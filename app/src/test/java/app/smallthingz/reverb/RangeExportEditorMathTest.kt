@@ -671,9 +671,6 @@ class RangeExportEditorMathTest {
                 bytes[index * 2 + 1] = ((sample ushr 8) and 0xff).toByte()
             }
         }
-        fun decode(bytes: ByteArray): List<Int> = (0 until bytes.size / 2).map { index ->
-            (((bytes[index * 2 + 1].toInt() shl 8) or (bytes[index * 2].toInt() and 0xff))).toShort().toInt()
-        }
 
         val source = pcm(0..199)
         val first = decode(sliceShuttlePcm16Mono(source, 10.0, 10.032, 10.072, 1_000))
@@ -687,16 +684,6 @@ class RangeExportEditorMathTest {
 
     @Test
     fun shortBoundaryGrainGetsSymmetricWindow() {
-        fun pcm(vararg samples: Int): ByteArray = ByteArray(samples.size * 2).also { bytes ->
-            samples.forEachIndexed { index, sample ->
-                bytes[index * 2] = (sample and 0xff).toByte()
-                bytes[index * 2 + 1] = ((sample ushr 8) and 0xff).toByte()
-            }
-        }
-        fun decode(bytes: ByteArray): List<Int> = (0 until bytes.size / 2).map { index ->
-            (((bytes[index * 2 + 1].toInt() shl 8) or (bytes[index * 2].toInt() and 0xff))).toShort().toInt()
-        }
-
         val windowed = decode(windowShuttlePcm16Mono(pcm(1000, 1000, 1000, 1000, 1000, 1000), 3))
         assertEquals(6, windowed.size)
         assertEquals(0, windowed[0])
@@ -711,16 +698,6 @@ class RangeExportEditorMathTest {
 
     @Test
     fun sparseShuttleTailFadesToZeroWithoutChangingFrameCount() {
-        fun pcm(vararg samples: Int): ByteArray = ByteArray(samples.size * 2).also { bytes ->
-            samples.forEachIndexed { index, sample ->
-                bytes[index * 2] = (sample and 0xff).toByte()
-                bytes[index * 2 + 1] = ((sample ushr 8) and 0xff).toByte()
-            }
-        }
-        fun decode(bytes: ByteArray): List<Int> = (0 until bytes.size / 2).map { index ->
-            (((bytes[index * 2 + 1].toInt() shl 8) or (bytes[index * 2].toInt() and 0xff))).toShort().toInt()
-        }
-
         val faded = decode(fadeOutShuttlePcm16Mono(pcm(1000, 1000, 1000, 1000, 1000)))
         assertEquals(5, faded.size)
         assertEquals(1000, faded.first())
@@ -753,16 +730,6 @@ class RangeExportEditorMathTest {
 
     @Test
     fun shuttlePcmSpeedsAudibleGrainsAndPreservesDirection() {
-        fun pcm(vararg samples: Int): ByteArray = ByteArray(samples.size * 2).also { bytes ->
-            samples.forEachIndexed { index, sample ->
-                bytes[index * 2] = (sample and 0xff).toByte()
-                bytes[index * 2 + 1] = ((sample ushr 8) and 0xff).toByte()
-            }
-        }
-        fun decode(bytes: ByteArray): List<Int> = (0 until bytes.size / 2).map { index ->
-            (((bytes[index * 2 + 1].toInt() shl 8) or (bytes[index * 2].toInt() and 0xff))).toShort().toInt()
-        }
-
         val source = pcm(100, 200, 300, 400, 500, 600, 700, 800)
         assertEquals(
             listOf(100, 200, 300, 400, 500, 600, 700, 800),
@@ -829,16 +796,6 @@ class RangeExportEditorMathTest {
 
     @Test
     fun shuttleCrossfadeBridgesDiscontinuousGrains() {
-        fun pcm(vararg samples: Int): ByteArray = ByteArray(samples.size * 2).also { bytes ->
-            samples.forEachIndexed { index, sample ->
-                bytes[index * 2] = (sample and 0xff).toByte()
-                bytes[index * 2 + 1] = ((sample ushr 8) and 0xff).toByte()
-            }
-        }
-        fun decode(bytes: ByteArray): List<Int> = (0 until bytes.size / 2).map { index ->
-            (((bytes[index * 2 + 1].toInt() shl 8) or (bytes[index * 2].toInt() and 0xff))).toShort().toInt()
-        }
-
         val first = crossfadeShuttlePcm16Mono(null, pcm(0, 0, 1000, 1000), overlapFrames = 2)
         assertEquals(listOf(0, 0), decode(first.output))
         assertEquals(listOf(1000, 1000), decode(first.tail))
@@ -989,4 +946,14 @@ class RangeExportEditorMathTest {
         assertFalse(rangeExportSelectionWithinLimit(exactEndpointDuration, maximum))
     }
 
+    private fun pcm(vararg samples: Int): ByteArray = ByteArray(samples.size * 2).also { bytes ->
+        samples.forEachIndexed { index, sample ->
+            bytes[index * 2] = (sample and 0xff).toByte()
+            bytes[index * 2 + 1] = ((sample ushr 8) and 0xff).toByte()
+        }
+    }
+
+    private fun decode(bytes: ByteArray): List<Int> = (0 until bytes.size / 2).map { index ->
+        (((bytes[index * 2 + 1].toInt() shl 8) or (bytes[index * 2].toInt() and 0xff))).toShort().toInt()
+    }
 }

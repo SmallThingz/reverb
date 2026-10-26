@@ -34,7 +34,7 @@ internal class NativeRecordingInfoSheet(
         if(closed)return
         closed=true
         var failure:Throwable?=null
-        fun cleanup(block:()->Unit){try{block()}catch(error:Throwable){if(failure==null)failure=error else failure!!.addSuppressed(error)}}
+        fun cleanup(block:()->Unit){try{block()}catch(error:Throwable){if(failure==null)failure=error else if(failure!==error)failure!!.addSuppressed(error)}}
         cleanup(dialog::dismiss);cleanup(actions::close);cleanup(body::close)
         failure?.let{throw it}
     }

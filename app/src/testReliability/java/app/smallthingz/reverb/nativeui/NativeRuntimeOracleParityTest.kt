@@ -9,9 +9,12 @@ import smallthingz.ui.runtime.PausableMonotonicFrameClock as NativePausableClock
 import smallthingz.ui.runtime.mutableFloatStateOf as nativeFloatState
 import smallthingz.ui.runtime.mutableStateOf as nativeState
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Test
@@ -61,12 +64,21 @@ class NativeRuntimeOracleParityTest {
             oracle.pause(); native.pause()
             val oldWaiter = async(start=CoroutineStart.UNDISPATCHED) { oracle.withFrameNanos { expected.add(it) } }
             val newWaiter = async(start=CoroutineStart.UNDISPATCHED) { native.withFrameNanos { actual.add(it) } }
-            assertEquals(oracle.isPaused, native.isPaused)
-            assertEquals(oracleRequests, nativeRequests)
-            if (iteration % 2 == 0) { oldWaiter.cancelAndJoin(); newWaiter.cancelAndJoin() }
-            oracle.resume(); native.resume()
-            if (iteration % 2 != 0) { oldWaiter.await(); newWaiter.await() }
-            oracle.withFrameNanos { expected.add(it) }; native.withFrameNanos { actual.add(it) }
+            try {
+                withTimeout(5_000L) {
+                    assertEquals(oracle.isPaused, native.isPaused)
+                    assertEquals(oracleRequests, nativeRequests)
+                    if (iteration % 2 == 0) { oldWaiter.cancelAndJoin(); newWaiter.cancelAndJoin() }
+                    oracle.resume(); native.resume()
+                    if (iteration % 2 != 0) { oldWaiter.await(); newWaiter.await() }
+                    oracle.withFrameNanos { expected.add(it) }; native.withFrameNanos { actual.add(it) }
+                }
+            } finally {
+                oracle.resume(); native.resume()
+                withContext(NonCancellable) {
+                    withTimeout(5_000L) { oldWaiter.cancelAndJoin(); newWaiter.cancelAndJoin() }
+                }
+            }
         }
         assertEquals(expected, actual)
         assertEquals(oracleRequests, nativeRequests)

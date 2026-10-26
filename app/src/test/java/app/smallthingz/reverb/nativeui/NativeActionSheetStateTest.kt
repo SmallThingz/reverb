@@ -6,11 +6,13 @@ import smallthingz.ui.foundation.MutatePriority
 import smallthingz.ui.runtime.MonotonicFrameClock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -84,12 +86,20 @@ class NativeActionSheetStateTest {
         val drag=launch(start=CoroutineStart.UNDISPATCHED) {
             state.drag(MutatePriority.UserInput) {dragTo(450f);awaitCancellation()}
         }
-        var rejected=false
-        try {state.animateTo(NativeSheetValue.EXPANDED,snap())}
-        catch(_:CancellationException) {rejected=true}
-        assertTrue(rejected);assertTrue(drag.isActive)
-        assertEquals(450f,state.offset,0f)
-        drag.cancelAndJoin()
+        try {
+            withTimeout(5_000L) {
+                var rejected=false
+                try {state.animateTo(NativeSheetValue.EXPANDED,snap())}
+                catch(error:CancellationException) {
+                    if (error is TimeoutCancellationException) throw error
+                    rejected=true
+                }
+                assertTrue(rejected);assertTrue(drag.isActive)
+                assertEquals(450f,state.offset,0f)
+            }
+        } finally {
+            drag.cancelAndJoin()
+        }
     }
     @Test fun cancelledDragOnlySettlesWithinHalfPixelOfAnAnchor()=runBlocking {
         val state=state()

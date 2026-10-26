@@ -8,7 +8,6 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.content.SharedPreferences
-import android.content.pm.ApplicationInfo
 import android.content.pm.ServiceInfo
 import android.media.AudioFormat
 import android.media.AudioRecord
@@ -180,19 +179,6 @@ internal fun quickTileStartedLifetimeMayStop(
     !settingsRuntimeActive &&
     !retentionActive
 
-internal fun releaseExportLeaseOnceBestEffort(
-    released: AtomicBoolean,
-    release: () -> Unit,
-): Exception? {
-    if (!released.compareAndSet(false, true)) return null
-    return try {
-        release()
-        null
-    } catch (error: Exception) {
-        error
-    }
-}
-
 internal class IdentityOwnerRegistry<T : Any> {
     private val owners = ArrayList<T>()
 
@@ -356,9 +342,12 @@ open class ReverbService : Service() {
 
     private val visualizationCallbacks = IdentityOwnerRegistry<VisualizationCallback>()
 
-    private val captureScratch = ByteArray(CAPTURE_SCRATCH_BYTES)
-    private val captureBuffer = ByteBuffer.allocateDirect(CAPTURE_SCRATCH_BYTES)
-        .order(ByteOrder.nativeOrder())
+    // Audio-owner-only: idle binding and calibration do not allocate capture batches.
+    private var captureReadBuffers: CaptureReadBuffers? = null
+    private class CaptureReadBuffers(capacityBytes: Int) {
+        val scratch = ByteArray(capacityBytes)
+        val buffer = ByteBuffer.allocateDirect(capacityBytes).order(ByteOrder.nativeOrder())
+    }
     private val visualizationAnalyzer = AudioVisualizationAnalyzer()
     private val mainHandler = Handler(Looper.getMainLooper())
     private val pendingVisualizationFrame = AtomicReference<VisualizationFrame?>(null)
@@ -391,7 +380,6 @@ open class ReverbService : Service() {
     private val appUiForegroundOwners = UiForegroundOwnerTracker()
     private val appUiForeground: Boolean get() = appUiForegroundOwners.isForeground()
     private val captureCommands = CaptureCommandAdmission()
-    private val uiCaptureCommandOwner = java.util.UUID.randomUUID().toString()
     // Main-thread-only delivered capture lifetime: normal starts plus UI and Quick Settings tickets.
     private var captureCommandStartId = 0
     private var powerManager: PowerManager? = null
@@ -735,8 +723,7 @@ open class ReverbService : Service() {
                     // a tap admitted by this exact instance.
                     val retained = startService(
                         Intent(this, javaClass)
-                            .setAction(ACTION_UI_CAPTURE_KEEPALIVE)
-                            .putExtra(EXTRA_UI_CAPTURE_OWNER, uiCaptureCommandOwner),
+                            .setAction(ACTION_UI_CAPTURE_KEEPALIVE),
                     ) != null
                     if (retained && quickTileCommandNeedsMicrophoneForeground(foregroundServiceTypes)) {
                         try {
@@ -1492,8 +1479,6 @@ open class ReverbService : Service() {
                                 sourceMode = sourceMode,
                                 channelMode = channelMode,
                                 routeMode = routeMode,
-                                format = ExportFormat.WAV,
-                                codec = ExportCodec.PCM_16,
                                 sampleFormat = sampleFormat,
                                 sampleRate = sampleRate,
                             )
@@ -1608,7 +1593,9 @@ open class ReverbService : Service() {
             loadConfiguration()
             configurePersistentBuffer()
             if (serviceDestroying || generation != listeningCommandGeneration.get() || !isListeningEnabled()) return
-            ensureActiveCaptureTargetOnAudioThread()
+            val activeTarget = ensureActiveCaptureTargetOnAudioThread()
+            if (activeTarget && hasWritableCaptureTarget()) prepareCaptureReadBuffersOnAudioThread()
+            activeTarget
         } catch (error: Exception) {
             pauseListeningAfterPersistenceFailure("configure before capture", error)
             return
@@ -2445,39 +2432,6 @@ open class ReverbService : Service() {
         return cancelled
     }
 
-    private fun exportBufferedRange(
-        lease: PersistentAudioChunkStore.RangeLease,
-        receiver: AudioFileReceiver,
-        newFileName: String,
-        exportToken: ExportCancellationToken,
-        exportConfig: RecorderConfigurationSnapshot = getConfigurationSnapshot(),
-    ) {
-        val leaseClosed = AtomicBoolean(false)
-        fun closeLeaseOnce() {
-            releaseExportLeaseOnceBestEffort(leaseClosed, lease::close)?.let { error ->
-                reportPersistentStoreFailure("release export range", error)
-            }
-        }
-        if (!isExportPending(exportToken)) {
-            closeLeaseOnce()
-            return
-        }
-        val exportTask = object : FutureTask<Unit>(
-            Callable {
-                exportToken.started.set(true)
-                performBufferedRangeExport(
-                    lease, receiver, newFileName, exportToken, exportConfig, ::closeLeaseOnce,
-                )
-                Unit
-            },
-        ) {
-            override fun done() {
-                if (!exportToken.started.get()) closeLeaseOnce()
-            }
-        }
-        queueExportTask(exportTask, exportToken, receiver)
-    }
-
     private fun performBufferedRangeExport(
         lease: PersistentAudioChunkStore.RangeLease,
         receiver: AudioFileReceiver,
@@ -2615,7 +2569,7 @@ open class ReverbService : Service() {
             }
             Log.e(TAG, "Error while exporting audio history into ${outTarget?.displayName ?: newFileName}", e)
             val message = userFacingError(
-                getString(R.string.error_during_writing_history_into) +
+                getString(R.string.error_during_writing_history_into).trimEnd() + " " +
                     (outTarget?.displayName ?: newFileName),
                 e,
             )
@@ -3379,6 +3333,15 @@ open class ReverbService : Service() {
         firstFailure?.let { throw it }
     }
 
+    private fun prepareCaptureReadBuffersOnAudioThread() {
+        check(audioHandler.looper == Looper.myLooper())
+        val capacity = captureScratchCapacityBytes(sampleRate, channelMode.channelCount * pcmSampleFormat.bytesPerSample)
+        if (captureReadBuffers?.scratch?.size != capacity) {
+            // Publish only after both allocations succeed; failed replacement retains the old pair.
+            captureReadBuffers = CaptureReadBuffers(capacity)
+        }
+    }
+
     private fun flushAudioRecord() {
         check(audioHandler.looper == Looper.myLooper())
         if (audioRecord == null) { finishSilenceGate(); return }
@@ -3401,6 +3364,9 @@ open class ReverbService : Service() {
             readReleaseGeneration = audioRecordReleaseGeneration.get()
             captureBufferSlot = activeBufferSlot
         }
+        val buffers = checkNotNull(captureReadBuffers) { "Capture buffers were not prepared" }
+        val captureScratch = buffers.scratch
+        val captureBuffer = buffers.buffer
         val frameBytes = (channelMode.channelCount * pcmSampleFormat.bytesPerSample).coerceAtLeast(1)
         val requestedBytes = captureReadByteCount(
             sampleRate = sampleRate,
@@ -3494,6 +3460,7 @@ open class ReverbService : Service() {
             if (!releaseAudioRecordIfOwned(owner)) return false
             if (continuingCaptureGeneration(owner) == null) return false
 
+            prepareCaptureReadBuffersOnAudioThread()
             val record = createAudioRecord() ?: throw IOException("Audio input disconnected")
             val installed = synchronized(listeningIntentLock) {
                 val currentGeneration = continuingCaptureGeneration(owner)
@@ -4703,7 +4670,7 @@ open class ReverbService : Service() {
             releaseCaptureCommandStartedLifetimeIfIdle()
             // This may arrive while the worker owns a durable commit. Read the existing
             // volatile intent cache, never take its storage lock from this main callback.
-            // A stale instance token only preserves this instance's existing restart policy.
+            // A stale keepalive only preserves this instance's existing restart policy.
             return retainedCaptureServiceStartMode(
                 durableListeningIntentEnabled,
                 foregroundStartBlocked,
@@ -5322,9 +5289,7 @@ open class ReverbService : Service() {
         return File(directory, DEBUG_REPORT_FILE_NAME)
     }
 
-    private fun isDebuggableBuild(): Boolean {
-        return (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
-    }
+    private fun isDebuggableBuild(): Boolean = BuildConfig.DEBUG
 
     private fun createNotificationChannel() {
         val notificationManager = getSystemService(NotificationManager::class.java) ?: return
@@ -5533,8 +5498,6 @@ open class ReverbService : Service() {
         val sourceMode: AudioSourceMode,
         val channelMode: ChannelMode,
         val routeMode: InputRouteMode,
-        val format: ExportFormat,
-        val codec: ExportCodec,
         val sampleFormat: PcmSampleFormat,
         val sampleRate: Int,
     )
@@ -5580,7 +5543,6 @@ open class ReverbService : Service() {
         const val EXTRA_FLAC_COMPRESSION = "flacCompression"
         const val ACTION_APPLY_SETTINGS = "app.smallthingz.reverb.APPLY_SETTINGS"
         private const val ACTION_UI_CAPTURE_KEEPALIVE = "app.smallthingz.reverb.UI_CAPTURE_KEEPALIVE"
-        private const val EXTRA_UI_CAPTURE_OWNER = "app.smallthingz.reverb.UI_CAPTURE_OWNER"
         const val ACTION_SETTINGS_RUNTIME_KEEPALIVE = "app.smallthingz.reverb.SETTINGS_RUNTIME_KEEPALIVE"
         const val ACTION_EXPORT_KEEPALIVE = "app.smallthingz.reverb.EXPORT_KEEPALIVE"
         const val ACTION_BUFFER_CLEAR_KEEPALIVE = "app.smallthingz.reverb.BUFFER_CLEAR_KEEPALIVE"
@@ -5628,6 +5590,15 @@ internal inline fun releaseSilenceSampleRecorder(
         }
     }
 }
+
+/** Maximum existing capture batch for the operational input, with unchanged cap/alignment. */
+internal fun captureScratchCapacityBytes(sampleRate: Int, frameBytes: Int): Int = captureReadByteCount(
+    sampleRate = sampleRate,
+    frameBytes = frameBytes,
+    capacityBytes = ReverbService.CAPTURE_SCRATCH_BYTES,
+    visualizationActive = false,
+    appUiForeground = false,
+)
 
 internal fun captureReadByteCount(
     sampleRate: Int,

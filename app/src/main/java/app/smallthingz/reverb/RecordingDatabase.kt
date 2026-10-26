@@ -726,37 +726,43 @@ private fun recordingCatalogNullableIntegerProjection(column: String): String =
         "WHEN typeof(" + column + ") = 'integer' THEN " + column +
         " ELSE -1 END AS " + column
 
-internal fun recordingCatalogProjection(): Array<String> = arrayOf(
-    recordingCatalogBoundedTextProjection(RecordingDatabase.COLUMN_ID),
-    recordingCatalogBoundedTextProjection(RecordingDatabase.COLUMN_DISPLAY_NAME),
-    recordingCatalogBoundedTextProjection(RecordingDatabase.COLUMN_MIME_TYPE),
-    recordingCatalogIntegerProjection(RecordingDatabase.COLUMN_STARTED_AT_MILLIS),
-    recordingCatalogIntegerProjection(RecordingDatabase.COLUMN_DURATION_MILLIS),
-    recordingCatalogIntegerProjection(RecordingDatabase.COLUMN_SIZE_BYTES),
-    recordingCatalogBoundedTextProjection(RecordingDatabase.COLUMN_CODEC_SUMMARY),
-    recordingCatalogLegacyStorageProjection(),
-    recordingCatalogIntegerProjection(
-        RecordingDatabase.COLUMN_STORAGE_TYPE_CODE,
-        invalidSql = Long.MAX_VALUE.toString(),
-    ),
-    recordingCatalogBoundedTextProjection(RecordingDatabase.COLUMN_DIRECTORY_ID),
-    recordingCatalogBoundedTextProjection(RecordingDatabase.COLUMN_FILE_IDENTITY),
-    recordingCatalogBoundedTextProjection(
-        RecordingDatabase.COLUMN_WAVEFORM_DATA,
-        MAX_RECORDING_CATALOG_WAVEFORM_CHARS,
-    ),
-    recordingCatalogBoundedTextProjection(RecordingDatabase.COLUMN_WAVEFORM_REVISION),
-    recordingCatalogIntegerProjection(RecordingDatabase.COLUMN_CREATED_AT_MILLIS),
-    recordingCatalogIntegerProjection(RecordingDatabase.COLUMN_LAST_SEEN_AT_MILLIS),
-    recordingCatalogNullableIntegerProjection(RecordingDatabase.COLUMN_MISSING_SINCE_MILLIS),
-)
-
 private fun recordingCatalogDescendingIntegerOrder(column: String): String =
     "CASE WHEN typeof(" + column + ") = 'integer' THEN " + column + " ELSE -1 END DESC"
 
-internal fun recordingCatalogOrderBy(): String =
-    recordingCatalogDescendingIntegerOrder(RecordingDatabase.COLUMN_STARTED_AT_MILLIS) + ", " +
+// Initialize the fixed SQL only when a catalog query first needs it.
+private object RecordingCatalogSql {
+    val projection = arrayOf(
+        recordingCatalogBoundedTextProjection(RecordingDatabase.COLUMN_ID),
+        recordingCatalogBoundedTextProjection(RecordingDatabase.COLUMN_DISPLAY_NAME),
+        recordingCatalogBoundedTextProjection(RecordingDatabase.COLUMN_MIME_TYPE),
+        recordingCatalogIntegerProjection(RecordingDatabase.COLUMN_STARTED_AT_MILLIS),
+        recordingCatalogIntegerProjection(RecordingDatabase.COLUMN_DURATION_MILLIS),
+        recordingCatalogIntegerProjection(RecordingDatabase.COLUMN_SIZE_BYTES),
+        recordingCatalogBoundedTextProjection(RecordingDatabase.COLUMN_CODEC_SUMMARY),
+        recordingCatalogLegacyStorageProjection(),
+        recordingCatalogIntegerProjection(
+            RecordingDatabase.COLUMN_STORAGE_TYPE_CODE,
+            invalidSql = Long.MAX_VALUE.toString(),
+        ),
+        recordingCatalogBoundedTextProjection(RecordingDatabase.COLUMN_DIRECTORY_ID),
+        recordingCatalogBoundedTextProjection(RecordingDatabase.COLUMN_FILE_IDENTITY),
+        recordingCatalogBoundedTextProjection(
+            RecordingDatabase.COLUMN_WAVEFORM_DATA,
+            MAX_RECORDING_CATALOG_WAVEFORM_CHARS,
+        ),
+        recordingCatalogBoundedTextProjection(RecordingDatabase.COLUMN_WAVEFORM_REVISION),
+        recordingCatalogIntegerProjection(RecordingDatabase.COLUMN_CREATED_AT_MILLIS),
+        recordingCatalogIntegerProjection(RecordingDatabase.COLUMN_LAST_SEEN_AT_MILLIS),
+        recordingCatalogNullableIntegerProjection(RecordingDatabase.COLUMN_MISSING_SINCE_MILLIS),
+    )
+
+    val orderBy = recordingCatalogDescendingIntegerOrder(RecordingDatabase.COLUMN_STARTED_AT_MILLIS) + ", " +
         recordingCatalogDescendingIntegerOrder(RecordingDatabase.COLUMN_CREATED_AT_MILLIS)
+}
+
+internal fun recordingCatalogProjection(): Array<String> = RecordingCatalogSql.projection.copyOf()
+
+internal fun recordingCatalogOrderBy(): String = RecordingCatalogSql.orderBy
 
 internal fun recordingCatalogInitialCapacity(rowCount: Int): Int =
     rowCount.coerceIn(0, MAX_RECORDING_CATALOG_INITIAL_CAPACITY)

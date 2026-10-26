@@ -62,12 +62,15 @@ internal class ReverbBufferSelectorView(
     }
     override fun onMeasure(w: Int, h: Int) {
         val padding = dp(6)
-        val width = resolveSize(dp(112) * 2 + padding * 3, w)
+        val segmentWidth = dp(112)
+        val width = resolveSize(segmentWidth * 2 + padding * 3, w)
         val maxHeight = if (MeasureSpec.getMode(h) == MeasureSpec.UNSPECIFIED)
             0x3fffffff else (MeasureSpec.getSize(h) - padding * 2).coerceAtLeast(0)
+        val childHeightSpec = atMost(maxHeight)
         var remaining = (width - padding * 2).coerceAtLeast(0)
-        for (child in listOf(oneShot, looping)) {
-            child.measure(exact(min(dp(112), remaining)), atMost(maxHeight))
+        for (index in 0..1) {
+            val child = if (index == 0) oneShot else looping
+            child.measure(exact(min(segmentWidth, remaining)), childHeightSpec)
             remaining = (remaining - child.measuredWidth -
                 min(padding, (remaining - child.measuredWidth).coerceAtLeast(0))).coerceAtLeast(0)
         }
@@ -78,7 +81,8 @@ internal class ReverbBufferSelectorView(
         val padding = dp(6)
         val innerHeight = (height - padding * 2).coerceAtLeast(0)
         var start = padding
-        for (child in listOf(oneShot, looping)) {
+        for (index in 0..1) {
+            val child = if (index == 0) oneShot else looping
             val x = if (layoutDirection == LAYOUT_DIRECTION_RTL) width - start - child.measuredWidth else start
             val y = padding + ((innerHeight - child.measuredHeight) / 2f).roundToInt()
             child.layout(x, y, x + child.measuredWidth, y + child.measuredHeight)

@@ -1584,6 +1584,11 @@ class PersistentAudioChunkStoreDurabilityTest {
         var store = PersistentAudioChunkStore(root, overwriteOldest = false)
         configure(store, capacity)
         try {
+            expected = pcmBytes(32)
+            assertEquals(expected.size, store.append(expected, 0, expected.size))
+            configure(store, 0L)
+            assertArrayEquals("Off must preserve retained history", expected, readAllOrEmpty(store))
+            configure(store, capacity)
             repeat(160) { iteration ->
                 when (random.nextInt(5)) {
                     0, 1, 2 -> {
@@ -1599,7 +1604,9 @@ class PersistentAudioChunkStoreDurabilityTest {
                     3 -> {
                         capacity = (random.nextInt(8_193) * 2).toLong()
                         configure(store, capacity)
-                        if (expected.size.toLong() > capacity) expected = expected.copyOf(capacity.toInt())
+                        if (capacity > 0L && expected.size.toLong() > capacity) {
+                            expected = expected.copyOf(capacity.toInt())
+                        }
                     }
                     else -> {
                         store.close()
@@ -1628,25 +1635,28 @@ class PersistentAudioChunkStoreDurabilityTest {
         configure(store, capacity)
         try {
             repeat(220) { iteration ->
-                var expectedAfterResize: ByteArray? = null
+                var expectedAfterTransition: ByteArray? = null
+                var appended = false
                 when (random.nextInt(6)) {
                     0, 1, 2, 3 -> {
                         val count = (1 + random.nextInt(2_048)) * 2
                         val bytes = ByteArray(count) { random.nextInt(256).toByte() }
                         assertEquals("looping append at $iteration", count, store.append(bytes, 0, count))
                         completeHistory.write(bytes)
+                        appended = true
                     }
                     4 -> {
                         val retainedBeforeResize = readAllOrEmpty(store)
                         capacity = ((256 + random.nextInt(8_000)) * 2).toLong()
                         val expectedSize = minOf(capacity, retainedBeforeResize.size.toLong()).toInt()
-                        expectedAfterResize = retainedBeforeResize.copyOfRange(
+                        expectedAfterTransition = retainedBeforeResize.copyOfRange(
                             retainedBeforeResize.size - expectedSize,
                             retainedBeforeResize.size,
                         )
                         configure(store, capacity)
                     }
                     else -> {
+                        expectedAfterTransition = readAllOrEmpty(store)
                         store.close()
                         store = PersistentAudioChunkStore(root, overwriteOldest = true)
                         configure(store, capacity)
@@ -1654,11 +1664,12 @@ class PersistentAudioChunkStoreDurabilityTest {
                 }
 
                 val observed = readAllOrEmpty(store)
+                if (appended) assertTrue("accepted append lost all history at $iteration", observed.isNotEmpty())
                 assertTrue("capacity exceeded at $iteration", observed.size.toLong() <= capacity)
                 val all = completeHistory.toByteArray()
                 assertTrue("retained data is not a suffix at $iteration", all.endsWithBytes(observed))
-                expectedAfterResize?.let { expected ->
-                    assertArrayEquals("explicit resize over-deleted at $iteration", expected, observed)
+                expectedAfterTransition?.let { expected ->
+                    assertArrayEquals("resize or restart changed retained bytes at $iteration", expected, observed)
                 }
             }
         } finally {

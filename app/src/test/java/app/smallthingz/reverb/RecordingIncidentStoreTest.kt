@@ -398,14 +398,14 @@ class RecordingIncidentStoreTest {
 
     @Test
     fun incidentKindUsesStableByteIdentity() {
-        assertTrue(RecordingIncidentKind.UNEXPECTED_SHUTDOWN.storageCode in Byte.MIN_VALUE..Byte.MAX_VALUE)
-        assertTrue(RecordingIncidentKind.UNEXPECTED_ERROR.storageCode in Byte.MIN_VALUE..Byte.MAX_VALUE)
+        assertTrue(RecordingIncidentKind.UNEXPECTED_SHUTDOWN.storageCode == 1.toByte())
+        assertTrue(RecordingIncidentKind.UNEXPECTED_ERROR.storageCode == 2.toByte())
         assertTrue(
-            RecordingIncidentKind.fromStorageCode(RecordingIncidentKind.UNEXPECTED_SHUTDOWN.storageCode) ==
+            RecordingIncidentKind.fromStorageCode(1) ==
                 RecordingIncidentKind.UNEXPECTED_SHUTDOWN,
         )
         assertTrue(
-            RecordingIncidentKind.fromStorageCode(RecordingIncidentKind.UNEXPECTED_ERROR.storageCode) ==
+            RecordingIncidentKind.fromStorageCode(2) ==
                 RecordingIncidentKind.UNEXPECTED_ERROR,
         )
         assertTrue(RecordingIncidentKind.fromStorageCode(0x7f) == null)

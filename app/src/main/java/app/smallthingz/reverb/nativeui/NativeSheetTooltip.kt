@@ -47,7 +47,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -100,6 +101,12 @@ internal class NativeSheetTooltipMotion {
     }
 }
 
+/** Each gesture owns a fresh flow which can only transition from held to released. */
+internal suspend fun dismissNativeTooltipAfterRelease(held:StateFlow<Boolean>,dismiss:()->Unit) {
+    held.first {!it}
+    dismiss()
+}
+
 /** Direct existing-anchor adapter; no extra clickable View or second press/ripple controller. */
 internal class NativeSheetTooltip(
     private val anchor:View,
@@ -137,7 +144,7 @@ internal class NativeSheetTooltip(
                                 longPressed=true
                                 scope.launch(start=CoroutineStart.UNDISPATCHED) {
                                     try {show(MutatePriority.PreventUserInput)}
-                                    finally {if(motion.shouldExist)thisHold.collectLatest {if(!it)dismiss()}}
+                                    finally {if(motion.shouldExist)dismissNativeTooltipAfterRelease(thisHold,::dismiss)}
                                 }
                             }
                         }

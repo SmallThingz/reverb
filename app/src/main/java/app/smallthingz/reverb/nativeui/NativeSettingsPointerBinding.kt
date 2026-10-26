@@ -23,13 +23,15 @@ internal class NativeSettingsPointerBinding(
     private val layouts=IdentityHashMap<View,Layout>()
     private var listView:ReverbLibraryRecyclerView?=null
     private var scroll:NativeLibraryScrollOwner?=null
+    private var scrollNodes=emptyList<NativeViewPhasePointerNode>()
+    private val topBarNodes=listOf(content.topBar.touchShieldNode)
     private var closed=false
     private val density get()=content.pointerEnvironment.textDensity.density
     val layout:NativeViewPointerHitLayout=object:NativeViewPointerHitLayout {
         override val placed get()=!closed&&content.isAttachedToWindow&&content.isLaidOut&&content.visibility==View.VISIBLE
         override val size get()=Size(content.width.toFloat(),content.height.toFloat())
         override val minimumTouchTarget get()=Size(48f*density,48f*density)
-        override val nodes get()=listOf(content.gateNode)
+        override val nodes=listOf(content.gateNode)
         override val childrenInHitOrder:List<NativeViewPointerHitLayout>
             get(){refresh();return children(content)}
         override fun screenToLocal(screen:Offset)=geometry.coordinates(content).local(screen)
@@ -43,6 +45,7 @@ internal class NativeSettingsPointerBinding(
             listView=next
             scroll=next?.let {NativeLibraryScrollOwner(it,content.pointerEnvironment,frames,scope,
                 content.nestedScroll,parentInterested)}
+            scrollNodes=scroll?.let {java.util.Collections.unmodifiableList(listOf(it.observerNode,it.dragNode))}?:emptyList()
         }
         layouts.keys.filter {!it.isAttachedToWindow}.forEach {layouts.remove(it)?.close()}
     }
@@ -86,19 +89,20 @@ internal class NativeSettingsPointerBinding(
             override fun dispatch(event:NativeDragPointerEvent,pass:NativePointerPass)=Unit
             override fun cancel()=Unit
         }else null
+        private val interopNodes=interop?.let(::listOf)?:emptyList()
+        private val fallbackNodes=click?.let(::listOf)?:shield?.let(::listOf)?:emptyList()
         override val placed get()=view.isAttachedToWindow&&view.isLaidOut&&view.visibility==View.VISIBLE
         override val size get()=Size(view.width.toFloat(),view.height.toFloat())
         override val minimumTouchTarget get()=Size(48f*density,48f*density)
         override val childrenInHitOrder get()=children(view)
         override fun screenToLocal(screen:Offset)=geometry.coordinates(view).local(screen)
         override val nodes:List<NativeViewPhasePointerNode> get() {
-            if(view===content.topBar)return listOf(content.topBar.touchShieldNode)
-            if(view===listView)return scroll?.let {listOf(it.observerNode,it.dragNode)}?:emptyList()
-            interop?.let {return listOf(it)}
+            if(view===content.topBar)return topBarNodes
+            if(view===listView)return scrollNodes
+            if(interop!=null)return interopNodes
             val custom=content.pointerNodes(view)
             if(custom.isNotEmpty())return custom
-            click?.let {return listOf(it)}
-            return shield?.let(::listOf)?:emptyList()
+            return fallbackNodes
         }
         override fun withinLayerBounds(local:Offset):Boolean=when {
             view is ReverbGroupLayout->view.containsVisualPoint(local.x,local.y)
@@ -121,6 +125,7 @@ internal class NativeSettingsPointerBinding(
             if(failure==null)failure=error else if(failure!==error)failure!!.addSuppressed(error)
         }}
         release {scroll?.close()};scroll=null;listView=null
+        scrollNodes=emptyList()
         layouts.values.forEach {release(it::close)};layouts.clear()
         failure?.let {throw it}
     }

@@ -978,10 +978,11 @@ private fun settledMainParityBitmap(instrumentation: Instrumentation, host: Nati
         repeat(40) {
             val next = captureNativeParityContent(instrumentation, host) { render.board }
             val old = previous
-            equal = if (old != null && compareNativeParityPixels(old, next).getLong("different_pixels") == 0L)
-                equal + 1 else 0
-            old?.recycle()
             previous = next
+            equal = try {
+                if (old != null && compareNativeParityPixels(old, next).getLong("different_pixels") == 0L)
+                    equal + 1 else 0
+            } finally { old?.recycle() }
             if (equal >= 2) {
                 previous = null
                 return next

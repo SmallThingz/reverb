@@ -4,11 +4,14 @@ import smallthingz.ui.animation.core.exponentialDecay
 import smallthingz.ui.runtime.MonotonicFrameClock
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -17,7 +20,7 @@ import org.junit.Test
 
 /** Proposal tests only: no compilation, execution or actual frame-phase qualification credited. */
 class NativeVerticalScrollOwnerTest {
-    @Test fun heldUserMutationRejectsDefaultFlingWithoutFinishingTheActiveDrag() = runBlocking {
+    @Test fun heldUserMutationRejectsDefaultFlingWithoutFinishingTheActiveDrag() = boundedTest {
         val fixture = Fixture()
         val drag = launch(start = CoroutineStart.UNDISPATCHED) {
             fixture.owner.drag { awaitCancellation() }
@@ -35,7 +38,7 @@ class NativeVerticalScrollOwnerTest {
         assertFalse(fixture.state.isScrollInProgress)
     }
 
-    @Test fun equalPriorityHostsOfTheSameRetainedPageRetireTheOldMutation() = runBlocking {
+    @Test fun equalPriorityHostsOfTheSameRetainedPageRetireTheOldMutation() = boundedTest {
         val first = Fixture()
         val second = Fixture(first.state)
         val old = launch(start = CoroutineStart.UNDISPATCHED) {
@@ -49,7 +52,7 @@ class NativeVerticalScrollOwnerTest {
         assertFalse(second.owner.shouldScrollImmediately)
     }
 
-    @Test fun userDragCancelsAnActualFlingJobWithoutInventingPostFling() = runBlocking {
+    @Test fun userDragCancelsAnActualFlingJobWithoutInventingPostFling() = boundedTest {
         val fixture = Fixture()
         val fling = launch(start = CoroutineStart.UNDISPATCHED) { fixture.owner.onScrollStopped(-1000f) }
         fixture.frames.frame(0L)
@@ -64,7 +67,7 @@ class NativeVerticalScrollOwnerTest {
         assertFalse(fixture.state.isScrollInProgress)
     }
 
-    @Test fun suspendedAncestorPreFlingIsCancelledBeforeLocalMutation() = runBlocking {
+    @Test fun suspendedAncestorPreFlingIsCancelledBeforeLocalMutation() = boundedTest {
         val fixture = Fixture()
         val entered = CompletableDeferred<Unit>()
         fixture.pre = { entered.complete(Unit); awaitCancellation() }
@@ -77,7 +80,7 @@ class NativeVerticalScrollOwnerTest {
         assertEquals(0, fixture.frames.delivered)
     }
 
-    @Test fun partialNestedConsumptionReceivesCurrentVelocityAndCorrectPhysicalSign() = runBlocking {
+    @Test fun partialNestedConsumptionReceivesCurrentVelocityAndCorrectPhysicalSign() = boundedTest {
         val fixture = Fixture()
         fixture.pre = { 200f }
         fixture.post = { _, available -> available / 2f }
@@ -96,7 +99,7 @@ class NativeVerticalScrollOwnerTest {
         assertFalse(fixture.state.isScrollInProgress)
     }
 
-    @Test fun detachedNodeLocalCancellationStillHandsVelocityToParent() = runBlocking {
+    @Test fun detachedNodeLocalCancellationStillHandsVelocityToParent() = boundedTest {
         val fixture = Fixture()
         fixture.attached = false
         val fling = launch(start = CoroutineStart.UNDISPATCHED) { fixture.owner.onScrollStopped(-1000f) }
@@ -111,7 +114,7 @@ class NativeVerticalScrollOwnerTest {
         assertFalse(fixture.owner.isFlinging)
     }
 
-    @Test fun zeroVelocityTerminalStillRunsBothNestedCallbacksWithoutAFrame() = runBlocking {
+    @Test fun zeroVelocityTerminalStillRunsBothNestedCallbacksWithoutAFrame() = boundedTest {
         val fixture = Fixture()
         fixture.owner.onScrollStopped(0f)
         assertEquals(listOf(0f), fixture.preVelocities)
@@ -120,7 +123,7 @@ class NativeVerticalScrollOwnerTest {
         assertFalse(fixture.state.isScrollInProgress)
     }
 
-    @Test fun suspendedPostFlingDoesNotKeepLocalMutationBusy() = runBlocking {
+    @Test fun suspendedPostFlingDoesNotKeepLocalMutationBusy() = boundedTest {
         val fixture = Fixture()
         val entered = CompletableDeferred<Unit>()
         fixture.post = { _, _ -> entered.complete(Unit); awaitCancellation() }
@@ -133,7 +136,7 @@ class NativeVerticalScrollOwnerTest {
         fling.cancelAndJoin()
     }
 
-    @Test fun pageKeyCapturesItsViewportAtAdmissionAndLeavesUnsupportedEventsAlone() = runBlocking {
+    @Test fun pageKeyCapturesItsViewportAtAdmissionAndLeavesUnsupportedEventsAlone() = boundedTest {
         val fixture = Fixture()
         assertTrue(fixture.owner.pageKey(true, true, false, true, this))
         assertEquals(0, fixture.state.value) // Source event returns before the launched mutation.
@@ -147,7 +150,7 @@ class NativeVerticalScrollOwnerTest {
         assertEquals(80, fixture.state.value)
     }
 
-    @Test fun descendantRawScrollCannotCompeteWithHeldMutationAndPreservesDirectionFlags() = runBlocking {
+    @Test fun descendantRawScrollCannotCompeteWithHeldMutationAndPreservesDirectionFlags() = boundedTest {
         val fixture = Fixture()
         fixture.owner.drag {
             scrollBy(-20f)
@@ -158,6 +161,16 @@ class NativeVerticalScrollOwnerTest {
         assertEquals(10, fixture.state.value)
         assertTrue(fixture.state.lastScrolledForward) // Raw backward scroll does not rewrite flags.
         assertEquals(0f, fixture.owner.onNestedPostScroll(10f, false), 0f)
+    }
+
+    private fun boundedTest(block: suspend CoroutineScope.() -> Unit) = runBlocking {
+        withTimeout(5_000L) {
+            try {
+                block()
+            } finally {
+                coroutineContext[Job]!!.children.forEach { it.cancel() }
+            }
+        }
     }
 
     private class Fixture(val state: NativeVerticalScrollState = NativeVerticalScrollState()) {

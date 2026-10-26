@@ -174,17 +174,20 @@ internal class ReverbIncidentsContentView(
         header.measure(MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY),
             MeasureSpec.makeMeasureSpec(height, MeasureSpec.AT_MOST))
         val body = max(0, height - header.measuredHeight)
-        for (child in arrayOf(list, empty)) if (child.visibility != GONE) {
-            child.measure(MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY),
-                MeasureSpec.makeMeasureSpec(body, MeasureSpec.EXACTLY))
+        val childWidth = MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY)
+        val childHeight = MeasureSpec.makeMeasureSpec(body, MeasureSpec.EXACTLY)
+        for (index in 0..1) {
+            val child = if (index == 0) list else empty
+            if (child.visibility != GONE) child.measure(childWidth, childHeight)
         }
         setMeasuredDimension(width, height)
     }
 
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
         header.layout(0, 0, width, header.measuredHeight)
-        for (child in arrayOf(list, empty)) if (child.visibility != GONE) {
-            child.layout(0, header.measuredHeight, width, height)
+        for (index in 0..1) {
+            val child = if (index == 0) list else empty
+            if (child.visibility != GONE) child.layout(0, header.measuredHeight, width, height)
         }
     }
 
@@ -373,14 +376,23 @@ private class IncidentsEmptyContent(
     }
 
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
-        val children = (0 until childCount).map(::getChildAt).filter { it.visibility != GONE }
-        val total = children.sumOf { it.measuredHeight } + max(0, children.size - 1) * dp(10f)
+        val children = ArrayList<View>(childCount)
+        var total = 0
+        var columnWidth = 0
+        for (index in 0 until childCount) {
+            val child = getChildAt(index)
+            if (child.visibility == GONE) continue
+            children.add(child)
+            total += child.measuredHeight
+            columnWidth = max(columnWidth, child.measuredWidth)
+        }
+        total += max(0, children.size - 1) * dp(10f)
         val padding = dp(28f)
-        val columnWidth = children.maxOfOrNull { it.measuredWidth } ?: 0
         // Box centers the intrinsic Column first; Column then centers each child independently.
         val columnX = padding + ((max(0, width - padding * 2) - columnWidth) / 2f).roundToInt()
         var y = padding + ((max(0, height - padding * 2) - total) / 2f).roundToInt()
-        children.forEach { child ->
+        for (index in children.indices) {
+            val child = children[index]
             val x = columnX + ((columnWidth - child.measuredWidth) / 2f).roundToInt()
             child.layout(x, y, x + child.measuredWidth, y + child.measuredHeight)
             y += child.measuredHeight + dp(10f)

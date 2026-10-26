@@ -294,13 +294,6 @@ private class ReverbClippedGroupContent(context: Context) : ReverbDividerLayout(
     }
 }
 
-/** A paired settings row; no extra wrapper, surface, padding, or independent corner shape. */
-internal class ReverbGroupRow(context: Context) : ReverbDividerLayout(context) {
-    init {
-        orientation = HORIZONTAL
-    }
-}
-
 /** Draws the same explicit top/start strokes as Modifier.settingsAudioDivider, after each child. */
 internal open class ReverbDividerLayout(context: Context) : LinearLayout(context) {
     @ColorInt private var dividerColor = 0

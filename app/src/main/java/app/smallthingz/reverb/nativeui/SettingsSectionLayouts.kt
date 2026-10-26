@@ -209,8 +209,7 @@ internal fun settingsSectionTitle(context:Context,stringRes:Int,environment:Reve
     environment.paragraph(context,context.getString(stringRes),ReverbTextRole.BODY_LARGE,environment.palette.onSurface)
         .also { bindSectionTitle(it,environment) }
 internal fun bindSectionTitle(view:ReverbParagraphView,environment:ReverbViewEnvironment) {
-    view.setTypography(reverbDefaultTextStyle().copy(
-        fontSize=19.sp,lineHeight=26.sp,fontWeight=FontWeight.Medium),
+    view.setTypography(settingsSectionTitleStyle,
         environment.textDensity,environment.sharedFontResolver)
     view.setTextColor(environment.palette.onSurface)
 }
@@ -218,3 +217,6 @@ private fun ViewGroup.placeLogical(child:View,start:Int,top:Int) {
     val x=if(layoutDirection==View.LAYOUT_DIRECTION_RTL)width-start-child.measuredWidth else start
     child.layout(x,top,x+child.measuredWidth,top+child.measuredHeight)
 }
+
+private val settingsSectionTitleStyle = reverbDefaultTextStyle().copy(
+    fontSize=19.sp,lineHeight=26.sp,fontWeight=FontWeight.Medium)

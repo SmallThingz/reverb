@@ -55,6 +55,11 @@ internal data class NativeInlinePlayerPresentation(
     val waveformMorphStarted: Boolean,
 )
 
+/** Called only after the row's fixed recording ID has been checked. */
+internal fun sameNativeInlinePlayerRevision(previous: RecordingEntity, next: RecordingEntity): Boolean =
+    previous.fileIdentity == next.fileIdentity && previous.sizeBytes == next.sizeBytes &&
+        previous.durationMillis == next.durationMillis && previous.lastSeenAtMillis == next.lastSeenAtMillis
+
 /**
  * One released recording.id lifetime. Revision owns playback/read jobs; this outer owner retains
  * accepted trim writes and their receiver across revision changes. No screen route is switched.
@@ -115,7 +120,7 @@ internal class NativeRecordingInlinePlayerController(
         check(!closed) { "An inline player row has been disposed" }
         require(next.recording.id == recordingId) { "A player row cannot adopt another recording" }
         val previous = input
-        val revisionChanged = revisionKey(next.recording) != session.key
+        val revisionChanged = !sameNativeInlinePlayerRevision(session.recording, next.recording)
         if (revisionChanged) session.close()
         input = next
         // A queued trim terminal may run before the coalesced presentation is delivered.

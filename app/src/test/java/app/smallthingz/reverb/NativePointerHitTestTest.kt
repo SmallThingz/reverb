@@ -95,6 +95,27 @@ class NativePointerHitTestTest {
             "front:MAIN", "parent:MAIN", "parent:FINAL", "front:FINAL", "back:FINAL"), calls)
     }
 
+    @Test fun oneHitUsesOneNodeSnapshotButTheNextHitReadsCurrentMembership() {
+        val first = node("first")
+        val second = node("second")
+        var current = listOf(first, second)
+        var reads = 0
+        val root = object : NativePointerHitLayout {
+            override val placed = true
+            override val size = Size(100f, 100f)
+            override val minimumTouchTarget = Size(48f, 48f)
+            override val nodes: List<NativePhasePointerNode> get() { reads++; return current.toList() }
+            override val childrenInHitOrder = emptyList<NativePointerHitLayout>()
+            override fun screenToLocal(screen: Offset) = screen
+            override fun withinLayerBounds(local: Offset) = true
+        }
+        assertEquals(listOf(first, second), nativePointerHitPath(root, Offset(10f, 10f), PointerType.Touch))
+        assertEquals(1, reads)
+        current = listOf(second)
+        assertEquals(listOf(second), nativePointerHitPath(root, Offset(10f, 10f), PointerType.Touch))
+        assertEquals(2, reads)
+    }
+
     private fun node(name: String, sharing: Boolean = false, calls: MutableList<String>? = null) = object : NativePhasePointerNode {
         override val attached = true
         override val shareWithSiblings = sharing

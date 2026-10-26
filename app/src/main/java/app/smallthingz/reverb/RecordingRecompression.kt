@@ -3,6 +3,7 @@ package app.smallthingz.reverb
 import android.content.Context
 import android.util.Log
 import java.io.IOException
+import java.nio.ByteBuffer
 import java.security.MessageDigest
 import kotlinx.coroutines.flow.MutableStateFlow
 
@@ -72,12 +73,13 @@ internal fun writeConvertedRecordingCopy(
                         }
                     }
                 } else {
-                    val batchFrames = maxOf(1, 128 * 1024 / layout.frameBytes)
+                    val batchFrames = minOf(frames, maxOf(1, 128 * 1024 / layout.frameBytes).toLong()).toInt()
                     val bytes = ByteArray(batchFrames * layout.frameBytes)
+                    val readBuffer = ByteBuffer.wrap(bytes)
                     var copied = 0L
                     while (copied < frames) {
                         val count = minOf(batchFrames.toLong(), frames - copied).toInt()
-                        requireReadAt(channel, layout.dataOffsetBytes + (first + copied) * layout.frameBytes, bytes, count * layout.frameBytes)
+                        requireReadAt(channel, layout.dataOffsetBytes + (first + copied) * layout.frameBytes, readBuffer, count * layout.frameBytes)
                         consume(bytes, 0, count * layout.frameBytes); copied += count
                     }
                 }

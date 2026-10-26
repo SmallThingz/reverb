@@ -716,11 +716,13 @@ internal class PersistentAudioChunkStore internal constructor(
                 timelineEndSeconds = leaseDuration + selectedSegmentDuration,
             )
             if (startedAtMillis == 0L) {
-                startedAtMillis = record.createdAtMillis +
-                    (startFrame * 1000L / record.sampleRate.coerceAtLeast(1))
+                startedAtMillis = safeAdd(
+                    record.createdAtMillis, startFrame * 1000L / record.sampleRate.coerceAtLeast(1),
+                )
             }
-            endedAtMillis = record.createdAtMillis +
-                (endFrame * 1000L / record.sampleRate.coerceAtLeast(1))
+            endedAtMillis = safeAdd(
+                record.createdAtMillis, endFrame * 1000L / record.sampleRate.coerceAtLeast(1),
+            )
             leaseDuration += selectedSegmentDuration
         }
 
@@ -1007,11 +1009,13 @@ internal class PersistentAudioChunkStore internal constructor(
                         timelineEndSeconds = selectedDuration + childDuration,
                     )
                     if (selectedStartedAtMillis == 0L) {
-                        selectedStartedAtMillis = segment.record.createdAtMillis +
-                            (absoluteStartFrame * 1000L / rate)
+                        selectedStartedAtMillis = safeAdd(
+                            segment.record.createdAtMillis, absoluteStartFrame * 1000L / rate,
+                        )
                     }
-                    selectedEndedAtMillis = segment.record.createdAtMillis +
-                        ((absoluteStartFrame + childFrames) * 1000L / rate)
+                    selectedEndedAtMillis = safeAdd(
+                        segment.record.createdAtMillis, (absoluteStartFrame + childFrames) * 1000L / rate,
+                    )
                     selectedDuration += childDuration
                 }
                 if (selected.isEmpty()) return null
@@ -1435,8 +1439,8 @@ internal class PersistentAudioChunkStore internal constructor(
         }
         if (furthestRetired >= 0L) nextChunkId += (furthestRetired + 1L).toUInt()
 
-        lastWriteAtMillis = chunks.lastOrNull()?.let { newest ->
-            newest.createdAtMillis + (newest.durationSeconds * 1000.0).toLong()
+        lastWriteAtMillis = chunks.peekLast()?.let { newest ->
+            safeAdd(newest.createdAtMillis, (newest.durationSeconds * 1000.0).toLong())
         } ?: 0L
         // Recovery has produced a complete in-memory timeline at this point. Mark it
         // loaded before checkpointing so a checkpoint failure cannot make a later call
@@ -2266,7 +2270,7 @@ internal class PersistentAudioChunkStore internal constructor(
             state = ChunkState.ACTIVE,
             createdAtMillis = startedAtMillis ?: System.currentTimeMillis(),
             continuesPreviousChunk = predecessor != null && predecessor + 1u == id &&
-                chunks.lastOrNull()?.let { previous ->
+                chunks.peekLast()?.let { previous ->
                     previous.id == predecessor && previous.sampleRate == configuredSampleRate &&
                         previous.channelCount == configuredChannelCount && previous.sampleFormat == configuredSampleFormat
                 } == true,
@@ -2410,7 +2414,7 @@ internal class PersistentAudioChunkStore internal constructor(
     private fun cleanupLoopingRetentionStepLocked(): RetentionStepOutcome {
         if (!overwriteOldest || retentionValue <= 0L || !retentionExceededLocked()) return RetentionStepOutcome.BLOCKED
         if (retentionCleanupWillRetireChunkLocked()) syncActivePayloadLocked()
-        val oldest = chunks.firstOrNull() ?: return RetentionStepOutcome.BLOCKED
+        val oldest = chunks.peekFirst() ?: return RetentionStepOutcome.BLOCKED
         if (oldest === activeRecord) {
             pendingLoopingRetentionTruncation = true
             return RetentionStepOutcome.BLOCKED
@@ -2433,7 +2437,7 @@ internal class PersistentAudioChunkStore internal constructor(
     private fun truncateOneShotRetentionStepLocked(): RetentionStepOutcome {
         if (overwriteOldest || retentionValue <= 0L || !retentionExceededLocked()) return RetentionStepOutcome.BLOCKED
         finalizeActiveLocked()
-        val newest = chunks.lastOrNull() ?: return RetentionStepOutcome.BLOCKED
+        val newest = chunks.peekLast() ?: return RetentionStepOutcome.BLOCKED
         val keepBytes = when (retentionMode) {
             RetentionMode.SIZE -> oneShotRetainedChunkBytes(
                 retentionValue = retentionValue,
@@ -2453,8 +2457,8 @@ internal class PersistentAudioChunkStore internal constructor(
         } else {
             removeNewestChunkAndRetireLocked(newest, failOnCleanupError = true)
         }
-        lastWriteAtMillis = chunks.lastOrNull()?.let { currentNewest ->
-            currentNewest.createdAtMillis + (currentNewest.durationSeconds * 1000.0).toLong()
+        lastWriteAtMillis = chunks.peekLast()?.let { currentNewest ->
+            safeAdd(currentNewest.createdAtMillis, (currentNewest.durationSeconds * 1000.0).toLong())
         } ?: 0L
         return RetentionStepOutcome.PROGRESSED
     }
@@ -2522,8 +2526,8 @@ internal class PersistentAudioChunkStore internal constructor(
             truncateFinalizedChunkLocked(partialRecord, partialPayloadBytes)
         }
 
-        lastWriteAtMillis = chunks.lastOrNull()?.let { newest ->
-            newest.createdAtMillis + (newest.durationSeconds * 1000.0).toLong()
+        lastWriteAtMillis = chunks.peekLast()?.let { newest ->
+            safeAdd(newest.createdAtMillis, (newest.durationSeconds * 1000.0).toLong())
         } ?: 0L
         pendingOneShotRetentionTruncation = retentionExceededLocked()
         return true
@@ -2613,8 +2617,9 @@ internal class PersistentAudioChunkStore internal constructor(
             replacement.payloadChecksum = checksum.value.toInt()
             replacement.state = ChunkState.FINALIZED
             writeMutableChunkSlot(replacement, access = output, forceToDisk = true)
-            output.close()
+            val closing = output
             output = null
+            closing.close()
             val replacementFileDigest = FileInputStream(temp).use(::sha256)
             try {
                 atomicChunkReplace(temp, record.file)
@@ -2668,7 +2673,7 @@ internal class PersistentAudioChunkStore internal constructor(
         // two continuous capture appends. Restore only after successful durability,
         // when the original newest predecessor remains present and its tail is intact.
         if (preservesTail && previousContinuation != null &&
-            chunks.lastOrNull()?.let { newest ->
+            chunks.peekLast()?.let { newest ->
                 newest.id == previousContinuation && newest.state == ChunkState.FINALIZED &&
                     newest.sampleRate == configuredSampleRate && newest.channelCount == configuredChannelCount &&
                     newest.sampleFormat == configuredSampleFormat && !newest.pendingDelete
@@ -2691,7 +2696,7 @@ internal class PersistentAudioChunkStore internal constructor(
         }
 
         while (retentionExceededLocked() && chunks.isNotEmpty()) {
-            val oldest = chunks.first()
+            val oldest = chunks.getFirst()
             if (oldest === activeRecord) {
                 if (exactBoundary) pendingLoopingRetentionTruncation = true
                 break
@@ -2721,7 +2726,7 @@ internal class PersistentAudioChunkStore internal constructor(
             record = record,
             payloadBytes = record.payloadBytes - dropBytes,
             sourcePayloadOffsetBytes = dropBytes,
-            replacementCreatedAtMillis = record.createdAtMillis + advancedMillis,
+            replacementCreatedAtMillis = safeAdd(record.createdAtMillis, advancedMillis),
         )
     }
 
@@ -2761,7 +2766,7 @@ internal class PersistentAudioChunkStore internal constructor(
 
     private fun retentionCleanupWillRetireChunkLocked(): Boolean {
         if (!overwriteOldest || !retentionExceededLocked()) return false
-        val oldest = chunks.firstOrNull() ?: return false
+        val oldest = chunks.peekFirst() ?: return false
         if (oldest === activeRecord) return false
         val activeDirty = activeRecord?.payloadBytes?.let { it > activeDurablePayloadBytes } == true
         if (!activeDirty) return false
@@ -2785,13 +2790,13 @@ internal class PersistentAudioChunkStore internal constructor(
     }
 
     private fun removeFirstChunkForRetentionLocked(failOnCleanupError: Boolean = false): ChunkRecord {
-        val record = chunks.first()
+        val record = chunks.getFirst()
         requireFinalizedChunkPayloadIntegrityLocked(record)
         return removeFirstChunkAndRetireLocked(failOnCleanupError)
     }
 
     private fun removeFirstChunkAndRetireLocked(failOnCleanupError: Boolean = false): ChunkRecord {
-        val record = chunks.first()
+        val record = chunks.getFirst()
         // A leased ACTIVE chunk must not later be mistaken for changed/uncertain audio.
         // Seal its exact payload before durable retirement, without invalidating the lease.
         val sealFailure = if (record === activeRecord && record.payloadBytes > 0L) {

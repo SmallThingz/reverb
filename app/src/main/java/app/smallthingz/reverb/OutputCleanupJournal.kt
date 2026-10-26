@@ -258,11 +258,9 @@ internal fun pendingOutputCleanupSuppressedId(raw: String): String? {
     decodePendingOutputCleanupRecord(raw)?.let { return it.id }
     val parts = raw.split('|')
     if (parts.size < 3) return null
-    if (parts[0] !in setOf(
-            OUTPUT_CLEANUP_RECORD_VERSION_V1,
-            OUTPUT_CLEANUP_RECORD_VERSION_V2,
-            OUTPUT_CLEANUP_RECORD_VERSION,
-        )
+    if (parts[0] != OUTPUT_CLEANUP_RECORD_VERSION_V1 &&
+        parts[0] != OUTPUT_CLEANUP_RECORD_VERSION_V2 &&
+        parts[0] != OUTPUT_CLEANUP_RECORD_VERSION
     ) {
         return null
     }
@@ -336,8 +334,8 @@ internal fun verifiedExportStagingRecordMatches(
     record: VerifiedExportStagingRecord,
     fingerprint: StableOutputFingerprint,
 ): Boolean {
-    if (!record.sha256Hex.equals(fingerprint.digest.sha256.toHexString(), ignoreCase = true) ||
-        record.byteCount != fingerprint.digest.byteCount
+    if (record.byteCount != fingerprint.digest.byteCount ||
+        !record.sha256Hex.equals(fingerprint.digest.sha256.toHexString(), ignoreCase = true)
     ) {
         return false
     }
@@ -486,12 +484,6 @@ private fun writeVerifiedExportStagingEntriesLocked(context: Context, entries: S
     )
 }
 
-internal fun verifiedExportStagingFingerprint(
-    context: Context,
-    storageType: RecordingStorageType,
-    id: String,
-): StableOutputFingerprint? = verifiedExportStagingRecovery(context, storageType, id)?.fingerprint
-
 internal fun verifiedExportStagingRecovery(
     context: Context,
     storageType: RecordingStorageType,
@@ -514,14 +506,22 @@ internal fun verifiedExportStagingRecoveryForFingerprint(
     id: String,
     fingerprint: StableOutputFingerprint,
 ): VerifiedExportStagingRecovery? {
-    val matching = entries.mapNotNull(::decodeVerifiedExportStagingRecord).filter { record ->
-        record.storageType == storageType && record.id == id && verifiedExportStagingRecordMatches(record, fingerprint)
+    var found = false
+    var finalName: String? = null
+    var conflictingNames = false
+    for (raw in entries) {
+        val record = decodeVerifiedExportStagingRecord(raw) ?: continue
+        if (record.storageType != storageType || record.id != id ||
+            !verifiedExportStagingRecordMatches(record, fingerprint)) continue
+        found = true
+        val name = record.finalDisplayName ?: continue
+        if (finalName == null) finalName = name
+        else if (finalName != name) conflictingNames = true
     }
-    if (matching.isEmpty()) return null
+    if (!found) return null
     // Conflicting names cannot grant naming authority. Legacy records still prove their
     // fingerprint, but only an unambiguous new record can resolve a compact staging name.
-    val finalName = matching.mapNotNull { it.finalDisplayName }.distinct().singleOrNull()
-    return VerifiedExportStagingRecovery(fingerprint, finalName)
+    return VerifiedExportStagingRecovery(fingerprint, if (conflictingNames) null else finalName)
 }
 
 internal fun verifiedExportStagingHasFingerprint(
@@ -862,13 +862,15 @@ private fun outputCleanupAssetState(
     storageType: RecordingStorageType,
     id: String,
 ): OutputCleanupAssetState = when (storageType) {
-    RecordingStorageType.FILE -> when (val observation = observeStoragePath(File(id))) {
-        StoragePathObservation(StoragePathState.MISSING, false) -> OutputCleanupAssetState.MISSING
-        StoragePathObservation(StoragePathState.UNAVAILABLE, false) -> OutputCleanupAssetState.UNAVAILABLE
-        else -> if (observation.state == StoragePathState.PRESENT && observation.isRegularFile) {
-            OutputCleanupAssetState.PRESENT
-        } else {
-            OutputCleanupAssetState.UNAVAILABLE
+    RecordingStorageType.FILE -> observeStoragePath(File(id)).let { observation ->
+        when (observation.state) {
+            StoragePathState.MISSING -> OutputCleanupAssetState.MISSING
+            StoragePathState.UNAVAILABLE -> OutputCleanupAssetState.UNAVAILABLE
+            StoragePathState.PRESENT -> if (observation.isRegularFile) {
+                OutputCleanupAssetState.PRESENT
+            } else {
+                OutputCleanupAssetState.UNAVAILABLE
+            }
         }
     }
     RecordingStorageType.DOCUMENT -> queryOutputCleanupAssetState(
@@ -1026,7 +1028,7 @@ internal fun pendingOutputCleanupOwnsClaimPath(context: Context, claimPath: Stri
     }
 
 private fun outputCleanupClaimToken(record: PendingOutputCleanupRecord): String =
-    outputCleanupClaimTokens(record).first()
+    outputCleanupClaimToken(record, record.storageType.storageCode.toInt().toString())
 
 private fun outputCleanupClaimToken(record: PendingOutputCleanupRecord, storageIdentity: String): String {
     val seed = buildString {

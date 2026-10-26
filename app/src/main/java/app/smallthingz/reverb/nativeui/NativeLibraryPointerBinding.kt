@@ -37,8 +37,10 @@ internal class NativeLibraryPointerBinding(
     private val layouts = IdentityHashMap<View, Layout>()
     private var listView: ReverbLibraryRecyclerView? = null
     private var listScroll: NativeLibraryScrollOwner? = null
+    private var listNodes = emptyList<NativeViewPhasePointerNode>()
     private var emptyView: NativeVerticalViewport? = null
     private var emptyScroll: NativeVerticalPhaseBinding? = null
+    private var emptyNodes = emptyList<NativeViewPhasePointerNode>()
     private var dismissKey: Any? = null
     private var dismissDistance = Float.NaN
     private var closed = false
@@ -53,6 +55,7 @@ internal class NativeLibraryPointerBinding(
         override fun dispatch(event: NativeDragPointerEvent, pass: NativePointerPass) = edge.dispatch(event, pass)
         override fun cancel() = edge.restart()
     }
+    private val edgeNodes = listOf(edgeNode)
     // FilesScreen's transparent Scaffold still owns Surface's inert pointerInput(Unit) node.
     // It admits empty background so lower Main siblings cannot receive the same DOWN hit.
     private val scaffoldShield = object : NativeViewPhasePointerNode {
@@ -87,6 +90,8 @@ internal class NativeLibraryPointerBinding(
             listScroll = nextList?.let {
                 NativeLibraryScrollOwner(it, content.pointerEnvironment, frames, scope, content.nestedScroll, parentInterested)
             }
+            listNodes = listScroll?.let { java.util.Collections.unmodifiableList(listOf(it.observerNode, it.dragNode)) }
+                ?: emptyList()
         }
         val nextEmpty = content.emptyViewport
         if (nextEmpty !== emptyView) {
@@ -96,6 +101,8 @@ internal class NativeLibraryPointerBinding(
                 NativeVerticalPhaseBinding(it, { configuration.scaledTouchSlop.toFloat() },
                     { configuration.scaledMaximumFlingVelocity.toFloat() }, parentInterested)
             }
+            emptyNodes = emptyScroll?.let { java.util.Collections.unmodifiableList(listOf(it.observerNode, it.dragNode)) }
+                ?: emptyList()
         }
         val obsolete = layouts.keys.filter { !it.isAttachedToWindow }
         obsolete.forEach { layouts.remove(it)?.cancel() }
@@ -140,6 +147,8 @@ internal class NativeLibraryPointerBinding(
             override fun dispatch(event: NativeDragPointerEvent, pass: NativePointerPass) = Unit
             override fun cancel() = Unit
         } else null
+        private val clickNodes = click?.let(::listOf) ?: emptyList()
+        private val shieldNodes = shield?.let(::listOf) ?: emptyList()
         override val placed get() = view.isAttachedToWindow && view.isLaidOut && view.visibility == View.VISIBLE
         override val size get() = Size(view.width.toFloat(), view.height.toFloat())
         override val minimumTouchTarget get() = Size(48f * density, 48f * density)
@@ -147,13 +156,13 @@ internal class NativeLibraryPointerBinding(
         override fun screenToLocal(screen: Offset) = geometry.coordinates(view).local(screen)
         override val nodes: List<NativeViewPhasePointerNode>
             get() {
-                if (view === content.bodyPointerView) return listOf(edgeNode)
-                if (view === listView) return listScroll?.let { listOf(it.observerNode, it.dragNode) } ?: emptyList()
-                if (view === emptyView) return emptyScroll?.let { listOf(it.observerNode, it.dragNode) } ?: emptyList()
+                if (view === content.bodyPointerView) return edgeNodes
+                if (view === listView) return listNodes
+                if (view === emptyView) return emptyNodes
                 val player = content.pointerNodes(view)
                 if (player.isNotEmpty()) return player
-                if (click != null && (view !is NativeLibrarySummaryInput || view.sourceClickPresent)) return listOf(click)
-                return shield?.let(::listOf) ?: emptyList()
+                if (click != null && (view !is NativeLibrarySummaryInput || view.sourceClickPresent)) return clickNodes
+                return shieldNodes
             }
         override fun withinLayerBounds(local: Offset): Boolean = when {
             view is ReverbGroupLayout -> view.containsVisualPoint(local.x, local.y)
@@ -172,7 +181,9 @@ internal class NativeLibraryPointerBinding(
         if (closed) return
         closed = true
         listScroll?.close(); listScroll = null; listView = null
+        listNodes = emptyList()
         emptyScroll?.close(); emptyScroll = null; emptyView = null
+        emptyNodes = emptyList()
         layouts.values.forEach { it.cancel() }
         layouts.clear()
         edge.restart()

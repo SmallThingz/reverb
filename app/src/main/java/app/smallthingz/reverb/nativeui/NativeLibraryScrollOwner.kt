@@ -110,6 +110,9 @@ internal class NativeLibraryScrollOwner(
     private var mutating = false
     private var countingConsumption = false
     private var consumedY = 0
+    private val consumeIntegerPixels: (Int) -> Int = ::consumeInteger
+    private val userInputScroll: (Float) -> Float = { dispatch(it, NativeVerticalScrollSource.USER_INPUT) }
+    private val sideEffectScroll: (Float) -> Float = { dispatch(it, NativeVerticalScrollSource.SIDE_EFFECT) }
     private var closed = false
     private val semanticsScroll: (Float) -> Boolean = { amount ->
         val current=scope
@@ -119,7 +122,7 @@ internal class NativeLibraryScrollOwner(
         }
     }
     private sealed interface Event {
-        data class Start(val point: Offset) : Event
+        data object Start : Event
         data class Delta(val value: Offset) : Event
         data class Stop(val velocity: Velocity) : Event
         data object Cancel : Event
@@ -132,7 +135,7 @@ internal class NativeLibraryScrollOwner(
     private val sink = object : NativeDragSink {
         override fun start(position: Offset) {
             ensureListener()
-            channel?.trySend(Event.Start(position))
+            channel?.trySend(Event.Start)
         }
         override fun delta(physicalDelta: Offset) { channel?.trySend(Event.Delta(physicalDelta)) }
         override fun stop(physicalVelocity: Velocity) { channel?.trySend(Event.Stop(physicalVelocity)) }
@@ -234,13 +237,17 @@ internal class NativeLibraryScrollOwner(
         val before = nested.preScroll(physical, source)
         val available = physical - before
         val self = fraction.dispatch(available, view.canScrollVertically(1),
-            view.canScrollVertically(-1), ::consumeInteger)
+            view.canScrollVertically(-1), consumeIntegerPixels)
         val after = nested.postScroll(self, available - self, source)
         return before + self + after
     }
     private fun scroll(physical: Float, source: NativeVerticalScrollSource): Float =
         if (view.canScrollVertically(1) || view.canScrollVertically(-1)) {
-            overscroll.scroll(physical, source) { dispatch(it, source) }
+            val performScroll = when (source) {
+                NativeVerticalScrollSource.USER_INPUT -> userInputScroll
+                NativeVerticalScrollSource.SIDE_EFFECT -> sideEffectScroll
+            }
+            overscroll.scroll(physical, source, performScroll)
         } else dispatch(physical, source)
 
     private suspend fun stopped(physicalVelocity: Float) {

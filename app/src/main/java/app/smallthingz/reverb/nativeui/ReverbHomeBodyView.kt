@@ -1,6 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
 import android.content.Context
+import android.content.res.Configuration
 import android.graphics.RectF
 import android.view.View
 import android.view.ViewGroup
@@ -55,6 +56,13 @@ internal class ReverbHomeBodyView(
     private var renderedBuffer = BufferSlot.ONE_SHOT
     private var flip = ReverbHomeFlipFrame()
     private var actions: ReverbHomeActions? = null
+    private var contentDirty = true
+    private var renderedDisabled = false
+    private val activateRenderedBuffer: () -> Unit = {
+        val currentActions = actions
+        if (renderedDisabled) currentActions?.openBufferSettings(renderedBuffer)
+        else currentActions?.activateBuffer(renderedBuffer)
+    }
     private val readoutCache = HomeReadoutCache()
     private var disabledBufferLabel = context.getString(R.string.buffer_disabled)
     private val blob = ReverbHomeBlobControl(context, initialEnvironment, blobInputEnvironment, animationScope) {}
@@ -78,15 +86,26 @@ internal class ReverbHomeBodyView(
 
     fun bind(value: ReverbHomeBodyState, renderedBuffer: BufferSlot,
         frame: ReverbHomeFlipFrame, actions: ReverbHomeActions) {
+        val frameOnly = !contentDirty && state === value && this.renderedBuffer == renderedBuffer &&
+            this.actions === actions
         state = value
         this.renderedBuffer = renderedBuffer
         flip = frame
         this.actions = actions
+        if (frameOnly) {
+            blob.updateFrame(frame)
+            controls.updateFrame(frame)
+            return
+        }
+        // All content dependencies are immutable fields of value, actions or the environment.
+        // Keep invalidation set until the complete bind succeeds, including optional children.
+        contentDirty = true
         val metrics = if (renderedBuffer == BufferSlot.ONE_SHOT) value.oneShotMetrics else value.loopingMetrics
         val enabled = if (renderedBuffer == BufferSlot.ONE_SHOT) value.oneShotEnabled else value.loopingEnabled
         val ui = captureBufferUiState(renderedBuffer, enabled, value.oneShotFull, value.listening, value.activeBuffer)
         val recording = ui == CaptureBufferUiState.RECORDING
         val disabled = ui == CaptureBufferUiState.DISABLED
+        renderedDisabled = disabled
         val full = ui == CaptureBufferUiState.FILLED
         val serviceReady = captureServiceInteractionReady(value.serviceConnected, value.serviceStateHydrated) &&
             !value.preparingRange
@@ -100,9 +119,7 @@ internal class ReverbHomeBodyView(
             recording, value.saving, captureEnabled, clickable, full,
             disabled || isCaptureBlockedByOtherBuffer(renderedBuffer, value.listening, value.activeBuffer),
             readout.primary, readout.secondary, value.visualizerVisible,
-        ), frame) {
-            if (disabled) actions.openBufferSettings(renderedBuffer) else actions.activateBuffer(renderedBuffer)
-        }
+        ), frame, activateRenderedBuffer)
         controls.bind(ReverbHomeControlsState(renderedBuffer, value.activeBuffer, value.listening,
             value.oneShotEnabled, value.oneShotFull, value.loopingEnabled, serviceReady, value.saving,
             metrics.seconds > 0f, recording), frame, actions)
@@ -123,9 +140,11 @@ internal class ReverbHomeBodyView(
             swipeSurface.removeView(it)
             progress = null
         }
+        contentDirty = false
     }
 
     fun setEnvironment(value: ReverbViewEnvironment) {
+        contentDirty = true
         environment = value
         disabledBufferLabel = context.getString(R.string.buffer_disabled)
         readoutCache.invalidate()
@@ -136,6 +155,12 @@ internal class ReverbHomeBodyView(
         val callbacks = actions
         if (current != null && callbacks != null) bind(current, renderedBuffer, flip, callbacks)
         requestLayout()
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        // Child labels refresh during the same dispatch; the next render must publish them.
+        contentDirty = true
     }
 
     /** Called by the horizontal parent ownership adapter on source-equivalent consumption. */

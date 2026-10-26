@@ -333,10 +333,12 @@ private class IncidentBody(
     private val description = label(initial.bodySmall)
     private val divider = IncidentDivider(context)
     val checkTarget = IncidentCheckTarget(context, initial.density.density, onPrimaryAction, onOpenMenu)
-    private val details = listOf<View>(divider, cause, runtime, age, description)
+    private val details = arrayOf<View>(divider, cause, runtime, age, description)
+    private val accessibilityChildren = arrayOf<View>(date, summary, checkTarget, cause, runtime, age, description)
     override val mergedRowAccessibility = ReverbMergedRowAccessibility(this, NativeMergedRowRole.BUTTON, {
-        NativeMergedRowAccessibilityState(true, null, clickLabel,
-            listOf(date, summary, checkTarget, cause, runtime, age, description).filter { it.visibility == VISIBLE },
+        val visible = ArrayList<View>(accessibilityChildren.size)
+        for (child in accessibilityChildren) if (child.visibility == VISIBLE) visible.add(child)
+        NativeMergedRowAccessibilityState(true, null, clickLabel, visible,
             longClickable = true, rolePresent = false)
     }, onPrimaryAction, onOpenMenu)
 
@@ -347,7 +349,8 @@ private class IncidentBody(
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
         ViewCompat.setScreenReaderFocusable(this, true)
         accessibilityDelegate = mergedRowAccessibility
-        listOf(date, summary, cause, runtime, age, description, divider, checkTarget).forEach { addView(it) }
+        addView(date); addView(summary); addView(cause); addView(runtime)
+        addView(age); addView(description); addView(divider); addView(checkTarget)
         clear()
     }
 
@@ -378,7 +381,8 @@ private class IncidentBody(
 
     fun clear() {
         clickLabel = null
-        listOf(date, summary, cause, runtime, age, description).forEach { it.setText("") }
+        date.setText(""); summary.setText(""); cause.setText("")
+        runtime.setText(""); age.setText(""); description.setText("")
         details.forEach { it.visibility = GONE }
         checkTarget.clear()
         requestLayout()
@@ -389,7 +393,9 @@ private class IncidentBody(
         date.setTypography(value.bodyLarge.copy(fontWeight = FontWeight.SemiBold), value.density, value.fontResolver)
         summary.setTypography(value.bodyMedium, value.density, value.fontResolver)
         cause.setTypography(value.bodyMedium, value.density, value.fontResolver)
-        listOf(runtime, age, description).forEach { it.setTypography(value.bodySmall, value.density, value.fontResolver) }
+        runtime.setTypography(value.bodySmall, value.density, value.fontResolver)
+        age.setTypography(value.bodySmall, value.density, value.fontResolver)
+        description.setTypography(value.bodySmall, value.density, value.fontResolver)
         checkTarget.setDensity(value.density.density)
         requestLayout()
     }
@@ -398,7 +404,7 @@ private class IncidentBody(
         date.setTextColor(ink)
         summary.setTextColor(muted)
         cause.setTextColor(ink)
-        listOf(runtime, age, description).forEach { it.setTextColor(muted) }
+        runtime.setTextColor(muted); age.setTextColor(muted); description.setTextColor(muted)
         divider.setColor(line)
         checkTarget.setTint(icon)
     }

@@ -94,7 +94,12 @@ private class PageRender(
     val maximumScroll: () -> Int,
     private val dispose: () -> Unit,
 ) : AutoCloseable {
-    override fun close() = dispose()
+    private var closed = false
+    override fun close() {
+        if (closed) return
+        closed = true
+        dispose()
+    }
 }
 
 /**
@@ -248,24 +253,15 @@ internal fun verifyNativeOnboardingPageParity(instrumentation: Instrumentation, 
         var cleanupFailure: Throwable? = null
         try {
             activity?.let { host -> nativeParityOnMain(instrumentation) {
-                var renderFailure: Throwable? = null
-                try {
-                    val old = activeRender
-                    activeRender = null
-                    old?.close()
-                } catch (error: Throwable) {
-                    renderFailure = error
-                    throw error
-                } finally {
-                    try { host.finish() }
-                    catch (error: Throwable) {
-                        if (renderFailure == null) throw error else renderFailure.addSuppressed(error)
-                    }
-                }
+                val old = activeRender
+                activeRender = null
+                var cleanup = captureNativeParityCleanup(null) { old?.close() }
+                cleanup = captureNativeParityCleanup(cleanup) { host.finish() }
+                cleanup?.let { throw it }
             } }
         } catch (error: Throwable) {
             cleanupFailure = error
-            primary?.addSuppressed(error)
+            appendNativeParityFailure(primary, error)
             result.put("cleanup_error", android.util.Log.getStackTraceString(error))
         }
         result.put("completed_slices", completedSlices).put("failed_slices", failedSlices)
@@ -278,7 +274,7 @@ internal fun verifyNativeOnboardingPageParity(instrumentation: Instrumentation, 
 
 private fun writeOnboardingParityEvidence(directory: File, result: JSONObject, failure: Throwable?) {
     try { File(directory, "result.json").writeText(result.toString(2)) }
-    catch (error: Throwable) { if (failure == null) throw error else failure.addSuppressed(error) }
+    catch (error: Throwable) { if (failure == null) throw error else appendNativeParityFailure(failure, error) }
 }
 
 private fun showOnboardingPageCase(
@@ -365,15 +361,21 @@ private fun showOnboardingPageCase(
             }
             PageRender(view, view::verticalScrollPosition, view::maximumVerticalScrollPosition, ::dispose)
         } catch (error: Throwable) {
-            try { dispose() } catch (cleanup: Throwable) { error.addSuppressed(cleanup) }
+            captureNativeParityCleanup(error) { dispose() }
             throw error
         }
     }
-    host.fixtureRoot.addView(render.content, FrameLayout.LayoutParams(width, height, Gravity.TOP or Gravity.LEFT).apply {
-        leftMargin = horizontal
-        topMargin = vertical
-    })
-    return render
+    try {
+        host.fixtureRoot.addView(render.content, FrameLayout.LayoutParams(width, height, Gravity.TOP or Gravity.LEFT).apply {
+            leftMargin = horizontal
+            topMargin = vertical
+        })
+        return render
+    } catch (error: Throwable) {
+        captureNativeParityCleanup(error) { render.close() }
+        captureNativeParityCleanup(error) { host.fixtureRoot.removeView(render.content) }
+        throw error
+    }
 }
 
 /** The isolated page has no scrollable ancestors, exactly like the released oracle fixture. */
@@ -387,11 +389,7 @@ private object IsolatedOnboardingNestedHost : NativeVerticalNestedHost {
 private fun closeOnboardingPageResources(vararg resources: AutoCloseable?) {
     var failure: Throwable? = null
     resources.forEach { resource ->
-        try { resource?.close() }
-        catch (error: Throwable) {
-            val previous = failure
-            if (previous == null) failure = error else previous.addSuppressed(error)
-        }
+        failure = captureNativeParityCleanup(failure) { resource?.close() }
     }
     failure?.let { throw it }
 }

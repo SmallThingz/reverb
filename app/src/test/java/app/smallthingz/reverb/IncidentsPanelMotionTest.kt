@@ -3,11 +3,15 @@ package app.smallthingz.reverb
 import smallthingz.ui.runtime.MonotonicFrameClock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -209,10 +213,11 @@ class IncidentsPanelMotionTest {
         val owner = SupervisorJob(coroutineContext[Job])
         val scope = CoroutineScope(coroutineContext + owner + clock)
         try {
-            block(IncidentsPanelMotionState(false, scope, 220), frames, owner)
+            withTimeout(5_000L) { block(IncidentsPanelMotionState(false, scope, 220), frames, owner) }
         } finally {
             scope.cancel()
             frames.close()
+            withContext(NonCancellable) { withTimeout(5_000L) { owner.cancelAndJoin() } }
         }
     }
 }

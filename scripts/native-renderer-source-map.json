@@ -6,15 +6,12 @@
     "src/main/java/app/smallthingz/reverb/CaptureScreen.kt": "c5f8077047f1328a616f5c9f65411aa58b230af8ff6e8097db7481c55c138dbf",
     "src/main/java/app/smallthingz/reverb/FilesScreen.kt": "f73be342e5ecf7585ef9fd697b3aa3a232831ddceb5cdd4812872b8b906dee68",
     "src/main/java/app/smallthingz/reverb/IncidentsBackMotion.kt": "08b827a9566af730fae1519005de8d48142d6551cfa0aa98aa0760215d6f242c",
-    "src/main/java/app/smallthingz/reverb/IncidentsPanelMotion.kt": "ee7681d4b12ad16851d6618cc7befa6332f414d17c5e43640ed0d99fa104c777",
     "src/main/java/app/smallthingz/reverb/IncidentsScreen.kt": "a2827638f5aab388d473a31d51f437a04c143bace15c3b57b24cfb3583ba6b2b",
     "src/main/java/app/smallthingz/reverb/MainPanelPolicy.kt": "4091efe78b45a42b4532c361b21de89c18cf9f4b1d1af9bf04bdf396949c4582",
     "src/main/java/app/smallthingz/reverb/NotificationSaveSettings.kt": "f1949dfbc613e1bb887b58d88cd3cd2ff86b91c932d06872490c0dbacc68dfd1",
-    "src/main/java/app/smallthingz/reverb/PredictiveBackMotion.kt": "af1920c29751a87033c5d5fdfb858f218e91cf7b0e4b93dc0a2e852e5da213de",
     "src/main/java/app/smallthingz/reverb/ProgressiveWaveform.kt": "b2d348e73fa9b173c63384c0b62ec7bc8ad5691477cc4090c6d8fbe84ecf8f4c",
     "src/main/java/app/smallthingz/reverb/QuickSettingsTilesControls.kt": "6076d129a1ff68b8b291b419d20ce0cab042723f639a377b0fd8bd24801a6d05",
     "src/main/java/app/smallthingz/reverb/RangeExportEditor.kt": "b8cec9f92e76daa2d333fa3d1dee063540f0391f813708b906d25780720fbac6",
-    "src/main/java/app/smallthingz/reverb/RecordingCard.kt": "0c003f5fbe655ae9e42ea1a6fc013e072707f2e172c80e483d186f535b2d9d76",
     "src/main/java/app/smallthingz/reverb/RecordingInlinePlayer.kt": "a699f2eb0c0b654ed28078f7519905067e7a81801ba642a07dffe49e5915f2eb",
     "src/main/java/app/smallthingz/reverb/SettingsScreen.kt": "eb48558734376d19fae5dc271ba987574a91a4df64ea489fbd710961518f42a1",
     "src/main/java/app/smallthingz/reverb/SettingsSilenceCalibration.kt": "b2eeb8250473b8e127ff1d152946de4868527833f4161421fcb86c6eb2480702",
@@ -44,7 +41,12 @@
     "src/reliability/java/app/smallthingz/reverb/ReverbTheme.kt": "a4d9e0e131dc477c586a5790cde43604a067d878bf0cc8f677a88c6de05945c1",
     "src/reliability/java/app/smallthingz/reverb/SettingsScreenRenderer.kt": "98b1f17c83d87ebb11f233196801cf3522c74f9cfd6e7a10cc5bd6a66344f2f8",
     "src/reliability/java/app/smallthingz/reverb/SettingsSilenceCalibrationRenderer.kt": "da93c545f0bc42f57cb92f4a4f46398e101aea21826a81febd4d1597dd25dea4",
-    "src/reliability/java/app/smallthingz/reverb/SkipSilenceSettings.kt": "07a678ccb30aebd9f7196ef88df3534b975a8ed3bb62b658f0ab0a01eef47f39"
+    "src/reliability/java/app/smallthingz/reverb/SkipSilenceSettings.kt": "07a678ccb30aebd9f7196ef88df3534b975a8ed3bb62b658f0ab0a01eef47f39",
+    "src/main/java/app/smallthingz/reverb/IncidentsPanelMotion.kt": "e173858cec63503be521b16c8a60ed5c48115ab9c6d80893b277c1bf76b982fe",
+    "src/reference/java/app/smallthingz/reverb/IncidentsPanelMotionReference.kt": "1a2e64d547152ddc9c132735943f30b4a383f3c1c9207f86982dba89e9be0796",
+    "src/main/java/app/smallthingz/reverb/PredictiveBackMotion.kt": "e3481c572c732843e80f0e94bc6d3f70ba377c9183ddebeb15f8d73cb6783482",
+    "src/reference/java/app/smallthingz/reverb/PredictiveBackMotionReference.kt": "90bb4764766e0b5e8a3011324c285f10e2cfc0cdbde931fdcba0aefb33bb539d",
+    "src/reliability/java/app/smallthingz/reverb/RecordingCard.kt": "0c003f5fbe655ae9e42ea1a6fc013e072707f2e172c80e483d186f535b2d9d76"
   },
   "normalizations": {
     "src/main/java/app/smallthingz/reverb/SettingsScreen.kt": [
@@ -90,7 +92,7 @@
           "length": 2386
         },
         {
-          "file": "src/main/java/app/smallthingz/reverb/RecordingCard.kt",
+          "file": "src/reliability/java/app/smallthingz/reverb/RecordingCard.kt",
           "start": 32,
           "length": 80
         },
@@ -290,17 +292,17 @@
       "sha256": "74d0a90c2e5e37f7163d5bdf92dff8e48f728007775b39079fbc9cbb09fb8296",
       "parts": [
         {
-          "file": "src/main/java/app/smallthingz/reverb/IncidentsPanelMotion.kt",
+          "file": "src/reference/java/app/smallthingz/reverb/IncidentsPanelMotionReference.kt",
           "start": 0,
           "length": 31
         },
         {
-          "file": "src/main/java/app/smallthingz/reverb/IncidentsPanelMotion.kt",
+          "file": "src/reference/java/app/smallthingz/reverb/IncidentsPanelMotionReference.kt",
           "start": 30,
           "length": 1
         },
         {
-          "file": "src/main/java/app/smallthingz/reverb/IncidentsPanelMotion.kt",
+          "file": "src/reference/java/app/smallthingz/reverb/IncidentsPanelMotionReference.kt",
           "start": 32,
           "length": 95
         },
@@ -310,7 +312,7 @@
           "length": 90
         },
         {
-          "file": "src/main/java/app/smallthingz/reverb/IncidentsPanelMotion.kt",
+          "file": "src/reference/java/app/smallthingz/reverb/IncidentsPanelMotionReference.kt",
           "start": 127,
           "length": 140
         },
@@ -320,29 +322,34 @@
           "length": 96
         },
         {
-          "file": "src/main/java/app/smallthingz/reverb/IncidentsPanelMotion.kt",
+          "file": "src/reference/java/app/smallthingz/reverb/IncidentsPanelMotionReference.kt",
           "start": 267,
           "length": 186
         },
         {
-          "file": "src/main/java/app/smallthingz/reverb/IncidentsPanelMotion.kt",
+          "file": "src/reference/java/app/smallthingz/reverb/IncidentsPanelMotionReference.kt",
           "start": 30,
           "length": 1
         },
         {
           "file": "src/main/java/app/smallthingz/reverb/IncidentsPanelMotion.kt",
+          "start": 32,
+          "length": 263
+        },
+        {
+          "file": "src/reference/java/app/smallthingz/reverb/IncidentsPanelMotionReference.kt",
           "start": 454,
-          "length": 2047
+          "length": 1783
+        },
+        {
+          "file": "src/reference/java/app/smallthingz/reverb/IncidentsPanelMotionReference.kt",
+          "start": 30,
+          "length": 1
         },
         {
           "file": "src/reliability/java/app/smallthingz/reverb/IncidentsPanelMotionCompose.kt",
           "start": 219,
           "length": 316
-        },
-        {
-          "file": "src/main/java/app/smallthingz/reverb/IncidentsPanelMotion.kt",
-          "start": 2501,
-          "length": 0
         }
       ]
     },
@@ -435,17 +442,17 @@
       "sha256": "fc977cc4f385def455abe021faf4635a87b6df85cd95de4885a8a1a128fd4d24",
       "parts": [
         {
-          "file": "src/main/java/app/smallthingz/reverb/PredictiveBackMotion.kt",
+          "file": "src/reference/java/app/smallthingz/reverb/PredictiveBackMotionReference.kt",
           "start": 0,
           "length": 31
         },
         {
-          "file": "src/main/java/app/smallthingz/reverb/PredictiveBackMotion.kt",
+          "file": "src/reference/java/app/smallthingz/reverb/PredictiveBackMotionReference.kt",
           "start": 30,
           "length": 1
         },
         {
-          "file": "src/main/java/app/smallthingz/reverb/PredictiveBackMotion.kt",
+          "file": "src/reference/java/app/smallthingz/reverb/PredictiveBackMotionReference.kt",
           "start": 32,
           "length": 41
         },
@@ -455,7 +462,7 @@
           "length": 55
         },
         {
-          "file": "src/main/java/app/smallthingz/reverb/PredictiveBackMotion.kt",
+          "file": "src/reference/java/app/smallthingz/reverb/PredictiveBackMotionReference.kt",
           "start": 73,
           "length": 50
         },
@@ -465,7 +472,7 @@
           "length": 194
         },
         {
-          "file": "src/main/java/app/smallthingz/reverb/PredictiveBackMotion.kt",
+          "file": "src/reference/java/app/smallthingz/reverb/PredictiveBackMotionReference.kt",
           "start": 123,
           "length": 138
         },
@@ -475,7 +482,7 @@
           "length": 94
         },
         {
-          "file": "src/main/java/app/smallthingz/reverb/PredictiveBackMotion.kt",
+          "file": "src/reference/java/app/smallthingz/reverb/PredictiveBackMotionReference.kt",
           "start": 261,
           "length": 41
         },
@@ -485,19 +492,39 @@
           "length": 172
         },
         {
-          "file": "src/main/java/app/smallthingz/reverb/PredictiveBackMotion.kt",
+          "file": "src/reference/java/app/smallthingz/reverb/PredictiveBackMotionReference.kt",
           "start": 302,
           "length": 30
         },
         {
-          "file": "src/main/java/app/smallthingz/reverb/PredictiveBackMotion.kt",
+          "file": "src/reference/java/app/smallthingz/reverb/PredictiveBackMotionReference.kt",
           "start": 30,
           "length": 1
         },
         {
           "file": "src/main/java/app/smallthingz/reverb/PredictiveBackMotion.kt",
+          "start": 104,
+          "length": 64
+        },
+        {
+          "file": "src/reference/java/app/smallthingz/reverb/PredictiveBackMotionReference.kt",
           "start": 333,
-          "length": 1119
+          "length": 404
+        },
+        {
+          "file": "src/main/java/app/smallthingz/reverb/PredictiveBackMotion.kt",
+          "start": 168,
+          "length": 541
+        },
+        {
+          "file": "src/reference/java/app/smallthingz/reverb/PredictiveBackMotionReference.kt",
+          "start": 737,
+          "length": 109
+        },
+        {
+          "file": "src/reference/java/app/smallthingz/reverb/PredictiveBackMotionReference.kt",
+          "start": 30,
+          "length": 1
         },
         {
           "file": "src/reliability/java/app/smallthingz/reverb/PredictiveBackMotionCompose.kt",
@@ -505,9 +532,14 @@
           "length": 3523
         },
         {
+          "file": "src/reference/java/app/smallthingz/reverb/PredictiveBackMotionReference.kt",
+          "start": 30,
+          "length": 1
+        },
+        {
           "file": "src/main/java/app/smallthingz/reverb/PredictiveBackMotion.kt",
-          "start": 1452,
-          "length": 609
+          "start": 709,
+          "length": 608
         }
       ]
     },

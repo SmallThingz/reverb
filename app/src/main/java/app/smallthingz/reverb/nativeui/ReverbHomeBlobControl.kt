@@ -112,6 +112,15 @@ internal class ReverbHomeBlobControl(
         bindInput()
     }
 
+    /** A flip does not change content/input, but renderer maintenance remains unconditional. */
+    fun updateFrame(frame: ReverbHomeFlipFrame) {
+        check(!closed)
+        flip = frame
+        current?.let { updateRendererState(it) }
+        overlay.alpha = frame.contentAlpha.coerceIn(0f, 1f)
+        applyTransform()
+    }
+
     fun setEnvironment(value: ReverbViewEnvironment) {
         environment = value
         overlay.setEnvironment(value)
@@ -132,14 +141,18 @@ internal class ReverbHomeBlobControl(
 
     private fun renderState() {
         val value = current ?: return
+        updateRendererState(value)
+        overlay.bind(value, flip.contentAlpha)
+        applyTransform()
+    }
+
+    private fun updateRendererState(value: ReverbHomeBlobState) {
         val colors = environment.palette
         val visuallyEnabled = value.captureEnabled || value.filled
         renderer.updateState(value.active, visuallyEnabled, value.saving, value.visualizerVisible,
             colors.primary, colors.tertiary,
             if (value.filled) colors.primaryContainer else colors.surfaceContainerHighest)
         alpha = if (!value.dimmed && visuallyEnabled && !value.saving) 1f else .56f
-        overlay.bind(value, flip.contentAlpha)
-        applyTransform()
     }
 
     private fun applyTransform() {
@@ -227,6 +240,12 @@ internal class ReverbHomeBlobControl(
     }
 }
 
+private val blobPrimaryTextStyle = ReverbParagraphStyles[ReverbTextRole.TITLE_LARGE].copy(
+    fontSize = 18.sp, lineHeight = 22.sp,
+    fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Medium)
+private val blobSecondaryTextStyle = ReverbParagraphStyles[ReverbTextRole.LABEL_MEDIUM].copy(
+    fontSize = 14.sp, lineHeight = 18.sp, fontFamily = FontFamily.Monospace)
+
 /** Keeps source conditional Spacer/Text children and their measurement order, not joined text. */
 private class BlobOverlay(context: Context, initialEnvironment: ReverbViewEnvironment) : ViewGroup(context) {
     private var environment = initialEnvironment
@@ -265,13 +284,8 @@ private class BlobOverlay(context: Context, initialEnvironment: ReverbViewEnviro
     }
 
     private fun bindTypography() {
-        primary.setTypography(ReverbParagraphStyles[ReverbTextRole.TITLE_LARGE].copy(
-            fontSize = 18.sp, lineHeight = 22.sp,
-            fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Medium),
-            environment.textDensity, environment.sharedFontResolver)
-        secondary.setTypography(ReverbParagraphStyles[ReverbTextRole.LABEL_MEDIUM].copy(
-            fontSize = 14.sp, lineHeight = 18.sp, fontFamily = FontFamily.Monospace),
-            environment.textDensity, environment.sharedFontResolver)
+        primary.setTypography(blobPrimaryTextStyle, environment.textDensity, environment.sharedFontResolver)
+        secondary.setTypography(blobSecondaryTextStyle, environment.textDensity, environment.sharedFontResolver)
         requestLayout()
     }
 

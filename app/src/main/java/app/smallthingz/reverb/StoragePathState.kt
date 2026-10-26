@@ -23,17 +23,20 @@ internal data class StoragePathObservation(
     val isRegularFile: Boolean = false,
 )
 
+private val PRESENT_REGULAR_PATH = StoragePathObservation(StoragePathState.PRESENT, true)
+private val PRESENT_NONREGULAR_PATH = StoragePathObservation(StoragePathState.PRESENT, false)
+private val MISSING_PATH = StoragePathObservation(StoragePathState.MISSING)
+private val UNAVAILABLE_PATH = StoragePathObservation(StoragePathState.UNAVAILABLE)
+
 internal fun observeStoragePath(file: File): StoragePathObservation {
     if (Build.VERSION.SDK_INT >= 28) {
         return try {
             val stat = Os.lstat(file.path)
-            StoragePathObservation(StoragePathState.PRESENT, OsConstants.S_ISREG(stat.st_mode))
+            if (OsConstants.S_ISREG(stat.st_mode)) PRESENT_REGULAR_PATH else PRESENT_NONREGULAR_PATH
         } catch (error: ErrnoException) {
-            StoragePathObservation(if (error.errno == OsConstants.ENOENT) {
-                StoragePathState.MISSING
-            } else StoragePathState.UNAVAILABLE)
+            if (error.errno == OsConstants.ENOENT) MISSING_PATH else UNAVAILABLE_PATH
         } catch (_: SecurityException) {
-            StoragePathObservation(StoragePathState.UNAVAILABLE)
+            UNAVAILABLE_PATH
         }
     }
     return observeStoragePathNio(file)
@@ -45,16 +48,13 @@ private fun observeStoragePathNio(file: File): StoragePathObservation = try {
         BasicFileAttributes::class.java,
         LinkOption.NOFOLLOW_LINKS,
     )
-    StoragePathObservation(
-        state = StoragePathState.PRESENT,
-        isRegularFile = attributes.isRegularFile,
-    )
+    if (attributes.isRegularFile) PRESENT_REGULAR_PATH else PRESENT_NONREGULAR_PATH
 } catch (_: NoSuchFileException) {
-    StoragePathObservation(StoragePathState.MISSING)
+    MISSING_PATH
 } catch (_: IOException) {
-    StoragePathObservation(StoragePathState.UNAVAILABLE)
+    UNAVAILABLE_PATH
 } catch (_: SecurityException) {
-    StoragePathObservation(StoragePathState.UNAVAILABLE)
+    UNAVAILABLE_PATH
 }
 
 internal fun storagePathState(file: File): StoragePathState = observeStoragePath(file).state

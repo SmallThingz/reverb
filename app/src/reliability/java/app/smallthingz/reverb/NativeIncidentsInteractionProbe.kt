@@ -279,9 +279,11 @@ private fun captureIncidentStep(instrumentation: Instrumentation, host: NativePa
     try {
         while (SystemClock.uptimeMillis() < deadline) {
             val current = captureNativeParityContent(instrumentation, host) { board.show(reference) }
-            val identical = previous?.let { compareNativeParityPixels(it, current).getLong("different_pixels") == 0L } ?: false
-            previous?.recycle()
+            val old = previous
             previous = current
+            val identical = try {
+                old?.let { compareNativeParityPixels(it, current).getLong("different_pixels") == 0L } ?: false
+            } finally { old?.recycle() }
             stable = if (identical) stable + 1 else 0
             if (stable >= 2) {
                 val file = File(directory, "$name.png")

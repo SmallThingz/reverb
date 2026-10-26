@@ -1,25 +1,13 @@
 package app.smallthingz.reverb.nativeui
 
-import android.animation.ValueAnimator
 import android.content.Context
-import android.graphics.Canvas
-import android.graphics.Outline
-import android.graphics.Path
-import android.graphics.RectF
-import android.graphics.Rect
 import android.os.Build
-import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
-import android.view.ViewOutlineProvider
 import smallthingz.ui.text.style.TextOverflow
 import app.smallthingz.reverb.R
-import app.smallthingz.reverb.NativeClickPhaseHost
-import app.smallthingz.reverb.NativeClickPhaseEndpoint
-import app.smallthingz.reverb.ReverbClickPhaseEndpoint
 import kotlin.math.max
-import kotlin.math.min
 import kotlin.math.roundToInt
 
 internal data class LibraryToolbarState(
@@ -148,29 +136,28 @@ private class LibrarySelectionBar(context: Context, private var environment: Rev
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val width = MeasureSpec.getSize(widthMeasureSpec)
         val size = dp(48f)
-        listOf(close, share, delete).forEach { it.measure(libraryToolbarExact(size), libraryToolbarExact(size)) }
+        val actionSpec = libraryToolbarExact(size)
+        close.measure(actionSpec, actionSpec)
+        share.measure(actionSpec, actionSpec)
+        delete.measure(actionSpec, actionSpec)
         val available = max(0, width - dp(16f) - dp(16f) - size * 3 - dp(16f))
         title.measure(libraryToolbarExact(available), libraryToolbarAtMost(dp(66f)))
         setMeasuredDimension(width, resolveSize(dp(66f), heightMeasureSpec))
     }
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
-        var x = dp(16f)
-        fun place(child: View) {
-            val px = if (layoutDirection == LAYOUT_DIRECTION_RTL) width - x - child.measuredWidth else x
-            val y = ((height - child.measuredHeight) / 2f).roundToInt()
-            child.layout(px, y, px + child.measuredWidth, y + child.measuredHeight)
-            x += child.measuredWidth
-        }
-        place(close); x += dp(16f); place(title); place(share); place(delete)
+        var x = place(close, dp(16f)) + dp(16f)
+        x = place(title, x)
+        x = place(share, x)
+        place(delete, x)
+    }
+    private fun place(child: View, x: Int): Int {
+        val px = if (layoutDirection == LAYOUT_DIRECTION_RTL) width - x - child.measuredWidth else x
+        val y = ((height - child.measuredHeight) / 2f).roundToInt()
+        child.layout(px, y, px + child.measuredWidth, y + child.measuredHeight)
+        return x + child.measuredWidth
     }
 }
 
 
 private fun libraryToolbarExact(value: Int) = View.MeasureSpec.makeMeasureSpec(value.coerceAtLeast(0), View.MeasureSpec.EXACTLY)
 private fun libraryToolbarAtMost(value: Int) = View.MeasureSpec.makeMeasureSpec(value.coerceAtLeast(0), View.MeasureSpec.AT_MOST)
-
-private fun isActivationKey(code: Int): Boolean = when (code) {
-    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER,
-    KeyEvent.KEYCODE_NUMPAD_ENTER, KeyEvent.KEYCODE_SPACE -> true
-    else -> false
-}

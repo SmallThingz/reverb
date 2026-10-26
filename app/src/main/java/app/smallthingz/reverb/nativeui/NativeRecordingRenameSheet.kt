@@ -64,7 +64,7 @@ internal class NativeRecordingRenameSheet(
         if(closed)return
         closed=true
         var failure:Throwable?=null
-        fun release(block:()->Unit){try{block()}catch(error:Throwable){if(failure==null)failure=error else failure!!.addSuppressed(error)}}
+        fun release(block:()->Unit){try{block()}catch(error:Throwable){if(failure==null)failure=error else if(failure!==error)failure!!.addSuppressed(error)}}
         release(dialog::dismiss)
         release(actions::close)
         release(field::close)

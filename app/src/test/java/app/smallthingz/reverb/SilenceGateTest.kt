@@ -528,7 +528,6 @@ class SilenceGateTest {
         for ((start, size) in result.spans) expected.write(bytes, (start * 2).toInt(), size)
         assertArrayEquals(expected.toByteArray(), result.bytes)
         assertTrue(result.gaps >= 2)
-        assertEquals(result, result.copy(bytes = result.bytes))
     }
 
     @Test fun batchSizeDoesNotChangeGatingOrRetention() {

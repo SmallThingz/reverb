@@ -83,12 +83,12 @@ internal fun verifyNativeGroupParity(instrumentation: Instrumentation, report: S
                 var caseFailure: Throwable? = null
                 try {
                     reference = renderAndCapture(instrumentation, activity, fixture, true)
-                    candidate = renderAndCapture(instrumentation, activity, fixture, false)
-                    referenceAgain = renderAndCapture(instrumentation, activity, fixture, true)
-                    candidateAgain = renderAndCapture(instrumentation, activity, fixture, false)
                     saveNativeParityBitmap(directory, fixture.name + "-compose.png", reference)
+                    candidate = renderAndCapture(instrumentation, activity, fixture, false)
                     saveNativeParityBitmap(directory, fixture.name + "-native.png", candidate)
+                    referenceAgain = renderAndCapture(instrumentation, activity, fixture, true)
                     saveNativeParityBitmap(directory, fixture.name + "-compose-repeat.png", referenceAgain)
+                    candidateAgain = renderAndCapture(instrumentation, activity, fixture, false)
                     saveNativeParityBitmap(directory, fixture.name + "-native-repeat.png", candidateAgain)
                     val referenceStability = compareNativeParityPixels(reference, referenceAgain)
                     val nativeStability = compareNativeParityPixels(candidate, candidateAgain)
@@ -306,11 +306,20 @@ internal fun compareNativeParityPixels(reference: Bitmap, candidate: Bitmap): JS
     return JSONObject().put("different_pixels", different)
         .put("total_pixels", expected.size).put("max_channel_delta", maxChannelDelta)
         .put("difference_bounds_inclusive", if (different == 0L) JSONObject.NULL else JSONArray(listOf(left, top, right, bottom)))
-        .put("reference_argb_sha256", pixelHash(expected)).put("candidate_argb_sha256", pixelHash(actual))
+        .put("reference_argb_sha256", nativeParityPixelHash(expected)).put("candidate_argb_sha256", nativeParityPixelHash(actual))
 }
 
-private fun pixelHash(pixels: IntArray): String {
-    val bytes = ByteBuffer.allocate(pixels.size * Integer.BYTES)
-    for (pixel in pixels) bytes.putInt(pixel)
-    return MessageDigest.getInstance("SHA-256").digest(bytes.array()).joinToString("") { "%02x".format(it) }
+internal fun nativeParityPixelHash(pixels: IntArray): String {
+    val digest = MessageDigest.getInstance("SHA-256")
+    val bytes = ByteBuffer.allocate(minOf(pixels.size, 16 * 1024) * Int.SIZE_BYTES)
+    val integers = bytes.asIntBuffer() // ByteBuffer's default big-endian ARGB order is evidence format.
+    var offset = 0
+    while (offset < pixels.size) {
+        val count = minOf(integers.capacity(), pixels.size - offset)
+        integers.clear()
+        integers.put(pixels, offset, count)
+        digest.update(bytes.array(), 0, count * Int.SIZE_BYTES)
+        offset += count
+    }
+    return digest.digest().joinToString("") { "%02x".format(it) }
 }

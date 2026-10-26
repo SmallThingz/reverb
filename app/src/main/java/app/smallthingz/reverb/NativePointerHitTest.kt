@@ -38,6 +38,8 @@ internal data class NativePointerHitScore(val distance: Float, val inLayer: Bool
     val direct: Boolean get() = inLayer && distance < 0f
 }
 
+private val noPointerHitScore = NativePointerHitScore(Float.POSITIVE_INFINITY, false)
+
 internal fun nativeMinimumTouchDistance(local: Offset, size: Size, minimum: Size): Float {
     if (size.width >= minimum.width && size.height >= minimum.height) return Float.POSITIVE_INFINITY
     val horizontal = max(0f, (minimum.width - size.width) / 2f)
@@ -58,7 +60,7 @@ internal fun nativePointerHitPath(
     val scores = mutableListOf<NativePointerHitScore>()
     var depth = -1
     fun best(): NativePointerHitScore {
-        var score = NativePointerHitScore(Float.POSITIVE_INFINITY, false)
+        var score = noPointerHitScore
         for (index in depth + 1 until scores.size) {
             if (scores[index] < score) score = scores[index]
             if (score.direct) break
@@ -93,7 +95,8 @@ internal fun nativePointerHitPath(
         val score = NativePointerHitScore(if (withinLayer && inBounds) -1f else distance, inLayer)
         // A near hit is recorded only when better than the previous sibling. A miss still
         // traverses unclipped children, but default pointer nodes do not intercept that miss.
-        val recordOwn = layout.nodes.isNotEmpty() && (
+        val nodes = layout.nodes
+        val recordOwn = nodes.isNotEmpty() && (
             withinLayer && inBounds || distance.isFinite() && best() > score
         )
         fun children() {
@@ -108,8 +111,8 @@ internal fun nativePointerHitPath(
             depth = startDepth // HitTestResult.siblingHits restores the caller's depth.
         }
         fun modifiers(index: Int) {
-            if (index == layout.nodes.size) children()
-            else if (recordOwn) record(layout.nodes[index], score) { modifiers(index + 1) }
+            if (index == nodes.size) children()
+            else if (recordOwn) record(nodes[index], score) { modifiers(index + 1) }
             else modifiers(index + 1)
         }
         modifiers(0)

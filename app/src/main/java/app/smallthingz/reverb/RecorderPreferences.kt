@@ -16,6 +16,7 @@ import android.os.Build
 import android.os.PowerManager
 import androidx.annotation.StringRes
 import androidx.core.content.edit
+import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.max
 
@@ -38,8 +39,13 @@ private data class InputConfigKey(
 
 internal val Enum<*>.legacyPrefValue: String get() = name.lowercase()
 
-private inline fun <T> Iterable<T>.entryByStorageCode(value: Int, code: (T) -> Byte): T? =
-    firstOrNull { code(it).toInt() == value }
+private inline fun <T> List<T>.entryByStorageCode(value: Int, code: (T) -> Byte): T? {
+    for (index in indices) {
+        val entry = this[index]
+        if (code(entry).toInt() == value) return entry
+    }
+    return null
+}
 
 private fun <T : Enum<T>> Iterable<T>.entryByLegacyValue(value: String?, default: T): T =
     firstOrNull { it.legacyPrefValue == value } ?: default
@@ -149,10 +155,12 @@ enum class AudioSourceMode(
         fun fromStorageCode(value: Int): AudioSourceMode =
             entries.entryByStorageCode(value, AudioSourceMode::storageCode) ?: defaultMode()
 
-        fun availableModes(): List<AudioSourceMode> = preferredOrder.filter { mode ->
+        private val eligibleModes = Collections.unmodifiableList(preferredOrder.filter { mode ->
             !mode.requiresPrivilegedCapturePermission &&
                 (mode != VOICE_PERFORMANCE || Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
-        }
+        })
+
+        fun availableModes(): List<AudioSourceMode> = eligibleModes
     }
 
     private val requiresPrivilegedCapturePermission: Boolean

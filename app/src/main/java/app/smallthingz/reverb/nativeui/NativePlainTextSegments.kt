@@ -18,7 +18,8 @@ package app.smallthingz.reverb.nativeui
 
 // Integrated source-derived iterators from ui-android 1.11.2 AccessibilityIterators.android.kt.
 // Actual native accessibility traversal/event qualification remains pending.
-// Only adapters changed: MultiParagraph geometry, supplied visible-node bounds, and package/type names.
+// Adapters use MultiParagraph geometry, supplied visible-node bounds, and package/type names.
+// Clipped PAGE traversal rejects empty viewports and advances at least one line when visible.
 // First-use process locale retention intentionally matches the pinned iterator implementation.
 
 import smallthingz.ui.text.MultiParagraph
@@ -459,6 +460,8 @@ internal class NativePlainTextSegments {
                 return null
             }
 
+            if (pageHeight <= 0) return null
+
             val start = 0.coerceAtLeast(current)
 
             val currentLine = layoutResult.getLineForOffset(start)
@@ -469,9 +472,9 @@ internal class NativePlainTextSegments {
             val nextPageStartY = currentLineTop + pageHeight
             val lastLineTop = layoutResult.getLineTop(layoutResult.lineCount - 1)
             val currentPageEndLine =
-                if (nextPageStartY < lastLineTop)
+                (if (nextPageStartY < lastLineTop)
                     layoutResult.getLineForVerticalPosition(nextPageStartY) - 1
-                else layoutResult.lineCount - 1
+                else layoutResult.lineCount - 1).coerceAtLeast(currentLine)
 
             val end = getLineEdgeIndex(currentPageEndLine, DirectionEnd) + 1
 
@@ -493,6 +496,8 @@ internal class NativePlainTextSegments {
             } catch (e: IllegalStateException) {
                 return null
             }
+
+            if (pageHeight <= 0) return null
 
             val end = text.length.coerceAtMost(current)
 

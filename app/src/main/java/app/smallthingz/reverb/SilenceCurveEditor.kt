@@ -51,6 +51,11 @@ internal class SilenceCurveView(context: Context) : View(context) {
     private var sampled: List<Float>? = null
     private var maximumHz = 20_000
 
+    private companion object {
+        val gridDecibels = intArrayOf(0, -24, -48, -72, -96)
+        val gridFrequencies = intArrayOf(20, 100, 1_000, 10_000, 20_000)
+    }
+
     init {
         contentDescription = context.getString(R.string.silence_graph_description)
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
@@ -172,7 +177,7 @@ internal class SilenceCurveView(context: Context) : View(context) {
         val point = points[selected]
         labels += frequencyLabel(point)
         labels += cutoffLabel(point)
-        for (db in listOf(0, -24, -48, -72, -96)) {
+        for (db in gridDecibels) {
             val text = db.toString()
             labels += label(text, plot.left - 8 * density - textWidth(text, tickTextSize),
                 y(db.toFloat()) - textHeight(tickTextSize) / 2f, tickTextSize)
@@ -199,16 +204,18 @@ internal class SilenceCurveView(context: Context) : View(context) {
         if (plot.width() <= 0 || plot.height() <= 0) return
         paint.style = Paint.Style.FILL
         paint.textAlign = Paint.Align.LEFT
-        for ((index, label) in drawingLabelGeometry().labels.withIndex()) {
+        val labels = drawingLabelGeometry().labels
+        for (index in labels.indices) {
+            val label = labels[index]
             paint.textSize = label.textSize
             paint.color = if (index < 2) ink else muted
             canvas.drawText(label.text, label.bounds.left, label.baseline, paint)
         }
-        for (db in listOf(0, -24, -48, -72, -96)) {
+        for (db in gridDecibels) {
             paint.color = alpha(muted, 38); paint.strokeWidth = density
             canvas.drawLine(plot.left, y(db.toFloat()), plot.right, y(db.toFloat()), paint)
         }
-        for (hz in listOf(20, 100, 1_000, 10_000, 20_000)) {
+        for (hz in gridFrequencies) {
             val xp = x(hz)
             paint.color = alpha(muted, 32)
             canvas.drawLine(xp, plot.top, xp, plot.bottom, paint)

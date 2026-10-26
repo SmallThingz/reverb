@@ -65,7 +65,7 @@ private fun copyMainTraversalServiceInfo(source: AccessibilityServiceInfo): Acce
 
 // Match the platform's configurable fields, not component-only equality or unrelated Parcel data.
 private fun sameMainTraversalConfiguration(a: AccessibilityServiceInfo, b: AccessibilityServiceInfo): Boolean =
-    a.eventTypes == b.eventTypes && a.packageNames?.toList() == b.packageNames?.toList() &&
+    a.eventTypes == b.eventTypes && a.packageNames.contentEquals(b.packageNames) &&
         a.feedbackType == b.feedbackType && a.notificationTimeout == b.notificationTimeout &&
         (Build.VERSION.SDK_INT < 29 || (a.interactiveUiTimeoutMillis == b.interactiveUiTimeoutMillis &&
             a.nonInteractiveUiTimeoutMillis == b.nonInteractiveUiTimeoutMillis)) &&

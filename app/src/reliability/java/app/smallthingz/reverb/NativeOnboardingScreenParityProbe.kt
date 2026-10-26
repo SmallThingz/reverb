@@ -36,7 +36,12 @@ internal class ScreenParityRender(
     val save: () -> Any,
     private val dispose: () -> Unit,
 ) : AutoCloseable {
-    override fun close() = dispose()
+    private var closed = false
+    override fun close() {
+        if (closed) return
+        closed = true
+        dispose()
+    }
 }
 
 /**
@@ -169,16 +174,25 @@ internal fun verifyNativeOnboardingScreenParity(instrumentation: Instrumentation
     } finally {
         try {
             nativeParityOnMain(instrumentation) {
-                try { active?.close() } finally { host?.fixtureRoot?.removeAllViews(); host?.finish() }
+                val owned = active
+                active = null
+                var cleanup = captureNativeParityCleanup(null) { owned?.close() }
+                cleanup = captureNativeParityCleanup(cleanup) { host?.fixtureRoot?.removeAllViews() }
+                cleanup = captureNativeParityCleanup(cleanup) { host?.finish() }
+                cleanup?.let { throw it }
             }
         } catch (cleanup: Throwable) {
-            val primary = failure
-            if (primary != null) primary.addSuppressed(cleanup) else failure = cleanup
+            failure = appendNativeParityFailure(failure, cleanup)
         }
+        val cleanupFailedAfterPass = failure != null && result.optBoolean("passed")
+        if (failure != null) result.put("passed", false)
         result.put("failure", failure?.stackTraceToString() ?: JSONObject.NULL)
-        File(directory, "result.json").writeText(result.toString(2))
+        val writeFailure = captureNativeParityCleanup(failure) {
+            File(directory, "result.json").writeText(result.toString(2))
+        }
+        if (failure == null) writeFailure?.let { throw it }
         report.append("Full onboarding evidence: ").append(directory.absolutePath).append('\n')
-        if (failure != null && result.optBoolean("passed")) throw checkNotNull(failure)
+        if (cleanupFailedAfterPass) throw checkNotNull(failure)
     }
 }
 
@@ -265,12 +279,23 @@ internal fun showOnboardingScreen(
                 saved as? NativeOnboardingViewportSavedState ?: NativeOnboardingViewportSavedState())
             view.layoutDirection = direction
             ScreenParityRender(view, false, view::saveViewportState) {
-                try { view.close() } finally { runtime.close() }
+                var failure = captureNativeParityCleanup(null) { view.close() }
+                failure = captureNativeParityCleanup(failure) { runtime.close() }
+                failure?.let { throw it }
             }
-        } catch (error: Throwable) { runtime.close(); throw error }
+        } catch (error: Throwable) {
+            captureNativeParityCleanup(error) { runtime.close() }
+            throw error
+        }
     }
-    host.fixtureRoot.addView(rendered.view, FrameLayout.LayoutParams(-1, -1))
-    return rendered
+    try {
+        host.fixtureRoot.addView(rendered.view, FrameLayout.LayoutParams(-1, -1))
+        return rendered
+    } catch (error: Throwable) {
+        captureNativeParityCleanup(error) { rendered.close() }
+        captureNativeParityCleanup(error) { host.fixtureRoot.removeView(rendered.view) }
+        throw error
+    }
 }
 
 /** After the unmodified raster/tree sequence, ensure implicit-focus suppression did not disable

@@ -2,8 +2,12 @@ package app.smallthingz.reverb
 
 import java.io.IOException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -34,14 +38,21 @@ class SettingsMoveLifecycleTest {
             )
         }
 
-        persistenceStarted.await()
-        owner.cancel()
-        releasePersistence.complete(Unit)
-        moveStarted.await()
-        releaseMove.complete(Unit)
-        owner.join()
-
-        assertEquals(7, terminal.await().getOrThrow())
+        try {
+            withTimeout(5_000L) {
+                persistenceStarted.await()
+                owner.cancel()
+                releasePersistence.complete(Unit)
+                moveStarted.await()
+                releaseMove.complete(Unit)
+                owner.join()
+                assertEquals(7, terminal.await().getOrThrow())
+            }
+        } finally {
+            releasePersistence.complete(Unit)
+            releaseMove.complete(Unit)
+            withContext(NonCancellable) { withTimeout(5_000L) { owner.cancelAndJoin() } }
+        }
     }
 
     @Test

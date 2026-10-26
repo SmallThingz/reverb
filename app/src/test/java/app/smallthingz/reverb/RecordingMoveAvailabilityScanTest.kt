@@ -2,6 +2,8 @@ package app.smallthingz.reverb
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -117,18 +119,24 @@ class RecordingMoveAvailabilityScanTest {
         }
     }
 
-    @Test(expected = IllegalStateException::class)
+    @Test
     fun failedAuthoritativeIdentityReadIsNotPublishedAsAvailable() {
-        scanForMovableRecording(
-            recordings = listOf(recording("first")),
-            targetDirectoryId = "target",
-            pendingDeletionIds = emptySet(),
-            nowMillis = 100L,
-            mutationIsActive = { false },
-            assetState = { RecordingAssetState.PRESENT },
-            destructiveIdentityMatches = { throw IllegalStateException("provider observation failed") },
-            collectUpdate = { error("no update can be published after the failed observation") },
-        )
+        val failure = IllegalStateException("provider observation failed")
+        var updates = 0
+        val observed = assertThrows(IllegalStateException::class.java) {
+            scanForMovableRecording(
+                recordings = listOf(recording("first")),
+                targetDirectoryId = "target",
+                pendingDeletionIds = emptySet(),
+                nowMillis = 100L,
+                mutationIsActive = { false },
+                assetState = { RecordingAssetState.PRESENT },
+                destructiveIdentityMatches = { throw failure },
+                collectUpdate = { updates++ },
+            )
+        }
+        assertSame(failure, observed)
+        assertEquals(0, updates)
     }
 
     private fun recording(id: String, directoryId: String = "source") = RecordingEntity(

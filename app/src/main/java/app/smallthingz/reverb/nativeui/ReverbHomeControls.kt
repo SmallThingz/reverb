@@ -119,6 +119,13 @@ internal class ReverbHomeControls(
         buttons[3].bind(!state.saving, false, libraryFrame, openLibrary)
     }
 
+    /** Library and selector content stay static while the selected buffer's three glyphs flip. */
+    fun updateFrame(frame: ReverbHomeFlipFrame) {
+        buttons[0].updateFrame(frame)
+        buttons[1].updateFrame(frame)
+        buttons[2].updateFrame(frame)
+    }
+
     fun setEnvironment(value: ReverbViewEnvironment) {
         environment = value
         oneShotLabel = context.getString(R.string.buffer_one_shot)
@@ -452,6 +459,10 @@ private class HomeAction(context: Context, currentEnvironment: ReverbViewEnviron
         bindClick(enabled, next)
         apply()
     }
+    fun updateFrame(frame: ReverbHomeFlipFrame) {
+        flip = frame
+        applyTransform()
+    }
     fun setEnvironment(value: ReverbViewEnvironment) {
         currentEnvironment = value; glyph.setEnvironment(value); apply(); requestLayout()
     }
@@ -461,6 +472,9 @@ private class HomeAction(context: Context, currentEnvironment: ReverbViewEnviron
             else if (destructive) p.error else p.ink)
         // IconButton's inherited LocalContentColor controls the ripple, not the explicit glyph tint.
         indication.updateColor(if (isEnabled) p.ink else reverbColorWithAlpha(p.ink, .38f))
+        applyTransform()
+    }
+    private fun applyTransform() {
         glyph.rotationY = flip.degrees
         glyph.pivotX = glyph.width * flip.pivotFractionX
         glyph.pivotY = glyph.height * .5f

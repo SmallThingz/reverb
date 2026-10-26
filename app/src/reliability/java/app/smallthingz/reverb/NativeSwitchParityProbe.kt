@@ -68,6 +68,8 @@ internal fun verifyNativeSwitchStaticParity(instrumentation: Instrumentation, re
     check(directory.mkdir())
     val cases = JSONArray()
     val result = switchResult("A/B/A/B exact static ARGB, no tolerance or masks").put("cases", cases)
+        .put("complete", false).put("passed", false)
+    writeSwitchEvidence(directory, result, null)
     var host: NativeParityActivity? = null
     var boards: SwitchParityBoards? = null
     var error: Throwable? = null
@@ -152,7 +154,7 @@ internal fun verifyNativeSwitchStaticParity(instrumentation: Instrumentation, re
             result.put("cleanup_error", android.util.Log.getStackTraceString(cleanup))
             if (error != null) error.addSuppressed(cleanup) else error = cleanup
         }
-        result.put("completed_cases", completed).put("mismatched_cases", mismatched)
+        result.put("complete", true).put("completed_cases", completed).put("mismatched_cases", mismatched)
             .put("passed", error == null && completed == (if (Build.VERSION.SDK_INT >= 31) 4 else 2) && mismatched == 0)
         report.append("PARITY_EVIDENCE ").append(directory.name).append("/result.json\n")
         writeSwitchEvidence(directory, result, error)
@@ -175,6 +177,8 @@ internal fun verifyNativeSwitchObservedMotion(instrumentation: Instrumentation, 
     val result = switchResult("Reference/native halves from one PixelCopy request; finite observed buffers only")
         .put("cases", cases).put("dynamic_frame_phase_qualified", false)
         .put("timing_limit", "Request/callback times are not compositor presentation times; duplicates/gaps are retained")
+        .put("complete", false)
+    writeSwitchEvidence(directory, result, null)
     var host: NativeParityActivity? = null
     var boards: SwitchParityBoards? = null
     var primary: Throwable? = null
@@ -251,6 +255,7 @@ internal fun verifyNativeSwitchObservedMotion(instrumentation: Instrumentation, 
             if (primary != null) primary.addSuppressed(cleanup) else primary = cleanup
         }
         // There is intentionally no blanket motion "passed" field.
+        result.put("complete", true) // Receipt completion is not motion qualification.
         report.append("PARITY_EVIDENCE ").append(directory.name).append("/result.json\n")
         writeSwitchEvidence(directory, result, primary)
         if (result.has("cleanup_error") && !result.has("terminal_error")) throw checkNotNull(primary)
@@ -518,10 +523,14 @@ private class SwitchMotionSampler(private val activity: NativeParityActivity, pr
 }
 
 private fun writeSwitchEvidence(directory: File, result: JSONObject, primaryFailure: Throwable?) {
-    try { File(directory, "result.json").writeText(result.toString(2)) }
+    try {
+        writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+            output.write(result.toString(2).toByteArray(Charsets.UTF_8))
+        }
+    }
     catch (writeFailure: Throwable) {
         if (primaryFailure == null) throw writeFailure
-        primaryFailure.addSuppressed(writeFailure)
+        if (primaryFailure !== writeFailure) primaryFailure.addSuppressed(writeFailure)
     }
 }
 

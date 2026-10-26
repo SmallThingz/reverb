@@ -56,10 +56,12 @@ internal data class SpringFineSeekGeometry(val width: Int, val height: Int, val 
             (rangeFineTuneConstrainedY(rawVertical, horizontal) * drawVerticalTravel).roundToInt()
 }
 
+private const val FINE_SEEK_RETURN_STRENGTH = 3.4f
+private val fineSeekReturnDenominator = cosh(FINE_SEEK_RETURN_STRENGTH) - 1f
+
 internal fun springFineSeekReturnRemaining(elapsedNanos: Long): Float {
     val t = (elapsedNanos.toFloat() / 210_000_000L).coerceIn(0f, 1f)
-    val strength = 3.4f
-    return (cosh(strength * (1f - t)) - 1f) / (cosh(strength) - 1f)
+    return (cosh(FINE_SEEK_RETURN_STRENGTH * (1f - t)) - 1f) / fineSeekReturnDenominator
 }
 
 /**

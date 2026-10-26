@@ -33,7 +33,7 @@ internal fun adjustInlineTrimTarget(
     var start = values.startMillis.coerceIn(0, duration)
     var end = values.endMillis.coerceIn(start, duration)
     if (end - start < minimumRange) {
-        end = (start + minimumRange).coerceAtMost(duration)
+        end = (start.toLong() + minimumRange).coerceAtMost(duration.toLong()).toInt()
         start = (end - minimumRange).coerceAtLeast(0)
     }
     when (target) {

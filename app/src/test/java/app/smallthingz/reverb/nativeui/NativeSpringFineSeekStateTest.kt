@@ -193,6 +193,31 @@ class NativeSpringFineSeekStateTest {
         assertFalse(h.state.needsFrames)
     }
 
+    @Test fun returnCurveMatchesReleasedFloatBitsAcrossCompleteAndInterruptedReturns() {
+        // Independent released expression: retain its per-call Float arithmetic as the oracle.
+        fun released(elapsedNanos: Long): Float {
+            val t = (elapsedNanos.toFloat() / 210_000_000L).coerceIn(0f, 1f)
+            val strength = 3.4f
+            return (kotlin.math.cosh(strength * (1f - t)) - 1f) /
+                (kotlin.math.cosh(strength) - 1f)
+        }
+        fun checkSample(elapsed: Long) {
+            val expected = released(elapsed)
+            val actual = springFineSeekReturnRemaining(elapsed)
+            assertEquals("remaining at $elapsed", expected.toRawBits(), actual.toRawBits())
+            // A new return may begin at either sign or an interrupted fractional displacement.
+            for (start in floatArrayOf(-1f, -.375f, -0.0f, 0f, .0001f, .625f, 1f)) {
+                assertEquals("displacement $start at $elapsed",
+                    (start * expected).toRawBits(), (start * actual).toRawBits())
+            }
+        }
+        for (elapsed in 0L..210_000_000L step 100_000L) checkSample(elapsed)
+        for (elapsed in longArrayOf(Long.MIN_VALUE, -1L, 1L, 16_666_666L, 33_333_333L,
+            104_999_999L, 105_000_001L, 209_999_999L, 210_000_001L, Long.MAX_VALUE)) {
+            checkSample(elapsed)
+        }
+    }
+
     @Test fun fractionalDensityKeepsOddCenteredPositionAndOnlyMirrorsInnerOffset() {
         val g = SpringFineSeekGeometry(421, 316, 421f / 160f)
         assertEquals(168, g.hitWidth)

@@ -461,7 +461,7 @@ private class RecordingRowBody(context: Context, initial: ReverbViewEnvironment)
         requestLayout()
     }
     fun clear() {
-        listOf(title, subtitle, timestamp).forEach { it.setText("") }
+        for (index in paragraphLeaves.indices) paragraphLeaves[index].setText("")
         selectedSemantic = null
         leading.selectedSemantic = null
         leading.contentDescription = null
@@ -470,7 +470,7 @@ private class RecordingRowBody(context: Context, initial: ReverbViewEnvironment)
         refreshSemanticFlags();leading.refreshSemanticFlags()
     }
     fun replaceTextIdentities() {
-        listOf(title, subtitle, timestamp).forEach { it.replacePlainTextAccessibilityIdentity() }
+        for (index in paragraphLeaves.indices) paragraphLeaves[index].replacePlainTextAccessibilityIdentity()
     }
     fun setEnvironment(value: ReverbViewEnvironment) {
         environment = value

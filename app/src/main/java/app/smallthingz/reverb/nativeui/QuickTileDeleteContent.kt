@@ -85,7 +85,8 @@ internal class QuickTileDeleteContent(
         }
         override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
             var start = width - cancel.measuredWidth - confirm.measuredWidth
-            for (child in listOf(cancel, confirm)) {
+            for (index in 0..1) {
+                val child = if (index == 0) cancel else confirm
                 val x = if (layoutDirection == LAYOUT_DIRECTION_RTL) width - start - child.measuredWidth else start
                 val y = ((height - child.measuredHeight) / 2f).roundToInt()
                 child.layout(x, y, x + child.measuredWidth, y + child.measuredHeight)

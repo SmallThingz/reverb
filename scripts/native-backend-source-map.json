@@ -4,9 +4,15 @@
   "frozen_source_commit": "536c10ab104f3624c61e132eac6ea23b546db8e9",
   "normalizations": {
     "src/main/java/app/smallthingz/reverb/AppFeedback.kt": {
-      "compiled_sha256": "a584415941699f4fcd226e97be79dd5e5c047e7ebb97f507c58282f0b59ded09",
+      "compiled_sha256": "e34e2169a4391c6532b49864e0cd46befaccd30bbfb6426404174e07f67434f8",
       "normalized_sha256": "34ff15a7da52a5ce7cedbf8ae917ec6e0617a8628788cd501764cfea6d690041",
       "inverse": [
+        {
+          "from": "    val result = ArrayList<FeedbackEvent>(maxEvents)\n    result.add(head)\n    val tail = pending.listIterator(pending.size - (maxEvents - 2))\n    while (tail.hasNext()) result.add(tail.next())\n    result.add(event)\n    return result",
+          "to": "    return listOf(head) + (pending.drop(1) + event).takeLast(maxEvents - 1)",
+          "count": 1,
+          "word": false
+        },
         {
           "from": "smallthingz.ui",
           "to": "app.smallthingz.nativeui",
@@ -45,30 +51,6 @@
         }
       ]
     },
-    "src/main/java/app/smallthingz/reverb/IncidentsPanelMotion.kt": {
-      "compiled_sha256": "b597fed989a48e28ffeffff9e59cdc2cd8b2e5b2343675e7a294d76ea1e009f5",
-      "normalized_sha256": "ee7681d4b12ad16851d6618cc7befa6332f414d17c5e43640ed0d99fa104c777",
-      "inverse": [
-        {
-          "from": "smallthingz.ui",
-          "to": "app.smallthingz.nativeui",
-          "count": 6,
-          "word": false
-        },
-        {
-          "from": "app.smallthingz.nativeui.animation.",
-          "to": "androidx.compose.animation.",
-          "count": 2,
-          "word": false
-        },
-        {
-          "from": "app.smallthingz.nativeui.runtime.",
-          "to": "androidx.compose.runtime.",
-          "count": 4,
-          "word": false
-        }
-      ]
-    },
     "src/main/java/app/smallthingz/reverb/NotificationSaveSettings.kt": {
       "compiled_sha256": "41c8ae421d81a23ca9e0ed1832ad06a8b80c9872cb811e2026c183e378a9e4f1",
       "normalized_sha256": "f1949dfbc613e1bb887b58d88cd3cd2ff86b91c932d06872490c0dbacc68dfd1",
@@ -87,34 +69,22 @@
         }
       ]
     },
-    "src/main/java/app/smallthingz/reverb/PredictiveBackMotion.kt": {
-      "compiled_sha256": "6b75438fe5de0cc3ca68e3f668e78ae3228d744cc2f1c3c4fab14a74b5b8ebd6",
-      "normalized_sha256": "af1920c29751a87033c5d5fdfb858f218e91cf7b0e4b93dc0a2e852e5da213de",
-      "inverse": [
-        {
-          "from": "smallthingz.ui",
-          "to": "app.smallthingz.nativeui",
-          "count": 5,
-          "word": false
-        },
-        {
-          "from": "app.smallthingz.nativeui.animation.",
-          "to": "androidx.compose.animation.",
-          "count": 1,
-          "word": false
-        },
-        {
-          "from": "app.smallthingz.nativeui.runtime.",
-          "to": "androidx.compose.runtime.",
-          "count": 4,
-          "word": false
-        }
-      ]
-    },
     "src/main/java/app/smallthingz/reverb/QuickSettingsTilesControls.kt": {
-      "compiled_sha256": "c2cde2ee3d6a62298fa1919d393b8936bace4b705bab44fd6d8c9d131d90d2ef",
+      "compiled_sha256": "98f788a8e1d864363f1bbb409345d50d67d7c3ba8f4e8e2b64038909a45094c7",
       "normalized_sha256": "6076d129a1ff68b8b291b419d20ce0cab042723f639a377b0fd8bd24801a6d05",
       "inverse": [
+        {
+          "to": "    private var lastWheelOwner: Pair<Long, Long>? = null\n",
+          "count": 1,
+          "word": false,
+          "from": "    private var wheelOwnerInitialized = false\n    private var lastWheelParentRevision = 0L\n    private var lastWheelEditRevision = 0L\n"
+        },
+        {
+          "to": "        val current = parentRevision to editRevision\n        if (lastWheelOwner != current) {\n            lastWheelOwner = current\n",
+          "count": 1,
+          "word": false,
+          "from": "        val currentEditRevision = editRevision\n        if (!wheelOwnerInitialized || lastWheelParentRevision != parentRevision ||\n            lastWheelEditRevision != currentEditRevision\n        ) {\n            wheelOwnerInitialized = true\n            lastWheelParentRevision = parentRevision\n            lastWheelEditRevision = currentEditRevision\n"
+        },
         {
           "from": "smallthingz.ui",
           "to": "app.smallthingz.nativeui",
@@ -130,9 +100,21 @@
       ]
     },
     "src/main/java/app/smallthingz/reverb/RangeExportEditor.kt": {
-      "compiled_sha256": "051d809521d1233391529b41da45ca59767167a66752a5af44bbaffc1dbd9ed0",
+      "compiled_sha256": "d5f04490ad74923101252804e0ce5900dc64d354d1b631c19953fdb0ed986eba",
       "normalized_sha256": "b8cec9f92e76daa2d333fa3d1dee063540f0391f813708b906d25780720fbac6",
       "inverse": [
+        {
+          "to": "    fun beginBoundaryEdit(target: RangeEditTarget) {\n        selectTarget(target)\n        pausePreview()\n        previewController.stop()\n        auditionSelectedBoundary(force = true)\n",
+          "count": 1,
+          "word": false,
+          "from": "    fun beginBoundaryEdit(target: RangeEditTarget) {\n        selectTarget(target)\n        pausePreview()\n        auditionSelectedBoundary(force = true)\n"
+        },
+        {
+          "to": "    private fun targetValue(target: RangeEditTarget): Float = editTargetValue(currentEditValues(), target)\n",
+          "count": 1,
+          "word": false,
+          "from": "    private fun targetValue(target: RangeEditTarget): Float = when (target) {\n        RangeEditTarget.START -> startSeconds\n        RangeEditTarget.END -> endSeconds\n    }\n"
+        },
         {
           "from": "smallthingz.ui",
           "to": "app.smallthingz.nativeui",
@@ -160,9 +142,15 @@
       ]
     },
     "src/main/java/app/smallthingz/reverb/RecordingInlinePlayer.kt": {
-      "compiled_sha256": "0d3aada2f7032d77dda18225d69732a282fa89e17f9b122761b2bba28a8bd958",
+      "compiled_sha256": "1d62ac068bdfb80f43032d233a91e82839dcec94da06d451e6affa89e2a31d9b",
       "normalized_sha256": "a699f2eb0c0b654ed28078f7519905067e7a81801ba642a07dffe49e5915f2eb",
       "inverse": [
+        {
+          "to": "        end = (start + minimumRange).coerceAtMost(duration)\n",
+          "count": 1,
+          "word": false,
+          "from": "        end = (start.toLong() + minimumRange).coerceAtMost(duration.toLong()).toInt()\n"
+        },
         {
           "from": "import android.content.Context\n",
           "to": "import android.content.Context\nimport androidx.compose.ui.input.pointer.PointerInputChange\n",
@@ -593,6 +581,64 @@
         }
       ],
       "approved_reference_change": "Latest user request: Incidents occupies logical start on Home and is absent from Library. Invert only documented exception declarations and exact Incidents block; original palette, brand, Settings and comparison criteria unchanged."
+    },
+    "src/main/java/app/smallthingz/reverb/IncidentsPanelMotion.kt": {
+      "compiled_sha256": "e173858cec63503be521b16c8a60ed5c48115ab9c6d80893b277c1bf76b982fe",
+      "normalized_sha256": "e173858cec63503be521b16c8a60ed5c48115ab9c6d80893b277c1bf76b982fe",
+      "inverse": []
+    },
+    "src/reference/java/app/smallthingz/reverb/IncidentsPanelMotionReference.kt": {
+      "compiled_sha256": "9139d5dd8117dcfb3d3aea21b44d38557895cac66820d89f4a97f26bdee5526e",
+      "normalized_sha256": "1a2e64d547152ddc9c132735943f30b4a383f3c1c9207f86982dba89e9be0796",
+      "inverse": [
+        {
+          "from": "smallthingz.ui",
+          "to": "app.smallthingz.nativeui",
+          "count": 6,
+          "word": false
+        },
+        {
+          "from": "app.smallthingz.nativeui.animation.",
+          "to": "androidx.compose.animation.",
+          "count": 2,
+          "word": false
+        },
+        {
+          "from": "app.smallthingz.nativeui.runtime.",
+          "to": "androidx.compose.runtime.",
+          "count": 4,
+          "word": false
+        }
+      ]
+    },
+    "src/main/java/app/smallthingz/reverb/PredictiveBackMotion.kt": {
+      "compiled_sha256": "e3481c572c732843e80f0e94bc6d3f70ba377c9183ddebeb15f8d73cb6783482",
+      "normalized_sha256": "e3481c572c732843e80f0e94bc6d3f70ba377c9183ddebeb15f8d73cb6783482",
+      "inverse": []
+    },
+    "src/reference/java/app/smallthingz/reverb/PredictiveBackMotionReference.kt": {
+      "compiled_sha256": "8fbb56ae5f8fc41bc0fce2647369506a9437010095d22b5b3c440f19f23fefa4",
+      "normalized_sha256": "90bb4764766e0b5e8a3011324c285f10e2cfc0cdbde931fdcba0aefb33bb539d",
+      "inverse": [
+        {
+          "from": "smallthingz.ui",
+          "to": "app.smallthingz.nativeui",
+          "count": 5,
+          "word": false
+        },
+        {
+          "from": "app.smallthingz.nativeui.animation.",
+          "to": "androidx.compose.animation.",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "app.smallthingz.nativeui.runtime.",
+          "to": "androidx.compose.runtime.",
+          "count": 4,
+          "word": false
+        }
+      ]
     }
   },
   "references": {

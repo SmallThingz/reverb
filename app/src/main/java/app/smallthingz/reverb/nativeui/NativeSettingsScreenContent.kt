@@ -51,7 +51,9 @@ internal class NativeSettingsScreenContent(
     private var list:SettingsSectionListView?=null
     private var savedPosition=restoredPosition
     private var pendingRetentionFocus=false
-    private var previousFocusKey:Pair<ReverbService.BufferSlot?,Boolean>?=null
+    private var focusKeyInitialized=false
+    private var previousFocusBuffer:ReverbService.BufferSlot?=null
+    private var previousBatteryRestricted=false
     val topBar=ReverbSettingsTopBarView(context,environment) {inputRoot}
     private val deleteSheet=NativeSettingsTileDeleteSheet(this) {environment}
     private val sections=NativeSettingsSections(context,owner,{environment},lifecycleOwner.lifecycle,
@@ -113,9 +115,12 @@ internal class NativeSettingsScreenContent(
         editorBack.isEnabled=state.active&&owner.quickTileEditorState.editorOpen
         importantForAccessibility=if(inputAllowed)IMPORTANT_FOR_ACCESSIBILITY_NO
             else IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
-        val focusKey=input.focusRetention to owner.batteryOptimizationRestricted
-        if(previousFocusKey!=focusKey) {
-            previousFocusKey=focusKey
+        val focusBuffer=input.focusRetention
+        val batteryRestricted=owner.batteryOptimizationRestricted
+        if(!focusKeyInitialized||previousFocusBuffer!=focusBuffer||previousBatteryRestricted!=batteryRestricted) {
+            focusKeyInitialized=true
+            previousFocusBuffer=focusBuffer
+            previousBatteryRestricted=batteryRestricted
             if(input.focusRetention!=null)pendingRetentionFocus=true
         }
         if(!state.hydrated) {

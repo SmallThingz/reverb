@@ -24,7 +24,7 @@ internal class NativeVerticalDragChannel(
     private val nodeJob = SupervisorJob(scope.coroutineContext[Job])
     private val nodeScope = CoroutineScope(scope.coroutineContext + nodeJob)
     private sealed interface Event {
-        data class Start(val position: Offset) : Event
+        data object Start : Event
         data class Delta(val value: Offset) : Event
         data class Stop(val velocity: Velocity) : Event
         data object Cancel : Event
@@ -52,7 +52,7 @@ internal class NativeVerticalDragChannel(
                 }
             }
         }
-        events.trySend(Event.Start(position))
+        events.trySend(Event.Start)
     }
     override fun delta(physicalDelta: Offset) { events.trySend(Event.Delta(physicalDelta)) }
     override fun stop(physicalVelocity: Velocity) { events.trySend(Event.Stop(physicalVelocity)) }

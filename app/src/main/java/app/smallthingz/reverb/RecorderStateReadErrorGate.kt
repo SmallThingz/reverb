@@ -10,12 +10,33 @@ internal class RecorderStateReadErrorGate {
 
     fun shouldReportFailure(error: Throwable): Boolean {
         // Bound malformed/cyclic cause chains and retain only their descriptive values, not stack traces.
-        val signature = generateSequence(error) { it.cause }
-            .take(8)
-            .map { CauseSignature(it.javaClass.name, it.message) }
-            .toList()
-        if (signature == lastFailure) return false
-        lastFailure = signature
+        val previous = lastFailure
+        var replacement: ArrayList<CauseSignature>? = null
+        var cause: Throwable? = error
+        var index = 0
+        while (cause != null && index < 8) {
+            val type = cause.javaClass.name
+            val message = cause.message
+            val old = previous?.getOrNull(index)
+            if (replacement == null && (old == null || old.type != type || old.message != message)) {
+                replacement = ArrayList(8)
+                if (previous != null) {
+                    for (prefix in 0 until index) replacement.add(previous[prefix])
+                }
+            }
+            replacement?.add(CauseSignature(type, message))
+            index++
+            if (index < 8) cause = cause.cause
+        }
+        if (replacement == null) {
+            if (previous != null && previous.size == index) return false
+            // A shorter chain is a new failure even when every retained prefix still matches.
+            replacement = ArrayList(index)
+            if (previous != null) {
+                for (prefix in 0 until index) replacement.add(previous[prefix])
+            }
+        }
+        lastFailure = replacement
         return true
     }
 

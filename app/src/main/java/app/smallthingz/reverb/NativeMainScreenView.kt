@@ -531,7 +531,12 @@ internal class NativeMainScreenView private constructor(
     override fun onMeasure(w: Int, h: Int) {
         val width = MeasureSpec.getSize(w); val height = MeasureSpec.getSize(h)
         val fullW = exact(width); val fullH = exact(height)
-        for (view in listOfNotNull(settings, home, libraryLayer, incidents)) view.measure(fullW, fullH)
+        val settingsPanel = settings
+        val libraryPanel = libraryLayer
+        settingsPanel?.measure(fullW, fullH)
+        home.measure(fullW, fullH)
+        libraryPanel?.measure(fullW, fullH)
+        incidents.measure(fullW, fullH)
         libraryToolbar?.measure(fullW, atMost(height))
         val placement = navigation.feedbackPlacement(libraryMotion.panelProgress)
         val bottom = dp(placement.bottomPaddingDp) + if (placement.addNavigationBarBottom) navigationBottom else 0
@@ -541,7 +546,12 @@ internal class NativeMainScreenView private constructor(
     }
 
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
-        for (view in listOfNotNull(settings, home, libraryLayer, incidents)) view.layout(0, 0, width, height)
+        val settingsPanel = settings
+        val libraryPanel = libraryLayer
+        settingsPanel?.layout(0, 0, width, height)
+        home.layout(0, 0, width, height)
+        libraryPanel?.layout(0, 0, width, height)
+        incidents.layout(0, 0, width, height)
         libraryToolbar?.let { it.layout(0, 0, width, it.measuredHeight) }
         val placement = navigation.feedbackPlacement(libraryMotion.panelProgress)
         val bottom = height - dp(placement.bottomPaddingDp) -

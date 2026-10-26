@@ -10,6 +10,7 @@ import android.provider.DocumentsContract.Document
 import android.provider.DocumentsProvider
 import java.io.File
 import java.io.FileNotFoundException
+import java.io.IOException
 
 /** Real ContentResolver fixture, compiled only by scripts/reliability.gradle. */
 class ReliabilityDocumentsProvider : DocumentsProvider() {
@@ -20,6 +21,8 @@ class ReliabilityDocumentsProvider : DocumentsProvider() {
         RENAME_PROVIDER_SUFFIX,
         COPY_INSTEAD_OF_RENAME,
         RENAME_THEN_THROW,
+        RENAME_THEN_IO_FAILURE,
+        RENAME_THEN_IO_FAILURE_UNAVAILABLE,
         CORRUPT_RENAMED_BYTES,
         LOADING_AFTER_RENAME,
         ERROR_AFTER_RENAME,
@@ -75,6 +78,14 @@ class ReliabilityDocumentsProvider : DocumentsProvider() {
         writeOpenCalls = 0
         substitutedRead = -1
         afterNextListing = null
+    }
+
+    @Synchronized
+    fun prepareRenameResponse(nextMode: Mode) {
+        require(nextMode == Mode.RENAME_THEN_IO_FAILURE || nextMode == Mode.RENAME_THEN_IO_FAILURE_UNAVAILABLE)
+        mode = nextMode
+        renamed = false
+        oldIdQueries = 0
     }
 
     @Synchronized
@@ -160,7 +171,7 @@ class ReliabilityDocumentsProvider : DocumentsProvider() {
             return MatrixCursor(projection ?: COLUMNS).apply { extras = deletionQueryExtras() }
         }
         if (mode == Mode.DELETE_NOT_LISTED) return MatrixCursor(projection ?: COLUMNS)
-        if (renamed && mode == Mode.UNAVAILABLE_AFTER_RENAME) {
+        if (renamed && (mode == Mode.UNAVAILABLE_AFTER_RENAME || mode == Mode.RENAME_THEN_IO_FAILURE_UNAVAILABLE)) {
             throw IllegalStateException("Fixture provider temporarily unavailable")
         }
         return MatrixCursor(projection ?: COLUMNS).apply {
@@ -222,6 +233,12 @@ class ReliabilityDocumentsProvider : DocumentsProvider() {
         }
         if (mode == Mode.RENAME_THEN_THROW) {
             throw IllegalStateException("Fixture transport failed after committed rename")
+        }
+        if (mode == Mode.RENAME_THEN_IO_FAILURE || mode == Mode.RENAME_THEN_IO_FAILURE_UNAVAILABLE) {
+            // A nullable provider document ID means unchanged URI, not a null contract result.
+            // This checked failure instead exercises DocumentsContract's null-result branch
+            // through the local ContentResolver after the physical rename has committed.
+            throw IOException("Fixture response lost after committed rename")
         }
         return nextId
     }

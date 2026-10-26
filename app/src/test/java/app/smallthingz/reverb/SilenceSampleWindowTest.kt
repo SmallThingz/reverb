@@ -388,9 +388,10 @@ class SilenceSampleWindowTest {
     @Test
     fun heldReleaseWithoutAnyAdmittedPcmIsTerminalWithoutAnAudioCallback() {
         val request = SilenceSampleRequest(held = true)
-        val releaseThread = Thread { request.finishHold() }
+        val releaseThread = Thread { request.finishHold() }.apply { isDaemon = true }
         releaseThread.start()
-        releaseThread.join()
+        releaseThread.join(5_000L)
+        assertFalse("finishHold did not terminate", releaseThread.isAlive)
         assertFalse(request.running())
         assertTrue(request.state.value.tooShort)
         assertFalse(request.state.value.complete)

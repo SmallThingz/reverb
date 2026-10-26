@@ -35,7 +35,12 @@ internal fun enqueueFeedbackEvent(
     // can shed older tail events, but must never erase that unacknowledged delivery.
     val head = pending.first()
     if (maxEvents == 1) return listOf(head)
-    return listOf(head) + (pending.drop(1) + event).takeLast(maxEvents - 1)
+    val result = ArrayList<FeedbackEvent>(maxEvents)
+    result.add(head)
+    val tail = pending.listIterator(pending.size - (maxEvents - 2))
+    while (tail.hasNext()) result.add(tail.next())
+    result.add(event)
+    return result
 }
 
 internal fun acknowledgeFeedbackEvent(

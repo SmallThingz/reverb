@@ -4,7 +4,6 @@ import android.content.Context
 import android.graphics.Color
 import android.view.View
 import android.view.ViewGroup
-import smallthingz.ui.geometry.Offset
 import smallthingz.ui.geometry.Rect
 import app.smallthingz.reverb.NativeVerticalPhaseBinding
 import app.smallthingz.reverb.NativeVerticalScrollAccessibilityBinding
@@ -70,8 +69,13 @@ internal class ReverbRecordingInfoBody(
         val accessibility = host.accessibility
         viewport.sourceAccessibilityNode = { accessibility.sourceNode(viewport) }
         viewport.sourceAccessibilityChildren = {
-            rows.items.flatMap { listOf(it.label, it.value) }
-                .filter { accessibility.sourceNode(it).present }
+            val children = ArrayList<View>(rows.items.size * 2)
+            for (index in rows.items.indices) {
+                val row = rows.items[index]
+                if (accessibility.sourceNode(row.label).present) children.add(row.label)
+                if (accessibility.sourceNode(row.value).present) children.add(row.value)
+            }
+            children
         }
         leases += NativeVerticalScrollAccessibilityBinding(viewport, host.scrollEvents) {
             accessibility.sourceNode(viewport).present
@@ -84,9 +88,14 @@ internal class ReverbRecordingInfoBody(
         }
         accessibility.extraClip = ownClips
         restoredClip = { if (accessibility.extraClip === ownClips) accessibility.extraClip = previousClips }
-        for (text in listOf(name) + rows.items.flatMap { listOf(it.label, it.value) }) {
+        fun bindText(text: ReverbParagraphView) {
             leases += text.bindPlainTextAccessibility(accessibility.cursor, accessibility.geometry,
                 sourceNode = { accessibility.sourceNode(text) }) { accessibility.sourceNode(text).present }
+        }
+        bindText(name)
+        for (index in rows.items.indices) {
+            val row = rows.items[index]
+            bindText(row.label); bindText(row.value)
         }
     }
     /** Metadata enrichment updates text only; the source rememberScrollState/window stays live. */
@@ -134,12 +143,13 @@ internal class ReverbRecordingInfoBody(
         closed = true
         var failure: Throwable? = null
         fun release(block: () -> Unit) { try { block() } catch(error: Throwable) {
-            if (failure == null) failure = error else failure!!.addSuppressed(error)
+            if (failure == null) failure = error else if (failure !== error) failure!!.addSuppressed(error)
         } }
         release(scroll::close)
-        release { restoredClip?.invoke() }; restoredClip = null
-        leases.asReversed().forEach { release(it::close) }
-        leases.clear()
+        val clip = restoredClip; restoredClip = null
+        release { clip?.invoke() }
+        val owned = leases.toList(); leases.clear()
+        owned.asReversed().forEach { release(it::close) }
         viewport.sourceAccessibilityNode = null
         viewport.sourceAccessibilityChildren = null
         failure?.let { throw it }
@@ -172,7 +182,8 @@ private class InfoRows(context: Context, private var environment: ReverbViewEnvi
         val gap=(10f*environment.textDensity.density).roundToInt()
         val bounded=MeasureSpec.getMode(h)!=MeasureSpec.UNSPECIFIED
         var used=0
-        for ((index,row) in items.withIndex()) {
+        for (index in items.indices) {
+            val row = items[index]
             if(index>0)used+=gap
             row.measure(infoExact(width),if(bounded)infoAtMost(max(0,MeasureSpec.getSize(h)-used)) else h)
             used+=row.measuredHeight
@@ -181,7 +192,8 @@ private class InfoRows(context: Context, private var environment: ReverbViewEnvi
     }
     override fun onLayout(changed:Boolean,l:Int,t:Int,r:Int,b:Int) {
         var y=0;val gap=(10f*environment.textDensity.density).roundToInt()
-        for((index,row) in items.withIndex()) {
+        for(index in items.indices) {
+            val row=items[index]
             if(index>0)y+=gap
             row.layout(0,y,width,y+row.measuredHeight);y+=row.measuredHeight
         }
@@ -207,10 +219,13 @@ private class InfoRow(context:Context,private var environment:ReverbViewEnvironm
         }
         override fun onLayout(changed:Boolean,l:Int,t:Int,r:Int,b:Int) {
             val x=dp(14f);val y=dp(11f)
-            for((text,top) in listOf(this@InfoRow.label to y,this@InfoRow.value to(y+this@InfoRow.label.measuredHeight+dp(2f)))) {
-                val left=if(layoutDirection==LAYOUT_DIRECTION_RTL)width-x-text.measuredWidth else x
-                text.layout(left,top,left+text.measuredWidth,top+text.measuredHeight)
-            }
+            val valueTop=y+this@InfoRow.label.measuredHeight+dp(2f)
+            placeText(this@InfoRow.label,x,y)
+            placeText(this@InfoRow.value,x,valueTop)
+        }
+        private fun placeText(text:View,x:Int,top:Int) {
+            val left=if(layoutDirection==LAYOUT_DIRECTION_RTL)width-x-text.measuredWidth else x
+            text.layout(left,top,left+text.measuredWidth,top+text.measuredHeight)
         }
     }
     init {

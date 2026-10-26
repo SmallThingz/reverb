@@ -2,7 +2,6 @@ package app.smallthingz.reverb.nativeui
 
 import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.pow
 
 /** Home's indication is a foreground: it washes both the text and the surface beneath it. */
 internal class HomeBufferInk {
@@ -42,15 +41,15 @@ internal class HomeBufferInk {
     private fun prepareBackground(fill: Int) {
         background = composite(fill, field, fill ushr 24)
         val overlaid = overlay(background)
-        backgroundLow = luminance(channelMinimum(background, overlaid))
-        backgroundHigh = luminance(channelMaximum(background, overlaid))
+        backgroundLow = srgbLuminance(channelMinimum(background, overlaid))
+        backgroundHigh = srgbLuminance(channelMaximum(background, overlaid))
     }
 
     private fun contrastBound(foreground: Int): Double {
         val ink = composite(foreground, background, foreground ushr 24)
         val overlaid = overlay(ink)
-        val inkLow = luminance(channelMinimum(ink, overlaid))
-        val inkHigh = luminance(channelMaximum(ink, overlaid))
+        val inkLow = srgbLuminance(channelMinimum(ink, overlaid))
+        val inkHigh = srgbLuminance(channelMaximum(ink, overlaid))
         return when {
             inkLow >= backgroundHigh -> (inkLow + .05) / (backgroundHigh + .05)
             backgroundLow >= inkHigh -> (backgroundLow + .05) / (inkHigh + .05)
@@ -75,13 +74,5 @@ internal class HomeBufferInk {
         fun channel(shift: Int): Int =
             (((front ushr shift and 255) * alpha + (back ushr shift and 255) * (255 - alpha) + 127) / 255) shl shift
         return -0x1000000 or channel(16) or channel(8) or channel(0)
-    }
-
-    private fun luminance(color: Int): Double {
-        fun channel(shift: Int): Double {
-            val value = (color ushr shift and 255) / 255.0
-            return if (value <= .04045) value / 12.92 else ((value + .055) / 1.055).pow(2.4)
-        }
-        return .2126 * channel(16) + .7152 * channel(8) + .0722 * channel(0)
     }
 }

@@ -225,7 +225,9 @@ private class SliderBody(
         val next=when(action) {
             AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS.id->{
                 if(!isEnabled||args?.containsKey(AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE)!=true)return false
-                model.semanticProgress(args.getFloat(AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE))
+                val requested=args.getFloat(AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE)
+                if(!requested.isFinite())return false
+                model.semanticProgress(requested)
             }
             AccessibilityNodeInfo.ACTION_SCROLL_FORWARD->{if(!isEnabled)return false;model.semanticProgress(model.value+1)}
             AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD->{if(!isEnabled)return false;model.semanticProgress(model.value-1)}

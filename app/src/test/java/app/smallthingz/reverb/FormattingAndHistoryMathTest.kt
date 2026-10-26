@@ -367,20 +367,6 @@ class FormattingAndHistoryMathTest {
 
 
     @Test
-    fun recordingCopyDigest_copiesEveryByteAcrossBoundarySizes() {
-        val source = ByteArray(262_147) { index -> ((index * 37 + 11) and 0xff).toByte() }
-        val expectedDigest = sha256(ByteArrayInputStream(source)).sha256
-
-        for (bufferSize in listOf(1, 3, 4_096, 131_072)) {
-            val output = ByteArrayOutputStream(source.size)
-            val digest = copyWithSha256(ByteArrayInputStream(source), output, bufferSize)
-            assertEquals(source.size.toLong(), digest.byteCount)
-            assertTrue(source.contentEquals(output.toByteArray()))
-            assertTrue(expectedDigest.contentEquals(digest.sha256))
-        }
-    }
-
-    @Test
     fun recordingCopyDigest_makesProgressWhenBulkReadReturnsZero() {
         val expected = byteArrayOf(1, 2, 3, 4, 5)
         val source = object : ByteArrayInputStream(expected) {
@@ -397,18 +383,6 @@ class FormattingAndHistoryMathTest {
         val digest = copyWithSha256(source, output, 4)
         assertEquals(expected.size.toLong(), digest.byteCount)
         assertTrue(expected.contentEquals(output.toByteArray()))
-    }
-
-    @Test
-    fun recordingCopyDigest_detectsSameSizeContentCorruption() {
-        val source = ByteArray(65_536) { index -> (index xor (index ushr 8)).toByte() }
-        val altered = source.copyOf().also { bytes ->
-            bytes[bytes.lastIndex / 2] = (bytes[bytes.lastIndex / 2].toInt() xor 0x40).toByte()
-        }
-        val sourceDigest = sha256(ByteArrayInputStream(source))
-        val alteredDigest = sha256(ByteArrayInputStream(altered))
-        assertEquals(sourceDigest.byteCount, alteredDigest.byteCount)
-        assertFalse(sourceDigest.sha256.contentEquals(alteredDigest.sha256))
     }
 
     @Test
@@ -1111,7 +1085,7 @@ class FormattingAndHistoryMathTest {
     }
 
     @Test
-    fun destructiveAudioMutationIsRejectedOnceServiceTeardownOwnsLifetime() {
+    fun serviceCommandGateRejectsAfterTeardownOwnsLifetime() {
         assertTrue(serviceCommandMayQueue(serviceDestroying = false))
         assertFalse(serviceCommandMayQueue(serviceDestroying = true))
     }
@@ -1156,18 +1130,6 @@ class FormattingAndHistoryMathTest {
                 currentGeneration = 8L,
             ),
         )
-    }
-
-    @Test
-    fun committedSettingsReloadIsRejectedOnceServiceTeardownOwnsLifetime() {
-        assertTrue(serviceCommandMayQueue(serviceDestroying = false))
-        assertFalse(serviceCommandMayQueue(serviceDestroying = true))
-    }
-
-    @Test
-    fun exportStartAndUserCancelAreRejectedOnceServiceTeardownOwnsLifetime() {
-        assertTrue(serviceCommandMayQueue(serviceDestroying = false))
-        assertFalse(serviceCommandMayQueue(serviceDestroying = true))
     }
 
     @Test

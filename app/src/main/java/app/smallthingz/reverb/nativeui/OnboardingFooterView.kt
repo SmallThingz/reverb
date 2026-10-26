@@ -281,6 +281,7 @@ private class FooterButton(
 ) : ViewGroup(context), NativeClickPhaseHost, NativeMergedRowAccessibilityHost {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val label = ReverbParagraphView(context, style, density, resolver, android.graphics.Color.TRANSPARENT)
+    private val accessibilityChildren = listOf(label)
     private val content = object : ViewGroup(context) {
         private val softwareClip = Path()
         init {
@@ -330,7 +331,7 @@ private class FooterButton(
     private val interaction = factory.create(this, content, filled) { elevation = it }
     override val nativeClickEndpoint: NativeClickPhaseEndpoint get() = interaction.pointerEndpoint
     override val mergedRowAccessibility = ReverbMergedRowAccessibility(this, NativeMergedRowRole.BUTTON,
-        sourceState = { NativeMergedRowAccessibilityState(isEnabled, null, null, listOf(label)) },
+        sourceState = { NativeMergedRowAccessibilityState(isEnabled, null, null, accessibilityChildren) },
         invokeSourceClick = {
             if (isEnabled && isAttachedToWindow) { onActivate(); true } else false
         })

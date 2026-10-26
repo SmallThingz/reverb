@@ -3,6 +3,7 @@ package app.smallthingz.reverb
 import android.content.Context
 import android.util.Log
 import java.io.IOException
+import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -214,8 +215,9 @@ private fun copyFrameRange(
     writer: WavAudioFileWriter,
 ) {
     val frameBytes = layout.frameBytes
-    val framesPerBuffer = maxOf(1, TRIM_COPY_BUFFER_BYTES / frameBytes)
+    val framesPerBuffer = minOf(frameCount, maxOf(1, TRIM_COPY_BUFFER_BYTES / frameBytes).toLong()).toInt()
     val buffer = ByteArray(framesPerBuffer * frameBytes)
+    val readBuffer = ByteBuffer.wrap(buffer)
     var copiedFrames = 0L
     while (copiedFrames < frameCount) {
         val frames = minOf(framesPerBuffer.toLong(), frameCount - copiedFrames).toInt()
@@ -223,7 +225,7 @@ private fun copyFrameRange(
         requireReadAt(
             channel = source,
             position = layout.dataOffsetBytes + (startFrame + copiedFrames) * frameBytes.toLong(),
-            bytes = buffer,
+            buffer = readBuffer,
             count = byteCount,
         )
         writer.write(buffer, 0, byteCount)

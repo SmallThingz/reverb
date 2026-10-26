@@ -338,10 +338,10 @@ internal class ReverbRenameFieldView(
         if(closed)return
         closed=true
         var failure:Throwable?=null
-        fun release(action:()->Unit){try{action()}catch(error:Throwable){if(failure==null)failure=error else failure!!.addSuppressed(error)}}
+        fun release(action:()->Unit){try{action()}catch(error:Throwable){if(failure==null)failure=error else if(failure!==error)failure!!.addSuppressed(error)}}
         release(interop::close);release(supportLease::close)
-        editor.releaseCallbacks()
-        colorTargets.close();thicknessTargets.close();ownerJob.cancel()
+        release(editor::releaseCallbacks)
+        release{colorTargets.close()};release{thicknessTargets.close()};release{ownerJob.cancel()}
         failure?.let{throw it}
     }
     private fun dp(value:Float)=(value*environment.textDensity.density).roundToInt()

@@ -5,6 +5,9 @@ import android.view.ViewGroup
 import smallthingz.ui.unit.sp
 import kotlin.math.roundToInt
 
+private val libraryHeaderTextStyle =
+    ReverbParagraphStyles[ReverbTextRole.LABEL_LARGE].copy(letterSpacing = 0.04.sp)
+
 /** FilesScreen.HeaderItem only. The containing list owns its separate 16dp horizontal inset. */
 internal class ReverbLibraryHeaderView(
     context: Context,
@@ -24,11 +27,12 @@ internal class ReverbLibraryHeaderView(
         if (this.compactTop != compactTop) { this.compactTop = compactTop; requestLayout() }
     }
     fun setEnvironment(value: ReverbViewEnvironment) {
+        if (environment === value) return
         environment = value
         bindTypography()
     }
     private fun bindTypography() {
-        label.setTypography(ReverbParagraphStyles[ReverbTextRole.LABEL_LARGE].copy(letterSpacing = 0.04.sp),
+        label.setTypography(libraryHeaderTextStyle,
             environment.textDensity, environment.sharedFontResolver)
         label.setTextColor(environment.palette.muted)
         requestLayout()

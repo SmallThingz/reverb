@@ -2,9 +2,7 @@ package app.smallthingz.reverb
 
 import java.io.Closeable
 import java.util.concurrent.Callable
-import java.util.concurrent.Executor
 import java.util.concurrent.FutureTask
-import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -76,23 +74,5 @@ internal fun <P : Closeable, C : Closeable> createTimelineSnapshotExportTask(
         override fun done() {
             if (!started.get()) closeParentOnce(onWorker = false)
         }
-    }
-}
-
-internal fun submitExportTask(
-    executor: Executor,
-    task: FutureTask<Unit>,
-    onRejected: (RejectedExecutionException) -> Unit,
-) {
-    try {
-        executor.execute(task)
-    } catch (error: RejectedExecutionException) {
-        // done() releases an unstarted source; never retry work or close the parent on the caller.
-        try {
-            task.cancel(false)
-        } catch (cleanupError: Exception) {
-            if (cleanupError !== error) error.addSuppressed(cleanupError)
-        }
-        onRejected(error)
     }
 }

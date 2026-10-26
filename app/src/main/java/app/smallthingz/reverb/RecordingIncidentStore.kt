@@ -439,7 +439,10 @@ internal fun unexpectedAppExitShouldCreateIncident(reason: Int, status: Int): Bo
     ApplicationExitInfo.REASON_INITIALIZATION_FAILURE,
     EXIT_REASON_ANOMALY,
     -> true
-    ApplicationExitInfo.REASON_SIGNALED -> status in setOf(4, 6, 7, 8, 11) // SIGILL/ABRT/BUS/FPE/SEGV
+    ApplicationExitInfo.REASON_SIGNALED -> when (status) {
+        4, 6, 7, 8, 11 -> true // SIGILL/ABRT/BUS/FPE/SEGV
+        else -> false
+    }
     else -> false
 }
 
@@ -711,8 +714,9 @@ internal fun unexpectedErrorIncidentDescription(
     val normalizedSource = source.trim().ifBlank { "Unexpected app error" }
     val type = error::class.java.name
     val message = error.message?.trim().orEmpty()
-    val frame = error.stackTrace.firstOrNull { it.className.startsWith("app.smallthingz.reverb") }
-        ?: error.stackTrace.firstOrNull()
+    val stackTrace = error.stackTrace
+    val frame = stackTrace.firstOrNull { it.className.startsWith("app.smallthingz.reverb") }
+        ?: stackTrace.firstOrNull()
     val location = frame?.let { stack ->
         buildString {
             append(stack.className.substringAfterLast('.'))
@@ -1545,10 +1549,9 @@ internal object RecordingIncidentStore {
             candidate.kind == incident.kind &&
                 recordingIncidentsShareCaptureSession(candidate, incident)
         }
-        val exactIndex = existing.indexOfFirst { candidate ->
+        val index = if (sessionIndex >= 0) sessionIndex else existing.indexOfFirst { candidate ->
             recordingIncidentReferenceMatches(candidate, incident)
         }
-        val index = sessionIndex.takeIf { it >= 0 } ?: exactIndex
         val updated = if (index >= 0) {
             existing.toMutableList().apply {
                 this[index] = mergeRecordingIncidentEvidence(this[index], incident, incomingExitObserved)

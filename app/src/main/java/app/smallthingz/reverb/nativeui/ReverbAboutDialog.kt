@@ -39,12 +39,12 @@ import kotlin.math.max
 import kotlin.math.roundToInt
 
 /**
- * Native About Window proposal. Uses the released Compose Dialog's exact theme/window policy,
- * not AlertDialog's default sizing, title, buttons, background, animations or cancel behavior.
+ * Native About window used by NativeMainScreenView, with the released Compose Dialog's exact
+ * theme/window policy, sizing, title, buttons, background, animations and cancel behavior.
  *
  * The owner retains this object for one About entry and calls dismiss() when its route is removed.
- * Recreate on anchor/density changes, matching released Dialog's remember keys. No production caller
- * is integrated. Actual window/frame/input parity remains a fixture obligation.
+ * Recreate on anchor/density changes, matching released Dialog's remember keys.
+ * Actual window/frame/input parity remains a fixture obligation.
  */
 internal class ReverbAboutDialog(
     private val anchor: View,

@@ -19,7 +19,7 @@ internal class NativeMotionPointerSource(
     private val rootToScreen: (Offset) -> Offset,
     mouseButtons: Boolean = false,
 ) {
-    private data class Previous(val id: Long, val screenPosition: Offset, val pressed: Boolean)
+    private class Previous(val id: Long, var screenPosition: Offset)
     private val previous = mutableMapOf<Int, Previous>()
     private var nextId = 0L
     private val admission = NativePressedPointerAdmission(mouseButtons)
@@ -41,6 +41,7 @@ internal class NativeMotionPointerSource(
             val androidId = event.getPointerId(index)
             val old = previous[androidId]
             val id = old?.id ?: nextId++
+            val previousScreen = old?.screenPosition ?: Offset.Zero
             val original = Offset(event.getX(index), event.getY(index))
             val screen = if (index == 0) Offset(event.rawX, event.rawY)
                 else if (Build.VERSION.SDK_INT >= 29) Offset(event.getRawX(index), event.getRawY(index))
@@ -55,18 +56,26 @@ internal class NativeMotionPointerSource(
                 MotionEvent.TOOL_TYPE_ERASER -> PointerType.Eraser
                 else -> PointerType.Unknown
             }
-            val history = ArrayList<NativePointerHistory>(event.historySize)
-            for (sample in 0 until event.historySize) {
-                val point = Offset(event.getHistoricalX(index, sample), event.getHistoricalY(index, sample))
-                if (point.x.isFinite() && point.y.isFinite()) {
-                    history += NativePointerHistory(event.getHistoricalEventTime(sample), point)
+            val historySize = event.historySize
+            val history = if (historySize == 0) emptyList() else {
+                val samples = ArrayList<NativePointerHistory>(historySize)
+                for (sample in 0 until historySize) {
+                    val point = Offset(event.getHistoricalX(index, sample), event.getHistoricalY(index, sample))
+                    if (point.x.isFinite() && point.y.isFinite()) {
+                        samples += NativePointerHistory(event.getHistoricalEventTime(sample), point)
+                    }
                 }
+                samples
             }
             changes += NativeRootPointerChange(
-                id, androidId, event.eventTime, screen, old?.screenPosition ?: screen, pressed, old?.pressed ?: false,
+                id, androidId, event.eventTime, screen, if (old != null) previousScreen else screen, pressed, old != null,
                 type, original, history,
             )
-            if (pressed) previous[androidId] = Previous(id, screen, true) else previous.remove(androidId)
+            if (pressed) {
+                val current = old ?: Previous(id, screen)
+                current.screenPosition = screen
+                previous[androidId] = current
+            } else previous.remove(androidId)
         }
         return NativeRootPointerFrame(changes, event.buttonState and MotionEvent.BUTTON_PRIMARY != 0)
     }
@@ -102,12 +111,17 @@ internal class NativeRootPointerFrame(
         screenToLocal: (Offset) -> Offset,
         nodeOriginOnScreen: Offset,
         pointerIds: Set<Long>? = null,
-    ): NativeDragPointerEvent =
-        NativeDragPointerEvent(changes.filter { pointerIds == null || it.id in pointerIds }.map { change ->
-            NativeDragPointerChange(
+    ): NativeDragPointerEvent {
+        val capacity = if (pointerIds == null) changes.size else minOf(changes.size, pointerIds.size)
+        val projected = ArrayList<NativeDragPointerChange>(capacity)
+        for (change in changes) {
+            if (pointerIds != null && change.id !in pointerIds) continue
+            projected.add(NativeDragPointerChange(
                 change.id, change.timeMillis, screenToLocal(change.screenPosition),
                 screenToLocal(change.previousScreenPosition), change.pressed, change.previouslyPressed,
                 change.type, change.originalPosition, change.history, change.consumption,
-            )
-        }, nodeOriginOnScreen, primaryMouseButtonPressed, dispatchState)
+            ))
+        }
+        return NativeDragPointerEvent(projected, nodeOriginOnScreen, primaryMouseButtonPressed, dispatchState)
+    }
 }

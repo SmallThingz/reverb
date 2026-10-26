@@ -136,7 +136,8 @@ internal class NativeCaptureUiOwner(
     private val mutableState = MutableStateFlow(snapshot())
     val state: StateFlow<NativeCaptureUiState> = mutableState.asStateFlow()
     private var clearPoll: Job? = null
-    private var clearPollKey: Pair<ReverbService?, Long?> = null to null
+    private var clearPollService: ReverbService? = null
+    private var clearPollOperationId: Long? = null
     private var feedbackJob: Job? = null
     private var feedbackStatus: CaptureSaveStatus? = null
     private val feedbackVisible = MutableStateFlow(false)
@@ -345,12 +346,13 @@ internal class NativeCaptureUiOwner(
     }
 
     private fun restartClearPoll() {
-        val key = service to activeClearOperationId
-        if (key == clearPollKey) return
-        clearPollKey = key
+        val recorder = service
+        val operationId = activeClearOperationId
+        if (recorder == clearPollService && operationId == clearPollOperationId) return
+        clearPollService = recorder
+        clearPollOperationId = operationId
         clearPoll?.cancel(); clearPoll = null
-        val recorder = key.first ?: return
-        val operationId = key.second ?: return
+        if (recorder == null || operationId == null) return
         clearPoll = scope.launch {
             while (service === recorder && activeClearOperationId == operationId) {
                 val status = recorder.currentBufferClearStatus()

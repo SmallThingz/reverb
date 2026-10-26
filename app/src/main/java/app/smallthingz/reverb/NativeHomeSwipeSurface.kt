@@ -28,7 +28,10 @@ internal fun nativeHomeSwipeSurface(
     val blobLayout = object : NativeViewPointerHitLayout {
         override val placed get() = blob.isAttachedToWindow && blob.visibility == View.VISIBLE
         override val size get() = Size(blob.width.toFloat(), blob.height.toFloat())
-        override val minimumTouchTarget get() = Size(minimumTarget(), minimumTarget())
+        override val minimumTouchTarget: Size get() {
+            val minimum = minimumTarget()
+            return Size(minimum, minimum)
+        }
         override val nodes = listOf(clickNode)
         override val childrenInHitOrder = emptyList<NativeViewPointerHitLayout>()
         override fun screenToLocal(screen: Offset) = coordinates.coordinates(blob).local(screen)
@@ -37,7 +40,10 @@ internal fun nativeHomeSwipeSurface(
     val hitLayout = object : NativeViewPointerHitLayout {
         override val placed get() = root.isAttachedToWindow && root.visibility == View.VISIBLE
         override val size get() = Size(root.width.toFloat(), root.height.toFloat())
-        override val minimumTouchTarget get() = Size(minimumTarget(), minimumTarget())
+        override val minimumTouchTarget: Size get() {
+            val minimum = minimumTarget()
+            return Size(minimum, minimum)
+        }
         override val nodes = listOf(dragNode)
         override val childrenInHitOrder = listOf(blobLayout)
         override fun screenToLocal(screen: Offset) = coordinates.coordinates(root).local(screen)

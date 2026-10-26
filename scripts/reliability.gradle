@@ -13,6 +13,11 @@ allprojects {
             throw new GradleException('reverbNativeEntryLifecycle requires reverbNativeParity=true')
         }
         android {
+            sourceSets {
+                def referenceReliability = maybeCreate('reliability')
+                referenceReliability.java.srcDir 'src/reference/java'
+                referenceReliability.kotlin.srcDir 'src/reference/java'
+            }
             buildTypes {
                 reliability {
                     initWith debug
@@ -82,7 +87,10 @@ allprojects {
                     'src/reliability/java/app/smallthingz/reverb/ReleasedLibraryFilesScreen.kt': 'eee4b6985bb0ada6b8127a49ea4925055afe46bb8ea75cb067780c02e4503489',
                     'src/main/java/app/smallthingz/reverb/RecordingCard.kt': '85b5ad0f9f97b63a57024933e8b5723050ebf5cbcbfde3f7807231c7e04d1b42',
                 ]
-                inputs.files(screenOracleSources.keySet().collect { file(it) })
+                inputs.files(screenOracleSources.keySet().collect { relative ->
+                    file(relative == 'src/main/java/app/smallthingz/reverb/RecordingCard.kt' ?
+                        'src/reliability/java/app/smallthingz/reverb/RecordingCard.kt' : relative)
+                })
                 def rangeRendererSource = file('src/main/java/app/smallthingz/reverb/RangeExportEditor.kt')
                 def inlinePlayerSource = file('src/main/java/app/smallthingz/reverb/RecordingInlinePlayer.kt')
                 inputs.files(rangeRendererSource, inlinePlayerSource)
@@ -108,12 +116,12 @@ allprojects {
                     def splitSha256 = { byte[] bytes ->
                         java.security.MessageDigest.getInstance('SHA-256').digest(bytes).encodeHex().toString()
                     }
-                    if (splitSha256(splitSourceMapFile.bytes) != '441a3c805dadb0711e79b72d132cf4151c431eaa1f63b8a393c7c104442f90e0') {
+                    if (splitSha256(splitSourceMapFile.bytes) != '217991dba2629efe2f61b69aa506dcdd055c2ddc67b9167740ecc91dad5ef16d') {
                         throw new GradleException('Native renderer split manifest changed')
                     }
                     // Native backends change namespaces; approved Incidents reference exceptions are explicit.
                     // Pin actual compiled inputs, invert only declared seams, then apply every original release hash.
-                    if (splitSha256(backendSourceMapFile.bytes) != 'e89afbb05f2635049b477efef57d564ffadf67eef07eee1079f2e0d79c3f76d9') {
+                    if (splitSha256(backendSourceMapFile.bytes) != 'e50777cd37ea84a5073ec8e9d62fb06692ce2afb3227bb9d94458d1230073cb4') {
                         throw new GradleException('Native backend source manifest changed')
                     }
                     def backendNormalizedBytes = [:]

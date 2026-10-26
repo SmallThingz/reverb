@@ -138,6 +138,9 @@ class HomeBufferContrastTest {
     private data class Colors(val fill: Int, val ink: Int)
 
     companion object {
+        private val stateAlphas = intArrayOf(0, 8, 16, 20, 26)
+        private val pressAlphas = intArrayOf(0, 8, 16, 26)
+        private val channelShifts = intArrayOf(0, 8, 16)
         private fun colors(p: ReverbPalette, state: State): Colors = when (state) {
             State.IDLE -> Colors(reverbColorWithAlpha(p.primaryContainer, .74f), p.onPrimaryContainer)
             State.RECORDING -> Colors(p.primary, p.onPrimary)
@@ -163,7 +166,7 @@ class HomeBufferContrastTest {
             val foreground = composite(ink, background)
             var result = 21.0
             // Sample independently varying state/ripple opacities, including coincident maxima.
-            for (state in intArrayOf(0, 8, 16, 20, 26)) for (press in intArrayOf(0, 8, 16, 26)) {
+            for (state in stateAlphas) for (press in pressAlphas) {
                 val a = composite(p.ink, composite(p.ink, foreground, state), press)
                 val b = composite(p.ink, composite(p.ink, background, state), press)
                 result = min(result, contrast(a, b))
@@ -177,7 +180,7 @@ class HomeBufferContrastTest {
                 val overlaid = composite(p.ink, composite(p.ink, color, 26), 26)
                 var low = 0
                 var high = 0
-                for (shift in intArrayOf(0, 8, 16)) {
+                for (shift in channelShifts) {
                     val a = color ushr shift and 255
                     val b = overlaid ushr shift and 255
                     low = low or (min(a, b) shl shift)
@@ -191,7 +194,7 @@ class HomeBufferContrastTest {
         }
         private fun composite(front: Int, back: Int, alpha: Int = front ushr 24): Int {
             var result = -0x1000000
-            for (shift in intArrayOf(0, 8, 16)) {
+            for (shift in channelShifts) {
                 val channel = ((front ushr shift and 255) * alpha + (back ushr shift and 255) * (255 - alpha) + 127) / 255
                 result = result or (channel shl shift)
             }

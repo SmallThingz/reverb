@@ -83,11 +83,11 @@ internal class NativeBringIntoViewRequestQueue {
                     CancellationException(
                         "bringIntoView call interrupted by a newer, non-overlapping call"
                     )
-                for (j in requests.size - 1..i) {
+                for (j in requests.size - 1 downTo i) {
                     // This mutates the list while iterating, but since we're iterating
                     // backwards in both cases, it's fine.
                     // Cancelling the continuation will remove the request from the queue.
-                    requests[i].continuation.cancel(cause)
+                    requests[j].continuation.cancel(cause)
                 }
             }
             // Otherwise the new request fully contains the current item, so keep searching up

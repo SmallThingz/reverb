@@ -79,6 +79,7 @@ internal fun verifyNativeRangeParity(instrumentation: Instrumentation, report: S
         .put("comparison", "Exact unmasked ARGB, ABAB stability and actual state; no tolerance")
         .put("scope", "Range content viewport; regular/compact Light/Dark; existing wheel set-progress action")
         .put("limits", "Settled pixels only; no opening-frame alignment, endpoint pointer/audition, FineSeek playback, export, provider/codec, system inset or full accessibility-service proof")
+        .put("qa_preference_digest_format", QA_PREFERENCE_DIGEST_FORMAT)
         .put("cases", entries).put("passed", false)
     val preferencesBefore = rangePreferenceDigest(context)
     var host: NativeParityActivity? = null
@@ -620,7 +621,7 @@ private fun rangeDescendants(view: View): Sequence<View> = sequence {
 private fun rangeSha256(bytes: ByteArray) =
     MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
 private fun rangePreferenceDigest(context: android.content.Context) =
-    rangeSha256(getRecorderPreferences(context).all.toSortedMap().toString().toByteArray(Charsets.UTF_8))
+    qaPreferenceDigest(getRecorderPreferences(context).all)
 private fun writeRangeEvidence(directory: File, result: JSONObject, primary: Throwable?) {
     try { File(directory, "result.json").writeText(result.toString(2)) }
     catch (error: Throwable) { if (primary == null) throw error else primary.addSuppressed(error) }

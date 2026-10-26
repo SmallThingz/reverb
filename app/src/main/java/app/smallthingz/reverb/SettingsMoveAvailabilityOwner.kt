@@ -21,15 +21,16 @@ internal class SettingsMoveAvailabilityOwner(
     @Volatile private var generation = 0L
     @Volatile private var active = false
     @Volatile private var closed = false
-    private var lastRequest: Pair<String, Int>? = null
+    private var lastTarget: String? = null
+    private var lastRevision = 0
     private val queue = LibraryRefreshQueue(scope) { active && !closed }
 
     fun request(target: String, revision: Int) {
         if (closed) return
-        val key = target to revision
-        if (active && lastRequest == key) return
+        if (active && lastTarget == target && lastRevision == revision) return
         active = true
-        lastRequest = key
+        lastTarget = target
+        lastRevision = revision
         val submitted = ++generation
         publish(false)
         queue.request {
@@ -51,7 +52,8 @@ internal class SettingsMoveAvailabilityOwner(
     fun hide() {
         active = false
         generation++
-        lastRequest = null
+        lastTarget = null
+        lastRevision = 0
         queue.dropPending()
         if (!closed) publish(false)
     }

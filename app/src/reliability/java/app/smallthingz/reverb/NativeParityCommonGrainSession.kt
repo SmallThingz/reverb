@@ -13,7 +13,6 @@ import app.smallthingz.reverb.nativeui.generateNoisePixels
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
-import java.nio.ByteBuffer
 import java.security.MessageDigest
 import java.util.IdentityHashMap
 import org.json.JSONArray
@@ -26,7 +25,7 @@ import org.json.JSONObject
  */
 internal class NativeParityCommonGrainSession {
     private val generated = generateNoisePixels()
-    private val generatedHash = hashPixels(generated)
+    private val generatedHash = nativeParityPixelHash(generated)
     private val suppliedPng: ByteArray
     private val decodedHash: String
     private val wrappers = IdentityHashMap<Resources, Resources>()
@@ -51,7 +50,7 @@ internal class NativeParityCommonGrainSession {
             val pixels = IntArray(generated.size)
             decoded.getPixels(pixels, 0, NOISE_TILE_SIZE, 0, 0, NOISE_TILE_SIZE, NOISE_TILE_SIZE)
             check(pixels.contentEquals(generated)) { "Common grain PNG changed generated ARGB pixels" }
-            decodedHash = hashPixels(pixels)
+            decodedHash = nativeParityPixelHash(pixels)
         } finally { decoded.recycle() }
     }
 
@@ -107,7 +106,7 @@ internal class NativeParityCommonGrainSession {
             val pixels = IntArray(generated.size)
             actual.getPixels(pixels, 0, NOISE_TILE_SIZE, 0, 0, NOISE_TILE_SIZE, NOISE_TILE_SIZE)
             check(pixels.contentEquals(generated)) { "Actual native cached grain differs from supplied input" }
-            nativeHash = hashPixels(pixels)
+            nativeHash = nativeParityPixelHash(pixels)
         } finally { actual.recycle() }
     }
 
@@ -129,12 +128,6 @@ internal class NativeParityCommonGrainSession {
 
     private companion object {
         const val ORIGINAL_PNG_SHA256 = "55ce1eaa8d7c1b78eb0b8298b101aec91ca1ef1d6b467f8899380046355dc517"
-
-        fun hashPixels(pixels: IntArray): String {
-            val bytes = ByteBuffer.allocate(pixels.size * Int.SIZE_BYTES)
-            bytes.asIntBuffer().put(pixels)
-            return hashBytes(bytes.array())
-        }
 
         fun hashBytes(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256")
             .digest(bytes).joinToString("") { "%02x".format(it.toInt() and 0xff) }

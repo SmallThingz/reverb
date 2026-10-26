@@ -284,6 +284,37 @@ class NativeOnboardingPagerTest {
         }
     }
 
+    @Test
+    fun unchangedFlingTargetSkipsDuplicatePlacementButKeepsGeometryAndTerminalNotifications() = runBlocking {
+        val observations = mutableListOf<Triple<Long, Int, Boolean>>()
+        withPager(onChanged = { observations.add(Triple(it.layoutAbsoluteOffsetPx, it.targetPage, it.isScrollInProgress)) }) {
+                pager, scope, frames ->
+            pager.dispatchRawDelta(560f)
+            pager.beginPointerGesture()
+            pager.endPointerGesture(-560f)
+            observations.clear()
+            val fling = scope.launch(start = CoroutineStart.UNDISPATCHED) { pager.fling(0f) }
+            // Scroll admission and the first private -1 -> target assignment both still notify.
+            assertEquals(listOf(Triple(560L, 1, true), Triple(560L, 1, true)), observations)
+            frames.send(0L)
+            yield()
+            assertEquals(2, observations.size)
+            frames.send(100_000_000L)
+            yield()
+            assertTrue(pager.layoutAbsoluteOffsetPx in 561L..999L)
+            assertEquals(3, observations.size)
+            assertEquals(Triple(pager.layoutAbsoluteOffsetPx, 1, true), observations.last())
+
+            finishAnimation(fling, frames, 200_000_000L)
+            if (pager.needsRemeasure) pager.updateLayout(1000)
+            assertEquals(1000L, pager.layoutAbsoluteOffsetPx)
+            assertEquals(1, pager.currentPage)
+            assertEquals(1, pager.settledPage)
+            assertEquals(0f, pager.currentPageOffsetFraction, 0f)
+            assertEquals(Triple(1000L, 1, false), observations.last())
+        }
+    }
+
     private suspend fun finishAnimation(job: Job, frames: Channel<Long>, startNanos: Long) {
         var frame = 0
         while (!job.isCompleted && frame < 240) {
@@ -297,6 +328,7 @@ class NativeOnboardingPagerTest {
 
     private suspend fun CoroutineScope.withPager(
         layout: Boolean = true,
+        onChanged: (NativeOnboardingPager) -> Unit = {},
         block: suspend (NativeOnboardingPager, CoroutineScope, Channel<Long>) -> Unit,
     ) {
         val frames = Channel<Long>(Channel.UNLIMITED)
@@ -305,7 +337,8 @@ class NativeOnboardingPagerTest {
         }
         val owner = SupervisorJob(coroutineContext[Job])
         val scope = CoroutineScope(coroutineContext + owner + clock)
-        val pager = NativeOnboardingPager(scope, Density(1f))
+        lateinit var pager: NativeOnboardingPager
+        pager = NativeOnboardingPager(scope, Density(1f), onChanged = { onChanged(pager) })
         if (layout) pager.updateLayout(1000)
         try {
             withTimeout(5000) { block(pager, scope, frames) }

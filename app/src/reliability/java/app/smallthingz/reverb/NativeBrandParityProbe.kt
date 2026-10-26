@@ -103,14 +103,13 @@ internal fun verifyNativeBrandParity(instrumentation: Instrumentation, report: S
                 val bitmaps = mutableListOf<Bitmap>()
                 var caseFailure: Throwable? = null
                 try {
+                    val labels = listOf("compose", "native", "compose-repeat", "native-repeat")
                     repeat(4) { pass ->
-                        bitmaps += captureNativeParityContent(instrumentation, host) {
+                        val bitmap = captureNativeParityContent(instrumentation, host) {
                             boards.show(frame, compose = pass % 2 == 0)
                         }
-                    }
-                    val labels = listOf("compose", "native", "compose-repeat", "native-repeat")
-                    bitmaps.forEachIndexed { index, bitmap ->
-                        saveNativeParityBitmap(directory, name + "-" + labels[index] + ".png", bitmap)
+                        bitmaps += bitmap
+                        saveNativeParityBitmap(directory, name + "-" + labels[pass] + ".png", bitmap)
                     }
                     val referenceStable = compareNativeParityPixels(bitmaps[0], bitmaps[2])
                     val candidateStable = compareNativeParityPixels(bitmaps[1], bitmaps[3])

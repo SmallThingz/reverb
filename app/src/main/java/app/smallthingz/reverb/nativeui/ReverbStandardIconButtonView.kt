@@ -127,11 +127,12 @@ internal class ReverbStandardIconButtonView(
     internal inner class ActionVisual(context: Context) : ViewGroup(context),
         NativeClickPhaseHost, NativeMergedRowAccessibilityHost {
         val glyph = OnboardingIconView(context, ReverbIcon.Back, environment.palette.onSurface)
+        private val accessibilityChildren = listOf(glyph)
         private val clip = Path()
         override val nativeClickEndpoint: NativeClickPhaseEndpoint get() = endpoint
         override val mergedRowAccessibility = ReverbMergedRowAccessibility(
             this, NativeMergedRowRole.BUTTON,
-            sourceState = { NativeMergedRowAccessibilityState(isEnabled, null, null, listOf(glyph)) },
+            sourceState = { NativeMergedRowAccessibilityState(isEnabled, null, null, accessibilityChildren) },
             invokeSourceClick = { if (isEnabled) { currentClick(); true } else false },
         )
         init {

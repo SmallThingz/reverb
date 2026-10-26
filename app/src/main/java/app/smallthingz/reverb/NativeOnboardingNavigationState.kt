@@ -4,13 +4,11 @@ package app.smallthingz.reverb
 internal class NativeOnboardingNavigationState {
     private val pending = mutableSetOf<Any>()
     private val cancellation = mutableMapOf<Any, () -> Unit>()
-    private var pendingCount = 0
     var predictiveBackTarget: OnboardingBackTarget? = null
         private set
 
     fun begin(): Any = Any().also { owner ->
         pending += owner
-        pendingCount = pending.size
     }
 
     fun attachCancellation(owner: Any, cancel: () -> Unit) {
@@ -21,7 +19,6 @@ internal class NativeOnboardingNavigationState {
     fun complete(owner: Any) {
         pending -= owner
         cancellation -= owner
-        pendingCount = pending.size
     }
 
     fun beginPredictiveBack(sourcePage: Int): OnboardingBackTarget {
@@ -42,5 +39,5 @@ internal class NativeOnboardingNavigationState {
     fun mayNavigate(): Boolean = predictiveBackTarget == null
 
     fun mayFinish(onLastPage: Boolean, scrolling: Boolean, predictiveBack: Boolean): Boolean =
-        onLastPage && pendingCount == 0 && !scrolling && !predictiveBack && mayNavigate()
+        onLastPage && pending.isEmpty() && !scrolling && !predictiveBack && mayNavigate()
 }

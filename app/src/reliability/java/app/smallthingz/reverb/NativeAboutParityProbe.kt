@@ -107,6 +107,7 @@ internal fun verifyNativeAboutParity(
             val runResults = JSONArray()
             val entry = JSONObject().put("name", case.name).put("runs", runResults)
             entries.put(entry)
+            var caseFailure: Throwable? = null
             try {
                 for (compose in listOf(true, false)) {
                     current = AboutFixture.open(instrumentation, activity, case, compose) { current = it }
@@ -152,12 +153,19 @@ internal fun verifyNativeAboutParity(
                     nativeStability.getLong("different_pixels") == 0L
                 entry.put("passed", passed)
                 // Retain all visual cases rather than stop after the first raster discrepancy.
+            } catch (error: Throwable) {
+                caseFailure = error
+                throw error
             } finally {
-                captures.forEach(Bitmap::recycle)
-                repeats.forEach(Bitmap::recycle)
-                current?.let { entry.put("unfinished_trace", it.trace); it.close() }
+                var cleanup = caseFailure
+                captures.forEach { bitmap -> cleanup = captureNativeParityCleanup(cleanup) { bitmap.recycle() } }
+                repeats.forEach { bitmap -> cleanup = captureNativeParityCleanup(cleanup) { bitmap.recycle() } }
+                val owned = current
                 current = null
-                File(directory, "result.json").writeText(result.toString(2))
+                cleanup = captureNativeParityCleanup(cleanup) { owned?.let { entry.put("unfinished_trace", it.trace) } }
+                cleanup = captureNativeParityCleanup(cleanup) { owned?.close() }
+                cleanup = captureNativeParityCleanup(cleanup) { File(directory, "result.json").writeText(result.toString(2)) }
+                if (caseFailure == null) cleanup?.let { throw it }
             }
         }
 
@@ -237,20 +245,21 @@ internal fun verifyNativeAboutParity(
         current?.let { result.put("unfinished_trace", it.trace) }
         throw error
     } finally {
-        var cleanupError: Throwable? = null
-        try {
-            current?.close()
+        val owned = current
+        current = null
+        var cleanupError = captureNativeParityCleanup(null) { owned?.close() }
+        cleanupError = captureNativeParityCleanup(cleanupError) {
             host?.let { activity -> nativeParityOnMain(instrumentation) { activity.finish() } }
-        } catch (error: Throwable) {
-            cleanupError = error
-            failure?.addSuppressed(error)
+        }
+        cleanupError?.let { error ->
+            appendNativeParityFailure(failure, error)
             result.put("cleanup_error", android.util.Log.getStackTraceString(error)).put("passed", false)
         }
         report.append("PARITY_EVIDENCE ").append(directory.name).append("/result.json\n")
         try { File(directory, "result.json").writeText(result.toString(2)) }
         catch (writeError: Throwable) {
             val previous = failure ?: cleanupError
-            if (previous == null) throw writeError else previous.addSuppressed(writeError)
+            if (previous == null) throw writeError else appendNativeParityFailure(previous, writeError)
         }
         if (failure == null) cleanupError?.let { throw it }
     }
@@ -319,7 +328,7 @@ private class AboutFixture private constructor(
                 fixture.openWindow()
                 return fixture
             } catch (error: Throwable) {
-                try { fixture.close() } catch (cleanup: Throwable) { error.addSuppressed(cleanup) }
+                captureNativeParityCleanup(error) { fixture.close() }
                 throw error
             }
         }
@@ -782,11 +791,14 @@ private class AboutFixture private constructor(
         nativeParityOnMain(instrumentation) {
             if (closed) return@nativeParityOnMain
             closed = true
-            Choreographer.getInstance().removeFrameCallback(frameCallback)
-            visible.value = false
-            nativeDialog?.dismiss()
-            composeHost?.disposeComposition()
-            activity.fixtureRoot.removeAllViews()
+            var failure = captureNativeParityCleanup(null) {
+                Choreographer.getInstance().removeFrameCallback(frameCallback)
+            }
+            failure = captureNativeParityCleanup(failure) { visible.value = false }
+            failure = captureNativeParityCleanup(failure) { nativeDialog?.dismiss() }
+            failure = captureNativeParityCleanup(failure) { composeHost?.disposeComposition() }
+            failure = captureNativeParityCleanup(failure) { activity.fixtureRoot.removeAllViews() }
+            failure?.let { throw it }
         }
     }
 }

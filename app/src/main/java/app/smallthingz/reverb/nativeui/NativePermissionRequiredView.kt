@@ -38,7 +38,7 @@ internal class NativePermissionRequiredView(
     private var review=onReviewPermission
     private var library=onLibrary
     private var content:PermissionContent?=null
-    val hitLayouts:List<NativeViewPointerHitLayout> get()=content?.let {listOf(it.hitLayout)}?:emptyList()
+    val hitLayouts:List<NativeViewPointerHitLayout> get()=content?.hitLayouts?:emptyList()
     init {importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO;clipChildren=false;clipToPadding=false}
 
     fun bind(permissionsGranted:Boolean,showPermissionDenied:Boolean,
@@ -91,8 +91,10 @@ private class PermissionContent(context:Context,private val host:NativeMaterialB
         override fun dispatch(event:NativeDragPointerEvent,pass:NativePointerPass)=Unit
         override fun cancel()=Unit
     }
-    val hitLayout=host.hit(this,listOf(shield),children={listOf(libraryAction.hitLayout,allow.hitLayout)},
+    private val hitChildren=java.util.Collections.unmodifiableList(listOf(libraryAction.hitLayout,allow.hitLayout))
+    val hitLayout=host.hit(this,listOf(shield),children={hitChildren},
         clip={it.x>=0f&&it.y>=0f&&it.x<width&&it.y<height})
+    val hitLayouts=listOf(hitLayout)
     init {
         importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_YES;isScreenReaderFocusable=false
         clipChildren=false;clipToPadding=false
@@ -250,9 +252,10 @@ private class PermissionLibraryAction(context:Context,private val host:NativeMat
             contentDescription=context.getString(R.string.files_tab)
             importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_YES;isScreenReaderFocusable=false
         }
+        private val accessibilityChildren=listOf(glyph)
         override val nativeClickEndpoint get()=endpoint
         override val mergedRowAccessibility=ReverbMergedRowAccessibility(this,NativeMergedRowRole.BUTTON,
-            {NativeMergedRowAccessibilityState(true,null,null,listOf(glyph))},{activate()})
+            {NativeMergedRowAccessibilityState(true,null,null,accessibilityChildren)},{activate()})
         init {
             isClickable=true;isFocusable=true;descendantFocusability=FOCUS_BLOCK_DESCENDANTS
             importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_YES

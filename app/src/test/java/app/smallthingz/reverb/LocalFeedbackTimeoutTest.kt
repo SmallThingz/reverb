@@ -177,22 +177,27 @@ class LocalFeedbackTimeoutTest {
                     },
                 ) { foregroundCommits++ }
             }
-            assertEquals(30_000L, requestedDuration)
+            try {
+                assertEquals(30_000L, requestedDuration)
 
-            // FilesScreen ON_STOP/panel disposal performs this handoff and cancels its timer.
-            val backgroundRevision = state.handoffToBackground(hasPending = pending.isNotEmpty())
-            assertEquals(revision, backgroundRevision)
-            val backgroundBatch = pending.toList()
-            timer.cancel()
-            assertFalse(state.undo(revision))
-            assertNull(state.handoffToBackground(hasPending = true))
-            releaseRetiredTimer.complete(Unit)
-            timer.join()
-            assertEquals(0, foregroundCommits)
-            assertEquals(listOf("a", "b"), backgroundBatch)
-            assertTrue(state.committedInBackground)
-            assertTrue(state.completeBackgroundCommit(revision) {})
-            assertNotNull(state.extendUndoWindow())
+                // FilesScreen ON_STOP/panel disposal performs this handoff and cancels its timer.
+                val backgroundRevision = state.handoffToBackground(hasPending = pending.isNotEmpty())
+                assertEquals(revision, backgroundRevision)
+                val backgroundBatch = pending.toList()
+                timer.cancel()
+                assertFalse(state.undo(revision))
+                assertNull(state.handoffToBackground(hasPending = true))
+                releaseRetiredTimer.complete(Unit)
+                timer.join()
+                assertEquals(0, foregroundCommits)
+                assertEquals(listOf("a", "b"), backgroundBatch)
+                assertTrue(state.committedInBackground)
+                assertTrue(state.completeBackgroundCommit(revision) {})
+                assertNotNull(state.extendUndoWindow())
+            } finally {
+                releaseRetiredTimer.complete(Unit)
+                withContext(NonCancellable) { withTimeout(5_000L) { timer.cancelAndJoin() } }
+            }
         }
     }
 

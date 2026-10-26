@@ -92,8 +92,8 @@ class RecordingReliabilitySweepTest {
                     }
                     fun retained(bytes: ByteArray): ByteArray {
                         if (capacity == 0L || bytes.size <= capacity) return bytes
-                        return if (looping) bytes.takeLast(capacity.toInt()).toByteArray()
-                        else bytes.take(capacity.toInt()).toByteArray()
+                        return if (looping) bytes.copyOfRange(bytes.size - capacity.toInt(), bytes.size)
+                        else bytes.copyOf(capacity.toInt())
                     }
                     configure()
                     try {

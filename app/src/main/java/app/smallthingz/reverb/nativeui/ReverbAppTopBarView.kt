@@ -314,10 +314,11 @@ private class ReverbTopBarActionLeaf(
     private var click: (() -> Unit)? = null
     private var icon = ReverbIconDrawable(glyph, environment.textDensity.density, environment.palette.ink)
     private val descriptionView = ReverbTopBarDescriptionView(context, description)
+    private val accessibilityChildren = listOf(descriptionView)
     override val mergedRowAccessibility = ReverbMergedRowAccessibility(
         this, NativeMergedRowRole.BUTTON,
         sourceState = { NativeMergedRowAccessibilityState(isEnabled, null, null,
-            listOf(descriptionView), rolePresent = false) },
+            accessibilityChildren, rolePresent = false) },
         invokeSourceClick = { if (isEnabled && click != null) { click?.invoke(); true } else false },
     )
     private val indication = ReverbRowIndication.install(this, environment.palette.ink, ValueAnimator::getDurationScale)
@@ -414,10 +415,11 @@ private class ReverbTopBarBrandAction(context: Context, private var environment:
     private val identity = Any()
     private val mark = ReverbBrandMarkView(context)
     private val descriptionView = ReverbTopBarDescriptionView(context, context.getString(R.string.app_name))
+    private val accessibilityChildren = listOf(descriptionView)
     override val mergedRowAccessibility = ReverbMergedRowAccessibility(
         this, NativeMergedRowRole.BUTTON,
         sourceState = { NativeMergedRowAccessibilityState(isEnabled, null, null,
-            listOf(descriptionView), rolePresent = false) },
+            accessibilityChildren, rolePresent = false) },
         invokeSourceClick = { click?.let { it(); true } ?: false },
     )
     private val softwareClip = Path()
@@ -593,7 +595,6 @@ private fun topBarClipBounds(view: View): NativeTextSemanticsClip = NativeTextSe
     smallthingz.ui.geometry.Rect(0f, 0f, view.width.toFloat(), view.height.toFloat()))
 
 private fun appTopBarExact(value: Int) = View.MeasureSpec.makeMeasureSpec(value.coerceAtLeast(0), View.MeasureSpec.EXACTLY)
-private fun appTopBarAtMost(value: Int) = View.MeasureSpec.makeMeasureSpec(value.coerceAtLeast(0), View.MeasureSpec.AT_MOST)
 
 private fun isActivationKey(code: Int): Boolean = when (code) {
     KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER,

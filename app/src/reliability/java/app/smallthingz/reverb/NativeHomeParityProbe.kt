@@ -172,14 +172,14 @@ internal fun verifyNativeHomeParity(instrumentation: Instrumentation, report: St
                 entry.put("error", android.util.Log.getStackTraceString(failure))
                 throw failure
             } finally {
-                images.forEach(Bitmap::recycle)
                 var cleanupFailure: Throwable? = null
-                try { nativeParityOnMain(instrumentation) { current.close(); board = null } }
+                images.forEach { bitmap -> cleanupFailure = captureNativeParityCleanup(cleanupFailure) { bitmap.recycle() } }
+                try { nativeParityOnMain(instrumentation) { board = null; current.close() } }
                 catch (failure: Throwable) {
-                    cleanupFailure = failure
-                    caseFailure?.addSuppressed(failure)
+                    cleanupFailure = appendNativeParityFailure(cleanupFailure, failure)
                     entry.put("cleanup_error", android.util.Log.getStackTraceString(failure))
                 }
+                cleanupFailure?.let { appendNativeParityFailure(caseFailure, it) }
                 writeHomeEvidence(directory, result, caseFailure ?: cleanupFailure)
                 if (caseFailure == null) cleanupFailure?.let { throw it }
             }
@@ -191,10 +191,16 @@ internal fun verifyNativeHomeParity(instrumentation: Instrumentation, report: St
         throw failure
     } finally {
         var cleanup: Throwable? = null
-        try { nativeParityOnMain(instrumentation) { try { board?.close() } finally { host?.finish() } } }
+        try { nativeParityOnMain(instrumentation) {
+            val owned = board
+            board = null
+            var failure = captureNativeParityCleanup(null) { owned?.close() }
+            failure = captureNativeParityCleanup(failure) { host?.finish() }
+            failure?.let { throw it }
+        } }
         catch (failure: Throwable) {
             cleanup = failure
-            primary?.addSuppressed(failure)
+            appendNativeParityFailure(primary, failure)
             result.put("cleanup_error", android.util.Log.getStackTraceString(failure))
         }
         result.put("completed_cases", completed).put("mismatched_cases", mismatches)
@@ -237,6 +243,7 @@ private class HomeParityBoard(
     val referenceEvents = JSONArray()
     val nativeEvents = JSONArray()
     private var completion: CountDownLatch? = null
+    private var closed = false
     private val insets = ReverbHomeInsets(0, 0, 0, 0)
     private val environment = nativeParityEnvironment(context, density,
         ReverbPalette.resolve(context, dark))
@@ -340,12 +347,12 @@ private class HomeParityBoard(
             val scope = CoroutineScope((inherited.coroutineContext +
                 SupervisorJob(inherited.coroutineContext[Job])).withNativeParityClock())
             nativeScope = scope
-            native = ReverbHomeScreenView(context, environment, nativeState(), nativeSelection,
+            val created = ReverbHomeScreenView(context, environment, nativeState(), nativeSelection,
                 nativeActions, navigation(nativeEvents), case.hasIncidents, insets,
-                host.fixtureRoot, scope, { _, _, _ -> }).also {
-                it.layoutDirection = referenceHost.layoutDirection
-                host.fixtureRoot.addView(it, FrameLayout.LayoutParams(-1, -1))
-            }
+                host.fixtureRoot, scope, { _, _, _ -> })
+            native = created
+            created.layoutDirection = referenceHost.layoutDirection
+            host.fixtureRoot.addView(created, FrameLayout.LayoutParams(-1, -1))
         }
         referenceHost.visibility = if (compose) View.VISIBLE else View.GONE
         native?.visibility = if (compose) View.GONE else View.VISIBLE
@@ -423,12 +430,14 @@ private class HomeParityBoard(
     fun dp(value: Float) = value * density.density
 
     override fun close() {
+        if (closed) return
+        closed = true
         completion = null
-        try { native?.close() } finally {
-            nativeScope?.cancel()
-            reference.disposeComposition()
-            host.fixtureRoot.removeAllViews()
-        }
+        var failure = captureNativeParityCleanup(null) { native?.close() }
+        failure = captureNativeParityCleanup(failure) { nativeScope?.cancel() }
+        failure = captureNativeParityCleanup(failure) { reference.disposeComposition() }
+        failure = captureNativeParityCleanup(failure) { host.fixtureRoot.removeAllViews() }
+        failure?.let { throw it }
     }
 }
 
@@ -436,7 +445,7 @@ private fun writeHomeEvidence(directory: File, result: JSONObject, primary: Thro
     try { File(directory, "result.json").writeText(result.toString(2)) }
     catch (failure: Throwable) {
         if (primary == null) throw failure
-        primary.addSuppressed(failure)
+        appendNativeParityFailure(primary, failure)
     }
 }
 

@@ -2,6 +2,10 @@ package app.smallthingz.reverb
 
 import kotlin.math.roundToInt
 
+internal fun interface FineSeekQuantizer {
+    fun quantize(value: Double): Double
+}
+
 /** Retain only this gesture's rounding remainder; clamped motion never becomes reverse debt. */
 internal class FineSeekPosition<T : Any> {
     private var target: T? = null
@@ -30,10 +34,10 @@ internal class FineSeekPosition<T : Any> {
         delta: Double,
         minimum: Double,
         maximum: Double,
-        quantize: (Double) -> Double,
+        quantize: FineSeekQuantizer,
     ): Double {
         val requested = project(target, current, delta, minimum, maximum)
-        val result = quantize(requested).coerceIn(minimum, maximum)
+        val result = quantize.quantize(requested).coerceIn(minimum, maximum)
         this.target = target
         precise = requested
         applied = result

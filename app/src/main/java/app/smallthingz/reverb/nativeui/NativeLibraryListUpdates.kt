@@ -34,20 +34,25 @@ internal class NativeLibraryListUpdates<Owner : Any> {
     fun submit(catalog: Any, state: NativeLibraryRowState<Owner>): NativeLibraryListUpdate? {
         val previous = current
         val catalogChanged = this.catalog !== catalog
+        val selectedChanged = previous == null || previous.selectedIds != state.selectedIds
+        val blockedChanged = previous == null || previous.blockedIds != state.blockedIds
         if (!catalogChanged && previous != null &&
-            previous.selectedIds == state.selectedIds &&
+            !selectedChanged &&
             previous.selectionActive == state.selectionActive &&
-            previous.blockedIds == state.blockedIds &&
+            !blockedChanged &&
             previous.expandedRecordingId == state.expandedRecordingId &&
             previous.expandedOwner === state.expandedOwner &&
             previous.trimRequestRecordingId == state.trimRequestRecordingId &&
             previous.screenActive == state.screenActive) return null
 
-        val next = state.copy(selectedIds = state.selectedIds.toSet(), blockedIds = state.blockedIds.toSet())
+        val next = state.copy(
+            selectedIds = if (previous != null && !selectedChanged) previous.selectedIds else state.selectedIds.toSet(),
+            blockedIds = if (previous != null && !blockedChanged) previous.blockedIds else state.blockedIds.toSet(),
+        )
         val affected = mutableSetOf<String>()
         if (previous != null) {
-            changedMembers(previous.selectedIds, next.selectedIds, affected)
-            changedMembers(previous.blockedIds, next.blockedIds, affected)
+            if (selectedChanged) changedMembers(previous.selectedIds, next.selectedIds, affected)
+            if (blockedChanged) changedMembers(previous.blockedIds, next.blockedIds, affected)
             if (previous.expandedRecordingId != next.expandedRecordingId ||
                 previous.expandedOwner !== next.expandedOwner) {
                 previous.expandedRecordingId?.let(affected::add)
@@ -74,7 +79,6 @@ internal class NativeLibraryListUpdates<Owner : Any> {
     }
 
     private fun changedMembers(previous: Set<String>, next: Set<String>, result: MutableSet<String>) {
-        if (previous == next) return
         previous.forEach { if (it !in next) result.add(it) }
         next.forEach { if (it !in previous) result.add(it) }
     }

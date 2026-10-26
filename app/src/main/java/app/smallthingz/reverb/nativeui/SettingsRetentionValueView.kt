@@ -51,10 +51,9 @@ internal class SettingsRetentionValueView(
         bindTypography();requestLayout()
     }
     private fun bindTypography() {
-        val base=reverbDefaultTextStyle()
-        heading.setTypography(base.copy(fontSize=14.sp,lineHeight=20.sp),environment.textDensity,environment.sharedFontResolver)
-        unit.setTypography(base.copy(fontSize=14.sp,lineHeight=20.sp),environment.textDensity,environment.sharedFontResolver)
-        estimate.setTypography(base.copy(fontSize=13.sp,lineHeight=20.sp),environment.textDensity,environment.sharedFontResolver)
+        heading.setTypography(retentionValueLabelStyle,environment.textDensity,environment.sharedFontResolver)
+        unit.setTypography(retentionValueLabelStyle,environment.textDensity,environment.sharedFontResolver)
+        estimate.setTypography(retentionValueEstimateStyle,environment.textDensity,environment.sharedFontResolver)
         heading.setTextColor(environment.palette.muted);unit.setTextColor(environment.palette.muted)
         estimate.setTextColor(environment.palette.muted);icon.bind(glyph,environment.palette.muted)
     }
@@ -93,3 +92,6 @@ private fun formatRetentionMinutesEstimate(seconds:Long):String {
     return if(seconds%60L==0L)(seconds/60L).toString()
         else String.format(Locale.US,"%.1f",seconds/60.0)
 }
+
+private val retentionValueLabelStyle = reverbDefaultTextStyle().copy(fontSize=14.sp,lineHeight=20.sp)
+private val retentionValueEstimateStyle = reverbDefaultTextStyle().copy(fontSize=13.sp,lineHeight=20.sp)

@@ -39,19 +39,23 @@ internal fun verifyLargeHistoryRangeUi(instrumentation: Instrumentation, report:
     }
     val audioRelease = CountDownLatch(1)
     var bound = false
+    var failure: Throwable? = null
     try {
         val rangeLabel = context.getString(R.string.export_range_title)
         val loading = context.getString(R.string.loading_audio_history)
         var selectionRequested = false
         awaitUiCondition {
-            val ready = findVisibleNode(instrumentation) {
-                it.contentDescription?.toString() == rangeLabel && enabledClickTarget(it) != null
-            } != null
+            val ready = hasVisibleNode(instrumentation) {
+                it.contentDescription?.toString() == rangeLabel && hasEnabledClickTarget(it)
+            }
             if (!ready && !selectionRequested &&
-                findVisibleNode(instrumentation) { it.contentDescription?.toString() == loading } == null) {
+                !hasVisibleNode(instrumentation) { it.contentDescription?.toString() == loading }) {
                 findVisibleNode(instrumentation) {
-                    it.text?.toString() == context.getString(R.string.buffer_loop) && enabledClickTarget(it) != null
-                }?.let { clickUiNode(it); selectionRequested = true }
+                    it.text?.toString() == context.getString(R.string.buffer_loop) && hasEnabledClickTarget(it)
+                }?.let { node ->
+                    try { clickUiNode(node); selectionRequested = true }
+                    finally { @Suppress("DEPRECATION") node.recycle() }
+                }
             }
             ready
         }
@@ -64,17 +68,20 @@ internal fun verifyLargeHistoryRangeUi(instrumentation: Instrumentation, report:
         val blocked = CountDownLatch(1)
         check(audio.post { blocked.countDown(); check(audioRelease.await(15, TimeUnit.SECONDS)) })
         check(blocked.await(5, TimeUnit.SECONDS))
-        clickUiNode(requireNotNull(findVisibleNode(instrumentation) { it.contentDescription?.toString() == rangeLabel }))
+        val range = requireNotNull(findVisibleNode(instrumentation) { it.contentDescription?.toString() == rangeLabel })
+        try { clickUiNode(range) } finally { @Suppress("DEPRECATION") range.recycle() }
         val preparing = context.getString(R.string.preparing_audio_selection)
-        awaitUiCondition { findVisibleNode(instrumentation) { it.contentDescription?.toString() == preparing } != null }
+        awaitUiCondition { hasVisibleNode(instrumentation) { it.contentDescription?.toString() == preparing } }
         val close = requireNotNull(findVisibleNode(instrumentation) {
-            it.contentDescription?.toString() == context.getString(R.string.close) && enabledClickTarget(it) != null
+            it.contentDescription?.toString() == context.getString(R.string.close) && hasEnabledClickTarget(it)
         }) { "Preparing range has no visible Close action" }
-        val bounds = Rect().also(close::getBoundsInScreen)
-        check(bounds.width() > 0 && bounds.height() > 0)
-        saveUiCapture(instrumentation, "range-preparing.png")
-        clickUiNode(close)
-        awaitUiCondition { findVisibleNode(instrumentation) { it.contentDescription?.toString() == rangeLabel } != null }
+        try {
+            val bounds = Rect().also(close::getBoundsInScreen)
+            check(bounds.width() > 0 && bounds.height() > 0)
+            saveUiCapture(instrumentation, "range-preparing.png")
+            clickUiNode(close)
+        } finally { @Suppress("DEPRECATION") close.recycle() }
+        awaitUiCondition { hasVisibleNode(instrumentation) { it.contentDescription?.toString() == rangeLabel } }
         audioRelease.countDown()
         val barrier = FutureTask { Unit }
         check(audio.post(barrier)); barrier.get(10, TimeUnit.SECONDS)
@@ -86,33 +93,48 @@ internal fun verifyLargeHistoryRangeUi(instrumentation: Instrumentation, report:
                 records.all { (it as PersistentAudioChunkStore.ChunkRecord).refCount == 0 }
             }
         }
-        check(findVisibleNode(instrumentation) { it.contentDescription?.toString() == preparing } == null)
+        check(!hasVisibleNode(instrumentation) { it.contentDescription?.toString() == preparing })
         saveUiCapture(instrumentation, "range-cancelled.png")
         report.append("PASS range_loading_is_visible_cancellable_and_releases_late_snapshot\n")
     } catch (error: Throwable) {
-        val root = instrumentation.uiAutomation.rootInActiveWindow
-        report.append("UI_FAILURE_ROOT ").append(root?.packageName).append('\n')
-        if (root?.packageName?.toString() == context.packageName) {
-            runCatching { saveUiCapture(instrumentation, "range-test-failure.png") }
+        failure = error
+        try {
             val pending = ArrayDeque<AccessibilityNodeInfo>()
-            pending.add(root)
-            var count = 0
-            while (pending.isNotEmpty() && count++ < 160) {
-                val node = pending.removeFirst()
-                if (node.text != null || node.contentDescription != null || node.isClickable) {
-                    report.append("UI_NODE text=").append(node.text).append(" desc=").append(node.contentDescription)
-                        .append(" visible=").append(node.isVisibleToUser).append(" enabled=").append(node.isEnabled)
-                        .append(" clickable=").append(node.isClickable).append('\n')
+            var root = instrumentation.uiAutomation.rootInActiveWindow
+            try {
+                report.append("UI_FAILURE_ROOT ").append(root?.packageName).append('\n')
+                if (root?.packageName?.toString() == context.packageName) {
+                    runCatching { saveUiCapture(instrumentation, "range-test-failure.png") }
+                    pending.add(checkNotNull(root))
+                    root = null // The queue now owns this snapshot.
+                    var count = 0
+                    while (pending.isNotEmpty() && count++ < 160) {
+                        val node = pending.removeFirst()
+                        try {
+                            if (node.text != null || node.contentDescription != null || node.isClickable) {
+                                report.append("UI_NODE text=").append(node.text).append(" desc=").append(node.contentDescription)
+                                    .append(" visible=").append(node.isVisibleToUser).append(" enabled=").append(node.isEnabled)
+                                    .append(" clickable=").append(node.isClickable).append('\n')
+                            }
+                            repeat(node.childCount) { node.getChild(it)?.let(pending::addLast) }
+                        } finally { @Suppress("DEPRECATION") node.recycle() }
+                    }
                 }
-                repeat(node.childCount) { node.getChild(it)?.let(pending::addLast) }
+            } finally {
+                @Suppress("DEPRECATION") root?.recycle()
+                while (pending.isNotEmpty()) {
+                    @Suppress("DEPRECATION") pending.removeFirst().recycle()
+                }
             }
+        } catch (diagnosticFailure: Throwable) {
+            if (diagnosticFailure !== error) error.addSuppressed(diagnosticFailure)
         }
-        throw error
     } finally {
-        audioRelease.countDown()
-        if (bound) context.unbindService(connection)
-        instrumentation.runOnMainSync { activity.finish() }
+        failure = captureNativeParityCleanup(failure) { audioRelease.countDown() }
+        failure = captureNativeParityCleanup(failure) { if (bound) context.unbindService(connection) }
+        failure = captureNativeParityCleanup(failure) { instrumentation.runOnMainSync { activity.finish() } }
     }
+    failure?.let { throw it }
 }
 
 private fun ReverbService.uiFixtureField(name: String): Any? =
@@ -126,6 +148,7 @@ private fun awaitUiCondition(condition: () -> Boolean) {
     }
 }
 
+/** Returns an owned snapshot; the caller must recycle it. */
 private fun findVisibleNode(
     instrumentation: Instrumentation,
     matches: (AccessibilityNodeInfo) -> Boolean,
@@ -133,32 +156,69 @@ private fun findVisibleNode(
     // UiAutomation can retain the initial disabled Compose nodes across hydration. Each
     // assertion must inspect current nodes, not turn its own cache into app-state evidence.
     if (Build.VERSION.SDK_INT >= 34) instrumentation.uiAutomation.clearCache()
-    val root = instrumentation.uiAutomation.rootInActiveWindow ?: return null
-    if (root.packageName?.toString() != instrumentation.targetContext.packageName) return null
     val pending = ArrayDeque<AccessibilityNodeInfo>()
-    pending.add(root)
-    while (pending.isNotEmpty()) {
-        val node = pending.removeFirst()
-        if (node.isVisibleToUser && matches(node)) return node
-        repeat(node.childCount) { index -> node.getChild(index)?.let(pending::addLast) }
+    var root: AccessibilityNodeInfo? = instrumentation.uiAutomation.rootInActiveWindow ?: return null
+    try {
+        if (root?.packageName?.toString() != instrumentation.targetContext.packageName) return null
+        pending.add(checkNotNull(root))
+        root = null // The queue now owns this snapshot.
+        while (pending.isNotEmpty()) {
+            val node = pending.removeFirst()
+            var retained = false
+            try {
+                if (node.isVisibleToUser && matches(node)) {
+                    retained = true
+                    return node
+                }
+                repeat(node.childCount) { index -> node.getChild(index)?.let(pending::addLast) }
+            } finally { if (!retained) { @Suppress("DEPRECATION") node.recycle() } }
+        }
+        return null
+    } finally {
+        @Suppress("DEPRECATION") root?.recycle()
+        while (pending.isNotEmpty()) {
+            @Suppress("DEPRECATION") pending.removeFirst().recycle()
+        }
     }
-    return null
 }
 
+private fun hasVisibleNode(instrumentation: Instrumentation, matches: (AccessibilityNodeInfo) -> Boolean): Boolean {
+    val node = findVisibleNode(instrumentation, matches) ?: return false
+    try { return true } finally { @Suppress("DEPRECATION") node.recycle() }
+}
+
+/** Borrows node; an ancestor result is owned by the caller and must be recycled. */
 private fun enabledClickTarget(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
     var current: AccessibilityNodeInfo? = node
-    while (current != null) {
-        if (!current.isEnabled) return null
-        if (current.isClickable) return current
-        current = current.parent
+    try {
+        while (current != null) {
+            if (!current.isEnabled) return null
+            if (current.isClickable) {
+                val target = current
+                current = null // Transfer any owned ancestor snapshot to the caller.
+                return target
+            }
+            val previous = current
+            current = previous.parent
+            if (previous !== node) { @Suppress("DEPRECATION") previous.recycle() }
+        }
+        return null
+    } finally {
+        if (current !== node) { @Suppress("DEPRECATION") current?.recycle() }
     }
-    return null
+}
+
+private fun hasEnabledClickTarget(node: AccessibilityNodeInfo): Boolean {
+    val target = enabledClickTarget(node) ?: return false
+    try { return true }
+    finally { if (target !== node) { @Suppress("DEPRECATION") target.recycle() } }
 }
 
 private fun clickUiNode(node: AccessibilityNodeInfo) {
-    check(enabledClickTarget(node)?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true) {
-        "QA control rejected click"
-    }
+    val target = enabledClickTarget(node)
+    try {
+        check(target?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true) { "QA control rejected click" }
+    } finally { if (target !== node) { @Suppress("DEPRECATION") target?.recycle() } }
 }
 
 private fun saveUiCapture(instrumentation: Instrumentation, name: String) {

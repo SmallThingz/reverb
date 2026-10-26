@@ -35,8 +35,9 @@ internal class SettingsMenuPointerBinding(
     private val rowLayouts = IdentityHashMap<SettingsMenuItemView, Layout>()
     private var reversedRows: List<NativeViewPointerHitLayout> = emptyList()
     private val columnLayout = Layout(content.column,emptyList(),{ reversedRows })
+    private val viewportChildren = listOf(columnLayout)
     private val viewportLayout = Layout(
-        content.viewport,listOf(vertical.observerNode,vertical.dragNode),{ listOf(columnLayout) },
+        content.viewport,listOf(vertical.observerNode,vertical.dragNode),{ viewportChildren },
         clip = { local ->
             val extra = (30f*density.density).roundToInt()
             local.x >= -extra && local.x < content.viewport.width+extra &&
@@ -48,7 +49,8 @@ internal class SettingsMenuPointerBinding(
         override fun dispatch(event: NativeDragPointerEvent, pass: NativePointerPass) = Unit
         override fun cancel() = Unit
     }
-    private val surfaceLayout = Layout(content,listOf(shield),{ listOf(viewportLayout) },clip = {
+    private val surfaceChildren = listOf(viewportLayout)
+    private val surfaceLayout = Layout(content,listOf(shield),{ surfaceChildren },clip = {
         reverbGroupGeometry(content.width.toFloat(),content.height.toFloat(),density.density,18f)
             .contains(it.x,it.y)
     })

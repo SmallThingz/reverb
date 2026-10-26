@@ -149,6 +149,7 @@ internal class NativeIncidentsPointerBinding(
                 override fun cancel() = Unit
             })
         } else null
+        private val fixedNodes = clickNode?.let(::listOf) ?: shield?.let(::listOf) ?: emptyList()
         private var scrollOwner: NativeLibraryScrollOwner? = null
         private var scrollNodes = emptyList<NativeViewPhasePointerNode>()
         private val attachment = if (click != null || shield != null || target is ReverbLibraryRecyclerView) {
@@ -190,7 +191,7 @@ internal class NativeIncidentsPointerBinding(
                     }
                     return scrollNodes
                 }
-                return clickNode?.let(::listOf) ?: shield?.let(::listOf) ?: emptyList()
+                return fixedNodes
             }
         override fun withinLayerBounds(local: Offset): Boolean = when {
             target is ReverbGroupLayout -> target.containsVisualPoint(local.x, local.y)

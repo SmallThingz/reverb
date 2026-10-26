@@ -52,7 +52,9 @@ internal class QuickSettingsTileEditorTarget {
     internal var seconds by mutableIntStateOf(DEFAULT_QUICK_SAVE_SECONDS)
     internal var busy by mutableStateOf(false)
     internal var editRevision by mutableLongStateOf(0L)
-    private var lastWheelOwner: Pair<Long, Long>? = null
+    private var wheelOwnerInitialized = false
+    private var lastWheelParentRevision = 0L
+    private var lastWheelEditRevision = 0L
     private var wheelRevision = 0L
 
     internal fun selectBuffer(selected: ReverbService.BufferSlot): Boolean {
@@ -85,9 +87,13 @@ internal class QuickSettingsTileEditorTarget {
     }
 
     internal fun wheelOwner(parentRevision: Long): Long {
-        val current = parentRevision to editRevision
-        if (lastWheelOwner != current) {
-            lastWheelOwner = current
+        val currentEditRevision = editRevision
+        if (!wheelOwnerInitialized || lastWheelParentRevision != parentRevision ||
+            lastWheelEditRevision != currentEditRevision
+        ) {
+            wheelOwnerInitialized = true
+            lastWheelParentRevision = parentRevision
+            lastWheelEditRevision = currentEditRevision
             wheelRevision++
         }
         return wheelRevision

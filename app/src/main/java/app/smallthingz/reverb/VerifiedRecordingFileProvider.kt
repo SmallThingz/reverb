@@ -7,15 +7,16 @@ import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
 import androidx.core.content.FileProvider
 import java.io.FileNotFoundException
+import java.util.Collections
 
-private val VERIFIED_FILE_PROVIDER_DEFAULT_COLUMNS = listOf(
+private val VERIFIED_FILE_PROVIDER_DEFAULT_COLUMNS = Collections.unmodifiableList(listOf(
     OpenableColumns.DISPLAY_NAME,
     OpenableColumns.SIZE,
-)
+))
 
 internal fun verifiedFileProviderQueryColumns(projection: Array<out String>?): List<String> =
-    (projection?.toList() ?: VERIFIED_FILE_PROVIDER_DEFAULT_COLUMNS)
-        .filter { it == OpenableColumns.DISPLAY_NAME || it == OpenableColumns.SIZE }
+    projection?.filter { it == OpenableColumns.DISPLAY_NAME || it == OpenableColumns.SIZE }
+        ?: VERIFIED_FILE_PROVIDER_DEFAULT_COLUMNS
 
 internal fun verifiedFileProviderQueryValues(
     columns: List<String>,

@@ -1,26 +1,9 @@
 package app.smallthingz.reverb
 
 import androidx.activity.BackEventCompat
-import smallthingz.ui.animation.core.Animatable
-import smallthingz.ui.runtime.getValue
-import smallthingz.ui.runtime.mutableIntStateOf
-import smallthingz.ui.runtime.mutableStateOf
-import smallthingz.ui.runtime.setValue
 import kotlin.math.roundToInt
 
 private const val PREDICTIVE_BACK_COMMIT_MAX_DURATION_MS = 220
-
-internal class PredictiveBackMotionState {
-    val progress = Animatable(0f)
-    var swipeEdge by mutableIntStateOf(BackEventCompat.EDGE_NONE)
-    var gestureActive by mutableStateOf(false)
-    var commitCompleted by mutableStateOf(false)
-
-    fun beginForwardMotion() {
-        // A retained panel must not carry a completed Back dismissal into its next reveal.
-        commitCompleted = false
-    }
-}
 
 internal fun predictiveBackCommitDurationMillis(progress: Float): Int {
     val remaining = 1f - progress.coerceIn(0f, 1f)
@@ -38,12 +21,6 @@ internal suspend inline fun continuePredictiveBackCommit(
     animateToEnd(predictiveBackCommitDurationMillis(currentProgress))
     onBack()
 }
-
-internal class PredictiveBackGestureCallbacks(
-    val onBack: () -> Unit,
-    val onFinished: () -> Unit,
-)
-
 
 internal fun predictiveBackOpenProgress(backProgress: Float): Float =
     1f - backProgress.coerceIn(0f, 1f)

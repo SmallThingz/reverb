@@ -21,25 +21,25 @@ internal fun measureLargeHistory(context: Context, report: StringBuilder) {
         val start = SystemClock.elapsedRealtimeNanos()
         val cpu = android.os.Debug.threadCpuTimeNanos()
         val processCpu = android.os.Process.getElapsedCpuTime()
-        val store = PersistentAudioChunkStore(root)
-        store.configure(RetentionMode.SIZE, Long.MAX_VALUE, 48_000, 1, PcmSampleFormat.PCM_16,
-            deferRetentionCleanup = true)
-        val snapshot = store.peekSnapshot()!!
-        val loaded = SystemClock.elapsedRealtimeNanos()
-        val cpuElapsed = android.os.Debug.threadCpuTimeNanos() - cpu
-        val processCpuElapsed = android.os.Process.getElapsedCpuTime() - processCpu
-        check(snapshot.chunkCount == count && snapshot.filledBytes == count.toLong() * payloadBytes)
-        val rangeStart = SystemClock.elapsedRealtimeNanos()
-        val lease = requireNotNull(store.acquireRange(0.0, store.durationSeconds()))
-        val rangeReady = SystemClock.elapsedRealtimeNanos()
-        lease.close()
-        val rangeClosed = SystemClock.elapsedRealtimeNanos()
-        report.append("MEASURE history iteration=$iteration chunks=$count logical_bytes=${snapshot.filledBytes}")
-            .append(" load_ms=${(loaded-start)/1_000_000.0} cpu_ms=${cpuElapsed/1_000_000.0}")
-            .append(" process_cpu_ms=$processCpuElapsed")
-            .append(" range_ms=${(rangeReady-rangeStart)/1_000_000.0} release_ms=${(rangeClosed-rangeReady)/1_000_000.0}")
-            .append(" read_bytes=${processReadBytes()-beforeIo}\n")
-        store.close()
+        PersistentAudioChunkStore(root).use { store ->
+            store.configure(RetentionMode.SIZE, Long.MAX_VALUE, 48_000, 1, PcmSampleFormat.PCM_16,
+                deferRetentionCleanup = true)
+            val snapshot = store.peekSnapshot()!!
+            val loaded = SystemClock.elapsedRealtimeNanos()
+            val cpuElapsed = android.os.Debug.threadCpuTimeNanos() - cpu
+            val processCpuElapsed = android.os.Process.getElapsedCpuTime() - processCpu
+            check(snapshot.chunkCount == count && snapshot.filledBytes == count.toLong() * payloadBytes)
+            val rangeStart = SystemClock.elapsedRealtimeNanos()
+            val rangeReady = requireNotNull(store.acquireRange(0.0, store.durationSeconds())).use {
+                SystemClock.elapsedRealtimeNanos()
+            }
+            val rangeClosed = SystemClock.elapsedRealtimeNanos()
+            report.append("MEASURE history iteration=$iteration chunks=$count logical_bytes=${snapshot.filledBytes}")
+                .append(" load_ms=${(loaded-start)/1_000_000.0} cpu_ms=${cpuElapsed/1_000_000.0}")
+                .append(" process_cpu_ms=$processCpuElapsed")
+                .append(" range_ms=${(rangeReady-rangeStart)/1_000_000.0} release_ms=${(rangeClosed-rangeReady)/1_000_000.0}")
+                .append(" read_bytes=${processReadBytes()-beforeIo}\n")
+        }
     }
     measureRetiredStartup(context, report)
 }

@@ -23,6 +23,7 @@ import android.text.InputType
 import android.text.Layout
 import android.text.Selection
 import android.text.Spanned
+import android.text.TextUtils
 import android.text.TextWatcher
 import android.text.method.TextKeyListener
 import android.text.style.LineHeightSpan
@@ -41,12 +42,7 @@ import android.view.inputmethod.TextAttribute
 import android.widget.EditText
 import androidx.annotation.RequiresApi
 import smallthingz.ui.graphics.Color
-import smallthingz.ui.text.AnnotatedString
-import smallthingz.ui.text.MultiParagraph
-import smallthingz.ui.text.MultiParagraphIntrinsics
 import smallthingz.ui.text.Paragraph
-import smallthingz.ui.text.TextLayoutInput
-import smallthingz.ui.text.TextLayoutResult
 import smallthingz.ui.text.TextStyle
 import smallthingz.ui.text.TextRange
 import smallthingz.ui.text.input.CommitTextCommand
@@ -68,7 +64,6 @@ import smallthingz.ui.text.font.FontWeight
 import smallthingz.ui.text.resolveDefaults
 import smallthingz.ui.text.style.TextOverflow
 import smallthingz.ui.unit.Constraints
-import smallthingz.ui.unit.IntSize
 import smallthingz.ui.unit.LayoutDirection
 import smallthingz.ui.unit.sp
 import androidx.core.view.inputmethod.EditorInfoCompat
@@ -86,7 +81,7 @@ import kotlin.math.ceil
  * Exact text/cursor/selection raster and native Editor handle/toolbar/undo/key behavior still need
  * the accompanying A/B probe. API28 cursor styling uses its public constructor resource path;
  * handle drawable setters remain API29+. No reflection or private API substitutes are used.
- * [sourceLayout] exposes the pinned paragraph geometry so a mismatch is measurable rather than
+ * The reliability probe exposes pinned paragraph geometry so a mismatch is measurable rather than
  * hidden by baseline nudges. If native Editor cannot reproduce that geometry, replace its drawing
  * and selection ownership explicitly before any production integration.
  */
@@ -260,7 +255,7 @@ internal class SettingsRetentionInputView private constructor(
             previousOwnerText = raw
             lastCallbackText = raw // remember(value), not every rejected onValueChange callback.
         }
-        if (text.toString() == raw) return
+        if (TextUtils.equals(text, raw)) return
         val start = selectionStart.coerceAtLeast(0).coerceAtMost(raw.length)
         val end = selectionEnd.coerceAtLeast(0).coerceAtMost(raw.length)
         applyingOwner = true
@@ -337,7 +332,7 @@ internal class SettingsRetentionInputView private constructor(
         applyingOwner = true
         try {
             val target = checkNotNull(editableText)
-            if (target.toString() != value.text) target.replace(0, target.length, value.text)
+            if (!TextUtils.equals(target, value.text)) target.replace(0, target.length, value.text)
             BaseInputConnection.removeComposingSpans(target)
             value.composition?.let { composingSpans.setComposingRegion(it.min, it.max) }
             Selection.setSelection(target, value.selection.start, value.selection.end)
@@ -359,7 +354,7 @@ internal class SettingsRetentionInputView private constructor(
         private val commands = ArrayList<EditCommand>()
         private val actions = NativeEditableConnectionActions(
             active = { active },
-            currentTextLength = { currentFieldValue().text.length },
+            currentTextLength = { checkNotNull(editableText).length },
             queueSelectAll = { command(SetSelectionCommand(0, it)) },
             sendKey = { action, code -> sendKeyEvent(KeyEvent(action, code)) },
             onEditorAction = { action ->
@@ -540,28 +535,6 @@ internal class SettingsRetentionInputView private constructor(
             span.reset(value.length, value.endsWith('\n'))
             value.setSpan(span, 0, value.length, Spanned.SPAN_INCLUSIVE_INCLUSIVE)
         }
-    }
-
-    /**
-     * Source layout for the finite QA probe, including newline/fallback geometry. This is NOT
-     * substituted for native Editor metrics in the parity report and cannot make a mismatch pass.
-     */
-    fun sourceLayout(containerWidth: Int = width): TextLayoutResult {
-        val value = AnnotatedString(text.toString())
-        val style = currentStyle()
-        val resolved = resolveDefaults(style, direction())
-        val intrinsics = MultiParagraphIntrinsics(value, resolved, emptyList(),
-            environment.textDensity, environment.sharedFontResolver)
-        val sourceWidth = maxOf(containerWidth, ceil(intrinsics.maxIntrinsicWidth).toInt())
-        val constraints = Constraints.fitPrioritizingWidth(minWidth = containerWidth, maxWidth = sourceWidth,
-            minHeight = ceil(checkNotNull(minimumParagraph).height).toInt(), maxHeight = Constraints.Infinity)
-        val paragraph = MultiParagraph(intrinsics,
-            Constraints.fitPrioritizingWidth(minWidth = 0, maxWidth = sourceWidth,
-                minHeight = 0, maxHeight = Constraints.Infinity), maxLines = 1, overflow = TextOverflow.Clip)
-        return TextLayoutResult(TextLayoutInput(value, style, emptyList(), 1, false,
-            TextOverflow.Clip, environment.textDensity, direction(),
-            environment.sharedFontResolver, constraints), paragraph,
-            IntSize(sourceWidth, maxOf(constraints.minHeight, ceil(paragraph.height).toInt())))
     }
 
     override fun onRtlPropertiesChanged(layoutDirection: Int) {

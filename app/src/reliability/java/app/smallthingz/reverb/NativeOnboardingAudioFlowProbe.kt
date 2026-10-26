@@ -257,16 +257,23 @@ internal fun verifyNativeOnboardingAudioFlow(instrumentation: Instrumentation, r
     } finally {
         try {
             nativeParityOnMain(instrumentation) {
-                try { fixture?.close() } finally { host?.fixtureRoot?.removeAllViews(); host?.finish() }
+                val owned = fixture
+                fixture = null
+                var cleanup = captureNativeParityCleanup(null) { owned?.close() }
+                cleanup = captureNativeParityCleanup(cleanup) { host?.fixtureRoot?.removeAllViews() }
+                cleanup = captureNativeParityCleanup(cleanup) { host?.finish() }
+                cleanup?.let { throw it }
             }
         } catch (cleanup: Throwable) {
-            val primary = failure
-            if (primary != null) primary.addSuppressed(cleanup) else failure = cleanup
+            failure = appendNativeParityFailure(failure, cleanup)
         }
         val cleanupFailedAfterPass = failure != null && result.optBoolean("passed")
         if (failure != null) result.put("passed", false)
         result.put("failure", failure?.stackTraceToString() ?: JSONObject.NULL)
-        File(directory, "result.json").writeText(result.toString(2))
+        val writeFailure = captureNativeParityCleanup(failure) {
+            File(directory, "result.json").writeText(result.toString(2))
+        }
+        if (failure == null) writeFailure?.let { throw it }
         report.appendLine("Onboarding audio flow evidence: ${directory.absolutePath}")
         if (cleanupFailedAfterPass) throw checkNotNull(failure)
     }
@@ -329,7 +336,10 @@ private class OnboardingAudioQaFixture(
                     finishRequests++; events += "synthetic-finish"
                 }, runtime.scope, host.onBackPressedDispatcher, NativeOnboardingViewportSavedState(page = page))
             render = ScreenParityRender(view, false, view::saveViewportState, ::close)
-        } catch (error: Throwable) { runtime.close(); throw error }
+        } catch (error: Throwable) {
+            captureNativeParityCleanup(error) { runtime.close() }
+            throw error
+        }
     }
     private fun update(next: OnboardingPageContentState) { state = next; view.bind(next) }
     fun compression() = onboardingAudioQaRow(view, view.context.getString(R.string.output_compression)) as OnboardingAudioRow
@@ -342,7 +352,14 @@ private class OnboardingAudioQaFixture(
         .put("permission_requests", permissionRequests).put("finish_requests", finishRequests)
         .put("compression_edits", compressionEdits).put("silence_edits", silenceEdits).put("events", JSONArray(events))
         .put("settled_pages", JSONArray(settledPages))
-    override fun close() { try { view.close() } finally { runtime.close() } }
+    private var closed = false
+    override fun close() {
+        if (closed) return
+        closed = true
+        var failure = captureNativeParityCleanup(null) { view.close() }
+        failure = captureNativeParityCleanup(failure) { runtime.close() }
+        failure?.let { throw it }
+    }
 }
 
 private fun onboardingAudioQaRow(root: View, label: String): View =

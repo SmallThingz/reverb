@@ -73,9 +73,11 @@ internal class ReverbRangeExportControls(
         environment = value; this.state = state; this.onCancel = onCancel; this.onExport = onExport
         val palette = value.palette
         val enabled = !loading && state.snapshotReady && !state.selectionDurationEditing && canExport
-        val key = VisualKey(value, loading, enabled, selectedBuffer)
-        if (visualKey == key) return // Waveform frames do not remeasure unchanged controls.
-        visualKey = key
+        val previous = visualKey
+        if (previous != null && previous.environment === value && previous.loading == loading &&
+            previous.enabled == enabled && previous.buffer == selectedBuffer) return
+        // Waveform frames keep live callbacks above without allocating or rebinding visual state.
+        visualKey = VisualKey(value, loading, enabled, selectedBuffer)
         surface.setPalette(palette.field, palette.border)
         close.bind(value, ReverbIcon.Close, context.getString(R.string.close), true,
             palette.ink, palette.onSurface, { this.onCancel() })
@@ -158,7 +160,7 @@ private class BufferPill(context: Context, private var environment: ReverbViewEn
         val color = reverbColorWithAlpha(value.palette.onPrimaryContainer, .58f)
         glyph.bind(if (oneShot) ReverbIcon.OneShot else ReverbIcon.Looping, color)
         label.setText(context.getString(if (oneShot) R.string.buffer_one_shot else R.string.buffer_loop))
-        label.setTypography(ReverbParagraphStyles[ReverbTextRole.LABEL_SMALL].copy(fontWeight = FontWeight.SemiBold),
+        label.setTypography(rangeBufferLabelStyle,
             value.textDensity, value.sharedFontResolver)
         label.setTextColor(color); requestLayout()
     }
@@ -174,7 +176,8 @@ private class BufferPill(context: Context, private var environment: ReverbViewEn
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
         val innerH = max(0, height - dp(5) - dp(5))
         var x = dp(10)
-        for (child in listOf(glyph, label)) {
+        for (index in 0..1) {
+            val child = if (index == 0) glyph else label
             val px = if (layoutDirection == LAYOUT_DIRECTION_RTL) width - x - child.measuredWidth else x
             val y = dp(5) + ((innerH - child.measuredHeight) * .5f).roundToInt()
             child.layout(px, y, px + child.measuredWidth, y + child.measuredHeight)
@@ -256,7 +259,9 @@ internal class ExportContent(
     }
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
         var logicalX = dp(15)
-        for (child in listOf(loadingView ?: glyph, label)) {
+        val icon = loadingView ?: glyph
+        for (index in 0..1) {
+            val child = if (index == 0) icon else label
             val x = if (layoutDirection == LAYOUT_DIRECTION_RTL) width - logicalX - child.measuredWidth else logicalX
             val y = ((height - child.measuredHeight) * .5f).roundToInt()
             child.layout(x, y, x + child.measuredWidth, y + child.measuredHeight)
@@ -300,3 +305,5 @@ internal class ExportContent(
 
 private fun rangeControlExact(size: Int) = View.MeasureSpec.makeMeasureSpec(size, View.MeasureSpec.EXACTLY)
 private fun rangeControlAtMost(size: Int) = View.MeasureSpec.makeMeasureSpec(size, View.MeasureSpec.AT_MOST)
+
+private val rangeBufferLabelStyle = ReverbParagraphStyles[ReverbTextRole.LABEL_SMALL].copy(fontWeight = FontWeight.SemiBold)

@@ -248,7 +248,7 @@ internal class LibraryOwnedFixtures(private val context: Context, private val ev
             )
             entry.put("verified_staging_identity", verified.providerIdentity)
                 .put("verified_bytes", verified.digest.byteCount)
-                .put("verified_wav_sha256", verified.digest.sha256.joinToString("") { "%02x".format(it.toInt() and 255) })
+                .put("verified_wav_sha256", verified.digest.sha256.toHexString())
             saveManifest()
             val published = finalizeOutputTarget(context, target, verified)
             entry.put("published_id", published.id).put("published_identity", published.publishedIdentity)
@@ -264,7 +264,7 @@ internal class LibraryOwnedFixtures(private val context: Context, private val ev
             ownedDigests[raw.id] = verified.digest
             entry.put("complete", true).put("id", raw.id)
                 .put("identity", identity).put("bytes", verified.digest.byteCount)
-                .put("wav_sha256", verified.digest.sha256.joinToString("") { "%02x".format(it.toInt() and 255) })
+                .put("wav_sha256", verified.digest.sha256.toHexString())
                 .put("pcm_sha256", libraryDigest(pcm))
                 .put("sample_rate", 8_000).put("channels", 1).put("frames", frames)
                 .put("signal", "signed16 little-endian; ((sampleIndex % 64)-32)*512")
@@ -1003,7 +1003,7 @@ private fun libraryViews(root: View): List<View> = buildList {
     visit(root)
 }
 private fun libraryDigest(bytes: ByteArray) = MessageDigest.getInstance("SHA-256").digest(bytes)
-    .joinToString("") { "%02x".format(it.toInt() and 255) }
+    .toHexString()
 private fun writeLibraryEvidence(directory: File, result: JSONObject, primary: Throwable?) {
     try { File(directory, "result.json").writeText(result.toString(2)) }
     catch (error: Throwable) { if (primary == null) throw error; if (primary !== error) primary.addSuppressed(error) }

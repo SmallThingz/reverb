@@ -523,7 +523,7 @@ object RecordingRepository {
             sha256Hex = digest.sha256.toHexString(),
             assetDeleted = false,
             storageType = RecordingStorageType.FILE.takeIf { isFile },
-            claimToken = UUID.randomUUID().toString().takeIf { isFile },
+            claimToken = if (isFile) UUID.randomUUID().toString() else null,
             fileIdentity = recording.fileIdentity.takeIf { isFile && it.isNotBlank() },
         )
     }.getOrNull()
@@ -963,13 +963,12 @@ object RecordingRepository {
         }
         val nowMillis = System.currentTimeMillis()
         val importedIds = HashSet<String>(imported.size)
-        val importedUpdates = ArrayList<RecordingEntity>()
+        val updates = ArrayList<RecordingEntity>()
         imported.forEach { observed ->
             val merged = mergeObservedRecording(existingById[observed.id], observed, nowMillis)
             importedIds += merged.id
-            if (existingById[merged.id] != merged) importedUpdates += merged
+            if (existingById[merged.id] != merged) updates += merged
         }
-        val updates = mutableListOf<RecordingEntity>()
 
         existing.asSequence()
             .filter { it.id !in importedIds }
@@ -980,7 +979,7 @@ object RecordingRepository {
                 if (updated != recording) updates += updated
             }
 
-        dao.applyChanges(importedUpdates + updates, emptyList())
+        dao.applyChanges(updates, emptyList())
         return true
     }
 
@@ -1321,18 +1320,14 @@ private fun looksLikeVersionedPendingDeletionEntry(raw: String): Boolean {
 }
 
 internal fun pendingDeletionSuppressedId(raw: String): String? {
-    decodePendingDeletionIntent(raw)?.let { return it.id }
     if (!isEncodedPendingDeletionEntry(raw)) {
         return raw.takeIf { it.isNotBlank() && !looksLikeVersionedPendingDeletionEntry(it) }
     }
-    val parts = raw.split('|')
-    if (parts.size < 2) return null
-    // Suppression needs only the selected recording ID, never the digest/identity/token that
-    // grants destructive authority. Recover it from a recognized torn record so first paint
-    // cannot resurrect a deletion while recovery determines what actually happened on disk.
-    return runCatching {
-        String(Base64.getUrlDecoder().decode(parts[1]), StandardCharsets.UTF_8)
-    }.getOrNull()?.takeIf { it.isNotBlank() }
+    // All recognized versions start with a three-character prefix and the encoded ID.
+    // Suppression needs no digest/identity/token authority, including for torn records.
+    val end = raw.indexOf('|', startIndex = PENDING_DELETION_V1_PREFIX.length)
+        .let { if (it < 0) raw.length else it }
+    return decodePendingDeletionField(raw.substring(PENDING_DELETION_V1_PREFIX.length, end))
 }
 
 internal fun tornPendingDeletionFileSourceId(raw: String): String? {

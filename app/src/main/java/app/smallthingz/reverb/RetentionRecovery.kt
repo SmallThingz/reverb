@@ -185,12 +185,10 @@ internal fun retentionConfigurationFromPreferences(
     recoveryFallback: RetentionConfiguration? = null,
     allowLegacyWithoutDigest: Boolean = true,
 ): RetentionConfiguration? {
-    if (listOf(
-            values.oneShotSeconds,
-            values.oneShotSizeBytes,
-            values.loopingSeconds,
-            values.loopingSizeBytes,
-        ).any { value -> value != null && value < 0L }
+    if ((values.oneShotSeconds ?: 0L) < 0L ||
+        (values.oneShotSizeBytes ?: 0L) < 0L ||
+        (values.loopingSeconds ?: 0L) < 0L ||
+        (values.loopingSizeBytes ?: 0L) < 0L
     ) {
         return null
     }
@@ -318,11 +316,11 @@ internal fun persistedBufferHistoryRootMayContainData(root: File): Boolean {
 }
 
 internal fun hasPersistedBufferHistoryArtifacts(context: Context): Boolean {
-    val roots = listOf(
+    return persistedBufferHistoryRootMayContainData(
         File(context.noBackupFilesDir, BUFFER_CACHE_FOLDER_NAME),
+    ) || persistedBufferHistoryRootMayContainData(
         File(context.noBackupFilesDir, ONE_SHOT_BUFFER_CACHE_FOLDER_NAME),
     )
-    return roots.any(::persistedBufferHistoryRootMayContainData)
 }
 
 internal fun retentionResolutionNeedsHistoryProbe(
@@ -346,7 +344,7 @@ internal fun resolveRetentionConfiguration(
 internal fun retentionConfigurationDigest(configuration: RetentionConfiguration): String =
     MessageDigest.getInstance("SHA-256")
         .digest(canonicalRetentionConfigurationBytes(configuration))
-        .joinToString(separator = "") { byte -> "%02x".format(byte.toInt() and 0xff) }
+        .toHexString()
 
 internal fun retentionPreferenceDigestMatches(
     values: RetentionPreferenceValues,

@@ -5,7 +5,6 @@ import android.graphics.Outline
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
-import smallthingz.ui.geometry.Rect
 import smallthingz.ui.text.PlatformTextStyle
 import smallthingz.ui.text.font.FontFamily
 import smallthingz.ui.text.font.FontWeight
@@ -84,9 +83,14 @@ internal class ReverbRangeTimelineView(
                 state.lastTarget == RangeEditTarget.START, 1f)
             end.marker.bind(environment, state.lastTarget == RangeEditTarget.END,
                 state.lastTarget == RangeEditTarget.END, 1f)
-            startBubble.bind(state.targetSeconds(RangeEditTarget.START), state.lastTarget == RangeEditTarget.START)
-            endBubble.bind(state.targetSeconds(RangeEditTarget.END), state.lastTarget == RangeEditTarget.END)
-            last.setText(formatRangeTimeInput(state.durationSeconds.toDouble()))
+            val appearanceChanged = stylesDirty || renderedTarget != state.lastTarget
+            startBubble.bind(state.targetSeconds(RangeEditTarget.START), state.lastTarget == RangeEditTarget.START,
+                textChanged = renderedStart != state.startSeconds, appearanceChanged = appearanceChanged)
+            endBubble.bind(state.targetSeconds(RangeEditTarget.END), state.lastTarget == RangeEditTarget.END,
+                textChanged = renderedEnd != state.endSeconds, appearanceChanged = appearanceChanged)
+            if (renderedDuration != state.durationSeconds) {
+                last.setText(formatRangeTimeInput(state.durationSeconds.toDouble()))
+            }
             chrome.startActive = state.lastTarget == RangeEditTarget.START
             renderedStart = state.startSeconds; renderedEnd = state.endSeconds
             renderedDuration = state.durationSeconds; renderedTarget = state.lastTarget
@@ -109,11 +113,11 @@ internal class ReverbRangeTimelineView(
     private fun bindTextEnvironment() {
         waveform.setPalette(ProgressiveWaveformPalette(environment.palette.primary,
             environment.palette.onSurfaceVariant, environment.palette.tertiary))
-        for (label in listOf(first, last)) {
-            label.setTypography(ReverbParagraphStyles[ReverbTextRole.LABEL_SMALL].copy(fontFamily = FontFamily.Monospace),
-                environment.textDensity, environment.sharedFontResolver)
-            label.setTextColor(reverbColorWithAlpha(environment.palette.onSurfaceVariant, .66f))
-        }
+        val color = reverbColorWithAlpha(environment.palette.onSurfaceVariant, .66f)
+        first.setTypography(rangeTimelineLabelStyle, environment.textDensity, environment.sharedFontResolver)
+        first.setTextColor(color)
+        last.setTypography(rangeTimelineLabelStyle, environment.textDensity, environment.sharedFontResolver)
+        last.setTextColor(color)
     }
 
     private fun updateMorph() {
@@ -152,8 +156,13 @@ internal class ReverbRangeTimelineView(
     fun pointerChildrenInHitOrder(parent: ViewGroup): List<View>? {
         if (parent !== chrome) return null
         val active = if (chrome.startActive) startBubble else endBubble
-        return listOf(active) + (chrome.childCount - 1 downTo 0)
-            .map(chrome::getChildAt).filter { it !== active && it.visibility == VISIBLE }
+        val ordered = ArrayList<View>(chrome.childCount)
+        ordered.add(active)
+        for (index in chrome.childCount - 1 downTo 0) {
+            val child = chrome.getChildAt(index)
+            if (child !== active && child.visibility == VISIBLE) ordered.add(child)
+        }
+        return ordered
     }
 
     /** Source xFor/secondsFor use raw dp floats; final offset placement rounds separately. */
@@ -184,11 +193,18 @@ internal class ReverbRangeTimelineView(
         }
         override fun onMeasure(w: Int, h: Int) {
             val width = MeasureSpec.getSize(w); val height = MeasureSpec.getSize(h)
-            for (endpoint in listOf(start, end)) endpoint.measure(exact(minOf(width, dp(44f))),
-                exact(minOf(height, dp(146f))))
-            for (bubble in listOf(startBubble, endBubble)) bubble.measure(exact(minOf(width, dp(84f))),
-                exact(minOf(height, dp(28f))))
-            for (label in listOf(first, last)) label.measure(atMost((width - dp(12f)).coerceAtLeast(0)), atMost(height))
+            val endpointWidth = exact(minOf(width, dp(44f)))
+            val endpointHeight = exact(minOf(height, dp(146f)))
+            start.measure(endpointWidth, endpointHeight)
+            end.measure(endpointWidth, endpointHeight)
+            val bubbleWidth = exact(minOf(width, dp(84f)))
+            val bubbleHeight = exact(minOf(height, dp(28f)))
+            startBubble.measure(bubbleWidth, bubbleHeight)
+            endBubble.measure(bubbleWidth, bubbleHeight)
+            val labelWidth = atMost((width - dp(12f)).coerceAtLeast(0))
+            val labelHeight = atMost(height)
+            first.measure(labelWidth, labelHeight)
+            last.measure(labelWidth, labelHeight)
             setMeasuredDimension(width, height)
         }
         override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
@@ -238,6 +254,7 @@ internal class ReverbRangeTimelineView(
     private inner class TimeBubble(context: Context) : ViewGroup(context) {
         private val surface = ReverbGroupLayout(context, 10f)
         private val text = environment.paragraph(context, "", ReverbTextRole.LABEL_MEDIUM)
+        private var renderedStyle = rangeBubbleTextStyle
         private val content = object : ViewGroup(context) {
             override fun onMeasure(w: Int, h: Int) {
                 val width = MeasureSpec.getSize(w); val height = MeasureSpec.getSize(h)
@@ -265,17 +282,20 @@ internal class ReverbRangeTimelineView(
             addView(surface)
             text.setTextLayout(true, 1, smallthingz.ui.text.style.TextOverflow.Clip)
         }
-        fun bind(seconds: Float, active: Boolean) {
+        fun bind(seconds: Float, active: Boolean, textChanged: Boolean, appearanceChanged: Boolean) {
             val palette = environment.palette
-            surface.setPalette(if (active) palette.primaryContainer else palette.surfaceContainerHighest, 0)
-            surface.elevation = if (active) density else 0f
-            text.setText(formatRangeTimeInput(seconds.toDouble()))
-            text.setTypography(ReverbParagraphStyles[ReverbTextRole.LABEL_MEDIUM].copy(
-                color = smallthingz.ui.graphics.Color(if (active) palette.onPrimaryContainer else palette.onSurfaceVariant),
-                fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold,
-                fontSize = 11.sp, lineHeight = 13.sp, platformStyle = PlatformTextStyle(includeFontPadding = false),
-            ), environment.textDensity, environment.sharedFontResolver)
-            text.setTextColor(if (active) palette.onPrimaryContainer else palette.onSurfaceVariant)
+            if (appearanceChanged) {
+                surface.setPalette(if (active) palette.primaryContainer else palette.surfaceContainerHighest, 0)
+                surface.elevation = if (active) density else 0f
+            }
+            if (textChanged) text.setText(formatRangeTimeInput(seconds.toDouble()))
+            if (appearanceChanged) {
+                val color = if (active) palette.onPrimaryContainer else palette.onSurfaceVariant
+                val textColor = smallthingz.ui.graphics.Color(color)
+                if (renderedStyle.color != textColor) renderedStyle = rangeBubbleTextStyle.copy(color = textColor)
+                text.setTypography(renderedStyle, environment.textDensity, environment.sharedFontResolver)
+                text.setTextColor(color)
+            }
         }
         override fun onMeasure(w: Int, h: Int) {
             surface.measure(w, h); setMeasuredDimension(surface.measuredWidth, surface.measuredHeight)
@@ -291,3 +311,9 @@ internal class ReverbRangeTimelineView(
     private fun exact(value: Int) = MeasureSpec.makeMeasureSpec(value.coerceAtLeast(0), MeasureSpec.EXACTLY)
     private fun atMost(value: Int) = MeasureSpec.makeMeasureSpec(value.coerceAtLeast(0), MeasureSpec.AT_MOST)
 }
+
+private val rangeTimelineLabelStyle = ReverbParagraphStyles[ReverbTextRole.LABEL_SMALL].copy(fontFamily = FontFamily.Monospace)
+private val rangeBubbleTextStyle = ReverbParagraphStyles[ReverbTextRole.LABEL_MEDIUM].copy(
+    fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold,
+    fontSize = 11.sp, lineHeight = 13.sp, platformStyle = PlatformTextStyle(includeFontPadding = false),
+)

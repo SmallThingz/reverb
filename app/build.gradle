@@ -71,7 +71,7 @@ android {
         }
     }
     buildFeatures {
-        buildConfig = false
+        buildConfig = true
         compose = gradle.ext.has('reverbReliabilityEnabled') && gradle.ext.reverbReliabilityEnabled
     }
     sourceSets {
@@ -81,6 +81,12 @@ android {
         // AGP's built-in Kotlin compiler has its own source roots for this .kt adapter.
         debug.kotlin.srcDir 'src/nativeCompatibility/java'
         release.kotlin.srcDir 'src/nativeCompatibility/java'
+        // Historical holders are shared by host tests and the isolated QA variant only.
+        ['testDebug', 'testRelease'].each { sourceSetName ->
+            def referenceTests = maybeCreate(sourceSetName)
+            referenceTests.java.srcDir 'src/reference/java'
+            referenceTests.kotlin.srcDir 'src/reference/java'
+        }
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17

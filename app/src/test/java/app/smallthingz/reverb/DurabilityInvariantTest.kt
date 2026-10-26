@@ -1952,7 +1952,7 @@ class DurabilityInvariantTest {
             assertTrue(identity.isNotBlank())
             val renamed = File(directory, "renamed.wav")
             Files.move(original.toPath(), renamed.toPath())
-            assertTrue(fileIdentityMatches(identity, resolveFileIdentity(renamed)))
+            assertTrue(sameFileObjectAcrossRename(identity, resolveFileIdentity(renamed)))
 
             val replacement = File(directory, "replacement.tmp").apply { writeBytes(byteArrayOf(9, 8, 7, 6)) }
             Files.move(
@@ -2536,7 +2536,8 @@ class DurabilityInvariantTest {
             Files.move(source.toPath(), claim.toPath())
             source.writeBytes(replacementBytes)
             assertFalse(fileIdentityMatches(originalIdentity, resolveFileIdentity(source)))
-            assertTrue(fileIdentityMatches(originalIdentity, resolveFileIdentity(claim)))
+            val claimedIdentity = resolveFileIdentity(claim)
+            assertTrue(sameFileObjectAcrossRename(originalIdentity, claimedIdentity))
 
             val result = replayClaimedFileDeletion(intent, claim)
             if (deletionClaimIdentityHasPinnedDescriptorAuthority(originalIdentity)) {

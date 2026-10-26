@@ -216,7 +216,8 @@ internal class PlainTextAccessibility(
         if (!exposed()) return
         // Plain source text has no native View select/clear-selection/show-on-screen actions.
         // Preserve Android-owned accessibility focus, then add only the source cursor actions.
-        info.actionList.toList().forEach(info::removeAction)
+        val actions = info.actionList
+        for (index in actions.size - 1 downTo 0) info.removeAction(actions[index])
         info.addAction(if (view.isAccessibilityFocused)
             AccessibilityNodeInfo.AccessibilityAction.ACTION_CLEAR_ACCESSIBILITY_FOCUS
             else AccessibilityNodeInfo.AccessibilityAction.ACTION_ACCESSIBILITY_FOCUS)

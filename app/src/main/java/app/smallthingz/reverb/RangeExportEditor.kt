@@ -833,7 +833,6 @@ internal class RangeExportEditorState(
     fun beginBoundaryEdit(target: RangeEditTarget) {
         selectTarget(target)
         pausePreview()
-        previewController.stop()
         auditionSelectedBoundary(force = true)
     }
 
@@ -989,6 +988,9 @@ internal class RangeExportEditorState(
         previewController.audition(readySnapshot, targetValue(lastTarget).toDouble())
     }
 
-    private fun targetValue(target: RangeEditTarget): Float = editTargetValue(currentEditValues(), target)
+    private fun targetValue(target: RangeEditTarget): Float = when (target) {
+        RangeEditTarget.START -> startSeconds
+        RangeEditTarget.END -> endSeconds
+    }
 }
 

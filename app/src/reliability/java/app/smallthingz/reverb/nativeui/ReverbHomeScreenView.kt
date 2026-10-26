@@ -7,17 +7,6 @@ import app.smallthingz.reverb.ReverbService.BufferSlot
 import kotlinx.coroutines.CoroutineScope
 
 /**
- * Resolved physical Scaffold content insets. The window owns system-inset/consumption policy;
- * this screen does not read, change or guess system bars, IME visibility or accessibility settings.
- */
-internal data class ReverbHomeInsets(
-    val statusTop: Int,
-    val contentLeft: Int,
-    val contentRight: Int,
-    val contentBottom: Int,
-)
-
-/**
  * Existing normal-Home API. Its root now shares the exact same direct-child Scaffold geometry with
  * Main's permission/range branch host; there is no additional View, renderer or hidden Capture owner.
  */

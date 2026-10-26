@@ -46,7 +46,7 @@ internal class SettingsMenuContent(
     private val density: Density,
     labelLarge: TextStyle,
     resolver: FontFamily.Resolver,
-    private var palette: ReverbPalette,
+    palette: ReverbPalette,
     state: NativeVerticalScrollState,
     frames: MonotonicFrameClock,
     scope: CoroutineScope,
@@ -57,7 +57,7 @@ internal class SettingsMenuContent(
     private val pad = (8f * density.density).roundToInt()
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val clip = SettingsMenuClip(context, radius)
-    val column = SettingsMenuColumn(context, labelLarge, density, resolver, palette, interestedParent)
+    val column = SettingsMenuColumn(context, labelLarge, density, resolver, interestedParent)
     val viewport = NativeVerticalViewport(
         context, state, density, frames, scope,
         object : NativeVerticalNestedHost {
@@ -91,7 +91,6 @@ internal class SettingsMenuContent(
     }
 
     fun <T> bind(content: SettingsDropdownContent<T>, palette: ReverbPalette, select: (T) -> Unit) {
-        this.palette = palette
         fill.color = palette.raised
         column.bind(content, palette, select)
         requestLayout()
@@ -100,7 +99,6 @@ internal class SettingsMenuContent(
 
     /** Released Incidents/Library use default12dp horizontal/zero vertical item padding. */
     fun bindActions(actions: List<ReverbMenuAction>, palette: ReverbPalette, background: Int = palette.surfaceContainerHigh) {
-        this.palette = palette
         fill.color = background
         column.bindActions(actions, palette)
         requestLayout()
@@ -169,14 +167,12 @@ internal class SettingsMenuColumn(
     private val style: TextStyle,
     private val density: Density,
     private val resolver: FontFamily.Resolver,
-    private var palette: ReverbPalette,
     private val interestedParent: (MotionEvent) -> Boolean,
 ) : ViewGroup(context), AutoCloseable {
     val rows = ArrayList<SettingsMenuItemView>()
     init { clipChildren = false; clipToPadding = false }
 
     fun <T> bind(content: SettingsDropdownContent<T>, palette: ReverbPalette, select: (T) -> Unit) {
-        this.palette = palette
         while (rows.size > content.options.size) {
             val row = rows.removeAt(rows.lastIndex)
             row.close()
@@ -193,7 +189,6 @@ internal class SettingsMenuColumn(
     }
 
     fun bindActions(actions: List<ReverbMenuAction>, palette: ReverbPalette) {
-        this.palette = palette
         while (rows.size > actions.size) {
             val row = rows.removeAt(rows.lastIndex)
             row.close()

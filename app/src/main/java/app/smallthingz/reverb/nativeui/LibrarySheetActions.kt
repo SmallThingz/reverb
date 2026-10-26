@@ -11,9 +11,11 @@ import kotlin.math.roundToInt
 internal class LibrarySheetActions(context:Context,private val host:NativeActionSheetContentContext,
                                   val buttons:List<LibrarySheetButton>):ViewGroup(context),AutoCloseable {
     private var environment=host.environment
+    private var closed=false
     private var contentWidth=0
     private val measuredGaps=IntArray(buttons.size)
-    val hitLayout:NativeViewPointerHitLayout=host.hit(this,emptyList(),children={buttons.asReversed().map{it.hitLayout}})
+    private val hitChildren=java.util.Collections.unmodifiableList(buttons.asReversed().map{it.hitLayout})
+    val hitLayout:NativeViewPointerHitLayout=host.hit(this,emptyList(),children={hitChildren})
     init {importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO;clipChildren=false;clipToPadding=false;buttons.forEach(::addView)}
     fun bindEnvironment(next:ReverbViewEnvironment) {
         if(environment===next)return
@@ -25,7 +27,8 @@ internal class LibrarySheetActions(context:Context,private val host:NativeAction
     override fun onMeasure(w:Int,h:Int) {
         val width=MeasureSpec.getSize(w);val gap=(8f*environment.textDensity.density).roundToInt()
         var used=0;var tallest=0
-        for((index,button) in buttons.withIndex()) {
+        for(index in buttons.indices) {
+            val button=buttons[index]
             measuredGaps[index]=if(index>0)minOf(gap,max(0,width-used))else 0
             used+=measuredGaps[index]
             button.measure(MeasureSpec.makeMeasureSpec(max(0,width-used),MeasureSpec.AT_MOST),h)
@@ -36,7 +39,8 @@ internal class LibrarySheetActions(context:Context,private val host:NativeAction
     }
     override fun onLayout(changed:Boolean,l:Int,t:Int,r:Int,b:Int) {
         var logical=width-contentWidth
-        for((index,button) in buttons.withIndex()) {
+        for(index in buttons.indices) {
+            val button=buttons[index]
             logical+=measuredGaps[index]
             val x=if(layoutDirection==LAYOUT_DIRECTION_RTL)width-logical-button.measuredWidth else logical
             val y=((height-button.measuredHeight)*.5f).roundToInt()
@@ -44,10 +48,12 @@ internal class LibrarySheetActions(context:Context,private val host:NativeAction
         }
     }
     override fun close() {
+        if(closed)return
+        closed=true
         var failure:Throwable?=null
         // Each button adds a scoped clip mapping. Retire them in reverse installation order.
         buttons.asReversed().forEach {button->try{button.close()}catch(error:Throwable){
-            if(failure==null)failure=error else failure!!.addSuppressed(error)
+            if(failure==null)failure=error else if(failure!==error)failure!!.addSuppressed(error)
         }}
         failure?.let{throw it}
     }

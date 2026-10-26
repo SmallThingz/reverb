@@ -45,6 +45,9 @@ internal class NativeLibraryPlayerLease(
         initialEnvironment.palette, initialEnvironment.textDensity,
         ViewConfiguration.get(context).scaledTouchSlop.toFloat(), frames, scope, inputRoot, { true }))
     private val player = ReverbLibraryPlayerView(context, initialEnvironment, fine, inputRoot, frames, scope, durationScale)
+    private val waveformNodes = listOf(player.waveformInput)
+    private val fineSeekNodes = listOf(fine.fineSeekNode)
+    private val puckNodes = listOf(fine.puckClickNode)
     private var controller: NativeRecordingInlinePlayerController? = null
     private var presentation: NativeInlinePlayerPresentation? = null
     private var closed = false
@@ -126,9 +129,9 @@ internal class NativeLibraryPlayerLease(
 
     /** Exact leaves: source fine parent disappears when disabled; its disabled puck remains. */
     fun pointerNodes(view: View): List<NativeViewPhasePointerNode> = when {
-        view === player.waveformInput.view -> listOf(player.waveformInput)
-        view === fine -> if (fine.fineSeekInputEnabled) listOf(fine.fineSeekNode) else emptyList()
-        view === fine.puckClickView -> listOf(fine.puckClickNode)
+        view === player.waveformInput.view -> waveformNodes
+        view === fine -> if (fine.fineSeekInputEnabled) fineSeekNodes else emptyList()
+        view === fine.puckClickView -> puckNodes
         else -> emptyList()
     }
     override fun closePresentation() {

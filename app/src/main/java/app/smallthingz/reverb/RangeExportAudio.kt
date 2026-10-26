@@ -295,16 +295,15 @@ internal fun crossfadeShuttlePcm16Mono(
             output.writePcm16Mono(outFrame++, mixed)
         }
     }
-    val currentBodyStart = mixedFrames
-    for (frame in currentBodyStart until bodyFrames) {
-        var value = current.readPcm16Mono(frame)
-        if (previousFrames == 0 && requestedOverlap > 0 && frame < requestedOverlap) {
+    if (previousFrames == 0 && requestedOverlap > 0) {
+        for (frame in 0 until minOf(requestedOverlap, bodyFrames)) {
+            val value = current.readPcm16Mono(frame)
             val t = (frame + 1).toFloat() / (requestedOverlap + 1).toFloat()
             val fade = t * t * (3f - 2f * t)
-            value = (value * fade).roundToInt()
+            output.writePcm16Mono(outFrame++, (value * fade).roundToInt())
         }
-        output.writePcm16Mono(outFrame++, value)
     }
+    current.copyInto(output, outFrame * 2, outFrame * 2, bodyFrames * 2)
     val tail = if (tailFrames > 0) {
         current.copyOfRange(bodyFrames * 2, currentFrames * 2)
     } else {

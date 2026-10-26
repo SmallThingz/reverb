@@ -155,7 +155,7 @@ internal class NativeDragPointerRouter(
         } else if (change.consumed) {
             // Source leaves its state intact; a later dispatch/pickup owner decides the next cycle.
             sink.cancel()
-        } else if (change.delta.getDistance() != 0f) {
+        } else if (change.delta.getDistanceSquared() != 0f) {
             delta(change, change.delta, event)
             change.consume()
         }

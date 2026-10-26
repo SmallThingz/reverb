@@ -208,7 +208,10 @@ internal class NativeLibraryWindowTransition(
             }
             editableCount = views.count { view ->
                 view.isShown && view.importantForAccessibility == View.IMPORTANT_FOR_ACCESSIBILITY_YES &&
-                    view.createAccessibilityNodeInfo()?.let { it.isEditable && it.isEnabled } == true
+                    view.createAccessibilityNodeInfo()?.let { node ->
+                        try { node.isEditable && node.isEnabled }
+                        finally { @Suppress("DEPRECATION") node.recycle() }
+                    } == true
             }
         }
         check(expected.requiredLabels.all(labels::contains)) { "Tooltip anchor has the wrong sheet labels" }

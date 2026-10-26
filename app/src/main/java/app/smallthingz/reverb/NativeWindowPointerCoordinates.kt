@@ -27,12 +27,11 @@ internal class NativeWindowPointerCoordinates(private val root: () -> View) {
 
     fun begin(event: MotionEvent) {
         perView.clear()
-        val toWindow = matrixToWindow(root())
+        nativeViewMatrixToWindow(root(), location, rootToScreenMatrix)
         position[0] = event.x
         position[1] = event.y
-        toWindow.mapPoints(position)
+        rootToScreenMatrix.mapPoints(position)
         windowPositionInScreen = Offset(event.rawX - position[0], event.rawY - position[1])
-        rootToScreenMatrix.set(toWindow)
         rootToScreenMatrix.postTranslate(windowPositionInScreen.x, windowPositionInScreen.y)
     }
 
@@ -48,7 +47,7 @@ internal class NativeWindowPointerCoordinates(private val root: () -> View) {
     fun beginFromParent(windowPosition: Offset) {
         perView.clear()
         windowPositionInScreen = windowPosition
-        rootToScreenMatrix.set(matrixToWindow(root()))
+        nativeViewMatrixToWindow(root(), location, rootToScreenMatrix)
         rootToScreenMatrix.postTranslate(windowPosition.x, windowPosition.y)
     }
 
@@ -72,6 +71,13 @@ internal class NativeWindowPointerCoordinates(private val root: () -> View) {
 /** Shared pinned window transform; the caller owns its two-Int scratch buffer. */
 internal fun nativeViewMatrixToWindow(view: View, location: IntArray): Matrix {
     val result = Matrix()
+    nativeViewMatrixToWindow(view, location, result)
+    return result
+}
+
+/** Destination is caller-owned scratch; sample before dispatching input callbacks. */
+private fun nativeViewMatrixToWindow(view: View, location: IntArray, result: Matrix) {
+    result.reset()
     if (Build.VERSION.SDK_INT >= 29) {
         view.transformMatrixToGlobal(result)
         var top = view
@@ -85,7 +91,6 @@ internal fun nativeViewMatrixToWindow(view: View, location: IntArray): Matrix {
         // Preserve the pinned API21 fallback's CURRENT-view scroll ordering, including SDK28.
         calculateLegacy(view, result, location)
     }
-    return result
 }
 
 private fun calculateLegacy(view: View, result: Matrix, location: IntArray) {

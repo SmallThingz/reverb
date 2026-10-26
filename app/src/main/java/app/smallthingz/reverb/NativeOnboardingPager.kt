@@ -250,7 +250,9 @@ internal class NativeOnboardingPager(
     }
 
     private fun updateTargetPage(page: Int) {
-        programmaticTarget = page.coerceIn(0, pageCount - 1)
+        val target = page.coerceIn(0, pageCount - 1)
+        if (programmaticTarget == target) return
+        programmaticTarget = target
         onChanged()
     }
 

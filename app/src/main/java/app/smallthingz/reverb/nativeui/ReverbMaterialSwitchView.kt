@@ -48,6 +48,7 @@ internal class ReverbMaterialSwitchView(
     private val trackPaint = Paint(PAINT_FLAGS)
     private val thumbPaint = Paint(PAINT_FLAGS)
     private val borderPaint = Paint(PAINT_FLAGS).apply { style = Paint.Style.STROKE }
+    private var boundPalette = palette
     private var colors = MaterialSwitchColors.from(palette)
     private var checked = initialChecked
     private var visuallyPressed = false
@@ -70,7 +71,9 @@ internal class ReverbMaterialSwitchView(
     }
 
     fun setPalette(palette: ReverbPalette) {
+        if (boundPalette === palette) return
         colors = MaterialSwitchColors.from(palette)
+        boundPalette = palette
         invalidate()
     }
 
@@ -256,6 +259,7 @@ private class MaterialSwitchColors(
             // Retain Color.copy alpha quantization and compositeOver Float arithmetic exactly.
             fun composite(color: Int, alpha: Float): Int =
                 Color(color).copy(alpha = alpha).compositeOver(surface).toArgb()
+            val disabledOnSurface = composite(palette.onSurface, 0.12f)
             return MaterialSwitchColors(
                 checkedThumb = palette.onPrimary,
                 checkedTrack = palette.primary,
@@ -263,10 +267,10 @@ private class MaterialSwitchColors(
                 uncheckedTrack = palette.surfaceContainerHighest,
                 uncheckedBorder = palette.outline,
                 disabledCheckedThumb = composite(palette.surface, 1f),
-                disabledCheckedTrack = composite(palette.onSurface, 0.12f),
+                disabledCheckedTrack = disabledOnSurface,
                 disabledUncheckedThumb = composite(palette.onSurface, 0.38f),
                 disabledUncheckedTrack = composite(palette.surfaceContainerHighest, 0.12f),
-                disabledUncheckedBorder = composite(palette.onSurface, 0.12f),
+                disabledUncheckedBorder = disabledOnSurface,
             )
         }
     }
@@ -310,7 +314,6 @@ private class SwitchFloatMotion(initial: Float) {
             else ((frameNanos - start) / durationScale).toLong()
         lastFrame = frameNanos
         if (snap || playTime >= durationNanos) {
-            value = target
             stop()
         } else {
             value = SPRING.getValueFromNanos(playTime, initialValue, target, initialVelocity)
@@ -319,6 +322,8 @@ private class SwitchFloatMotion(initial: Float) {
     }
 
     fun stop() {
+        // Retained views must not reattach with a stopped, half-finished thumb.
+        value = target
         isRunning = false
         velocity = 0f
         startFrame = UNSET_FRAME

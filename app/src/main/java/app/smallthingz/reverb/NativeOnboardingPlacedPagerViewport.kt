@@ -63,7 +63,6 @@ internal class NativeOnboardingPlacedPagerViewport(
         { requireNotNull(attachedScope) }, ::focusedBounds,
         NativePagerBringIntoViewSpec(pager, nativeBringIntoViewSpec(context)))
     private val focusSearchPages = mutableSetOf<Int>()
-    private var attachedPages: Set<Int> = emptySet()
     private var attachedPageMask = 0
     private var measuring = false
     var sourceAccessibility: NativeOnboardingPagerAccessibility? = null
@@ -92,20 +91,31 @@ internal class NativeOnboardingPlacedPagerViewport(
         val focusedPage = pages.indexOfFirst { it.hasFocus() }.takeIf { it >= 0 }
         val wantedMask = nativeOnboardingPageMembershipMask(next, focusSearchPages, focusedPage)
         if (wantedMask == attachedPageMask && next == placedPages) return
-        val wanted = (next.toSet() + focusSearchPages + listOfNotNull(focusedPage)).toSortedSet()
-        for (index in attachedPages) if (index !in wanted) removeView(pages[index])
-        for (index in wanted) if (pages[index].parent !== this) {
+        val previousMask = attachedPageMask
+        for (index in 0 until NATIVE_ONBOARDING_PAGE_COUNT) {
+            val bit = 1 shl index
+            if (previousMask and bit != 0 && wantedMask and bit == 0) removeView(pages[index])
+        }
+        for (index in 0 until NATIVE_ONBOARDING_PAGE_COUNT) if (
+            wantedMask and (1 shl index) != 0 && pages[index].parent !== this
+        ) {
             val insertion = (0 until childCount).count { pages.indexOf(getChildAt(it)) < index }
             addView(pages[index], insertion, LayoutParams(-1, -1))
             pages[index].measure(exact(width), exact(height))
         }
         placedPages = next
-        attachedPages = wanted
         attachedPageMask = wantedMask
         placementChanged()
     }
 
-    fun focusPlacedPages(): List<Int> = attachedPages.sorted()
+    fun focusPlacedPages(): List<Int> {
+        val mask = attachedPageMask
+        val result = ArrayList<Int>(NATIVE_ONBOARDING_PAGE_COUNT)
+        for (index in 0 until NATIVE_ONBOARDING_PAGE_COUNT) {
+            if (mask and (1 shl index) != 0) result.add(index)
+        }
+        return result
+    }
 
     /** Synchronous source beyond-bounds placement; accepted focus pins the new page afterwards. */
     fun withFocusSearchPage(page: Int, block: () -> Boolean): Boolean {
@@ -131,7 +141,10 @@ internal class NativeOnboardingPlacedPagerViewport(
             pager.updateLayout(width, density)
             contentInView.measured(width)
             reconcilePlaced(width, height)
-            for (index in attachedPages) pages[index].measure(exact(width), exact(height))
+            val mask = attachedPageMask
+            for (index in 0 until NATIVE_ONBOARDING_PAGE_COUNT) {
+                if (mask and (1 shl index) != 0) pages[index].measure(exact(width), exact(height))
+            }
         } finally { measuring = false }
     }
 
@@ -144,7 +157,8 @@ internal class NativeOnboardingPlacedPagerViewport(
         if (sourceAccessibility?.isNodePresent() == false) null else super.createAccessibilityNodeInfo()
 
     private fun place(width: Int, height: Int) {
-        for (index in attachedPages) {
+        val mask = attachedPageMask
+        for (index in 0 until NATIVE_ONBOARDING_PAGE_COUNT) if (mask and (1 shl index) != 0) {
             val x = pager.pageTranslationX(index).toInt()
             pages[index].layout(x, 0, x + width, height)
         }

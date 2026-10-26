@@ -440,10 +440,12 @@ internal class SheetPointerOwner(private val density:Float):AutoCloseable {
             override fun dispatch(event:NativeDragPointerEvent,pass:NativePointerPass)=Unit
             override fun cancel()=Unit
         }
+        val fixedContentHits=listOf(closeHit,handleHit)
         val contentHit=NativeActionSheetHitLayout(surface.painted,geometry,minimum,listOf(shield),
-            children={contentHits+listOf(closeHit,handleHit)},clip=surface::containsShape)
+            children={contentHits+fixedContentHits},clip=surface::containsShape)
+        val surfaceChildren=listOf(contentHit)
         val surfaceHit=NativeActionSheetHitLayout(surface,geometry,minimum,listOf(drag),
-            children={listOf(contentHit)})
+            children={surfaceChildren})
         val scrimHit=NativeActionSheetHitLayout(scrim,geometry,{Size.Zero},
             listOf(NativeSheetScrimTapNode(scrim,{density}) {scrim.performClick()}))
         sheets=listOf(surfaceHit,scrimHit)

@@ -166,8 +166,9 @@ internal class ReverbSpringFineSeekView(
         if (!inputActive || !model.needsFrames || frameJob?.isActive == true) return
         frameJob = attachedScope?.launch {
             // Source uses raw withFrameNanos and210ms cosh return, not animator duration scaling.
+            val onFrame = model::frame
             while (model.needsFrames && inputActive) {
-                environment.frameClock.withFrameNanos(model::frame)
+                environment.frameClock.withFrameNanos(onFrame)
             }
         }
     }

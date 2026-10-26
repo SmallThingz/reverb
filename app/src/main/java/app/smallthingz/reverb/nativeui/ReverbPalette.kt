@@ -18,7 +18,6 @@ package app.smallthingz.reverb.nativeui
 
 import android.content.Context
 import android.os.Build
-import kotlin.math.pow
 import kotlin.math.sqrt
 import androidx.annotation.RequiresApi
 import app.smallthingz.reverb.nativeui.color.Cam
@@ -316,6 +315,7 @@ private fun dynamic31(darkTheme: Boolean, readColor: (Int) -> Int): ReverbPalett
     // Material3 1.4.0 uses neutral2 (chroma 8), not neutral1, on Android 12/13.
     val neutralBase = Cam.fromInt(readColor(android.R.color.system_neutral2_600))
     fun neutralTone(tone: Float): Int = Cam.getInt(neutralBase.hue, neutralBase.chroma, tone)
+    val neutralSurface = neutralTone(if (darkTheme) 6f else 98f)
     return if (darkTheme) ReverbPalette.fallback(true).copy(
         primary = readColor(android.R.color.system_accent1_200),
         onPrimary = readColor(android.R.color.system_accent1_800),
@@ -330,9 +330,9 @@ private fun dynamic31(darkTheme: Boolean, readColor: (Int) -> Int): ReverbPalett
         onTertiary = readColor(android.R.color.system_accent3_800),
         tertiaryContainer = readColor(android.R.color.system_accent3_700),
         onTertiaryContainer = readColor(android.R.color.system_accent3_100),
-        background = neutralTone(6f),
+        background = neutralSurface,
         onBackground = readColor(android.R.color.system_neutral2_100),
-        surface = neutralTone(6f),
+        surface = neutralSurface,
         onSurface = readColor(android.R.color.system_neutral2_100),
         surfaceVariant = readColor(android.R.color.system_neutral2_700),
         onSurfaceVariant = readColor(android.R.color.system_neutral2_200),
@@ -342,7 +342,7 @@ private fun dynamic31(darkTheme: Boolean, readColor: (Int) -> Int): ReverbPalett
         outlineVariant = readColor(android.R.color.system_neutral2_700),
         scrim = readColor(android.R.color.system_neutral2_1000),
         surfaceBright = neutralTone(24f),
-        surfaceDim = neutralTone(6f),
+        surfaceDim = neutralSurface,
         surfaceContainer = neutralTone(12f),
         surfaceContainerHigh = neutralTone(17f),
         surfaceContainerHighest = neutralTone(22f),
@@ -375,9 +375,9 @@ private fun dynamic31(darkTheme: Boolean, readColor: (Int) -> Int): ReverbPalett
         onTertiary = readColor(android.R.color.system_accent3_0),
         tertiaryContainer = readColor(android.R.color.system_accent3_100),
         onTertiaryContainer = readColor(android.R.color.system_accent3_900),
-        background = neutralTone(98f),
+        background = neutralSurface,
         onBackground = readColor(android.R.color.system_neutral2_900),
-        surface = neutralTone(98f),
+        surface = neutralSurface,
         onSurface = readColor(android.R.color.system_neutral2_900),
         surfaceVariant = readColor(android.R.color.system_neutral2_100),
         onSurfaceVariant = readColor(android.R.color.system_neutral2_700),
@@ -386,7 +386,7 @@ private fun dynamic31(darkTheme: Boolean, readColor: (Int) -> Int): ReverbPalett
         outline = readColor(android.R.color.system_neutral2_500),
         outlineVariant = readColor(android.R.color.system_neutral2_200),
         scrim = readColor(android.R.color.system_neutral2_1000),
-        surfaceBright = neutralTone(98f),
+        surfaceBright = neutralSurface,
         surfaceDim = neutralTone(87f),
         surfaceContainer = neutralTone(94f),
         surfaceContainerHigh = neutralTone(92f),
@@ -420,8 +420,8 @@ internal class SettingsSelectionInk(palette: ReverbPalette) {
     private val idleIndication = palette.ink
     private val selected = palette.settingsOnSelection
     private val idle = palette.muted
-    private val selectedLuminance = luminance(selected)
-    private val idleLuminance = luminance(idle)
+    private val selectedLuminance = srgbLuminance(selected)
+    private val idleLuminance = srgbLuminance(idle)
     private val crossover = sqrt((selectedLuminance + 0.05) * (idleLuminance + 0.05)) - 0.05
     private val lighter = if (selectedLuminance >= idleLuminance) selected else idle
     private val darker = if (selectedLuminance >= idleLuminance) idle else selected
@@ -432,7 +432,7 @@ internal class SettingsSelectionInk(palette: ReverbPalette) {
     fun foreground(animatedFill: Int): Int {
         val alpha = animatedFill ushr 24
         val background = composite(animatedFill, field, alpha)
-        val backgroundLuminance = luminance(background)
+        val backgroundLuminance = srgbLuminance(background)
         val preferred = when {
             alpha == 0 -> idle
             animatedFill == selectedFill -> selected
@@ -462,7 +462,7 @@ internal class SettingsSelectionInk(palette: ReverbPalette) {
         // Focus and press can overlap: each current layer is 10%, rounded to alpha 26/255.
         // The indication is behind the glyphs, so only the surface receives these overlays.
         val stateBackground = composite(indication, composite(indication, background, 26), 26)
-        val stateLuminance = luminance(stateBackground)
+        val stateLuminance = srgbLuminance(stateBackground)
         val stateContrast = if (stateLuminance >= inkLuminance)
             (stateLuminance + 0.05) / (inkLuminance + 0.05)
         else (inkLuminance + 0.05) / (stateLuminance + 0.05)
@@ -476,14 +476,6 @@ internal class SettingsSelectionInk(palette: ReverbPalette) {
             (((foreground ushr shift and 255) * alpha +
                 (background ushr shift and 255) * (255 - alpha) + 127) / 255) shl shift
         return (0xFF shl 24) or channel(16) or channel(8) or channel(0)
-    }
-
-    private fun luminance(color: Int): Double {
-        fun channel(shift: Int): Double {
-            val value = (color ushr shift and 255) / 255.0
-            return if (value <= 0.04045) value / 12.92 else ((value + 0.055) / 1.055).pow(2.4)
-        }
-        return 0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0)
     }
 
     private companion object {

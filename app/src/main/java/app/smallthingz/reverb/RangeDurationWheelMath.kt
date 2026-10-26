@@ -96,15 +96,20 @@ internal fun rangeDurationWheelValues(
     require(step > 0)
     val max = maxInclusive.coerceAtLeast(0)
     val current = currentValue.coerceAtLeast(0)
-    val values = ArrayList<Int>(max / step + 3)
-    var value = 0
-    while (value <= max) {
-        values += value
-        if (value > Int.MAX_VALUE - step) break
-        value += step
+    val lastRegularIndex = max / step
+    // Preserve rejection of a progression too large for the former list's capacity.
+    require(lastRegularIndex <= Int.MAX_VALUE - 3)
+    val regularCount = lastRegularIndex + 1
+    val addMaximum = includeMaximumBoundary && max % step != 0
+    val addCurrent = (current > max || current % step != 0) && !(addMaximum && current == max)
+    val filledCount = regularCount + if (addMaximum) 1 else 0
+    val values = IntArray(filledCount + if (addCurrent) 1 else 0)
+    for (index in 0 until regularCount) values[index] = index * step
+    if (addMaximum) values[regularCount] = max
+    if (addCurrent) {
+        val index = if (current > max) filledCount else current / step + 1
+        System.arraycopy(values, index, values, index + 1, filledCount - index)
+        values[index] = current
     }
-    if (includeMaximumBoundary && values.lastOrNull() != max) values += max
-    if (current !in values) values += current
-    values.sort()
-    return values.distinct().toIntArray()
+    return values
 }

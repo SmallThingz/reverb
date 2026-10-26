@@ -184,6 +184,26 @@ private fun incidentDrawParagraphState(paragraph: Any): JSONObject {
     fun field(owner: Any, name: String): Any? = owner.javaClass.getDeclaredField(name)
         .apply { isAccessible = true }.get(owner)
     try {
+        if (paragraph is smallthingz.ui.text.Paragraph) {
+            val intrinsics = paragraph.paragraphIntrinsics
+            val direction = smallthingz.ui.text.ParagraphIntrinsics::class.java.getDeclaredField("direction")
+                .apply { isAccessible = true }.get(intrinsics)
+            val layout = smallthingz.ui.text.Paragraph::class.java.getDeclaredField("layout")
+                .apply { isAccessible = true }.get(paragraph) as android.text.Layout
+            result.put("intrinsics_identity", System.identityHashCode(intrinsics))
+                .put("intrinsics_class", intrinsics.javaClass.name)
+                .put("intrinsics_style", intrinsics.style.toString())
+                .put("text_direction_heuristic", direction ?: JSONObject.NULL)
+                .put("platform_layout_class", layout.javaClass.name)
+                .put("platform_layout_identity", System.identityHashCode(layout))
+                .put("platform_layout_width", layout.width)
+                .put("platform_layout_alignment", layout.alignment.toString())
+                .put("platform_paragraph_direction", layout.getParagraphDirection(0))
+                .put("platform_line_left", layout.getLineLeft(0).toDouble())
+                .put("platform_line_right", layout.getLineRight(0).toDouble())
+                .put("complete", true)
+            return result
+        }
         if (paragraph.javaClass.name != "androidx.compose.ui.text.AndroidParagraph") {
             result.put("unavailable", "Current draw Paragraph is not the pinned AndroidParagraph")
             return result

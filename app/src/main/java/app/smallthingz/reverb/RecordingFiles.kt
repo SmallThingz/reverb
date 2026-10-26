@@ -53,7 +53,7 @@ private const val ILLEGAL_FILENAME_CHARS = "\\/*?\"<>|"
 internal fun hasIllegalRecordingNameCharacters(name: String): Boolean =
     name.any { it in ILLEGAL_FILENAME_CHARS }
 
-private val SUPPORTED_RECORDING_EXTENSIONS = ExportFormat.entries.map { it.extension }.toSet()
+private val SUPPORTED_RECORDING_EXTENSIONS = ExportFormat.entries.map { it.extension }
 private const val FILE_COPY_BUFFER_BYTES = 128 * 1024
 private const val VERIFIED_FILE_IDENTITY_QUERY = "reverb_identity"
 private const val STAGING_OUTPUT_PREFIX = "reverb-partial-"
@@ -1297,8 +1297,7 @@ private fun readStableDocumentPublicationObservation(
     preferredIdentity: String? = null,
 ): ObservedDocumentPublication? {
     fun candidate(): DocumentTreeEntry? = queryDocumentTreeEntries(context, treeUri)
-        .filter { entry -> entry.isFile && entry.name == finalDisplayName }
-        .singleOrNull()
+        .singleOrNull { entry -> entry.isFile && entry.name == finalDisplayName }
 
     val before = candidate() ?: return null
     val fingerprint = readStableOutputFingerprint(
@@ -1919,7 +1918,8 @@ internal fun fileIdentityMatches(storedIdentity: String, currentIdentity: String
     // migration to unknown birth only for the exact same device/inode/ctime revision;
     // never make an old deletion/recovery claim valid after any actual file mutation.
     return stored.size == 6 && current.size == 6 && stored[0] == "stat" && current[0] == "stat" &&
-        stored.take(5) == current.take(5) &&
+        stored[1] == current[1] && stored[2] == current[2] &&
+        stored[3] == current[3] && stored[4] == current[4] &&
         stored[5].toLongOrNull() != null && current[5].toLongOrNull() != null &&
         (stored[5] == "0" || current[5] == "0")
 }
@@ -1982,13 +1982,16 @@ internal fun recordingFileIdentityMatches(recording: RecordingEntity): Boolean {
     return fileIdentityMatches(recording.fileIdentity, resolveFileIdentity(File(recording.id)))
 }
 
-internal fun fileRecordingAssetState(file: File): RecordingAssetState = when (val observation = observeStoragePath(file)) {
-    StoragePathObservation(StoragePathState.MISSING, false) -> RecordingAssetState.MISSING
-    StoragePathObservation(StoragePathState.UNAVAILABLE, false) -> RecordingAssetState.UNAVAILABLE
-    else -> if (observation.state == StoragePathState.PRESENT && observation.isRegularFile) {
-        RecordingAssetState.PRESENT
-    } else {
-        RecordingAssetState.MISSING
+internal fun fileRecordingAssetState(file: File): RecordingAssetState {
+    val observation = observeStoragePath(file)
+    return when (observation.state) {
+        StoragePathState.MISSING -> RecordingAssetState.MISSING
+        StoragePathState.UNAVAILABLE -> RecordingAssetState.UNAVAILABLE
+        StoragePathState.PRESENT -> if (observation.isRegularFile) {
+            RecordingAssetState.PRESENT
+        } else {
+            RecordingAssetState.MISSING
+        }
     }
 }
 
@@ -3507,8 +3510,33 @@ private fun queryContentDisplayName(context: Context, uri: Uri): String? = runCa
 
 internal fun isStagingOutputName(name: String): Boolean = name.startsWith(STAGING_OUTPUT_PREFIX)
 
-internal fun isSupportedRecordingName(name: String): Boolean =
-    !isStagingOutputName(name) && name.substringAfterLast('.', "").lowercase() in SUPPORTED_RECORDING_EXTENSIONS
+internal fun isSupportedRecordingName(name: String): Boolean {
+    if (isStagingOutputName(name)) return false
+    val start = name.lastIndexOf('.') + 1
+    if (start == 0) return "" in SUPPORTED_RECORDING_EXTENSIONS
+    for (index in start until name.length) {
+        if (name[index] > '\u007f') {
+            // Retain the exact Unicode lowercase behavior, including multi-character mappings.
+            return name.substringAfterLast('.', "").lowercase() in SUPPORTED_RECORDING_EXTENSIONS
+        }
+    }
+    val length = name.length - start
+    for (index in SUPPORTED_RECORDING_EXTENSIONS.indices) {
+        val extension = SUPPORTED_RECORDING_EXTENSIONS[index]
+        if (extension.length != length) continue
+        var matches = true
+        for (offset in extension.indices) {
+            val char = name[start + offset]
+            val lower = if (char in 'A'..'Z') char + ('a' - 'A') else char
+            if (lower != extension[offset]) {
+                matches = false
+                break
+            }
+        }
+        if (matches) return true
+    }
+    return false
+}
 
 internal fun isDirectChildRecordingName(name: String): Boolean =
     name.isNotBlank() && name != "." && name != ".." &&
@@ -3968,11 +3996,13 @@ internal fun preserveUnexpectedRenameTarget(
     originalDisplayName: String,
     onUnexpectedMovedFile: ((File, CopyDigest) -> Boolean)? = null,
 ): Boolean {
-    val suppressionDigest = readStableFileOutputFingerprint(moved)?.digest ?: runCatching {
-        FileInputStream(moved).use(::sha256)
-    }.getOrNull()
-    val suppressed = suppressionDigest != null && onUnexpectedMovedFile != null &&
-        runCatching { onUnexpectedMovedFile(moved, suppressionDigest) }.getOrDefault(false)
+    val suppressed = if (onUnexpectedMovedFile == null) false else {
+        val suppressionDigest = readStableFileOutputFingerprint(moved)?.digest ?: runCatching {
+            FileInputStream(moved).use(::sha256)
+        }.getOrNull()
+        suppressionDigest != null &&
+            runCatching { onUnexpectedMovedFile(moved, suppressionDigest) }.getOrDefault(false)
+    }
 
     try {
         Files.move(moved.toPath(), source.toPath())
@@ -4221,6 +4251,7 @@ private fun renameDocumentRecording(
         var renameFailure: Throwable? = null
         val returnedRenamedUri = try {
             DocumentsContract.renameDocument(context.contentResolver, sourceUri, uniqueName)
+                ?: throw IOException("Document rename returned no result")
         } catch (error: Exception) {
             renameFailure = error
             null
@@ -4270,13 +4301,10 @@ private fun renameDocumentRecording(
             ) {
                 Log.w(TAG, "Unable to suppress rejected ambiguous document rename result ${observed.uri}")
             }
-            if (renameFailure != null || observed != null) {
-                throw RecordingRenameStateUncertainException(
-                    "Document rename result is uncertain: ${recording.id}",
-                    renameFailure,
-                )
-            }
-            return@runCatching null
+            throw RecordingRenameStateUncertainException(
+                "Document rename result is uncertain: ${recording.id}",
+                renameFailure,
+            )
         }
         verifyProviderRenamePostcondition(recording.id) {
             val renamedIdentity = resolveProviderRecordingIdentity(
@@ -4749,6 +4777,7 @@ internal fun <T> withSeekableRecordingScanCopy(
         // The pinned channel remains readable; process death cannot leave audio in the cache.
         Files.deleteIfExists(temporary.toPath())
         val bytes = ByteArray(FILE_COPY_BUFFER_BYTES)
+        val buffer = ByteBuffer.wrap(bytes)
         var copied = 0L
         while (true) {
             checkCancelled()
@@ -4764,7 +4793,8 @@ internal fun <T> withSeekableRecordingScanCopy(
             if (count.toLong() > maxBytes - copied) {
                 throw IOException("Recording exceeds temporary validation space")
             }
-            val buffer = ByteBuffer.wrap(bytes, 0, count)
+            buffer.clear()
+            buffer.limit(count)
             while (buffer.hasRemaining()) {
                 checkCancelled()
                 channel.write(buffer)

@@ -44,6 +44,8 @@ internal class ReverbRangeExportContent(
     private var selectedBuffer = ReverbService.BufferSlot.ONE_SHOT
     private var onCancel: () -> Unit = {}
     private var onExport: () -> Unit = {}
+    private val cancelCurrent: () -> Unit = { onCancel() }
+    private val exportCurrent: () -> Unit = { onExport() }
     private var compact = true
     private var wheel: NativeRangeSelectionDurationWheel? = null
     val durationWheel: View? get() = wheel?.view
@@ -107,10 +109,15 @@ internal class ReverbRangeExportContent(
         controls.alpha = if (!frame.snapshotPresent) 1f else frame.chromeAlpha
         controls.bind(environment, state, !frame.snapshotPresent,
             rangeExportSelectionWithinLimit(state.selectionDurationExactSeconds, frame.maximumDurationSeconds),
-            selectedBuffer, { this.onCancel() }, { this.onExport() })
-        val nextFine = FineKey(interactionEnabled && state.snapshotReady,
-            state.isPlaying, state.durationSeconds, state.lastTarget)
-        if (fineKey != nextFine) {
+            selectedBuffer, cancelCurrent, exportCurrent)
+        val fineEnabled = interactionEnabled && state.snapshotReady
+        val playing = state.isPlaying
+        val duration = state.durationSeconds
+        val target = state.lastTarget
+        val previousFine = fineKey
+        if (previousFine == null || previousFine.enabled != fineEnabled || previousFine.playing != playing ||
+            previousFine.duration.toBits() != duration.toBits() || previousFine.target != target) {
+            val nextFine = FineKey(fineEnabled, playing, duration, target)
             fineKey = nextFine
             fine.bind(SpringFineSeekBinding(
                 enabled = nextFine.enabled,
@@ -161,12 +168,17 @@ internal class ReverbRangeExportContent(
         val active = wheel ?: return
         val frame = presentation ?: return
         active.view.alpha = frame.chromeAlpha
-        val key = WheelKey(environment, frame.maximumDurationSeconds,
-            state.selectionDurationWheelLimitExactSeconds(frame.maximumDurationSeconds), state.selectionDurationExactSeconds,
-            frame.interactionReady && frame.backProgress <= 0f, frame.visualizerVisible)
-        if (wheelKey != key) {
-            wheelKey = key
-            active.bind(key.maximum, key.enabled, key.visible, environment)
+        val maximum = frame.maximumDurationSeconds
+        val reachableMaximum = state.selectionDurationWheelLimitExactSeconds(maximum)
+        val duration = state.selectionDurationExactSeconds
+        val enabled = frame.interactionReady && frame.backProgress <= 0f
+        val visible = frame.visualizerVisible
+        val previous = wheelKey
+        if (previous == null || previous.environment !== environment || previous.maximum.toBits() != maximum.toBits() ||
+            previous.reachableMaximum.toBits() != reachableMaximum.toBits() || previous.duration.toBits() != duration.toBits() ||
+            previous.enabled != enabled || previous.visible != visible) {
+            wheelKey = WheelKey(environment, maximum, reachableMaximum, duration, enabled, visible)
+            active.bind(maximum, enabled, visible, environment)
         }
     }
 

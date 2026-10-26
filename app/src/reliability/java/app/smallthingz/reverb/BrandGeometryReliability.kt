@@ -11,6 +11,7 @@ import kotlin.math.abs
 /** Native drawable rendering, isolated from the installed app and its recordings. */
 internal fun verifyBrandGeometry(context: Context) {
     check(context.packageName.endsWith(".reliability"))
+    val row = IntArray(512)
     for ((theme, night) in listOf("light" to Configuration.UI_MODE_NIGHT_NO, "dark" to Configuration.UI_MODE_NIGHT_YES)) {
         val configuration = Configuration(context.resources.configuration).apply {
             uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or night
@@ -25,12 +26,15 @@ internal fun verifyBrandGeometry(context: Context) {
                 drawable.draw(Canvas(bitmap))
                 var left = 512; var right = 0; var top = 512; var bottom = 0
                 var count = 0; var xSum = 0.0; var ySum = 0.0
-                for (y in 0 until 512) for (x in 0 until 512) {
-                    // Echoes stay translucent; primary opaque strokes own optical alignment.
-                    if (Color.alpha(bitmap.getPixel(x, y)) >= 240) {
-                        left = minOf(left, x); right = maxOf(right, x)
-                        top = minOf(top, y); bottom = maxOf(bottom, y)
-                        count++; xSum += x + 0.5; ySum += y + 0.5
+                for (y in 0 until 512) {
+                    bitmap.getPixels(row, 0, 512, 0, y, 512, 1)
+                    for (x in 0 until 512) {
+                        // Echoes stay translucent; primary opaque strokes own optical alignment.
+                        if (Color.alpha(row[x]) >= 240) {
+                            left = minOf(left, x); right = maxOf(right, x)
+                            top = minOf(top, y); bottom = maxOf(bottom, y)
+                            count++; xSum += x + 0.5; ySum += y + 0.5
+                        }
                     }
                 }
                 check(count > 10_000) { "$theme/$name: primary glyph missing" }

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-// Vendored from Material3 1.4.0; only package/import paths changed. See SOURCE.md.
+// Vendored from Material3 1.4.0; unused flRoot storage/calculation removed. See SOURCE.md.
 package app.smallthingz.reverb.nativeui.color
 
 import androidx.annotation.VisibleForTesting
@@ -27,9 +27,8 @@ import kotlin.math.sqrt
 
 /**
  * NOTICE: Fork and kotlin transpilation of
- * frameworks/base/core/java/com/android/internal/graphics/cam/Frame.java Manual changes have not
- * and should not be implemented except for compilation purposes between kotlin and java. Unused
- * methods were also removed.
+ * frameworks/base/core/java/com/android/internal/graphics/cam/Frame.java. Reverb retains the
+ * original default-frame arithmetic and removes the unused colorfulness scale flRoot.
  *
  * The frame, or viewing conditions, where a color was seen. Used, along with a color, to create a
  * color appearance model representing the color.
@@ -52,7 +51,6 @@ private constructor(
     val nc: Float,
     @get:VisibleForTesting val rgbD: FloatArray,
     val fl: Float,
-    @get:VisibleForTesting val flRoot: Float,
     val z: Float,
 ) {
     companion object {
@@ -181,7 +179,7 @@ private constructor(
 
             val aw = ((2.0f * rgbA[0]) + rgbA[1] + (0.05f * rgbA[2])) * nbb
 
-            return Frame(n, aw, nbb, nbb, c, nc, rgbD, fl, fl.pow(0.25f), z)
+            return Frame(n, aw, nbb, nbb, c, nc, rgbD, fl, z)
         }
     }
 }

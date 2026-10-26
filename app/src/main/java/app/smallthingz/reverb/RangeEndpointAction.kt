@@ -6,15 +6,15 @@ internal fun rangeEndpointLimits(
     target: RangeEditTarget,
 ): ClosedFloatingPointRange<Float>? {
     if (!durationSeconds.isFinite() || durationSeconds <= 0f) return null
-    val fullRange = RangeEditValues(0f, durationSeconds)
-    fun bound(requested: Float): Float {
-        val values = adjustRangeEditTarget(fullRange, target, requested, durationSeconds).values
-        return when (target) {
-            RangeEditTarget.START -> values.startSeconds
-            RangeEditTarget.END -> values.endSeconds
+    val minimum = minOf(0.05f, durationSeconds)
+    return when (target) {
+        RangeEditTarget.START -> {
+            val latest = durationSeconds - minimum
+            // Match the pointer edit's collapsed-Float repair at very long durations.
+            0f..(if (latest < durationSeconds) latest else java.lang.Math.nextDown(durationSeconds))
         }
+        RangeEditTarget.END -> minimum..durationSeconds
     }
-    return bound(0f)..bound(durationSeconds)
 }
 
 /** Selection and discrete edits share live admission; rejection never pauses a newer owner. */

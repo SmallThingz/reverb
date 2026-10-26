@@ -42,7 +42,9 @@ internal class NativeSettingsOwner(
     private var changed: () -> Unit = {}
     private var draftReconciliationDepth = 0
     private var previousPresentation: SettingsDraftPresentation? = null
-    private var hydrationKey: Pair<Boolean, Boolean>? = null
+    private var hydrationEffectInitialized = false
+    private var hydrationActive = false
+    private var hydrationPersisting = false
     private var hydrationJob: Job? = null
     private var moveRevision = 0
     private var batteryObserverInstalled = false
@@ -565,7 +567,7 @@ internal class NativeSettingsOwner(
                 old.displayed.snapshot.exportDirectoryUri != current.displayed.snapshot.exportDirectoryUri) {
                 refreshMoveAvailability()
             }
-            restartHydrationEffect(current.active to current.persisting)
+            restartHydrationEffect(current.active, current.persisting)
         } finally {
             draftReconciliationDepth--
         }
@@ -573,9 +575,11 @@ internal class NativeSettingsOwner(
         // start() is the only direct caller and publishes after this method returns as well.
     }
 
-    private fun restartHydrationEffect(key: Pair<Boolean, Boolean>) {
-        if (hydrationKey == key) return
-        hydrationKey = key
+    private fun restartHydrationEffect(active: Boolean, persisting: Boolean) {
+        if (hydrationEffectInitialized && hydrationActive == active && hydrationPersisting == persisting) return
+        hydrationEffectInitialized = true
+        hydrationActive = active
+        hydrationPersisting = persisting
         hydrationJob?.cancel()
         val next = scope.launch(start = CoroutineStart.LAZY) {
             var retryDelayMillis = DURABLE_UI_RETRY_INITIAL_MILLIS

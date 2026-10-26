@@ -236,7 +236,10 @@ internal class OnboardingPageContentView(
     }
     private fun cancelInputs() {
         permissions?.cancelPendingRowInput()
-        listOfNotNull(oneShot, looping, compression, silence).forEach(View::cancelPendingInputEvents)
+        oneShot?.cancelPendingInputEvents()
+        looping?.cancelPendingInputEvents()
+        compression?.cancelPendingInputEvents()
+        silence?.cancelPendingInputEvents()
     }
     private fun releaseOwner(expected: ActionOwner) {
         if (owner !== expected) return
@@ -258,7 +261,6 @@ internal class OnboardingPageContentView(
             cancelInputs()
         }
     }
-    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).roundToInt()
     private class ActionOwner(val lifecycleOwner: LifecycleOwner, val actions: OnboardingPageActions) {
         lateinit var observer: LifecycleEventObserver
         var permissionLease: AutoCloseable? = null

@@ -9,13 +9,13 @@ internal data class SettingsUiDraft(
     val loopingSizeText: String,
 ) {
     fun hasUnsavedChanges(baseline: SettingsSnapshot): Boolean {
-        val invalidInput = when (snapshot.retentionMode) {
+        if (snapshot != baseline) return true
+        return when (snapshot.retentionMode) {
             RetentionMode.TIME -> parseRetentionTimeSeconds(oneShotTimeText) == null ||
                 parseRetentionTimeSeconds(loopingTimeText) == null
             RetentionMode.SIZE -> parseRetentionSizeMib(oneShotSizeText)?.takeIf { it >= 0.0 } == null ||
                 parseRetentionSizeMib(loopingSizeText)?.takeIf { it >= 0.0 } == null
         }
-        return settingsSnapshotHasUnsavedChanges(baseline, snapshot, invalidInput)
     }
 
     // Primitive saveable values keep byte counts exact and enum identity independent of labels.

@@ -27,6 +27,55 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
+/** Validated options have one immutable revision per slot; retain creation order for teardown. */
+internal class QuickTileRowCache<Row>(
+    private val create: (QuickSaveTileOption) -> Row,
+    private val retire: (Row) -> Unit,
+) : AutoCloseable {
+    private class Entry<Row>(val slot: Int, val revision: String, val row: Row)
+    private val slots = arrayOfNulls<Entry<Row>>(QUICK_SAVE_TILE_COUNT)
+    private val creationOrder = ArrayList<Entry<Row>>(QUICK_SAVE_TILE_COUNT)
+
+    fun retain(options: List<QuickSaveTileOption>) {
+        var seen = 0
+        var retained = 0
+        for (index in options.indices) {
+            val option = options[index]
+            val bit = 1 shl option.slot
+            require(seen and bit == 0) { "Quick-tile rows require unique slots" }
+            seen = seen or bit
+            if (slots[option.slot]?.revision == option.revision) retained = retained or bit
+        }
+        var index = 0
+        while (index < creationOrder.size) {
+            val entry = creationOrder[index]
+            if (retained and (1 shl entry.slot) == 0) {
+                retire(entry.row)
+                slots[entry.slot] = null
+                creationOrder.removeAt(index)
+            } else index++
+        }
+    }
+
+    fun getOrCreate(option: QuickSaveTileOption): Row {
+        val existing = slots[option.slot]
+        if (existing != null) {
+            check(existing.revision == option.revision) { "Retire old tile revisions before creating rows" }
+            return existing.row
+        }
+        val entry = Entry(option.slot, option.revision, create(option))
+        slots[option.slot] = entry
+        creationOrder.add(entry)
+        return entry.row
+    }
+
+    override fun close() {
+        for (index in creationOrder.indices) retire(creationOrder[index].row)
+        creationOrder.clear()
+        slots.fill(null)
+    }
+}
+
 /**
  * Released QuickSettingsTilesControls concrete section. Owns the source16dp/12dp outer inset once.
  * The tile model/accepted work remains in its owner; existing options have Add/Delete, never Edit.
@@ -44,7 +93,11 @@ internal class SettingsQuickTilesView(
         ReverbTextRole.TITLE_MEDIUM, environment.palette.ink)
     private val surface = ReverbGroupLayout(context, 20f)
     private val rows = TileRowsColumn(context)
-    private val rowViews = linkedMapOf<Pair<Int, String>, QuickTileOptionRow>()
+    private val rowViews = QuickTileRowCache(
+        create = { option -> QuickTileOptionRow(context, option, this.environment, inputRoot,
+            owner::add, owner::requestDelete) },
+        retire = QuickTileOptionRow::close,
+    )
     private val loading = tileStatus(context, context.getString(R.string.tiles_ui_loading), environment)
     private val loadingInset = SettingsInsetView(context, loading, 16, 16, 16, 16, environment, false)
     private val create = SettingsCalibrationActionView(context, environment, inputRoot, ReverbIcon.Add) {
@@ -102,19 +155,10 @@ internal class SettingsQuickTilesView(
         surface.setPalette(colors.field, colors.border)
         rows.dividerColor = colors.border
         val items = owner.options.orEmpty()
-        val keys = items.map { it.slot to it.revision }.toSet()
-        rowViews.entries.iterator().let { iterator ->
-            while (iterator.hasNext()) {
-                val entry = iterator.next()
-                if (entry.key !in keys) { entry.value.close(); iterator.remove() }
-            }
-        }
+        rowViews.retain(items)
         val children = mutableListOf<View>()
         for (option in items) {
-            val row = rowViews.getOrPut(option.slot to option.revision) {
-                QuickTileOptionRow(context, option, environment, inputRoot,
-                    owner::add, owner::requestDelete)
-            }
+            val row = rowViews.getOrCreate(option)
             row.bind(option, quickSaveTileAddedState(option, owner.observations),
                 owner.interactive && !owner.editorState.editorOpen && owner.failure == null,
                 environment)
@@ -164,7 +208,9 @@ internal class SettingsQuickTilesView(
         val width = MeasureSpec.getSize(w)
         val inner = (width - 2 * dp(16)).coerceAtLeast(0)
         var height = 2 * dp(12)
-        for ((index, child) in ordered.withIndex()) {
+        val children = ordered
+        for (index in children.indices) {
+            val child = children[index]
             val fill = child === surface || child === inline
             child.measure(if (fill) exact(inner) else atMost(inner), unspecified())
             height += child.measuredHeight + if (index == 0) 0 else dp(8)
@@ -174,7 +220,9 @@ internal class SettingsQuickTilesView(
 
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
         var y = dp(12)
-        for ((index, child) in ordered.withIndex()) {
+        val children = ordered
+        for (index in children.indices) {
+            val child = children[index]
             if (index != 0) y += dp(8)
             placeTileLogical(child, dp(16), y)
             y += child.measuredHeight
@@ -187,8 +235,7 @@ internal class SettingsQuickTilesView(
         owner.close()
         inline?.close()
         inline = null
-        rowViews.values.forEach { it.close() }
-        rowViews.clear()
+        rowViews.close()
         create.close()
         retry.close()
         deleteTargetChanged(null)
@@ -216,7 +263,9 @@ private class TileRowsColumn(context: Context) : ViewGroup(context) {
     override fun onMeasure(w: Int, h: Int) {
         val width = MeasureSpec.getSize(w)
         var height = 0
-        for (child in ordered) {
+        val children = ordered
+        for (index in children.indices) {
+            val child = children[index]
             child.measure(exact(width), unspecified())
             height += child.measuredHeight
         }
@@ -224,7 +273,9 @@ private class TileRowsColumn(context: Context) : ViewGroup(context) {
     }
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
         var y = 0
-        for (child in ordered) {
+        val children = ordered
+        for (index in children.indices) {
+            val child = children[index]
             child.layout(0, y, width, y + child.measuredHeight)
             y += child.measuredHeight
         }
@@ -451,7 +502,9 @@ internal class QuickTileInlineView(
             val width = MeasureSpec.getSize(w)
             val inner = (width - 2 * dp(16)).coerceAtLeast(0)
             var height = 2 * dp(16)
-            for ((index, child) in ordered.withIndex()) {
+            val children = ordered
+            for (index in children.indices) {
+                val child = children[index]
                 child.measure(if (child === wheel?.view) exact(inner) else atMost(inner),
                     if (child === wheel?.view) exact(dp(160)) else unspecified())
                 height += child.measuredHeight + if (index == 0) 0 else dp(8)
@@ -460,7 +513,9 @@ internal class QuickTileInlineView(
         }
         override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
             var y = dp(16)
-            for ((index, child) in ordered.withIndex()) {
+            val children = ordered
+            for (index in children.indices) {
+                val child = children[index]
                 if (index != 0) y += dp(8)
                 val start = when (child) {
                     close, save -> width - dp(16) - child.measuredWidth

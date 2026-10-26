@@ -138,6 +138,7 @@ private fun verifyUnrequestedExportTimeout(context: Context, tree: Uri, provider
     try {
         check(connected.await(15, TimeUnit.SECONDS))
         val recorder = requireNotNull(service)
+        val export = ProviderTerminalExportAdapter(recorder)
         val initialized = FutureTask { Unit }
         val audio = ReverbService::class.java.getDeclaredField("audioHandler").apply { isAccessible = true }
             .get(recorder) as Handler
@@ -159,18 +160,13 @@ private fun verifyUnrequestedExportTimeout(context: Context, tree: Uri, provider
             }
             override fun fileCancelled() { terminal.set("cancelled"); delivered.countDown() }
         }
-        val begin = ReverbService::class.java.getDeclaredMethod("beginExport", ReverbService.AudioFileReceiver::class.java)
-            .apply { isAccessible = true }
-        val token = requireNotNull(begin.invoke(recorder, receiver))
+        val token = requireNotNull(export.begin(receiver))
         val config = recorder.getConfigurationSnapshot().copy(
             sampleRate = 16000,
             channelMode = ChannelMode.entries.single { it.channelCount == 1 },
             sampleFormat = PcmSampleFormat.PCM_16,
         )
-        val export = ReverbService::class.java.declaredMethods.single {
-            it.name == "exportBufferedRange" && it.parameterCount == 5
-        }.apply { isAccessible = true }
-        export.invoke(recorder, lease, receiver, "terminal-timeout", token, config)
+        export.submit(lease, receiver, "terminal-timeout", token, config)
         check(delivered.await(15, TimeUnit.SECONDS)) { "Export never delivered its terminal result" }
         // Terminal delivery can precede worker cleanup. Wait for that owned worker before unbinding.
         val executor = ReverbService::class.java.getDeclaredField("exportWorkExecutor").apply { isAccessible = true }
@@ -189,9 +185,9 @@ private fun verifyUnrequestedExportTimeout(context: Context, tree: Uri, provider
             override fun fileFailed(message: String, error: Throwable?) { retried.countDown() }
             override fun fileCancelled() { retried.countDown() }
         }
-        val retryToken = requireNotNull(begin.invoke(recorder, retryReceiver))
+        val retryToken = requireNotNull(export.begin(retryReceiver))
         val retryLease = requireNotNull(store.acquireRange(0.0, store.durationSeconds()))
-        export.invoke(recorder, retryLease, retryReceiver, "terminal-retry", retryToken, config)
+        export.submit(retryLease, retryReceiver, "terminal-retry", retryToken, config)
         check(retried.await(15, TimeUnit.SECONDS))
         executor.submit {}.get(15, TimeUnit.SECONDS)
         val recording = checkNotNull(saved.get()) { "A fresh export failed after the provider recovered" }
@@ -204,7 +200,7 @@ private fun verifyUnrequestedExportTimeout(context: Context, tree: Uri, provider
             override fun fileFailed(message: String, error: Throwable?) = error("User cancellation reported as failure")
             override fun fileCancelled() { cancelled.countDown() }
         }
-        requireNotNull(begin.invoke(recorder, cancellationReceiver))
+        requireNotNull(export.begin(cancellationReceiver))
         check(recorder.cancelCurrentExport())
         check(cancelled.await(15, TimeUnit.SECONDS)) { "User cancellation lost its neutral terminal" }
         check(!recorder.cancelCurrentExport())

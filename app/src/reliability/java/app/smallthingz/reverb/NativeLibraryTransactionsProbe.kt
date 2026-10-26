@@ -924,6 +924,7 @@ private fun transactionWrite(directory: File, result: JSONObject, primary: Throw
         output = file.startWrite()
         output.write(bytes)
         file.finishWrite(output)
+        output = null // Publication committed; a readback failure must not roll it back.
         // AtomicFile may log rather than throw on a filesystem failure; verify actual publication.
         check(File(directory, "result.json").readBytes().contentEquals(bytes)) { "Terminal evidence did not publish" }
     } catch (error: Throwable) {
@@ -933,7 +934,7 @@ private fun transactionWrite(directory: File, result: JSONObject, primary: Throw
     }
 }
 private fun transactionDigest(bytes: ByteArray) = MessageDigest.getInstance("SHA-256").digest(bytes)
-    .joinToString("") { "%02x".format(it.toInt() and 255) }
+    .toHexString()
 private fun requireTransactionIdentity(context: Context) {
     check(context.packageName == "app.smallthingz.reverb.nativeparity.reliability")
     check(context.applicationContext.javaClass == Application::class.java)
@@ -1004,7 +1005,7 @@ private class TransactionFixtures(
             writer.use { it.write(pcm, 0, pcm.size) }
             val verified = verifyWavOutputTargetAndDigest(context, target, writer.totalFileBytesWritten,
                 writer.expectedHeaderBytes, writer.payloadOffsetBytes, writer.totalSampleBytesWritten, writer.payloadSha256)
-            val wavSha = verified.digest.sha256.joinToString("") { "%02x".format(it.toInt() and 255) }
+            val wavSha = verified.digest.sha256.toHexString()
             entry.put("verified_staging_identity", verified.providerIdentity).put("verified_bytes", verified.digest.byteCount)
                 .put("verified_wav_sha256", wavSha)
             save()
@@ -1039,7 +1040,9 @@ private class TransactionFixtures(
         check(recordingDestructiveIdentityMatches(context, recording))
         val bytes = checkNotNull(openRecordingInputStream(context, recording)).use { it.readBytes() }
         check(bytes.size.toLong() == recording.sizeBytes && transactionDigest(bytes) == authority.wavSha)
-        check(transactionDigest(bytes.copyOfRange(authority.payloadOffset, bytes.size)) == authority.pcmSha)
+        val pcmDigest = MessageDigest.getInstance("SHA-256")
+        pcmDigest.update(bytes, authority.payloadOffset, bytes.size - authority.payloadOffset)
+        check(pcmDigest.digest().toHexString() == authority.pcmSha)
         check(recordingDestructiveIdentityMatches(context, recording)) { "Owned fixture changed during content read" }
     }
     fun requireUnchanged() {

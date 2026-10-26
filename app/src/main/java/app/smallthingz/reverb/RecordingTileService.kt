@@ -13,6 +13,8 @@ import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import androidx.core.content.ContextCompat
 import androidx.core.content.edit
+import java.util.EnumMap
+import java.util.EnumSet
 import java.util.IdentityHashMap
 import java.util.concurrent.Executors
 
@@ -275,7 +277,7 @@ internal enum class RecordingTileHandoffRefresh { SOURCE_RETRY, TARGET_ONLY, FUL
 
 /** Called under the live-listener lock. Presence is process-local and never inferred from unbinding. */
 internal class RecordingTileHandoffController {
-    private val observations = mutableMapOf<ReverbService.BufferSlot, RecordingTileObservation>()
+    private val observations = EnumMap<ReverbService.BufferSlot, RecordingTileObservation>(ReverbService.BufferSlot::class.java)
     private var nextGeneration = 0L
     var pending: RecordingTileHandoff? = null
         private set
@@ -368,7 +370,7 @@ internal object RecordingQuickTileStateCache {
 
     private var runtimeOwner: Any? = null
     private var runtimeOwnerStopped = false
-    private val pendingClearedBuffers = mutableSetOf<ReverbService.BufferSlot>()
+    private val pendingClearedBuffers = EnumSet.noneOf(ReverbService.BufferSlot::class.java)
 
     /** The token has no Service/Context reference and is claimed before any store observation. */
     fun beginRuntime(owner: Any) {
@@ -806,9 +808,13 @@ internal object RecordingQuickTiles {
             val services = synchronized(listeningServices) { listeningServices.keys.toList() }
             // Deactivate the old recording tile before activating the new one. This prevents
             // a frame where SystemUI can render both buffers ACTIVE during a handoff.
-            services
-                .sortedBy { service -> service.refreshPriority(current) }
-                .forEach { service -> service.refreshFromSnapshot(current) }
+            // Each concrete service has a fixed buffer slot, so callbacks cannot change priority.
+            for (priority in 0..1) {
+                for (index in services.indices) {
+                    val service = services[index]
+                    if (service.refreshPriority(current) == priority) service.refreshFromSnapshot(current)
+                }
+            }
         }
         if (Looper.myLooper() == Looper.getMainLooper()) refreshConnected.run()
         else mainHandler.post(refreshConnected)
@@ -842,6 +848,7 @@ abstract class RecordingTileService : TileService() {
 
     private var tileListening = false
     private var tileDestroyed = false
+    private var tileIcon: Icon? = null
     private lateinit var tileObservation: RecordingTileObservation
 
     override fun onCreate() {
@@ -948,10 +955,10 @@ abstract class RecordingTileService : TileService() {
                 RecordingTileUiState.DISABLED -> getString(R.string.quick_tile_off)
             }
         }
-        val duration = formatShortTimer(recordingTileDurationSeconds(bufferSlot, snapshot))
         val showDuration = permissionGranted && recordingTileShowsDuration(bufferSlot, snapshot)
+        val duration = if (showDuration) formatShortTimer(recordingTileDurationSeconds(bufferSlot, snapshot)) else ""
         tile.label = getString(labelRes)
-        tile.icon = Icon.createWithResource(this, iconRes)
+        tile.icon = tileIcon ?: Icon.createWithResource(this, iconRes).also { tileIcon = it }
         tile.state = if (!permissionGranted) {
             Tile.STATE_UNAVAILABLE
         } else {

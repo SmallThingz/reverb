@@ -509,9 +509,13 @@ internal fun sampleWavWaveformEnvelopeProgressive(
     layout: WavPcmLayout,
     pass: RangeWaveformPass,
     onBucket: (bucketIndex: Int, magnitude: Float) -> Boolean,
-): FloatArray = samplePcmWaveformEnvelopeProgressive(layout, pass, { first, frames, scratch ->
-    requireReadAt(channel, layout.dataOffsetBytes + first * layout.frameBytes, scratch, frames * layout.frameBytes)
-}, onBucket)
+): FloatArray {
+    var probeBuffer: ByteBuffer? = null
+    return samplePcmWaveformEnvelopeProgressive(layout, pass, { first, frames, scratch ->
+        val buffer = probeBuffer ?: ByteBuffer.wrap(scratch).also { probeBuffer = it }
+        requireReadAt(channel, layout.dataOffsetBytes + first * layout.frameBytes, buffer, frames * layout.frameBytes)
+    }, onBucket)
+}
 
 /** Both containers sample the same PCM positions and reuse one probe-sized buffer. */
 internal fun samplePcmWaveformEnvelopeProgressive(
@@ -581,9 +585,20 @@ internal fun requireReadAt(
     count: Int,
 ) {
     require(count in 0..bytes.size)
+    if (count == 0) return
+    requireReadAt(channel, position, ByteBuffer.wrap(bytes), count)
+}
+
+internal fun requireReadAt(
+    channel: FileChannel,
+    position: Long,
+    buffer: ByteBuffer,
+    count: Int,
+) {
+    buffer.clear()
+    buffer.limit(count)
     var readTotal = 0
     while (readTotal < count) {
-        val buffer = ByteBuffer.wrap(bytes, readTotal, count - readTotal)
         val read = channel.read(buffer, position + readTotal)
         if (read <= 0) throw IOException("Unexpected end of WAV file")
         readTotal += read

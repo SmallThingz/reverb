@@ -313,6 +313,19 @@ class ReliabilityInstrumentation : Instrumentation() {
                             report.append("FAIL ").append(name).append('\n').append(Log.getStackTraceString(error)).append('\n')
                         }
                     }
+                    if (requestedTest == "document_rename_null_response") {
+                        verifyDocumentRenameNullResponse(targetContext, tree, provider) { name, test ->
+                            executed++
+                            try {
+                                test()
+                                report.append("PASS ").append(name).append('\n')
+                            } catch (error: Throwable) {
+                                failures++
+                                report.append("FAIL ").append(name).append('\n')
+                                    .append(Log.getStackTraceString(error)).append('\n')
+                            }
+                        }
+                    }
                     if (requestedTest == null || requestedTest == "wav_format_matrix") {
                         verifyWavPublicationMatrix(targetContext, tree, provider) { name, test ->
                             executed++

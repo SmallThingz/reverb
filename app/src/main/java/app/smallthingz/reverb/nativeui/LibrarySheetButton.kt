@@ -109,7 +109,7 @@ internal class LibrarySheetButton(
         closed=true
         var failure:Throwable?=null
         try{click.cancel()}catch(error:Throwable){failure=error}
-        try{surface.close()}catch(error:Throwable){if(failure==null)failure=error else failure!!.addSuppressed(error)}
+        try{surface.close()}catch(error:Throwable){if(failure==null)failure=error else if(failure!==error)failure!!.addSuppressed(error)}
         failure?.let{throw it}
     }
 }
@@ -125,6 +125,7 @@ private class ButtonSurface(context:Context,private val host:NativeMaterialButto
     private val fill=Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val label=ReverbParagraphView(context,reverbButtonTextStyle(),environment.textDensity,
         environment.sharedFontResolver,environment.palette.primary)
+    private val accessibilityChildren=listOf(label)
     private var icon=leadingIcon?.let { ReverbIconDrawable(it,environment.textDensity.density,environment.palette.onPrimary) }
     private val content=object:ViewGroup(context) {
         private var iconWidth=0
@@ -172,7 +173,7 @@ private class ButtonSurface(context:Context,private val host:NativeMaterialButto
     private val interactions=OnboardingNativeInteractionsFactory {host.inputRoot}.create(this,content,filled) {elevation=it}
     override val nativeClickEndpoint get()=interactions.pointerEndpoint
     override val mergedRowAccessibility=ReverbMergedRowAccessibility(this,NativeMergedRowRole.BUTTON,
-        {NativeMergedRowAccessibilityState(isEnabled,null,null,listOf(label))},
+        {NativeMergedRowAccessibilityState(isEnabled,null,null,accessibilityChildren)},
         {if(isEnabled&&isAttachedToWindow){action();true}else false})
     private val leases=ArrayList<AutoCloseable>()
     private var restoreClip:(()->Unit)?=null
@@ -244,7 +245,7 @@ private class ButtonSurface(context:Context,private val host:NativeMaterialButto
         if(closed)return
         closed=true
         var failure:Throwable?=null
-        fun release(block:()->Unit){try{block()}catch(error:Throwable){if(failure==null)failure=error else failure!!.addSuppressed(error)}}
+        fun release(block:()->Unit){try{block()}catch(error:Throwable){if(failure==null)failure=error else if(failure!==error)failure!!.addSuppressed(error)}}
         release(interactions::cancel)
         val clip=restoreClip;restoreClip=null
         release{clip?.invoke()}

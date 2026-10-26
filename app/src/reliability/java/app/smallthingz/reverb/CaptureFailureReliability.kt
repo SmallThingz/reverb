@@ -4,9 +4,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
-import android.media.AudioFormat
 import android.media.AudioRecord
-import android.media.MediaRecorder
 import android.os.Handler
 import android.os.IBinder
 import java.io.ByteArrayOutputStream
@@ -36,13 +34,20 @@ internal fun verifyFailedCaptureRestartIsNotSilentlyListening(context: Context) 
         val recorder = requireNotNull(service)
         val handler = recorder.field("audioHandler") as Handler
         val test = FutureTask {
+            check(recorder.field("captureReadBuffers") == null) {
+                "Idle service allocated capture buffers before capture preparation"
+            }
+            ReverbService::class.java.getDeclaredMethod("prepareCaptureReadBuffersOnAudioThread").apply {
+                isAccessible = true
+            }.invoke(recorder)
+            check(recorder.field("captureReadBuffers") != null) { "Capture buffers were not prepared" }
             val store = recorder.field("loopingAudioChunkStore") as PersistentAudioChunkStore
             store.configure(RetentionMode.SIZE, 1_048_576L, 16_000, 1, PcmSampleFormat.PCM_16)
             val prior = ByteArray(32_000) { ((it * 13 + 7) and 0xff).toByte() }
             check(store.append(prior, 0, prior.size) == prior.size)
             store.checkpoint()
             val before = store.readTestPcm()
-            val disconnected = DisconnectedTestAudioRecord()
+            val disconnected = DisconnectedTestAudioInput()
             val generation = recorder.field("listeningCommandGeneration") as AtomicLong
             val epoch = generation.incrementAndGet()
             recorder.setField("durableCaptureIntentAuthorityValid", true)
@@ -55,6 +60,7 @@ internal fun verifyFailedCaptureRestartIsNotSilentlyListening(context: Context) 
             try {
                 (recorder.field("audioReader") as Runnable).run()
                 check(disconnected.readCalls == 1) { "Disconnected-read branch was not exercised" }
+                check(disconnected.releaseCalls == 1) { "Disconnected input was not released exactly once" }
                 check(recorder.field("audioRecord") == null) { "Failed replacement still owns a recorder" }
                 check(before.contentEquals(store.readTestPcm())) { "Input recovery changed retained audio" }
                 check(recorder.field("state") != ReverbService.STATE_LISTENING) {
@@ -80,25 +86,28 @@ internal fun verifyFailedCaptureRestartIsNotSilentlyListening(context: Context) 
     }
 }
 
-private class DisconnectedTestAudioRecord : AudioRecord(
-    MediaRecorder.AudioSource.DEFAULT,
-    16_000,
-    AudioFormat.CHANNEL_IN_MONO,
-    AudioFormat.ENCODING_PCM_16BIT,
-    32_000,
-) {
+private class DisconnectedTestAudioInput : CaptureAudioInput {
     var readCalls = 0
         private set
+    var releaseCalls = 0
+        private set
+
+    override val state: Int = AudioRecord.STATE_INITIALIZED
+    override val recordingState: Int = AudioRecord.RECORDSTATE_RECORDING
 
     override fun read(buffer: ByteBuffer, sizeInBytes: Int, readMode: Int): Int {
         readCalls++
-        return ERROR_DEAD_OBJECT
+        return AudioRecord.ERROR_DEAD_OBJECT
     }
-
-    override fun getRecordingState(): Int = RECORDSTATE_RECORDING
 
     override fun startRecording() {
         error("Reliability fixture must not start microphone capture")
+    }
+
+    override fun stop() = Unit
+
+    override fun release() {
+        releaseCalls++
     }
 }
 

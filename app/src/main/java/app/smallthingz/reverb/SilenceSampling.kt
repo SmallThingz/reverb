@@ -163,8 +163,10 @@ internal class SilenceSampleRequest(held: Boolean = false, private val startedAt
         require(rate > 0 && channels > 0)
         val frameBytes = Math.multiplyExact(channels, format.bytesPerSample)
         require(offset >= 0 && count >= 0 && offset <= bytes.size - count && count % frameBytes == 0)
-        val configuration = Triple(rate, channels, format)
-        if (sourceFormat != null && sourceFormat != configuration) {
+        val configuration = sourceFormat
+        if (configuration != null &&
+            (configuration.first != rate || configuration.second != channels || configuration.third != format)
+        ) {
             fail("Audio input changed. Sample the room again.")
             return
         }
