@@ -55,7 +55,8 @@ internal object PcmStreamNormalizer {
         val step = sourceFrames.toDouble() / targetFrameCount
         val radius = pcmResamplingRadius(step)
         val before = minOf(radius.toLong(), first.startFrame)
-        val after = minOf(radius.toLong(), last.payloadBytesAtAcquire / frameBytes - last.startFrame - last.frameCount)
+        // Linear upsampling needs the next same-payload frame even though its filter radius is zero.
+        val after = minOf(if (step < 1.0) 1L else radius.toLong(), last.payloadBytesAtAcquire / frameBytes - last.startFrame - last.frameCount)
         val bufferedFrames = Math.addExact(Math.addExact(sourceFrames, before), after)
         val capacity = radius * 2 + 3
         val window = FloatArray(capacity * channels)

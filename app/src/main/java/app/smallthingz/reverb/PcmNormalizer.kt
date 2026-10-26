@@ -64,7 +64,8 @@ internal object PcmNormalizer {
         val radius = pcmResamplingRadius(sourceStep)
         require(payloadByteOffset % sourceFrameBytes == 0L)
         val before = minOf(radius.toLong(), payloadByteOffset / sourceFrameBytes)
-        val after = minOf(radius.toLong(), (payloadBytes - payloadByteOffset - sourceByteCountLong) / sourceFrameBytes)
+        // Linear upsampling needs the next same-payload frame even though its filter radius is zero.
+        val after = minOf(if (sourceStep < 1.0) 1L else radius.toLong(), (payloadBytes - payloadByteOffset - sourceByteCountLong) / sourceFrameBytes)
         val bufferedFrames = sourceFrameCount + before + after
         val bufferedBytes = bufferedFrames * sourceFrameBytes
         require(bufferedBytes <= Int.MAX_VALUE.toLong()) { "PCM filter window too large" }
