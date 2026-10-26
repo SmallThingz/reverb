@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import app.smallthingz.reverb.closePreservingPrimaryFailure
+
 import android.view.View
 import smallthingz.ui.runtime.MonotonicFrameClock
 import smallthingz.ui.text.TextStyle
@@ -125,19 +127,25 @@ internal class SettingsAudioMenuHost(
 
     /** The panel's released active=false effect closes menus, preserving each retained scroll. */
     fun dismissAll() {
-        sessions.keys.toList().forEach(::dismiss)
+        var failure: Throwable? = null
+        for (kind in sessions.keys.toList()) {
+            failure = closePreservingPrimaryFailure(failure) { dismiss(kind) }
+        }
+        failure?.let { throw it }
     }
 
     private fun dismiss(kind: SettingsAudioChoice) {
         val session = sessions[kind] ?: return
-        publishExpanded(kind,false)
-        session.window.expanded(false)
+        var failure = closePreservingPrimaryFailure(null) { publishExpanded(kind,false) }
+        failure = closePreservingPrimaryFailure(failure) { session.window.expanded(false) }
+        failure?.let { throw it }
     }
 
     private fun retire(kind: SettingsAudioChoice, session: Session) {
         if (sessions[kind] === session) sessions.remove(kind)
-        publishExpanded(kind,false)
-        session.close()
+        var failure = closePreservingPrimaryFailure(null) { publishExpanded(kind,false) }
+        failure = closePreservingPrimaryFailure(failure) { session.close() }
+        failure?.let { throw it }
     }
 
     private fun publishExpanded(kind: SettingsAudioChoice, value: Boolean) {

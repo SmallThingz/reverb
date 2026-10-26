@@ -4,6 +4,8 @@ import smallthingz.ui.geometry.Offset
 import smallthingz.ui.geometry.Rect
 import smallthingz.ui.graphics.Matrix
 import app.smallthingz.reverb.populateOnboardingPreviewSemanticTransform
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -141,6 +143,48 @@ class NativePlainTextGeometryTest {
             sourceTransform = { it.translate(7.25f, 2.5f); true },
             backendTransform = { error("Known source layer must not be replaced by backend math") })
         assertEquals(Offset(7.25f, 2.5f), target.map(Offset.Zero))
+    }
+
+    @Test fun characterLocationsRetainZeroWidthAndZeroHeightBoxesInsideNode() {
+        val node = Rect(0f, 0f, 10f, 20f)
+        // Hidden ellipsis code units and equal caret endpoints retain their released location.
+        for (character in listOf(Rect(5f, 2f, 5f, 8f), Rect(2f, 5f, 8f, 5f), Rect(5f, 5f, 5f, 5f))) {
+            assertTrue(nativeTextCharacterBoundsOverlap(character, node))
+            assertEquals(character, character.intersect(node))
+        }
+    }
+
+    @Test fun characterLocationsExcludeTouchingEdgesAndOffscreenBoxes() {
+        val node = Rect(0f, 0f, 10f, 20f)
+        for (character in listOf(Rect(0f, 2f, 0f, 8f), Rect(10f, 2f, 10f, 8f),
+            Rect(2f, 0f, 8f, 0f), Rect(2f, 20f, 8f, 20f), Rect(11f, 2f, 12f, 8f))) {
+            assertFalse(nativeTextCharacterBoundsOverlap(character, node))
+        }
+    }
+
+    @Test fun characterLocationsKeepFractionalClippingBeforeScreenMapping() {
+        val character = Rect(-0.25f, 3.5f, 2.25f, 9.75f)
+        val node = Rect(0.5f, 0f, 10f, 8.125f)
+        assertTrue(nativeTextCharacterBoundsOverlap(character, node))
+        assertEquals(Rect(0.5f, 3.5f, 2.25f, 8.125f), character.intersect(node))
+    }
+
+    @Test fun characterLocationsRetainReleasedDegenerateNodePredicate() {
+        // The released delegate applies the same strict-edge predicate to either operand.
+        assertTrue(nativeTextCharacterBoundsOverlap(Rect(-1f, -1f, 1f, 1f), Rect.Zero))
+        assertFalse(nativeTextCharacterBoundsOverlap(Rect.Zero, Rect.Zero))
+    }
+
+    @Test fun characterLocationPredicateKeepsNaNInfinityAndSignedZeroRules() {
+        val node = Rect(-1f, 0f, 1f, 3f)
+        assertTrue(nativeTextCharacterBoundsOverlap(Rect(-0f, 1f, 0f, 2f), node))
+        assertTrue(nativeTextCharacterBoundsOverlap(node,
+            Rect(Float.NEGATIVE_INFINITY, Float.NEGATIVE_INFINITY, Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY)))
+        for (invalid in listOf(Rect(Float.NaN, 1f, 0f, 2f), Rect(0f, Float.NaN, 1f, 2f),
+            Rect(0f, 1f, Float.NaN, 2f), Rect(0f, 1f, 1f, Float.NaN))) {
+            assertFalse(nativeTextCharacterBoundsOverlap(invalid, node))
+            assertFalse(nativeTextCharacterBoundsOverlap(node, invalid))
+        }
     }
 
     private fun layer(placement: Offset = Offset.Zero, clip: Rect? = null) =

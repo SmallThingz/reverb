@@ -298,7 +298,7 @@ internal class PlainTextAccessibility(
             val local = paragraph.getBoundingBox(offset.toInt())
             val inRoot = local.translate(geometry.paragraphPositionInRoot)
             val nodeBounds = geometry.visibleBoundsInRoot
-            if (!inRoot.overlaps(nodeBounds)) continue
+            if (!nativeTextCharacterBoundsOverlap(inRoot, nodeBounds)) continue
             val visible = inRoot.intersect(nodeBounds)
             val first = geometry.rootToScreen(Offset(visible.left, visible.top))
             val second = geometry.rootToScreen(Offset(visible.right, visible.bottom))

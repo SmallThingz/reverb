@@ -13,6 +13,12 @@ import smallthingz.ui.geometry.Offset
 import smallthingz.ui.geometry.Rect
 import smallthingz.ui.graphics.Matrix
 
+/** Released character-location visibility includes zero-width character boxes inside node bounds.
+ * Keep this predicate separate from the general rectangle API's positive-area overlap contract. */
+internal fun nativeTextCharacterBoundsOverlap(character: Rect, node: Rect): Boolean =
+    (character.left < node.right) and (node.left < character.right) and
+        (character.top < node.bottom) and (node.top < character.bottom)
+
 /** A copied transform. No mutable View/Matrix state escapes a geometry capture. */
 internal class NativeTextGeometryLayer(
     transform: Matrix,
