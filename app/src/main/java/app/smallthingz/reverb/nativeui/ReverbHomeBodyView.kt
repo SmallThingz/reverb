@@ -163,9 +163,6 @@ internal class ReverbHomeBodyView(
         contentDirty = true
     }
 
-    /** Called by the horizontal parent ownership adapter on source-equivalent consumption. */
-    fun cancelBlobGesture() = blob.cancelGesture()
-
     override fun onMeasure(w: Int, h: Int) {
         val width = MeasureSpec.getSize(w)
         val height = MeasureSpec.getSize(h)

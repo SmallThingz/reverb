@@ -45,9 +45,6 @@ internal class SettingsAudioMenuHost(
         }
     }
 
-    fun saveScrollPositions(): Map<SettingsAudioChoice, Int> =
-        scrollStates.mapValues { (_, state) -> state.save() }
-
     fun palette(palette: ReverbPalette) { this.palette = palette }
 
     override fun <T> open(

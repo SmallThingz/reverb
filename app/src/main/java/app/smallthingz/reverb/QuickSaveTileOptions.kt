@@ -5,7 +5,6 @@ import android.content.Context
 import android.content.pm.PackageManager
 import java.io.IOException
 import java.util.UUID
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -109,13 +108,6 @@ internal object QuickSaveTileOptions {
 
     init {
         worker.launch { for (observation in observationQueue) observation() }
-    }
-
-    /** Await accepted writes without binding a tile or blocking its main-thread lifecycle. */
-    suspend fun awaitPendingObservations() {
-        val completed = CompletableDeferred<Unit>()
-        observationQueue.trySend { completed.complete(Unit); Unit }.getOrThrow()
-        completed.await()
     }
 
     private fun enqueueObservation(context: Context, observation: (Context) -> Unit) {

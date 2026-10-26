@@ -201,7 +201,6 @@ internal class ReverbActionSheetDialog(
     }
     val contentView:View get()=surface
     val hasCurrentWindowFocus get()=root.isAttachedToWindow&&root.hasWindowFocus()
-    val isDisposed get()=disposed
 
     private fun snapPredictive(raw:Float) {
         runtime.scope.launch {predictive.snapTo(if(dismissalAllowed())PREDICTIVE_EASING.transform(raw)else 0f);applyMotion()}

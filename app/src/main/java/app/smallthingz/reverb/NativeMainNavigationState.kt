@@ -106,7 +106,6 @@ internal class NativeMainNavigationState(restored: NativeMainSavedNavigation = N
     }
     fun cancelVerticalReveal() { dragTarget = null }
 
-    fun settingsTarget() = if (dragTarget == NativeMainPanel.SETTINGS) settingsDragProgress else if (showSettings) 1f else 0f
     fun libraryTarget() = if (dragTarget == NativeMainPanel.LIBRARY) libraryDragProgress else if (showLibrary) 1f else 0f
 
     fun retainSettings(progress: Float): Boolean {

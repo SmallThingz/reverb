@@ -95,8 +95,6 @@ internal class ReverbRangeExportControls(
         requestLayout()
     }
 
-    val labelViews: List<ReverbParagraphView> get() = listOf(pill.label, exportAction.label)
-    val exportShape: ReverbGroupLayout get() = exportSurface
     fun cancelInput() { close.cancelInput(); exportAction.cancelInput() }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {

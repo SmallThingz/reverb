@@ -19,8 +19,6 @@ import kotlin.math.roundToInt
 internal class ReverbLibraryUndoCard(context: Context, private var environment: ReverbViewEnvironment, inputRoot: View) : ViewGroup(context) {
     private val surface = ReverbGroupLayout(context, 18f)
     private val row = LibraryUndoRow(context, environment, inputRoot)
-    val messageView: ReverbParagraphView get() = row.message
-    val actionTextView: ReverbParagraphView get() = row.actionText
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         surface.addRow(row, ReverbGroupLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
@@ -42,7 +40,6 @@ internal class ReverbLibraryUndoCard(context: Context, private var environment: 
 private class LibraryUndoRow(context: Context, private var environment: ReverbViewEnvironment, inputRoot: View) : ViewGroup(context) {
     val message = environment.paragraph(context, "", ReverbTextRole.BODY_MEDIUM)
     private val action = ReverbLibraryTextAction(context, environment, inputRoot)
-    val actionText get() = action.textView
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         message.accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE

@@ -376,23 +376,27 @@ private class IncidentsEmptyContent(
     }
 
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
-        val children = ArrayList<View>(childCount)
+        // These four private children keep fixed indices. Snapshot membership before layout callbacks.
+        var visibleChildren = 0
+        var visibleCount = 0
         var total = 0
         var columnWidth = 0
         for (index in 0 until childCount) {
             val child = getChildAt(index)
             if (child.visibility == GONE) continue
-            children.add(child)
+            visibleChildren = visibleChildren or (1 shl index)
+            visibleCount++
             total += child.measuredHeight
             columnWidth = max(columnWidth, child.measuredWidth)
         }
-        total += max(0, children.size - 1) * dp(10f)
+        total += max(0, visibleCount - 1) * dp(10f)
         val padding = dp(28f)
         // Box centers the intrinsic Column first; Column then centers each child independently.
         val columnX = padding + ((max(0, width - padding * 2) - columnWidth) / 2f).roundToInt()
         var y = padding + ((max(0, height - padding * 2) - total) / 2f).roundToInt()
-        for (index in children.indices) {
-            val child = children[index]
+        for (index in 0 until childCount) {
+            if (visibleChildren and (1 shl index) == 0) continue
+            val child = getChildAt(index)
             val x = columnX + ((columnWidth - child.measuredWidth) / 2f).roundToInt()
             child.layout(x, y, x + child.measuredWidth, y + child.measuredHeight)
             y += child.measuredHeight + dp(10f)
@@ -424,7 +428,8 @@ private class IncidentsLoadingView(
         info.isClickable = false
         info.isScreenReaderFocusable = true
         info.movementGranularities = 0
-        info.actionList.toList().forEach(info::removeAction)
+        val actions = info.actionList
+        for (index in actions.size - 1 downTo 0) info.removeAction(actions[index])
         info.addAction(if (isAccessibilityFocused) AccessibilityNodeInfo.AccessibilityAction.ACTION_CLEAR_ACCESSIBILITY_FOCUS
             else AccessibilityNodeInfo.AccessibilityAction.ACTION_ACCESSIBILITY_FOCUS)
         sourceAccessibilityNode?.invoke()?.populate(info)

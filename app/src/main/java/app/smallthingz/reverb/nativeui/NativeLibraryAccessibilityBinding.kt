@@ -162,7 +162,9 @@ internal class NativeLibraryRecyclerAccessibility(
             info.isScrollable=current.maximum>0f
             info.setCollectionInfo(AccessibilityNodeInfoCompat.CollectionInfoCompat.obtain(
                 view.adapter?.itemCount?:0,1,false))
-            info.actionList.toList().forEach(info::removeAction)
+            val nativeInfo = info.unwrap()
+            val actions = nativeInfo.actionList
+            for (index in actions.size - 1 downTo 0) nativeInfo.removeAction(actions[index])
             info.addAction(if(view.isAccessibilityFocused)
                 AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_CLEAR_ACCESSIBILITY_FOCUS
             else AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_ACCESSIBILITY_FOCUS)
@@ -174,7 +176,7 @@ internal class NativeLibraryRecyclerAccessibility(
                 info.addAction(AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_SCROLL_BACKWARD)
                 info.addAction(AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_SCROLL_UP)
             }
-            sourceNode(view).populate(info.unwrap())
+            sourceNode(view).populate(nativeInfo)
         }
         override fun performAccessibilityAction(host:View,action:Int,args:Bundle?):Boolean {
             if(closed || !sourceNode(view).present)return false

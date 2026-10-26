@@ -72,8 +72,6 @@ internal class SettingsAudioChoicesSection(
         if (!active && !closed) menus.dismissAll()
     }
 
-    fun saveMenuScrollPositions() = menus.saveScrollPositions()
-
     override fun close() {
         if (closed) return
         closed=true

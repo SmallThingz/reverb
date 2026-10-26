@@ -490,9 +490,6 @@ internal class ReverbParagraphView(
     }
 
     /** Intrinsic queries are explicit because Android View has no Compose-style intrinsic protocol. */
-    fun minIntrinsicTextWidth(): Int =
-        ceilPixel(ensureIntrinsics(cacheForMeasure(), paragraphDirection()).minIntrinsicWidth)
-
     fun maxIntrinsicTextWidth(): Int =
         ceilPixel(ensureIntrinsics(cacheForMeasure(), paragraphDirection()).maxIntrinsicWidth)
 

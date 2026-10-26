@@ -70,19 +70,8 @@ internal class NativeCaptureUiOwner(
         val onOpenLibrary: () -> Unit,
         val onOpenBufferSettings: (BufferSlot) -> Unit,
     )
-    private var callbacks = Callbacks(isSaveFeedbackVisible, onRecordingSaved,
+    private val callbacks = Callbacks(isSaveFeedbackVisible, onRecordingSaved,
         onOpenLibrary, onOpenBufferSettings)
-
-    /** Host delegates are current; already accepted Service/process work keeps its original owner. */
-    fun bindCallbacks(
-        isSaveFeedbackVisible: () -> Boolean,
-        onRecordingSaved: () -> Unit,
-        onOpenLibrary: () -> Unit,
-        onOpenBufferSettings: (BufferSlot) -> Unit,
-    ) {
-        callbacks = Callbacks(isSaveFeedbackVisible, onRecordingSaved, onOpenLibrary, onOpenBufferSettings)
-        refreshPresentationVisibility()
-    }
 
     private val resources get() = context.resources
     private val scope = CoroutineScope(hostScope.coroutineContext +

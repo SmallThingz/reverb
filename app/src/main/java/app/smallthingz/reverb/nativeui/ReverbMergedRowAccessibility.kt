@@ -248,7 +248,8 @@ internal class ReverbMergedRowAccessibility(
         info.maxTextLength = -1
         info.setBoundsInScreen(current.parentBoundsInScreen)
         info.movementGranularities = 0
-        info.actionList.toList().forEach(info::removeAction)
+        val actions = info.actionList
+        for (index in actions.size - 1 downTo 0) info.removeAction(actions[index])
         addAccessibilityFocusAction(info, host.isAccessibilityFocused)
         if (info.isFocusable) info.addAction(if (info.isFocused)
             AccessibilityNodeInfo.AccessibilityAction.ACTION_CLEAR_FOCUS
@@ -342,7 +343,8 @@ internal class ReverbMergedRowAccessibility(
             info.setBoundsInParent(Rect()) // Source provider writes only boundsInScreen.
             info.setBoundsInScreen(current.fakeRoleBoundsInScreen)
             info.drawingOrder = current.originalChildCount
-            info.actionList.toList().forEach(info::removeAction)
+            val actions = info.actionList
+            for (index in actions.size - 1 downTo 0) info.removeAction(actions[index])
             addAccessibilityFocusAction(info, isAccessibilityFocused)
         }
 

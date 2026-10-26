@@ -43,7 +43,7 @@ internal fun interface NativeVerticalDragScope {
  */
 internal class NativeVerticalScrollOwner(
     private val engine: NativeVerticalScrollEngine,
-    private var decay: DecayAnimationSpec<Float>,
+    private val decay: DecayAnimationSpec<Float>,
     private val frames: MonotonicFrameClock,
     private val flingHost: NativeVerticalFlingHost,
     private val overscroll: NativeVerticalOverscroll? = null,
@@ -98,11 +98,6 @@ internal class NativeVerticalScrollOwner(
         return consumedTotal
     }
 
-    /** Density updates affect the next fling; an already-created decay animation retains its spec. */
-    fun updateDecay(decay: DecayAnimationSpec<Float>) {
-        this.decay = decay
-    }
-
     /**
      * Call only for PageUp/PageDown. Source captures the viewport at the key event, returns true
      * immediately, and launches a separate UserInput mutation for each event. No overscroll wrapper.
@@ -130,10 +125,6 @@ internal class NativeVerticalScrollOwner(
      */
     fun onNestedPostScroll(availableY: Float, enabled: Boolean): Float =
         if (enabled && !state.isScrollInProgress) engine.dispatchRaw(availableY) else 0f
-
-    /** No extra pre-fling or outer overscroll wrapper when continuing a descendant's post-fling. */
-    suspend fun onNestedPostFling(availableY: Float, enabled: Boolean): Float =
-        if (enabled) availableY - (if (isFlinging) 0f else doFlingAnimation(availableY)) else 0f
 
     /**
      * The direct drag terminal. Pre-fling happens before the Default mutation, post-fling after it.

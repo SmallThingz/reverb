@@ -181,7 +181,8 @@ private class PermissionContent(context:Context,private val host:NativeMaterialB
         super.onInitializeAccessibilityNodeInfo(info)
         info.className="android.view.View";info.isClickable=false;info.isLongClickable=false
         info.isFocusable=false;info.isFocused=false;info.isScreenReaderFocusable=false;info.isEnabled=true
-        info.actionList.toList().forEach(info::removeAction)
+        val actions = info.actionList
+        for (index in actions.size - 1 downTo 0) info.removeAction(actions[index])
         info.addAction(if(isAccessibilityFocused)AccessibilityNodeInfo.AccessibilityAction.ACTION_CLEAR_ACCESSIBILITY_FOCUS
             else AccessibilityNodeInfo.AccessibilityAction.ACTION_ACCESSIBILITY_FOCUS)
         host.sourceNode(this).populate(info)

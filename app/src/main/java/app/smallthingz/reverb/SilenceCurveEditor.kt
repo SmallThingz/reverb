@@ -128,12 +128,6 @@ internal class SilenceCurveView(context: Context) : View(context) {
     )
     private var labelCache: LabelGeometryCache? = null
 
-    /** A defensive snapshot keeps mutable RectF/list consumers out of the renderer's one-entry cache. */
-    internal fun labelGeometry(): SilenceCurveLabelGeometry = drawingLabelGeometry().let { geometry ->
-        geometry.copy(viewport = RectF(geometry.viewport), plot = RectF(geometry.plot),
-            labels = geometry.labels.map { it.copy(bounds = RectF(it.bounds)) })
-    }
-
     private fun drawingLabelGeometry(): SilenceCurveLabelGeometry {
         val point = points[selected]
         val cached = labelCache

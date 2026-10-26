@@ -52,7 +52,8 @@ internal class NativeActionSheetAccessibility(
                 info.className="android.view.View";info.isClickable=false;info.isLongClickable=false
                 info.isFocusable=false;info.isFocused=false;info.isEnabled=true
                 info.isScreenReaderFocusable=false
-                info.actionList.toList().forEach(info::removeAction)
+                val actions = info.actionList
+                for (index in actions.size - 1 downTo 0) info.removeAction(actions[index])
                 info.addAction(if(host.isAccessibilityFocused)
                     AccessibilityNodeInfo.AccessibilityAction.ACTION_CLEAR_ACCESSIBILITY_FOCUS
                 else AccessibilityNodeInfo.AccessibilityAction.ACTION_ACCESSIBILITY_FOCUS)

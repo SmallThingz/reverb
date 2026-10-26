@@ -866,7 +866,8 @@ private fun bindAboutRepository(
                 ComposeRect(0f, 0f, host.width.toFloat(), host.height.toFloat()))?.let {
                 info.setBoundsInScreen(nativeMergedRoleBoundsInScreen(it, host.isLaidOut))
             }
-            info.actionList.toList().forEach(info::removeAction)
+            val actions = info.actionList
+            for (index in actions.size - 1 downTo 0) info.removeAction(actions[index])
             info.addAction(if (host.isAccessibilityFocused)
                 AccessibilityNodeInfo.AccessibilityAction.ACTION_CLEAR_ACCESSIBILITY_FOCUS
             else AccessibilityNodeInfo.AccessibilityAction.ACTION_ACCESSIBILITY_FOCUS)
@@ -966,7 +967,8 @@ private fun bindAboutClose(
             info.isImportantForAccessibility = isVisible
             info.setBoundsInParent(Rect()); info.setBoundsInScreen(visualBounds)
             info.drawingOrder = 1
-            info.actionList.toList().forEach(info::removeAction)
+            val actions = info.actionList
+            for (index in actions.size - 1 downTo 0) info.removeAction(actions[index])
             info.addAction(if (isAccessibilityFocused) AccessibilityNodeInfo.AccessibilityAction.ACTION_CLEAR_ACCESSIBILITY_FOCUS
                 else AccessibilityNodeInfo.AccessibilityAction.ACTION_ACCESSIBILITY_FOCUS)
         }
@@ -993,7 +995,8 @@ private fun bindAboutClose(
             info.isScreenReaderFocusable = isVisible
             info.maxTextLength = -1; info.movementGranularities = 0
             info.setBoundsInScreen(touchBounds)
-            info.actionList.toList().forEach(info::removeAction)
+            val actions = info.actionList
+            for (index in actions.size - 1 downTo 0) info.removeAction(actions[index])
             info.addAction(if (host.isAccessibilityFocused) AccessibilityNodeInfo.AccessibilityAction.ACTION_CLEAR_ACCESSIBILITY_FOCUS
                 else AccessibilityNodeInfo.AccessibilityAction.ACTION_ACCESSIBILITY_FOCUS)
             info.addAction(if (host.isFocused) AccessibilityNodeInfo.AccessibilityAction.ACTION_CLEAR_FOCUS

@@ -12,6 +12,8 @@ import app.smallthingz.reverb.bufferTransitionPivotFractionX
 import app.smallthingz.reverb.oppositeBufferSlot
 import app.smallthingz.reverb.shouldCommitBufferSwipe
 
+private val neutralHomeFlipFrame = ReverbHomeFlipFrame()
+
 /**
  * MainCaptureContent's original finite buffer-navigation state, without a pointer detector/clock.
  * A host supplies source Main-pass drag deltas and frame times, and invokes its render callback.
@@ -37,11 +39,14 @@ internal class ReverbHomeBufferMotion(initialSelection: BufferSlot) {
     val renderedBuffer get() = target?.let {
         bufferTransitionDisplayedSlot(displayedBuffer, it, progress.value)
     } ?: displayedBuffer
-    val flipFrame get() = ReverbHomeFlipFrame(
-        degrees = target?.let { bufferTransitionFlipDegrees(displayedBuffer, it, progress.value) } ?: 0f,
-        pivotFractionX = bufferTransitionPivotFractionX(),
-        depthScale = if (target == null) 1f else bufferTransitionDepthScale(progress.value),
-    )
+    val flipFrame: ReverbHomeFlipFrame get() {
+        val destination = target ?: return neutralHomeFlipFrame
+        return ReverbHomeFlipFrame(
+            degrees = bufferTransitionFlipDegrees(displayedBuffer, destination, progress.value),
+            pivotFractionX = bufferTransitionPivotFractionX(),
+            depthScale = bufferTransitionDepthScale(progress.value),
+        )
+    }
 
     /** Source LaunchedEffect(selectedBuffer) restarts only when that external key changes. */
     fun bind(selectedBuffer: BufferSlot, isSaving: Boolean, durationScale: Float) {

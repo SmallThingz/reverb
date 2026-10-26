@@ -921,8 +921,6 @@ abstract class RecordingTileService : TileService() {
         }
     }
 
-    internal fun tileBufferSlot(): ReverbService.BufferSlot = bufferSlot
-
     internal fun refreshPriority(snapshot: RecordingTileSnapshot): Int =
         recordingTileRefreshPriority(bufferSlot, snapshot)
 

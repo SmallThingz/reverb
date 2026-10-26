@@ -3434,21 +3434,6 @@ open class ReverbService : Service() {
         return read
     }
 
-    private fun restartAudioRecordOnAudioThread(generation: Long): Boolean {
-        check(audioHandler.looper == Looper.myLooper())
-        val owner = synchronized(listeningIntentLock) {
-            if (serviceDestroying || generation != listeningCommandGeneration.get() ||
-                audioRecordGeneration != generation || state != STATE_LISTENING || !isListeningEnabled()
-            ) return false
-            CaptureInputOperationOwner(
-                input = audioRecord ?: return false,
-                continuityGeneration = captureContinuityGeneration.get(),
-                releaseGeneration = audioRecordReleaseGeneration.get(),
-            )
-        }
-        return recoverAudioRecordOnAudioThread(owner)
-    }
-
     private fun recoverAudioRecordOnAudioThread(owner: CaptureInputOperationOwner): Boolean {
         check(audioHandler.looper == Looper.myLooper())
         val generation = continuingCaptureGeneration(owner) ?: return false

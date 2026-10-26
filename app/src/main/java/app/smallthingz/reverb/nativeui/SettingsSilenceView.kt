@@ -66,7 +66,6 @@ internal class SettingsSilenceView(
     }
     /** Custom pointer node is outside TextButton's minimum-interactive-size wrapper. */
     val calibrationPointerNode:NativeViewPhasePointerNode? get()=(expansion.content as? SilenceBody)?.pointerNode
-    val curveView:SilenceCurveView? get()=(expansion.content as? SilenceBody)?.curve
     init {importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO;addView(row);addView(expansion)}
     fun bind(next:SettingsSilenceState,colors:ReverbViewEnvironment,callbacks:SettingsSilenceActions) {
         val progressOnly=colors===environment&&state.samePresentationExceptProgress(next)&&

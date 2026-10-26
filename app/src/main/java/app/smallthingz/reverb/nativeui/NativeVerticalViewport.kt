@@ -288,7 +288,8 @@ internal class NativeVerticalViewport(
 
     override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo) {
         super.onInitializeAccessibilityNodeInfo(info)
-        info.actionList.toList().forEach(info::removeAction)
+        val actions = info.actionList
+        for (index in actions.size - 1 downTo 0) info.removeAction(actions[index])
         info.addAction(if (isAccessibilityFocused)
             AccessibilityNodeInfo.AccessibilityAction.ACTION_CLEAR_ACCESSIBILITY_FOCUS
         else AccessibilityNodeInfo.AccessibilityAction.ACTION_ACCESSIBILITY_FOCUS)

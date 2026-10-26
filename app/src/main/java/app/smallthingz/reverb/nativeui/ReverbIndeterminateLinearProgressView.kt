@@ -199,7 +199,8 @@ internal class ReverbIndeterminateLinearProgressView(
         info.setBoundsInParent(android.graphics.Rect())
         info.rangeInfo = null
         AccessibilityNodeInfoCompat.wrap(info).stateDescription = context.getString(smallthingz.ui.R.string.in_progress)
-        info.actionList.toList().forEach(info::removeAction)
+        val actions = info.actionList
+        for (index in actions.size - 1 downTo 0) info.removeAction(actions[index])
         info.addAction(if (isAccessibilityFocused) AccessibilityNodeInfo.AccessibilityAction.ACTION_CLEAR_ACCESSIBILITY_FOCUS
             else AccessibilityNodeInfo.AccessibilityAction.ACTION_ACCESSIBILITY_FOCUS)
         sourceNode()?.populate(info)

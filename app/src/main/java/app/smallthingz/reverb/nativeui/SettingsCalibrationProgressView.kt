@@ -135,7 +135,8 @@ internal class SettingsCalibrationProgressView(
         info.rangeInfo=AccessibilityNodeInfo.RangeInfo.obtain(AccessibilityNodeInfo.RangeInfo.RANGE_TYPE_FLOAT,0f,1f,progress)
         AccessibilityNodeInfoCompat.wrap(info).stateDescription=context.getString(
             smallthingz.ui.R.string.template_percent,calibrationProgressPercent(progress))
-        info.actionList.toList().forEach(info::removeAction)
+        val actions = info.actionList
+        for (index in actions.size - 1 downTo 0) info.removeAction(actions[index])
         info.addAction(if(isAccessibilityFocused)AccessibilityNodeInfo.AccessibilityAction.ACTION_CLEAR_ACCESSIBILITY_FOCUS
             else AccessibilityNodeInfo.AccessibilityAction.ACTION_ACCESSIBILITY_FOCUS)
         sourceNode()?.populate(info)

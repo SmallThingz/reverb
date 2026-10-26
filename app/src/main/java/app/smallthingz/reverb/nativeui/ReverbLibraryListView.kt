@@ -67,7 +67,7 @@ internal class ReverbLibraryListView(
     private val inlineHost: LibraryInlineExpansionHost,
 ) : FrameLayout(context) {
     private var environment = initialEnvironment
-    private var currentActions = actions
+    private val currentActions = actions
     private val rowUpdates = NativeLibraryListUpdates<InlinePlaybackRowOwner>()
     private var currentRecordingIds = emptySet<String>()
     private var blockedRecordingIds = emptySet<String>()
@@ -124,11 +124,6 @@ internal class ReverbLibraryListView(
     fun setEnvironment(value: ReverbViewEnvironment) {
         environment = value
         updateInsets()
-        rowAdapter.rebindAll()
-    }
-
-    fun setActions(value: LibraryRecordingRowActions) {
-        currentActions = value
         rowAdapter.rebindAll()
     }
 

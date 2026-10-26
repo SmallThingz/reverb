@@ -133,18 +133,6 @@ internal class ReverbFilledButtonElevation(
         stateChanged()
     }
 
-    /**
-     * Input cancellation is a sequence of end events, not disposal. The input owner should normally
-     * call end for its exact Press/Focus/Hover tokens. This clears all of THIS helper's active events
-     * when the existing factory retires every one together.
-     */
-    fun cancelInteractions() {
-        checkMainThread()
-        if (closed) return
-        state.clearInteractions(ValueAnimator.getDurationScale())
-        stateChanged()
-    }
-
     /** Owner forwards its size/configuration refresh; elevation is Dp and density is applied here. */
     fun measured() {
         checkMainThread()
@@ -257,12 +245,6 @@ internal class ReverbFilledButtonElevationState(initialEnabled: Boolean = true) 
     fun setEnabled(value: Boolean, durationScale: Float = 1f) {
         if (enabled == value) return
         enabled = value
-        selectTarget(durationScale)
-    }
-
-    fun clearInteractions(durationScale: Float = 1f) {
-        if (active.isEmpty()) return
-        active.clear()
         selectTarget(durationScale)
     }
 

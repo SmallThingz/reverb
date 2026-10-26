@@ -89,7 +89,6 @@ internal class ReverbLibraryPlayerView(
     val waveformInput: NativeViewPhasePointerNode get() = content.timeline
     val startLabel: ReverbParagraphView get() = content.times.start
     val endLabel: ReverbParagraphView get() = content.times.end
-    val errorLabel: ReverbParagraphView? get() = content.error
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         clipChildren = true

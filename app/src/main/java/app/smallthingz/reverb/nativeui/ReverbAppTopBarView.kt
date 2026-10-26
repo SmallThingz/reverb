@@ -545,7 +545,8 @@ private class ReverbTopBarDescriptionView(context: Context, description: String)
         info.isClickable = false
         info.isLongClickable = false
         info.isEnabled = true
-        info.actionList.toList().forEach(info::removeAction)
+        val actions = info.actionList
+        for (index in actions.size - 1 downTo 0) info.removeAction(actions[index])
         info.addAction(if (isAccessibilityFocused) AccessibilityNodeInfo.AccessibilityAction.ACTION_CLEAR_ACCESSIBILITY_FOCUS
             else AccessibilityNodeInfo.AccessibilityAction.ACTION_ACCESSIBILITY_FOCUS)
         text?.populate(info)

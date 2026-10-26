@@ -311,7 +311,6 @@ internal class ReverbLibraryScreenContent(
     }
     fun activePlayerLeases(): List<NativeLibraryPlayerLease> = leases.toList()
     fun currentState(): NativeLibraryPresentation? = presentation
-    fun recordingMenuAnchor(id: String): View? = list.attachedRecordingAnchor(id)
     fun pointerNodes(view: View): List<NativeViewPhasePointerNode> {
         for (lease in leases) {
             val nodes = lease.pointerNodes(view)
