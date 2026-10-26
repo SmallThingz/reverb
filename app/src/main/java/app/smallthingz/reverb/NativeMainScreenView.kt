@@ -607,17 +607,18 @@ internal class NativeMainScreenView private constructor(
 
     private fun shellLayout(view: View): NativeViewPointerHitLayout = shellLayouts.getOrPut(view) { ShellLayout(view) }
     private inner class ShellLayout(val view: View) : NativeViewPointerHitLayout {
-        private val click = (view as? NativeClickPhaseHost)?.let { NativeClickPhaseNode(view, it.nativeClickEndpoint) { false } }
+        override val nodes = (view as? NativeClickPhaseHost)?.let {
+            listOf(NativeClickPhaseNode(view, it.nativeClickEndpoint) { false })
+        } ?: emptyList()
         override val placed get() = view.isAttachedToWindow && view.visibility == VISIBLE
         override val size get() = Size(view.width.toFloat(), view.height.toFloat())
         override val minimumTouchTarget get() = Size(dpFloat(48), dpFloat(48))
-        override val nodes get() = listOfNotNull(click)
         override val childrenInHitOrder get() = if (view is ViewGroup)
             (view.childCount - 1 downTo 0).map { shellLayout(view.getChildAt(it)) } else emptyList()
         override fun screenToLocal(screen: Offset) = pointer.coordinates.coordinates(view).local(screen)
         override fun withinLayerBounds(local: Offset) =
             (view as? NativePointerLayerShape)?.containsPointerLayer(local.x, local.y) ?: true
-        fun close() { click?.cancel() }
+        fun close() { nodes.firstOrNull()?.cancel() }
     }
 
     private fun retireShellLayouts(root: View) {

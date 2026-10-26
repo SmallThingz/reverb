@@ -80,11 +80,21 @@ internal class NativeRangePointerBinding(
         }
         private val wheel = if (view === content.durationWheel)
             NativeAndroidInteropNode(view, content.nativeInteropRequests) else null
-        private val surfaceShield = if (view is ReverbGroupLayout) object : NativeViewPhasePointerNode {
-            override val view get() = this@Layout.view
-            override fun dispatch(event: NativeDragPointerEvent, pass: NativePointerPass) = Unit
-            override fun cancel() = Unit
-        } else null
+        private val fixedNodes: List<NativeViewPhasePointerNode> = run {
+            val surfaceShield = if (view is ReverbGroupLayout) object : NativeViewPhasePointerNode {
+                override val view get() = this@Layout.view
+                override fun dispatch(event: NativeDragPointerEvent, pass: NativePointerPass) = Unit
+                override fun cancel() = Unit
+            } else null
+            when (view) {
+                content.timeline.waveformInput -> listOf(waveformNode)
+                content.timeline.endpointStart -> listOf(startNode)
+                content.timeline.endpointEnd -> listOf(endNode)
+                content.fine -> listOf(content.fine.fineSeekNode)
+                content.fine.puckClickView -> listOf(content.fine.puckClickNode)
+                else -> wheel?.let(::listOf) ?: click?.let(::listOf) ?: surfaceShield?.let(::listOf) ?: emptyList()
+            }
+        }
         override val placed get() = !closed && view.isAttachedToWindow && view.isLaidOut &&
             view.visibility == View.VISIBLE
         override val size get() = Size(view.width.toFloat(), view.height.toFloat())
@@ -97,12 +107,11 @@ internal class NativeRangePointerBinding(
             else -> true
         }
         override val nodes: List<NativeViewPhasePointerNode> get() = when (view) {
-            content.timeline.waveformInput -> listOf(waveformNode) // Present even when disabled.
-            content.timeline.endpointStart -> if (content.interactionEnabled) listOf(startNode) else emptyList()
-            content.timeline.endpointEnd -> if (content.interactionEnabled) listOf(endNode) else emptyList()
-            content.fine -> if (content.fine.fineSeekInputEnabled) listOf(content.fine.fineSeekNode) else emptyList()
-            content.fine.puckClickView -> listOf(content.fine.puckClickNode) // Disabled clickable retained.
-            else -> wheel?.let(::listOf) ?: click?.let(::listOf) ?: surfaceShield?.let(::listOf) ?: emptyList()
+            content.timeline.endpointStart, content.timeline.endpointEnd ->
+                if (content.interactionEnabled) fixedNodes else emptyList()
+            content.fine -> if (content.fine.fineSeekInputEnabled) fixedNodes else emptyList()
+            // Waveform and disabled puck clickable remain present; only the detectors above gate membership.
+            else -> fixedNodes
         }
         override fun close() { try { click?.cancel() } finally { wheel?.close() } }
     }

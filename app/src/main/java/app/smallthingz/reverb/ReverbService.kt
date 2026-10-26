@@ -348,7 +348,8 @@ open class ReverbService : Service() {
         val scratch = ByteArray(capacityBytes)
         val buffer = ByteBuffer.allocateDirect(capacityBytes).order(ByteOrder.nativeOrder())
     }
-    private val visualizationAnalyzer = AudioVisualizationAnalyzer()
+    // Audio-owner-only; lifetimes without a visualizer never allocate FFT scratch.
+    private var visualizationAnalyzer: AudioVisualizationAnalyzer? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     private val pendingVisualizationFrame = AtomicReference<VisualizationFrame?>(null)
     private val visualizationDispatchScheduled = AtomicBoolean(false)
@@ -3947,7 +3948,7 @@ open class ReverbService : Service() {
         if (!::audioHandler.isInitialized) return
         val accepted = audioHandler.post {
             if (!serviceDestroying && visualizationCallbacks.current() === callback) {
-                visualizationAnalyzer.reset()
+                visualizationAnalyzerForAudioOwner().reset()
                 visualizationFaulted = false
             }
         }
@@ -3964,7 +3965,7 @@ open class ReverbService : Service() {
         if (serviceDestroying || !::audioHandler.isInitialized) return
         audioHandler.post {
             if (!serviceDestroying && visualizationCallbacks.current() === fallback) {
-                visualizationAnalyzer.reset()
+                visualizationAnalyzer?.reset()
                 visualizationFaulted = false
             }
         }
@@ -3976,11 +3977,14 @@ open class ReverbService : Service() {
         if (serviceDestroying || !::audioHandler.isInitialized) return
         audioHandler.post {
             if (!serviceDestroying && visualizationCallbacks.current() == null) {
-                visualizationAnalyzer.reset()
+                visualizationAnalyzer?.reset()
                 visualizationFaulted = false
             }
         }
     }
+
+    private fun visualizationAnalyzerForAudioOwner(): AudioVisualizationAnalyzer =
+        visualizationAnalyzer ?: AudioVisualizationAnalyzer().also { visualizationAnalyzer = it }
 
     private fun publishVisualization(array: ByteArray, offset: Int, count: Int) {
         val callback = visualizationCallbacks.current() ?: return
@@ -3989,7 +3993,7 @@ open class ReverbService : Service() {
         // completed read: a second coarse throttle only adds input-to-pixel latency and can skip
         // short transients entirely.
         val frame = try {
-            visualizationAnalyzer.analyze(
+            visualizationAnalyzerForAudioOwner().analyze(
                 array = array,
                 offset = offset,
                 count = count,

@@ -37,6 +37,9 @@ internal class NativeHomePointerBinding(
         override fun cancel() = vertical.cancel()
     }
 
+    private val enabledHomeNodes = listOf(parentNode, surfaceNode)
+    private val disabledHomeNodes = listOf(surfaceNode)
+
     val layout: NativeViewPointerHitLayout get() {
         refresh()
         return layoutFor(home)
@@ -65,19 +68,18 @@ internal class NativeHomePointerBinding(
         else layouts.getOrPut(view) { Layout(view) }
 
     private inner class Layout(private val view: View) : NativeViewPointerHitLayout {
-        private val click = (view as? NativeClickPhaseHost)?.let {
+        private val clickNodes = (view as? NativeClickPhaseHost)?.let {
             // Plain pointerInput drag detectors do not establish a ScrollableContainer/DragGestureNode
             // press-delay ancestor. Reuse the existing source click endpoint and false interest.
-            NativeClickPhaseNode(view, it.nativeClickEndpoint) { false }
-        }
+            listOf(NativeClickPhaseNode(view, it.nativeClickEndpoint) { false })
+        } ?: emptyList()
         override val placed get() = view.isAttachedToWindow && view.visibility == View.VISIBLE
         override val size get() = Size(view.width.toFloat(), view.height.toFloat())
         override val minimumTouchTarget get() = Size(48f * density(), 48f * density())
-        override val nodes: List<NativeViewPhasePointerNode> get() = when {
-            view === home -> if (gestureEnabled()) listOf(parentNode, surfaceNode) else listOf(surfaceNode)
-            click != null -> listOf(click)
-            else -> emptyList()
-        }
+        override val nodes: List<NativeViewPhasePointerNode> get() =
+            if (view === home) {
+                if (gestureEnabled()) enabledHomeNodes else disabledHomeNodes
+            } else clickNodes
         override val childrenInHitOrder: List<NativeViewPointerHitLayout> get() {
             val group = view as? ViewGroup ?: return emptyList()
             return (group.childCount - 1 downTo 0).map { layoutFor(group.getChildAt(it)) }
@@ -85,7 +87,7 @@ internal class NativeHomePointerBinding(
         override fun screenToLocal(screen: Offset) = geometry.coordinates(view).local(screen)
         override fun withinLayerBounds(local: Offset): Boolean =
             (view as? NativePointerLayerShape)?.containsPointerLayer(local.x, local.y) ?: true
-        fun close() { click?.cancel() }
+        fun close() { clickNodes.firstOrNull()?.cancel() }
     }
 
     /** Main cancels its retained pointer paths before retiring this binding. */
