@@ -5,6 +5,8 @@ import kotlin.math.floor
 
 /** A lease-proven continuous run shares one phase, independent of storage chunk boundaries. */
 internal object PcmStreamNormalizer {
+    private val EMPTY_BYTES = ByteArray(0)
+
     fun normalize(
         segments: List<PersistentAudioChunkStore.Segment>,
         targetFrameCount: Long,
@@ -116,7 +118,7 @@ internal object PcmStreamNormalizer {
         private var index = 0
         private var start = 0L
         private var frameInSegment = 0L
-        private var bytes = ByteArray(0)
+        private var bytes = EMPTY_BYTES
 
         private fun frames(): Long = segments[index].frameCount +
             (if (index == 0) before else 0L) + (if (index == segments.lastIndex) after else 0L)
@@ -127,7 +129,7 @@ internal object PcmStreamNormalizer {
                 if ((index and 255) == 0) checkPcmConversionNotInterrupted()
                 start += frames()
                 index++
-                bytes = ByteArray(0)
+                bytes = EMPTY_BYTES
             }
             frameInSegment = frame - start
         }
@@ -137,7 +139,7 @@ internal object PcmStreamNormalizer {
                 start += frames()
                 index++
                 frameInSegment = 0L
-                bytes = ByteArray(0)
+                bytes = EMPTY_BYTES
             }
             if (bytes.isEmpty()) {
                 val segment = segments[index]

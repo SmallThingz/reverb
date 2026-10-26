@@ -37,6 +37,8 @@ internal class SettingsDraftController(
         if (!initiallyActive) restoration.discard()
     }
 
+    val snapshot: SettingsSnapshot get() = displayed.snapshot
+
     val state: SettingsDraftPresentation
         get() = SettingsDraftPresentation(
             activation, active, hydrated, interactionReady, persistence != null,

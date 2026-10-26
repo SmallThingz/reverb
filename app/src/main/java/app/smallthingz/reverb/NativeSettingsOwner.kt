@@ -79,7 +79,7 @@ internal class NativeSettingsOwner(
         },
     )
     val state get() = draft.state
-    val snapshot get() = state.displayed.snapshot
+    val snapshot get() = draft.snapshot
     val estimates get() = nativeSettingsRetentionEstimates(snapshot)
     private val serviceBinding = NativeSettingsServiceBinding(context, lifecycle)
     private val persistence = NativeSettingsPersistence(context) { serviceBinding.service }

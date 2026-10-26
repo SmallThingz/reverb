@@ -220,14 +220,33 @@ private fun verifyUnrequestedExportTimeout(context: Context, tree: Uri, provider
         check(savedBytes.contentEquals(buildWavHeaderBytes(16000, 1, PcmSampleFormat.PCM_16, pcm.size.toLong()) + pcm))
 
         val cancelled = CountDownLatch(1)
+        val cancellationFailure = AtomicReference<Throwable>()
         val cancellationReceiver = object : ReverbService.AudioFileReceiver {
-            override fun fileReady(recording: RecordingEntity) = error("Cancelled export succeeded")
-            override fun fileFailed(message: String, error: Throwable?) = error("User cancellation reported as failure")
+            // Main-thread callbacks record failures; the instrumentation owner reports them below.
+            override fun fileReady(recording: RecordingEntity) {
+                cancellationFailure.compareAndSet(null, IllegalStateException("Cancelled export succeeded"))
+                cancelled.countDown()
+            }
+            override fun fileFailed(message: String, error: Throwable?) {
+                cancellationFailure.compareAndSet(null,
+                    IllegalStateException("User cancellation reported as failure: $message", error))
+                cancelled.countDown()
+            }
             override fun fileCancelled() { cancelled.countDown() }
         }
         requireNotNull(export.begin(cancellationReceiver))
         check(recorder.cancelCurrentExport())
         check(cancelled.await(15, TimeUnit.SECONDS)) { "User cancellation lost its neutral terminal" }
+        try {
+            awaitMainCallbacks()
+        } catch (fenceFailure: Throwable) {
+            cancellationFailure.get()?.let { terminalFailure ->
+                if (terminalFailure !== fenceFailure) terminalFailure.addSuppressed(fenceFailure)
+                throw terminalFailure
+            }
+            throw fenceFailure
+        }
+        cancellationFailure.get()?.let { throw it }
         check(!recorder.cancelCurrentExport())
         val retained = ByteArrayOutputStream()
         requireNotNull(source.acquireRange(0.0, source.durationSeconds())).use { original ->
