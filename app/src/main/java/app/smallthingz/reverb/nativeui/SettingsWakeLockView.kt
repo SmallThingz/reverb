@@ -87,9 +87,12 @@ private class WakeLockRow(
         override fun longPressOwnershipChanged(owns:Boolean)=Unit
     },indication)
     override val nativeClickEndpoint:NativeClickPhaseEndpoint=ReverbClickPhaseEndpoint(input)
-    override val mergedRowAccessibility=ReverbMergedRowAccessibility(this,NativeMergedRowRole.SWITCH,
-        {NativeMergedRowAccessibilityState(true,this.checked,null,listOf(title,summary))},
-        {activate()})
+    override val mergedRowAccessibility=run {
+        val children=listOf(title,summary)
+        ReverbMergedRowAccessibility(this,NativeMergedRowRole.SWITCH,
+            {NativeMergedRowAccessibilityState(true,this.checked,null,children)},
+            {activate()})
+    }
 
     override fun addChildrenForAccessibility(outChildren:ArrayList<View>) =
         mergedRowAccessibility.addChildrenForAccessibility(outChildren)

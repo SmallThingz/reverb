@@ -94,22 +94,6 @@ internal fun loopingDropChunkBytesForSize(
     return dropFrames * frame
 }
 
-internal fun loopingDropChunkBytesForTime(
-    excessSeconds: Double,
-    chunkSampleFrames: Long,
-    sampleRate: Int,
-    frameBytes: Int,
-): Long {
-    if (!excessSeconds.isFinite() || excessSeconds <= 0.0 || chunkSampleFrames <= 0L || sampleRate <= 0 || frameBytes <= 0) {
-        return 0L
-    }
-    val rawFrames = excessSeconds * sampleRate.toDouble()
-    val tolerance = minOf(0.25, 8.0 * Math.ulp(rawFrames))
-    if (rawFrames <= tolerance) return 0L
-    val dropFrames = ceil(rawFrames - tolerance).toLong().coerceIn(1L, chunkSampleFrames)
-    return dropFrames * frameBytes.toLong()
-}
-
 internal fun oneShotRetainedChunkBytesForTime(
     retentionSeconds: Long,
     retainedDurationBeforeChunk: Double,

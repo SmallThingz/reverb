@@ -70,8 +70,11 @@ private class CalibrationActionSurface(
     override val nativeClickEndpoint:NativeClickPhaseEndpoint get()=interactions.pointerEndpoint
     override fun containsPointerLayer(x:Float,y:Float)=reverbGroupGeometry(width.toFloat(),height.toFloat(),
         environment.textDensity.density,min(width,height)/(2f*environment.textDensity.density)).contains(x,y)
-    override val mergedRowAccessibility=ReverbMergedRowAccessibility(this,NativeMergedRowRole.BUTTON,
-        {NativeMergedRowAccessibilityState(enabled,null,null,listOf(label))},{activate()})
+    override val mergedRowAccessibility=run {
+        val children=listOf(label)
+        ReverbMergedRowAccessibility(this,NativeMergedRowRole.BUTTON,
+            {NativeMergedRowAccessibilityState(enabled,null,null,children)},{activate()})
+    }
     init {
         isClickable=true;isFocusable=true
         importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_YES

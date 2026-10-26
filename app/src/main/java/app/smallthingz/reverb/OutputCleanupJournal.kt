@@ -523,19 +523,6 @@ internal fun verifiedExportStagingRecoveryForFingerprint(
     return VerifiedExportStagingRecovery(fingerprint, if (conflictingNames) null else finalName)
 }
 
-internal fun verifiedExportStagingHasFingerprint(
-    entries: Set<String>,
-    storageType: RecordingStorageType,
-    id: String,
-    fingerprint: StableOutputFingerprint,
-): Boolean = entries.any { raw ->
-    decodeVerifiedExportStagingRecord(raw)?.let { record ->
-        record.storageType == storageType &&
-            record.id == id &&
-            verifiedExportStagingRecordMatches(record, fingerprint)
-    } == true
-}
-
 private fun verifiedExportStagingEntriesLocked(context: Context): Set<String> =
     getRecorderPreferences(context).requireDurableStringSet(PrefKey.VERIFIED_EXPORT_STAGING)
 

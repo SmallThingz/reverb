@@ -179,8 +179,8 @@ class OutputCleanupJournalConcurrencyTest {
         val combined = verifiedExportStagingEntriesAfterAppend(setOf(newer), old)
 
         assertEquals(setOf(old, newer), combined)
-        assertTrue(verifiedExportStagingHasFingerprint(combined, RecordingStorageType.FILE, id, oldFingerprint))
-        assertTrue(verifiedExportStagingHasFingerprint(combined, RecordingStorageType.FILE, id, newFingerprint))
+        assertTrue(verifiedExportStagingRecoveryForFingerprint(combined, RecordingStorageType.FILE, id, oldFingerprint) != null)
+        assertTrue(verifiedExportStagingRecoveryForFingerprint(combined, RecordingStorageType.FILE, id, newFingerprint) != null)
     }
 
 }

@@ -329,9 +329,12 @@ internal class OnboardingAudioRow(
     private var checked = false
     private var canActivate = false
     var onActivate: (() -> Unit)? = null
-    override val mergedRowAccessibility = ReverbMergedRowAccessibility(this, NativeMergedRowRole.SWITCH,
-        sourceState = { NativeMergedRowAccessibilityState(canActivate, checked, null, listOf(title)) },
-        invokeSourceClick = { if (canActivate && isAttachedToWindow) { onActivate?.invoke(); true } else false })
+    override val mergedRowAccessibility = run {
+        val children = listOf(title)
+        ReverbMergedRowAccessibility(this, NativeMergedRowRole.SWITCH,
+            sourceState = { NativeMergedRowAccessibilityState(canActivate, checked, null, children) },
+            invokeSourceClick = { if (canActivate && isAttachedToWindow) { onActivate?.invoke(); true } else false })
+    }
     init {
         clipChildren = false; clipToPadding = false
         isClickable = true; isFocusable = true

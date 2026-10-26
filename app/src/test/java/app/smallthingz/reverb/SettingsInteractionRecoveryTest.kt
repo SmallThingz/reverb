@@ -113,7 +113,7 @@ class SettingsInteractionRecoveryTest {
         var revision = 0L
         var baseline = SettingsSnapshot(sampleRate = 48_000)
         var draft = baseline
-        val dirty get() = settingsSnapshotHasUnsavedChanges(baseline, draft, false)
+        val dirty get() = SettingsUiDraft.normalized(draft).hasUnsavedChanges(baseline)
         var needsHydration = false
 
         fun edit(rate: Int) { draft = draft.copy(sampleRate = rate); revision++ }

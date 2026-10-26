@@ -155,9 +155,12 @@ private class SegmentCell<T>(
         override fun longPressOwnershipChanged(owns:Boolean)=Unit
     },sink)
     override val nativeClickEndpoint:NativeClickPhaseEndpoint=ReverbClickPhaseEndpoint(input)
-    override val mergedRowAccessibility=ReverbMergedRowAccessibility(this,NativeMergedRowRole.RADIO_BUTTON,
-        {NativeMergedRowAccessibilityState(isEnabled,null,null,listOf(text),selected=chosen)},
-        {val action=activate;if(action==null)false else {action();true}})
+    override val mergedRowAccessibility=run {
+        val children=listOf(text)
+        ReverbMergedRowAccessibility(this,NativeMergedRowRole.RADIO_BUTTON,
+            {NativeMergedRowAccessibilityState(isEnabled,null,null,children,selected=chosen)},
+            {val action=activate;if(action==null)false else {action();true}})
+    }
 
     init {
         // Released Text only clips actual overflow; glyph ink may exceed its measured advance.

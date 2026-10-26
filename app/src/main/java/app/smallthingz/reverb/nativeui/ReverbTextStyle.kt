@@ -100,10 +100,6 @@ internal fun ReverbTextStyle.resolveMetrics(scale: ReverbTextScale): ReverbTextM
     )
 }
 
-/** AndroidFontResolveInterceptor's accessibility Bold Text adjustment (undefined = Int.MAX_VALUE). */
-internal fun adjustedReverbFontWeight(weight: Int, adjustment: Int): Int =
-    if (adjustment == 0 || adjustment == Int.MAX_VALUE) weight else (weight + adjustment).coerceIn(1, 1000)
-
 internal data class ReverbLineHeightMetrics(
     val firstAscent: Int,
     val ascent: Int,

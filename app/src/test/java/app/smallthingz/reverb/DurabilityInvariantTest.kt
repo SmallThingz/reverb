@@ -881,11 +881,6 @@ class DurabilityInvariantTest {
         assertEquals(100L, loopingDropChunkBytesForSize(Long.MAX_VALUE, 100L, 2))
         assertEquals(Long.MAX_VALUE - 1L, loopingDropChunkBytesForSize(Long.MAX_VALUE, Long.MAX_VALUE, 2))
         assertEquals(100L, loopingDropChunkBytesForSize(Long.MAX_VALUE, 101L, 2))
-
-        val rate = 48_000
-        assertEquals(2L, loopingDropChunkBytesForTime(1.0 / rate, 100L, rate, 2))
-        assertEquals(4L, loopingDropChunkBytesForTime(1.1 / rate, 100L, rate, 2))
-        assertEquals(200L, loopingDropChunkBytesForTime(1.0, 100L, rate, 2))
     }
 
     @Test
@@ -961,7 +956,7 @@ class DurabilityInvariantTest {
             sessionId = "session-a",
             kind = StagingOutputKind.EXPORT,
         )
-        val exportMetadata = parseStagingOutputMetadata(exportStaging)
+        val exportMetadata = resolveStagingOutputRecovery(exportStaging) { null }?.metadata
         assertEquals(
             StagingOutputMetadata(StagingOutputKind.EXPORT, "session-a", "clip name.wav"),
             exportMetadata,
@@ -977,7 +972,7 @@ class DurabilityInvariantTest {
             sessionId = "session-old",
             kind = StagingOutputKind.EXPORT_TRACKED,
         )
-        val trackedMetadata = parseStagingOutputMetadata(trackedStaging)
+        val trackedMetadata = resolveStagingOutputRecovery(trackedStaging) { null }?.metadata
         assertEquals(StagingOutputKind.EXPORT_TRACKED, trackedMetadata?.kind)
         assertFalse(
             shouldRecoverStagingOutput(
@@ -1007,19 +1002,19 @@ class DurabilityInvariantTest {
             sessionId = "session-old",
             kind = StagingOutputKind.COPY,
         )
-        val copyMetadata = parseStagingOutputMetadata(copyStaging)
+        val copyMetadata = resolveStagingOutputRecovery(copyStaging) { null }?.metadata
         assertEquals(StagingOutputKind.COPY, copyMetadata?.kind)
         assertFalse(shouldRecoverStagingOutput(copyMetadata, currentSessionId = "session-new"))
         assertFalse(shouldRecoverStagingOutput(null, currentSessionId = "session-new"))
-        assertEquals(null, parseStagingOutputMetadata("reverb-partial-malformed.wav"))
+        assertEquals(null, resolveStagingOutputRecovery("reverb-partial-malformed.wav") { null }?.metadata)
         // New durable enum writes use compact stable byte codes, but every deployed legacy
         // staging kind must remain parseable for crash recovery.
         assertTrue(copyStaging.startsWith("reverb-partial-3__"))
         assertEquals(
             StagingOutputMetadata(StagingOutputKind.COPY, "legacy-session", "legacy.wav"),
-            parseStagingOutputMetadata(
+            resolveStagingOutputRecovery(
                 "reverb-partial-copy__legacy-session__token__bGVnYWN5Lndhdg.wav",
-            ),
+            ) { null }?.metadata,
         )
     }
 

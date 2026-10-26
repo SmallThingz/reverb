@@ -15,6 +15,7 @@ import android.view.accessibility.AccessibilityNodeInfo
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ExecutionException
 import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
 
@@ -66,12 +67,26 @@ internal fun verifyLargeHistoryRangeUi(instrumentation: Instrumentation, report:
         val recorder = requireNotNull(service)
         val audio = recorder.uiFixtureField("audioHandler") as Handler
         val blocked = CountDownLatch(1)
-        check(audio.post { blocked.countDown(); check(audioRelease.await(15, TimeUnit.SECONDS)) })
+        // FutureTask retains worker failure for the instrumentation owner instead of letting
+        // a timeout terminate the QA process on the service's audio Handler thread.
+        val audioBlock = FutureTask {
+            blocked.countDown()
+            check(audioRelease.await(15, TimeUnit.SECONDS)) { "QA audio block timed out before explicit release" }
+        }
+        fun checkAudioBlockFailure() {
+            if (!audioBlock.isDone) return
+            try { audioBlock.get() }
+            catch (error: ExecutionException) { throw error.cause ?: error }
+        }
+        check(audio.post(audioBlock))
         check(blocked.await(5, TimeUnit.SECONDS))
         val range = requireNotNull(findVisibleNode(instrumentation) { it.contentDescription?.toString() == rangeLabel })
         try { clickUiNode(range) } finally { @Suppress("DEPRECATION") range.recycle() }
         val preparing = context.getString(R.string.preparing_audio_selection)
-        awaitUiCondition { hasVisibleNode(instrumentation) { it.contentDescription?.toString() == preparing } }
+        awaitUiCondition {
+            checkAudioBlockFailure()
+            hasVisibleNode(instrumentation) { it.contentDescription?.toString() == preparing }
+        }
         val close = requireNotNull(findVisibleNode(instrumentation) {
             it.contentDescription?.toString() == context.getString(R.string.close) && hasEnabledClickTarget(it)
         }) { "Preparing range has no visible Close action" }
@@ -81,10 +96,15 @@ internal fun verifyLargeHistoryRangeUi(instrumentation: Instrumentation, report:
             saveUiCapture(instrumentation, "range-preparing.png")
             clickUiNode(close)
         } finally { @Suppress("DEPRECATION") close.recycle() }
-        awaitUiCondition { hasVisibleNode(instrumentation) { it.contentDescription?.toString() == rangeLabel } }
+        awaitUiCondition {
+            checkAudioBlockFailure()
+            hasVisibleNode(instrumentation) { it.contentDescription?.toString() == rangeLabel }
+        }
         audioRelease.countDown()
         val barrier = FutureTask { Unit }
         check(audio.post(barrier)); barrier.get(10, TimeUnit.SECONDS)
+        // The barrier also closes the race where explicit release followed a timed-out await.
+        checkAudioBlockFailure()
         val store = recorder.uiFixtureField("loopingAudioChunkStore") as PersistentAudioChunkStore
         awaitUiCondition {
             synchronized(store) {

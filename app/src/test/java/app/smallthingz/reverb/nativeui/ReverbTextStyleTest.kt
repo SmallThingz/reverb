@@ -7,14 +7,6 @@ import org.junit.Test
 
 class ReverbTextStyleTest {
     @Test
-    fun accessibilityBoldTextAdjustmentPreservesUndefinedAndClampsFontLimits() {
-        assertEquals(400, adjustedReverbFontWeight(400, Int.MAX_VALUE))
-        assertEquals(700, adjustedReverbFontWeight(400, 300))
-        assertEquals(1000, adjustedReverbFontWeight(700, 400))
-        assertEquals(1, adjustedReverbFontWeight(400, -500))
-    }
-
-    @Test
     fun freshAppOverridesDoNotAcquireMaterialTrackingOrUntrimmedLeading() {
         val title = ReverbTextRole.TITLE_MEDIUM.style
         assertEquals(0f, title.letterSpacingSp, 0f)

@@ -144,9 +144,9 @@ class FlacAndQuickSaveTest {
             baseline.copy(silenceGate = encodeSilenceGate(SilenceGateConfig(enabled = true))),
         )
         for (draft in drafts) {
-            assertTrue(settingsSnapshotHasUnsavedChanges(baseline, draft, false))
+            assertTrue(SettingsUiDraft.normalized(draft).hasUnsavedChanges(baseline))
         }
-        assertFalse(settingsSnapshotHasUnsavedChanges(baseline, baseline.copy(), false))
+        assertFalse(SettingsUiDraft.normalized(baseline.copy()).hasUnsavedChanges(baseline))
     }
 
     @Test fun settingsRollbackOwnsRestoredFeatureKeysWithoutClaimingTileDefinitions() {

@@ -163,7 +163,8 @@ internal class NativeOnboardingPagerAccessibility(
         val mapped = geometry.capture(host, Offset.Zero,
             ComposeRect(0f, 0f, host.width.toFloat(), host.height.toFloat()))
         info.setBoundsInScreen(mapped?.let { nativeMergedRoleBoundsInScreen(it, host.isLaidOut) } ?: Rect())
-        info.actionList.toList().forEach(info::removeAction)
+        val actions = info.actionList
+        for (index in actions.size - 1 downTo 0) info.removeAction(actions[index])
         info.addAction(if (host.isAccessibilityFocused)
             AccessibilityNodeInfo.AccessibilityAction.ACTION_CLEAR_ACCESSIBILITY_FOCUS
             else AccessibilityNodeInfo.AccessibilityAction.ACTION_ACCESSIBILITY_FOCUS)

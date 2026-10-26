@@ -3649,11 +3649,6 @@ private fun parseStagingOutputNameParts(name: String): StagingOutputNameParts? =
     StagingOutputNameParts(kind, sessionId, parts[3])
 }.getOrNull()
 
-internal fun parseStagingOutputMetadata(
-    name: String,
-    verifiedFinalDisplayName: String? = null,
-): StagingOutputMetadata? = parseStagingOutputNameParts(name)?.metadata(verifiedFinalDisplayName)
-
 internal data class StagingOutputRecovery(
     val metadata: StagingOutputMetadata,
     val fingerprint: StableOutputFingerprint?,

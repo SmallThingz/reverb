@@ -37,7 +37,7 @@ class RecordingStagingNameTest {
         val bytes = byteArrayOf(1, 3, 5, 7)
         val staged = File(directory, "preserved.partial").apply { writeBytes(bytes) }
         for (name in listOf("folder/clip.wav", "folder\\clip.wav", "clip\u0000.wav", "", " ", ".", "..")) {
-            assertNull(parseStagingOutputMetadata(legacyName(name)))
+            assertNull(resolveStagingOutputRecovery(legacyName(name)) { null }?.metadata)
             var recoveryReads = 0
             assertNull(resolveStagingOutputRecovery(legacyName(name)) { recoveryReads++; null })
             assertEquals(0, recoveryReads)
@@ -59,11 +59,11 @@ class RecordingStagingNameTest {
     fun legacyUnicodeNamesRemainExactAndMalformedUtf8IsRejected() {
         val name = "été 東京 🎙 session.wav"
         assertEquals(StagingOutputMetadata(StagingOutputKind.EXPORT, "old-session", name),
-            parseStagingOutputMetadata(legacyName(name)))
-        assertTrue(shouldRecoverStagingOutput(parseStagingOutputMetadata(legacyName(name)), "new-session"))
+            resolveStagingOutputRecovery(legacyName(name)) { null }?.metadata)
+        assertTrue(shouldRecoverStagingOutput(resolveStagingOutputRecovery(legacyName(name)) { null }?.metadata, "new-session"))
         val badUtf8 = Base64.getUrlEncoder().withoutPadding()
             .encodeToString(byteArrayOf(0xc3.toByte(), 0x28) + ".wav".toByteArray())
-        assertNull(parseStagingOutputMetadata("reverb-partial-export__old__token__$badUtf8.wav"))
+        assertNull(resolveStagingOutputRecovery("reverb-partial-export__old__token__$badUtf8.wav") { null }?.metadata)
         assertFalse(isDirectChildRecordingName("\uD800.wav"))
     }
 
@@ -77,10 +77,12 @@ class RecordingStagingNameTest {
             assertTrue(utf8Size(generated) <= 255)
             if (utf8Size(name) == 117) {
                 assertEquals(254, utf8Size(generated))
-                assertEquals(name, parseStagingOutputMetadata(generated)?.finalDisplayName)
+                assertEquals(name, resolveStagingOutputRecovery(generated) { null }?.metadata?.finalDisplayName)
             } else {
-                assertNull(parseStagingOutputMetadata(generated))
-                assertEquals(name, parseStagingOutputMetadata(generated, name)?.finalDisplayName)
+                assertNull(resolveStagingOutputRecovery(generated) { null }?.metadata)
+                assertEquals(name, resolveStagingOutputRecovery(generated) {
+                    VerifiedExportStagingRecovery(fingerprint(record(RecordingStorageType.FILE, name)), name)
+                }?.metadata?.finalDisplayName)
             }
             val child = File(directory, "case-$index").apply { mkdir() }
             val created = createLocalStagingFile(child, name, StagingOutputKind.EXPORT_TRACKED, io = realCreationIo())
@@ -148,7 +150,7 @@ class RecordingStagingNameTest {
         val stagedName = stagingOutputName(name, token, session, StagingOutputKind.EXPORT_TRACKED)
         val staged = File(directory, stagedName).apply { writeBytes(byteArrayOf(3, 1, 4)) }
         assertNull(resolveStagingOutputRecovery(stagedName) { null })
-        assertFalse(shouldRecoverStagingOutput(parseStagingOutputMetadata(stagedName), "other-session"))
+        assertFalse(shouldRecoverStagingOutput(resolveStagingOutputRecovery(stagedName) { null }?.metadata, "other-session"))
         assertArrayEquals(byteArrayOf(3, 1, 4), staged.readBytes())
         val copyName = stagingOutputName(name, token, session, StagingOutputKind.COPY)
         assertNull(resolveStagingOutputRecovery(copyName) { error("COPY must not obtain recovery authority") })
@@ -203,8 +205,8 @@ class RecordingStagingNameTest {
             val remaining = verifiedExportStagingEntriesAfterFingerprintRemoval(entries, type, record.id, fingerprint(record))
             assertEquals(setOf(replacement), remaining)
             assertEquals(remaining, verifiedExportStagingEntriesAfterFingerprintRemoval(remaining, type, record.id, fingerprint(record)))
-            assertTrue(verifiedExportStagingHasFingerprint(remaining, type, record.id,
-                fingerprint(record).copy(digest = CopyDigest(4, ByteArray(32) { 8 }))))
+            assertTrue(verifiedExportStagingRecoveryForFingerprint(remaining, type, record.id,
+                fingerprint(record).copy(digest = CopyDigest(4, ByteArray(32) { 8 }))) != null)
         }
     }
 

@@ -130,7 +130,7 @@ private fun writeRecoverySuppressionFixture(
         finalName, UUID.randomUUID().toString(), sessionId = "previous-reliability-session",
         kind = StagingOutputKind.EXPORT_TRACKED,
     )
-    check(shouldRecoverStagingOutput(parseStagingOutputMetadata(stagingName), verifiedTrackedExport = true))
+    check(shouldRecoverStagingOutput(resolveStagingOutputRecovery(stagingName) { null }?.metadata, verifiedTrackedExport = true))
     val documentId = provider.createDocument(ReliabilityDocumentsProvider.ROOT_ID, "audio/wav", stagingName)
     val uri = DocumentsContract.buildDocumentUriUsingTree(tree, documentId)
     val target = RecordingOutputTarget(

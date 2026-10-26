@@ -12,7 +12,7 @@ class SettingsOutputFormatPolicyTest {
             val readFormat = { format }
             format = ExportFormat.FLAC
             var commits = 0
-            assertFalse(commitSettingsForCurrentOutput(readFormat, ExportCodec.PCM_16,
+            assertFalse(commitSettingsForSelectedOutput(ExportFormat.WAV, ExportFormat.WAV, readFormat, ExportCodec.PCM_16,
                 48_000, ChannelMode.MONO, samples) { commits++; true })
             assertEquals(0, commits)
             assertEquals(ExportFormat.FLAC, format)
@@ -23,7 +23,7 @@ class SettingsOutputFormatPolicyTest {
         for (format in ExportFormat.entries) {
             var reads = 0
             var commits = 0
-            assertTrue(commitSettingsForCurrentOutput({ reads++; format }, ExportCodec.PCM_16,
+            assertTrue(commitSettingsForSelectedOutput(ExportFormat.WAV, ExportFormat.WAV, { reads++; format }, ExportCodec.PCM_16,
                 48_000, ChannelMode.MONO, PcmSampleFormat.PCM_16) { commits++; true })
             assertEquals(1, reads)
             assertEquals(1, commits)
@@ -32,13 +32,13 @@ class SettingsOutputFormatPolicyTest {
 
     @Test fun unsupportedLatestFlacRateDoesNotCommit() {
         var commits = 0
-        assertFalse(commitSettingsForCurrentOutput({ ExportFormat.FLAC }, ExportCodec.PCM_16,
+        assertFalse(commitSettingsForSelectedOutput(ExportFormat.WAV, ExportFormat.WAV, { ExportFormat.FLAC }, ExportCodec.PCM_16,
             655_351, ChannelMode.MONO, PcmSampleFormat.PCM_16) { commits++; true })
         assertEquals(0, commits)
     }
 
     @Test fun durableCommitFailureRemainsFailure() {
-        assertFalse(commitSettingsForCurrentOutput({ ExportFormat.FLAC }, ExportCodec.PCM_16,
+        assertFalse(commitSettingsForSelectedOutput(ExportFormat.WAV, ExportFormat.WAV, { ExportFormat.FLAC }, ExportCodec.PCM_16,
             48_000, ChannelMode.MONO, PcmSampleFormat.PCM_16) { false })
     }
 

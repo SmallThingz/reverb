@@ -85,11 +85,14 @@ private class LibraryTextActionSurface(context: Context, private var environment
         override fun longPressOwnershipChanged(owns: Boolean) = Unit
     }, ReverbRowIndicationSink(indication) { x, y, point -> point.set(x, y) })
     override val nativeClickEndpoint: NativeClickPhaseEndpoint = ReverbClickPhaseEndpoint(controller)
-    override val mergedRowAccessibility = ReverbMergedRowAccessibility(this, NativeMergedRowRole.BUTTON,
-        sourceState = { NativeMergedRowAccessibilityState(isEnabled, null, null, listOf(label)) },
-        invokeSourceClick = {
-            if (isEnabled && isAttachedToWindow && action != null) { action?.invoke(); true } else false
-        })
+    override val mergedRowAccessibility = run {
+        val children = listOf(label)
+        ReverbMergedRowAccessibility(this, NativeMergedRowRole.BUTTON,
+            sourceState = { NativeMergedRowAccessibilityState(isEnabled, null, null, children) },
+            invokeSourceClick = {
+                if (isEnabled && isAttachedToWindow && action != null) { action?.invoke(); true } else false
+            })
+    }
     override fun createAccessibilityNodeInfo(): AccessibilityNodeInfo? =
         if (mergedRowAccessibility.isNodePresent()) super.createAccessibilityNodeInfo() else null
     override fun addChildrenForAccessibility(outChildren: ArrayList<View>) =

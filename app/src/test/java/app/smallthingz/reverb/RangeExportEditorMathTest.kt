@@ -708,24 +708,27 @@ class RangeExportEditorMathTest {
     @Test
     fun fineAdjustAudioTargetTracksSelectedBoundaryAndHonorsBounds() {
         val values = RangeEditValues(startSeconds = 10f, endSeconds = 30f)
-        assertEquals(10.25f, projectFineAdjustShuttleTarget(
+        assertEquals(10.25f, projectRangeFineSeekPosition(
+            position = FineSeekPosition(),
             values = values,
             target = RangeEditTarget.START,
             pendingDeltaSeconds = 0.25f,
             durationSeconds = 40f,
-        ), 0.0001f)
-        assertEquals(39.95f, projectFineAdjustShuttleTarget(
+        ).toFloat(), 0.0001f)
+        assertEquals(39.95f, projectRangeFineSeekPosition(
+            position = FineSeekPosition(),
             values = values,
             target = RangeEditTarget.START,
             pendingDeltaSeconds = 100f,
             durationSeconds = 40f,
-        ), 0.0001f)
-        assertEquals(0.05f, projectFineAdjustShuttleTarget(
+        ).toFloat(), 0.0001f)
+        assertEquals(0.05f, projectRangeFineSeekPosition(
+            position = FineSeekPosition(),
             values = values,
             target = RangeEditTarget.END,
             pendingDeltaSeconds = -100f,
             durationSeconds = 40f,
-        ), 0.0001f)
+        ).toFloat(), 0.0001f)
     }
 
     @Test

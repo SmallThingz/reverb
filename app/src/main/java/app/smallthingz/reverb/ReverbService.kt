@@ -43,7 +43,6 @@ import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
-import java.util.concurrent.atomic.AtomicReference
 
 
 internal class UiForegroundOwnerTracker {
@@ -340,7 +339,10 @@ open class ReverbService : Service() {
     @Volatile
     private var configuredCaptureSnapshot: RecorderConfigurationSnapshot? = null
 
-    private val visualizationCallbacks = IdentityOwnerRegistry<VisualizationCallback>()
+    private val visualizationCallbacks = IdentityFrameMailbox<VisualizationCallback, VisualizationFrame>()
+    private val deliverVisualizationFrame: (VisualizationCallback, VisualizationFrame) -> Unit = { callback, frame ->
+        callback.frame(frame)
+    }
 
     // Audio-owner-only: idle binding and calibration do not allocate capture batches.
     private var captureReadBuffers: CaptureReadBuffers? = null
@@ -351,7 +353,6 @@ open class ReverbService : Service() {
     // Audio-owner-only; lifetimes without a visualizer never allocate FFT scratch.
     private var visualizationAnalyzer: AudioVisualizationAnalyzer? = null
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val pendingVisualizationFrame = AtomicReference<VisualizationFrame?>(null)
     private val visualizationDispatchScheduled = AtomicBoolean(false)
     private var visualizationFaulted = false
 
@@ -537,7 +538,6 @@ open class ReverbService : Service() {
             bufferClearExecutor.shutdown()
         }
         visualizationCallbacks.clearAll()
-        pendingVisualizationFrame.set(null)
         mainHandler.removeCallbacks(visualizationDispatcher)
         visualizationDispatchScheduled.set(false)
         if (::durabilitySyncExecutor.isInitialized) {
@@ -3937,34 +3937,31 @@ open class ReverbService : Service() {
 
     fun setVisualizationCallback(callback: VisualizationCallback) {
         if (!serviceOwnerRegistrationMayApply(serviceDestroying, registering = true)) return
-        if (!visualizationCallbacks.register(callback)) return
+        val registration = visualizationCallbacks.register(callback) ?: return
         // Teardown can win between the pre-check and registry mutation. Revoke this exact stale
         // owner rather than repopulating a registry on a dying Service.
         if (serviceDestroying) {
             visualizationCallbacks.unregister(callback)
             return
         }
-        pendingVisualizationFrame.set(null)
         if (!::audioHandler.isInitialized) return
         val accepted = audioHandler.post {
-            if (!serviceDestroying && visualizationCallbacks.current() === callback) {
+            if (!serviceDestroying && visualizationCallbacks.isCurrent(registration)) {
                 visualizationAnalyzerForAudioOwner().reset()
                 visualizationFaulted = false
             }
         }
         if (!accepted) {
             visualizationCallbacks.unregister(callback)
-            pendingVisualizationFrame.set(null)
         }
     }
 
     fun clearVisualizationCallback(callback: VisualizationCallback) {
         if (!visualizationCallbacks.unregister(callback)) return
-        pendingVisualizationFrame.set(null)
-        val fallback = visualizationCallbacks.current()
+        val fallback = visualizationCallbacks.currentRegistration()
         if (serviceDestroying || !::audioHandler.isInitialized) return
         audioHandler.post {
-            if (!serviceDestroying && visualizationCallbacks.current() === fallback) {
+            if (!serviceDestroying && visualizationCallbacks.isCurrent(fallback)) {
                 visualizationAnalyzer?.reset()
                 visualizationFaulted = false
             }
@@ -3973,7 +3970,6 @@ open class ReverbService : Service() {
 
     private fun clearAllVisualizationCallbacks() {
         visualizationCallbacks.clearAll()
-        pendingVisualizationFrame.set(null)
         if (serviceDestroying || !::audioHandler.isInitialized) return
         audioHandler.post {
             if (!serviceDestroying && visualizationCallbacks.current() == null) {
@@ -3987,7 +3983,7 @@ open class ReverbService : Service() {
         visualizationAnalyzer ?: AudioVisualizationAnalyzer().also { visualizationAnalyzer = it }
 
     private fun publishVisualization(array: ByteArray, offset: Int, count: Int) {
-        val callback = visualizationCallbacks.current() ?: return
+        val registration = visualizationCallbacks.currentRegistration() ?: return
         if (visualizationFaulted) return
         // The capture read itself is display-rate while the visualizer is attached. Analyze every
         // completed read: a second coarse throttle only adds input-to-pixel latency and can skip
@@ -4011,8 +4007,7 @@ open class ReverbService : Service() {
             )
             return
         }
-        if (visualizationCallbacks.current() !== callback) return
-        pendingVisualizationFrame.set(frame)
+        if (!visualizationCallbacks.publish(registration, frame)) return
         if (visualizationDispatchScheduled.compareAndSet(false, true)) {
             mainHandler.post(visualizationDispatcher)
         }
@@ -4020,16 +4015,11 @@ open class ReverbService : Service() {
 
     private val visualizationDispatcher = object : Runnable {
         override fun run() {
-            val frame = pendingVisualizationFrame.getAndSet(null)
-            val callback = visualizationCallbacks.current()
-            if (frame != null && callback != null) {
-                callback.frame(frame)
-            }
+            visualizationCallbacks.dispatchPending(deliverVisualizationFrame)
 
             visualizationDispatchScheduled.set(false)
             if (
-                pendingVisualizationFrame.get() != null &&
-                visualizationCallbacks.current() != null &&
+                visualizationCallbacks.hasPending() &&
                 visualizationDispatchScheduled.compareAndSet(false, true)
             ) {
                 mainHandler.post(this)
@@ -5651,15 +5641,6 @@ internal fun retentionMaintenanceMayRun(
     serviceDestroying: Boolean,
     foregroundServiceTimedOut: Boolean,
 ): Boolean = !serviceDestroying && !foregroundServiceTimedOut
-
-internal inline fun retentionMaintenanceKeepsServiceAlive(
-    isActive: () -> Boolean,
-    ensureProtectedLifetime: () -> Unit,
-): Boolean {
-    if (!isActive()) return false
-    ensureProtectedLifetime()
-    return isActive()
-}
 
 internal fun retentionMaintenanceHasProtectedLifetime(
     healthyListeningLifetime: Boolean,

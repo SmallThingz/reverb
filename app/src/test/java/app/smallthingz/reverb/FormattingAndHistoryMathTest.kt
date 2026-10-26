@@ -1745,9 +1745,9 @@ class FormattingAndHistoryMathTest {
 
         assertFalse(settingsEditedDuringPersistence(7L, 7L))
         assertTrue(settingsEditedDuringPersistence(7L, 8L))
-        assertFalse(settingsSnapshotHasUnsavedChanges(submitted, submitted, invalidRetentionInput = false))
-        assertTrue(settingsSnapshotHasUnsavedChanges(submitted, newer, invalidRetentionInput = false))
-        assertTrue(settingsSnapshotHasUnsavedChanges(submitted, submitted, invalidRetentionInput = true))
+        assertFalse(SettingsUiDraft.normalized(submitted).hasUnsavedChanges(submitted))
+        assertTrue(SettingsUiDraft.normalized(newer).hasUnsavedChanges(submitted))
+        assertTrue(SettingsUiDraft.normalized(submitted).copy(oneShotTimeText = "invalid", oneShotSizeText = "invalid").hasUnsavedChanges(submitted))
         assertTrue(settingsSaveMayContinueAfterCommit(hasUnsavedChanges = false))
         assertFalse(settingsSaveMayContinueAfterCommit(hasUnsavedChanges = true))
     }
@@ -1780,13 +1780,6 @@ class FormattingAndHistoryMathTest {
                 active = true, persisting = true, hasUnsavedChanges = true,
             ),
         )
-    }
-
-    @Test
-    fun settingsMoveAvailability_rejectsHiddenAndStaleResults() {
-        assertTrue(settingsMoveAvailabilityResultIsCurrent(active = true, requestGeneration = 3, currentGeneration = 3))
-        assertFalse(settingsMoveAvailabilityResultIsCurrent(active = false, requestGeneration = 3, currentGeneration = 3))
-        assertFalse(settingsMoveAvailabilityResultIsCurrent(active = true, requestGeneration = 2, currentGeneration = 3))
     }
 
     @Test

@@ -95,8 +95,11 @@ internal class SettingsStorageActionView(
         override val nativeClickEndpoint:NativeClickPhaseEndpoint get()=endpoint
         override fun containsPointerLayer(x:Float,y:Float)=reverbGroupGeometry(width.toFloat(),height.toFloat(),
             environment.textDensity.density,radius).contains(x,y)
-        override val mergedRowAccessibility=ReverbMergedRowAccessibility(this,NativeMergedRowRole.BUTTON,
-            {NativeMergedRowAccessibilityState(isEnabled,null,null,listOf(semanticChild))},{activate()})
+        override val mergedRowAccessibility=run {
+            val children=listOf(semanticChild)
+            ReverbMergedRowAccessibility(this,NativeMergedRowRole.BUTTON,
+                {NativeMergedRowAccessibilityState(isEnabled,null,null,children)},{activate()})
+        }
         init {
             importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_YES
             isClickable=true;isFocusable=true

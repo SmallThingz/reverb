@@ -283,14 +283,17 @@ internal class ReverbSpringFineSeekView(
             override val minimumTouchWidthPx get() = 48f * environment.density.density
             override val minimumTouchHeightPx get() = minimumTouchWidthPx
         }, NO_INDICATION)
-        override val mergedRowAccessibility = ReverbMergedRowAccessibility(
-            this, NativeMergedRowRole.BUTTON,
-            sourceState = { NativeMergedRowAccessibilityState(binding?.enabled == true, null, null, listOf(glyph)) },
-            invokeSourceClick = {
-                val current = binding
-                if (current?.enabled == true) { current.onTogglePlayback(); true } else false
-            },
-        )
+        override val mergedRowAccessibility = run {
+            val children = listOf(glyph)
+            ReverbMergedRowAccessibility(
+                this, NativeMergedRowRole.BUTTON,
+                sourceState = { NativeMergedRowAccessibilityState(binding?.enabled == true, null, null, children) },
+                invokeSourceClick = {
+                    val current = binding
+                    if (current?.enabled == true) { current.onTogglePlayback(); true } else false
+                },
+            )
+        }
 
         init {
             setWillNotDraw(false)

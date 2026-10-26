@@ -33,9 +33,12 @@ internal class ReverbIncidentBackView(
         contentDescription = context.getString(R.string.back)
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
     }
-    override val mergedRowAccessibility = ReverbMergedRowAccessibility(this, NativeMergedRowRole.BUTTON,
-        { NativeMergedRowAccessibilityState(true, null, null, listOf(icon)) },
-        invokeSourceClick = { onBack(); true })
+    override val mergedRowAccessibility = run {
+        val children = listOf(icon)
+        ReverbMergedRowAccessibility(this, NativeMergedRowRole.BUTTON,
+            { NativeMergedRowAccessibilityState(true, null, null, children) },
+            invokeSourceClick = { onBack(); true })
+    }
     private val indication = ReverbRowIndication.install(this, palette.ink, ValueAnimator::getDurationScale)
     private val controller = ReverbClickController(this, object : NativeClickEnvironment {
         override val nativeInputRoot get() = pointerInputRoot

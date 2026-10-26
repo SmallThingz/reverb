@@ -30,8 +30,11 @@ internal class SettingsToggleRowView(
     private val switch=ReverbMaterialSwitchView(context,environment.palette,initialChecked,initialEnabled)
     private val interactions=OnboardingNativeInteractionsFactory(inputRoot).row(this)
     override val nativeClickEndpoint:NativeClickPhaseEndpoint get()=interactions.pointerEndpoint
-    override val mergedRowAccessibility=ReverbMergedRowAccessibility(this,NativeMergedRowRole.SWITCH,
-        {NativeMergedRowAccessibilityState(enabled,checked,null,listOf(label))},{activate()})
+    override val mergedRowAccessibility=run {
+        val children=listOf(label)
+        ReverbMergedRowAccessibility(this,NativeMergedRowRole.SWITCH,
+            {NativeMergedRowAccessibilityState(enabled,checked,null,children)},{activate()})
+    }
     private var gap=0
     private var labelWidth=0
     init {

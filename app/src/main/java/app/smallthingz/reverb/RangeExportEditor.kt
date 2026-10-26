@@ -578,22 +578,6 @@ internal fun editTargetValue(values: RangeEditValues, target: RangeEditTarget): 
     RangeEditTarget.END -> values.endSeconds
 }
 
-internal fun projectFineAdjustShuttleTarget(
-    values: RangeEditValues,
-    target: RangeEditTarget,
-    pendingDeltaSeconds: Float,
-    durationSeconds: Float,
-): Float {
-    if (pendingDeltaSeconds == 0f) return editTargetValue(values, target)
-    val projected = adjustRangeEditTarget(
-        values = values,
-        target = target,
-        requestedSeconds = editTargetValue(values, target) + pendingDeltaSeconds,
-        durationSeconds = durationSeconds,
-    )
-    return editTargetValue(projected.values, target)
-}
-
 internal fun rangeTimelineDurationSeconds(value: Float): Float =
     value.takeIf { it.isFinite() && it > 0f } ?: 0.05f
 
@@ -929,8 +913,6 @@ internal class RangeExportEditorState(
         isScrubbing = false
         if (fineAdjustShuttleActive) {
             fineAdjustShuttleActive = false
-            previewController.stopShuttle()
-            isScrubbing = false
         }
         previewController.stop()
         isPlaying = false

@@ -100,9 +100,21 @@
       ]
     },
     "src/main/java/app/smallthingz/reverb/RangeExportEditor.kt": {
-      "compiled_sha256": "d5f04490ad74923101252804e0ce5900dc64d354d1b631c19953fdb0ed986eba",
+      "compiled_sha256": "07f72d1ae044509baaaa51f44002237d338a9a60fddd13c3aaca7f30d4813e82",
       "normalized_sha256": "b8cec9f92e76daa2d333fa3d1dee063540f0391f813708b906d25780720fbac6",
       "inverse": [
+        {
+          "from": "        if (fineAdjustShuttleActive) {\n            fineAdjustShuttleActive = false\n        }\n        previewController.stop()\n",
+          "to": "        if (fineAdjustShuttleActive) {\n            fineAdjustShuttleActive = false\n            previewController.stopShuttle()\n            isScrubbing = false\n        }\n        previewController.stop()\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "internal fun rangeTimelineDurationSeconds(value: Float): Float =\n",
+          "to": "internal fun projectFineAdjustShuttleTarget(\n    values: RangeEditValues,\n    target: RangeEditTarget,\n    pendingDeltaSeconds: Float,\n    durationSeconds: Float,\n): Float {\n    if (pendingDeltaSeconds == 0f) return editTargetValue(values, target)\n    val projected = adjustRangeEditTarget(\n        values = values,\n        target = target,\n        requestedSeconds = editTargetValue(values, target) + pendingDeltaSeconds,\n        durationSeconds = durationSeconds,\n    )\n    return editTargetValue(projected.values, target)\n}\n\ninternal fun rangeTimelineDurationSeconds(value: Float): Float =\n",
+          "count": 1,
+          "word": false
+        },
         {
           "to": "    fun beginBoundaryEdit(target: RangeEditTarget) {\n        selectTarget(target)\n        pausePreview()\n        previewController.stop()\n        auditionSelectedBoundary(force = true)\n",
           "count": 1,
@@ -636,6 +648,24 @@
           "from": "app.smallthingz.nativeui.runtime.",
           "to": "androidx.compose.runtime.",
           "count": 4,
+          "word": false
+        }
+      ]
+    },
+    "src/main/java/app/smallthingz/reverb/SettingsScreen.kt": {
+      "compiled_sha256": "cf4d2c91d07185a03bdc0a52623a7c93e68c6ef126898cb9bca35acf5fb9cdbe",
+      "normalized_sha256": "eb48558734376d19fae5dc271ba987574a91a4df64ea489fbd710961518f42a1",
+      "inverse": [
+        {
+          "from": "internal suspend fun <T> runCommittedSettingsMove(\n",
+          "to": "internal fun settingsMoveAvailabilityResultIsCurrent(\n    active: Boolean,\n    requestGeneration: Int,\n    currentGeneration: Int,\n): Boolean = active && requestGeneration == currentGeneration\n\ninternal suspend fun <T> runCommittedSettingsMove(\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "internal fun settingsSaveMayContinueAfterCommit(hasUnsavedChanges: Boolean): Boolean =\n",
+          "to": "internal fun settingsSnapshotHasUnsavedChanges(\n    durableSnapshot: SettingsSnapshot,\n    currentSnapshot: SettingsSnapshot,\n    invalidRetentionInput: Boolean,\n): Boolean = durableSnapshot != currentSnapshot || invalidRetentionInput\n\ninternal fun settingsSaveMayContinueAfterCommit(hasUnsavedChanges: Boolean): Boolean =\n",
+          "count": 1,
           "word": false
         }
       ]

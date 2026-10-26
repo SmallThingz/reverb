@@ -128,12 +128,6 @@ internal fun settingsRetentionModeChange(
     if (currentMode == requestedMode) null
     else SettingsRetentionModeChange(requestedMode, preserveInputDrafts = true)
 
-internal fun settingsSnapshotHasUnsavedChanges(
-    durableSnapshot: SettingsSnapshot,
-    currentSnapshot: SettingsSnapshot,
-    invalidRetentionInput: Boolean,
-): Boolean = durableSnapshot != currentSnapshot || invalidRetentionInput
-
 internal fun settingsSaveMayContinueAfterCommit(hasUnsavedChanges: Boolean): Boolean =
     !hasUnsavedChanges
 
@@ -153,12 +147,6 @@ internal fun settingsSupersededHydrationMayReleaseInteraction(
     persisting: Boolean,
     hasUnsavedChanges: Boolean,
 ): Boolean = active && !persisting && hasUnsavedChanges
-
-internal fun settingsMoveAvailabilityResultIsCurrent(
-    active: Boolean,
-    requestGeneration: Int,
-    currentGeneration: Int,
-): Boolean = active && requestGeneration == currentGeneration
 
 internal suspend fun <T> runCommittedSettingsMove(
     persistSettings: suspend () -> Boolean,

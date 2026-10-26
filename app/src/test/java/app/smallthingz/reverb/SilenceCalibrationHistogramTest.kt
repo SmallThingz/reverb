@@ -120,7 +120,7 @@ class SilenceCalibrationHistogramTest {
         val durable = baseline.copy(silenceHistogram = encoded())
         val measuredAgain = durable.copy(silenceHistogram = encoded(1f))
         assertEquals(durable.silenceGate, measuredAgain.silenceGate)
-        assertTrue(settingsSnapshotHasUnsavedChanges(durable, measuredAgain, false))
+        assertTrue(SettingsUiDraft.normalized(measuredAgain).hasUnsavedChanges(durable))
         var restored = SettingsDraftRestoration.restore(saveDraft(measuredAgain, durable))
         repeat(2) {
             restored = SettingsDraftRestoration.restore(restored.save(true, false, false, SettingsSnapshot()) {
