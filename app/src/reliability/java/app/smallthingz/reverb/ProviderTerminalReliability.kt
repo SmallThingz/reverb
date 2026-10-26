@@ -7,11 +7,13 @@ import android.content.ServiceConnection
 import android.net.Uri
 import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.FutureTask
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
@@ -121,7 +123,6 @@ private fun writeTerminalFixture(context: Context, tree: Uri): Pair<RecordingOut
 private fun verifyUnrequestedExportTimeout(context: Context, tree: Uri, provider: ReliabilityDocumentsProvider) {
     val prefs = getRecorderPreferences(context)
     check(prefs.edit().putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false).commit())
-    check(setConfiguredExportTreeUri(context, tree))
     val connected = CountDownLatch(1)
     var service: ReverbService? = null
     val connection = object : ServiceConnection {
@@ -131,23 +132,43 @@ private fun verifyUnrequestedExportTimeout(context: Context, tree: Uri, provider
         }
         override fun onServiceDisconnected(name: ComponentName) = Unit
     }
-    check(context.bindService(Intent(context, ReverbService::class.java), connection, Context.BIND_AUTO_CREATE))
     val root = File(context.filesDir, "terminal-source-${UUID.randomUUID()}")
     val pcm = ByteArray(3200) { (it * 31 + 3).toByte() }
-    val store = PersistentAudioChunkStore(root)
+    var bound = false
+    var treeConfigured = false
+    var store: PersistentAudioChunkStore? = null
+    var firstLease: PersistentAudioChunkStore.RangeLease? = null
+    var retryLease: PersistentAudioChunkStore.RangeLease? = null
+    var executor: ExecutorService? = null
+    var exportStarted = false
+    var primaryFailure: Throwable? = null
+    val main = Handler(Looper.getMainLooper())
+    fun awaitMainCallbacks() {
+        val fence = FutureTask { Unit }
+        check(main.post(fence))
+        fence.get(15, TimeUnit.SECONDS)
+    }
     try {
+        treeConfigured = setConfiguredExportTreeUri(context, tree)
+        check(treeConfigured)
+        bound = context.bindService(Intent(context, ReverbService::class.java), connection, Context.BIND_AUTO_CREATE)
+        check(bound)
         check(connected.await(15, TimeUnit.SECONDS))
         val recorder = requireNotNull(service)
+        val worker = ReverbService::class.java.getDeclaredField("exportWorkExecutor").apply { isAccessible = true }
+            .get(recorder) as ExecutorService
+        executor = worker
         val export = ProviderTerminalExportAdapter(recorder)
+        val source = PersistentAudioChunkStore(root)
+        store = source
         val initialized = FutureTask { Unit }
         val audio = ReverbService::class.java.getDeclaredField("audioHandler").apply { isAccessible = true }
             .get(recorder) as Handler
         check(audio.post(initialized))
         initialized.get(15, TimeUnit.SECONDS)
-        store.configure(RetentionMode.SIZE, 1_048_576L, 16000, 1, PcmSampleFormat.PCM_16)
-        check(store.append(pcm, 0, pcm.size) == pcm.size)
-        store.sealActiveChunk()
-        val lease = requireNotNull(store.acquireRange(0.0, store.durationSeconds()))
+        source.configure(RetentionMode.SIZE, 1_048_576L, 16000, 1, PcmSampleFormat.PCM_16)
+        check(source.append(pcm, 0, pcm.size) == pcm.size)
+        source.sealActiveChunk()
         val terminal = AtomicReference<String>()
         val originalError = AtomicReference<Throwable>()
         val delivered = CountDownLatch(1)
@@ -161,17 +182,20 @@ private fun verifyUnrequestedExportTimeout(context: Context, tree: Uri, provider
             override fun fileCancelled() { terminal.set("cancelled"); delivered.countDown() }
         }
         val token = requireNotNull(export.begin(receiver))
+        exportStarted = true
         val config = recorder.getConfigurationSnapshot().copy(
+            format = ExportFormat.WAV,
+            codec = ExportCodec.PCM_16,
             sampleRate = 16000,
             channelMode = ChannelMode.entries.single { it.channelCount == 1 },
             sampleFormat = PcmSampleFormat.PCM_16,
         )
+        val lease = requireNotNull(source.acquireRange(0.0, source.durationSeconds())).also { firstLease = it }
         export.submit(lease, receiver, "terminal-timeout", token, config)
         check(delivered.await(15, TimeUnit.SECONDS)) { "Export never delivered its terminal result" }
         // Terminal delivery can precede worker cleanup. Wait for that owned worker before unbinding.
-        val executor = ReverbService::class.java.getDeclaredField("exportWorkExecutor").apply { isAccessible = true }
-            .get(recorder) as java.util.concurrent.ExecutorService
-        executor.submit {}.get(15, TimeUnit.SECONDS)
+        worker.submit {}.get(15, TimeUnit.SECONDS)
+        awaitMainCallbacks()
         check(terminal.get() == "failure") { "Unrequested provider timeout was reported as ${terminal.get()}" }
         check(originalError.get() is java.net.SocketTimeoutException) { "Original timeout failure was not preserved" }
         check(!recorder.cancelCurrentExport()) { "Failed export retained its busy token" }
@@ -186,10 +210,11 @@ private fun verifyUnrequestedExportTimeout(context: Context, tree: Uri, provider
             override fun fileCancelled() { retried.countDown() }
         }
         val retryToken = requireNotNull(export.begin(retryReceiver))
-        val retryLease = requireNotNull(store.acquireRange(0.0, store.durationSeconds()))
-        export.submit(retryLease, retryReceiver, "terminal-retry", retryToken, config)
+        val retry = requireNotNull(source.acquireRange(0.0, source.durationSeconds())).also { retryLease = it }
+        export.submit(retry, retryReceiver, "terminal-retry", retryToken, config)
         check(retried.await(15, TimeUnit.SECONDS))
-        executor.submit {}.get(15, TimeUnit.SECONDS)
+        worker.submit {}.get(15, TimeUnit.SECONDS)
+        awaitMainCallbacks()
         val recording = checkNotNull(saved.get()) { "A fresh export failed after the provider recovered" }
         val savedBytes = requireNotNull(openRecordingInputStream(context, recording)).use { it.readBytes() }
         check(savedBytes.contentEquals(buildWavHeaderBytes(16000, 1, PcmSampleFormat.PCM_16, pcm.size.toLong()) + pcm))
@@ -205,16 +230,44 @@ private fun verifyUnrequestedExportTimeout(context: Context, tree: Uri, provider
         check(cancelled.await(15, TimeUnit.SECONDS)) { "User cancellation lost its neutral terminal" }
         check(!recorder.cancelCurrentExport())
         val retained = ByteArrayOutputStream()
-        requireNotNull(store.acquireRange(0.0, store.durationSeconds())).use { original ->
+        requireNotNull(source.acquireRange(0.0, source.durationSeconds())).use { original ->
             original.readNormalized(16000, 1, PcmSampleFormat.PCM_16) { bytes, offset, count ->
                 retained.write(bytes, offset, count)
                 count
             }
         }
         check(pcm.contentEquals(retained.toByteArray())) { "Failed export changed retained audio" }
+    } catch (error: Throwable) {
+        primaryFailure = error
+        throw error
     } finally {
-        store.close()
-        context.unbindService(connection)
-        check(setConfiguredExportTreeUri(context, null))
+        var cleanupFailure: Throwable? = null
+        fun cleanup(action: () -> Unit) {
+            try { action() } catch (error: Throwable) {
+                if (cleanupFailure == null) cleanupFailure = error
+                else if (cleanupFailure !== error) cleanupFailure!!.addSuppressed(error)
+            }
+        }
+        // This fixture exclusively owns the isolated QA export. Keep its store, leases and tree
+        // intact if cancellation/draining cannot establish that the worker has released them.
+        if (primaryFailure != null && exportStarted) cleanup { service?.cancelCurrentExport() }
+        var drained = false
+        cleanup {
+            executor?.submit {}?.get(15, TimeUnit.SECONDS)
+            awaitMainCallbacks()
+            drained = true
+        }
+        if (drained) {
+            cleanup { val closing = firstLease; firstLease = null; closing?.close() }
+            cleanup { val closing = retryLease; retryLease = null; closing?.close() }
+            cleanup { val closing = store; store = null; closing?.close() }
+        } else cleanup { error("QA export worker/callbacks did not drain; synthetic store, leases and tree retained") }
+        if (bound) cleanup { bound = false; context.unbindService(connection) }
+        if (drained && treeConfigured) cleanup { check(setConfiguredExportTreeUri(context, null)) }
+        cleanupFailure?.let { error ->
+            if (primaryFailure != null) {
+                if (primaryFailure !== error) primaryFailure!!.addSuppressed(error)
+            } else throw error
+        }
     }
 }

@@ -42,6 +42,9 @@ internal fun verifyNativeOnboardingAudioFlow(instrumentation: Instrumentation, r
         .put("unqualified", JSONArray(listOf("audio capture", "production owner Finish transaction",
             "system permission prompts/automatic sequence", "TalkBack delivery", "physical keyboard delivery",
             "released pixel parity", "switch animation timing", "production preference persistence")))
+    writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+        output.write(result.toString(2).toByteArray(Charsets.UTF_8))
+    }
     var host: NativeParityActivity? = null
     var fixture: OnboardingAudioQaFixture? = null
     var failure: Throwable? = null
@@ -271,7 +274,9 @@ internal fun verifyNativeOnboardingAudioFlow(instrumentation: Instrumentation, r
         if (failure != null) result.put("passed", false)
         result.put("failure", failure?.stackTraceToString() ?: JSONObject.NULL)
         val writeFailure = captureNativeParityCleanup(failure) {
-            File(directory, "result.json").writeText(result.toString(2))
+            writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+                output.write(result.toString(2).toByteArray(Charsets.UTF_8))
+            }
         }
         if (failure == null) writeFailure?.let { throw it }
         report.appendLine("Onboarding audio flow evidence: ${directory.absolutePath}")

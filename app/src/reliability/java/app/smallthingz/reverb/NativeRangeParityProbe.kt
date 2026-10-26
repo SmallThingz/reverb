@@ -81,6 +81,7 @@ internal fun verifyNativeRangeParity(instrumentation: Instrumentation, report: S
         .put("limits", "Settled pixels only; no opening-frame alignment, endpoint pointer/audition, FineSeek playback, export, provider/codec, system inset or full accessibility-service proof")
         .put("qa_preference_digest_format", QA_PREFERENCE_DIGEST_FORMAT)
         .put("cases", entries).put("passed", false)
+    writeRangeEvidence(directory, result, null)
     val preferencesBefore = rangePreferenceDigest(context)
     var host: NativeParityActivity? = null
     var board: RangeParityBoard? = null
@@ -623,8 +624,12 @@ private fun rangeSha256(bytes: ByteArray) =
 private fun rangePreferenceDigest(context: android.content.Context) =
     qaPreferenceDigest(getRecorderPreferences(context).all)
 private fun writeRangeEvidence(directory: File, result: JSONObject, primary: Throwable?) {
-    try { File(directory, "result.json").writeText(result.toString(2)) }
-    catch (error: Throwable) { if (primary == null) throw error else primary.addSuppressed(error) }
+    try {
+        writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+            output.write(result.toString(2).toByteArray(Charsets.UTF_8))
+        }
+    }
+    catch (error: Throwable) { if (primary == null) throw error else if (primary !== error) primary.addSuppressed(error) }
 }
 
 /** Observation-only projection: each renderer still mutates its own actual state implementation. */

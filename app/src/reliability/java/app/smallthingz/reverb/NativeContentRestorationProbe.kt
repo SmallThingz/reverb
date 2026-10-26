@@ -29,16 +29,23 @@ import kotlin.math.roundToInt
  * native save/restore owners; it does not pretend to be process death or an Activity route test.
  */
 internal fun verifyNativeContentRestoration(instrumentation: Instrumentation, report: StringBuilder) {
-    val host = launchNativeParityActivity(instrumentation)
+    val context = instrumentation.targetContext
+    check(context.packageName == "app.smallthingz.reverb.nativeparity.reliability")
+    check(context.applicationContext.javaClass == android.app.Application::class.java)
     val result = JSONObject().put("passed", false)
     val cases = JSONArray()
     result.put("cases", cases)
-    val directory = File(host.filesDir, "native-content-restoration-${System.currentTimeMillis()}")
+    val directory = File(context.filesDir, "native-content-restoration-${System.currentTimeMillis()}")
+    check(directory.mkdirs())
+    writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+        output.write(result.toString(2).toByteArray(Charsets.UTF_8))
+    }
+    var activity: NativeParityActivity? = null
     var lane: RestorationLane? = null
     var failure: Throwable? = null
     var preferencesBefore: Map<String, *>? = null
     try {
-        check(directory.mkdirs())
+        val host = launchNativeParityActivity(instrumentation).also { activity = it }
         preferencesBefore = getRecorderPreferences(host).all.toMap()
         requireNativeParityHost(instrumentation, host)
         awaitNativeParityDraw(instrumentation, host.fixtureRoot)
@@ -113,14 +120,18 @@ internal fun verifyNativeContentRestoration(instrumentation: Instrumentation, re
         }
         cleanup { nativeParityOnMain(instrumentation) { lane?.close() } }
         cleanup { preferencesBefore?.let { before ->
-            check(getRecorderPreferences(host).all == before) {
+            check(getRecorderPreferences(context).all == before) {
                 "Content restoration changed the isolated QA recorder preferences"
             }
         } }
-        cleanup { nativeParityOnMain(instrumentation) { host.finish() } }
+        cleanup { nativeParityOnMain(instrumentation) { activity?.finish() } }
         result.put("passed", failure == null)
         failure?.let { result.put("failure", it.stackTraceToString()) }
-        cleanup { File(directory, "result.json").writeText(result.toString(2)) }
+        cleanup {
+            writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+                output.write(result.toString(2).toByteArray(Charsets.UTF_8))
+            }
+        }
         report.appendLine("PARITY_EVIDENCE ${directory.name}/result.json")
     }
     failure?.let { throw it }

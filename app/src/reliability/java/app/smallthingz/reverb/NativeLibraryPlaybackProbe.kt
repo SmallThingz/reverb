@@ -17,15 +17,17 @@ internal fun verifyNativeLibraryPlayback(instrumentation: Instrumentation, repor
         .put("scope", "One Light/LTR pair: prepared expanded player, initial autoplay, explicit Play/progress/Pause, paused waveform seek, actual menu Trim and Cancel")
         .put("limits", "Visible progress plus native presentation; no audible-output measurement, exact scheduler timing, first-display-frame claim, native detached-bind order claim, Save or capture. Settled seek/Trim/Cancel pixels compared exactly.")
         .put("cases", cases).put("comparisons", comparisons).put("player_preparation", JSONArray()).put("passed", false)
+    fun persist() = writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+        output.write(result.toString(2).toByteArray(Charsets.UTF_8))
+    }
+    persist()
     val fixtures = LibraryOwnedFixtures(context, directory)
     var host: NativeParityActivity? = null
     var board: LibraryParityBoard? = null
     var primary: Throwable? = null
     var completed = 0
     var matches = 0
-    fun persist() = File(directory, "result.json").writeText(result.toString(2))
     try {
-        persist()
         fixtures.requireEmptyBaseline()
         val records = fixtures.create()
         check(records.first().durationMillis == 3_000L) { "Unexpected existing fixture order/duration" }

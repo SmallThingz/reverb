@@ -72,6 +72,8 @@ internal fun verifyNativeBrandParity(instrumentation: Instrumentation, report: S
         .put("sdk", Build.VERSION.SDK_INT).put("device", Build.MANUFACTURER + "/" + Build.MODEL)
         .put("resource_contexts", resourceContexts)
         .put("cases", cases)
+    result.put("passed", false)
+    writeBrandEvidence(directory, result, null)
     var activity: NativeParityActivity? = null
     var activeBoards: BrandParityBoards? = null
     var expected = 0
@@ -165,10 +167,14 @@ internal fun verifyNativeBrandParity(instrumentation: Instrumentation, report: S
 }
 
 private fun writeBrandEvidence(directory: File, result: JSONObject, primary: Throwable?) {
-    try { File(directory, "result.json").writeText(result.toString(2)) }
+    try {
+        writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+            output.write(result.toString(2).toByteArray(Charsets.UTF_8))
+        }
+    }
     catch (error: Throwable) {
         if (primary == null) throw error
-        primary.addSuppressed(error)
+        if (primary !== error) primary.addSuppressed(error)
     }
 }
 

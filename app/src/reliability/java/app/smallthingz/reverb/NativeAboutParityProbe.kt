@@ -89,6 +89,10 @@ internal fun verifyNativeAboutParity(
         .put("motion_phase_qualified", false)
         .put("limits", "Own-window synthetic activation and read-only semantics, plus explicitly targeted host keyboard-mode entry; actual system predictive dispatch, TalkBack and stopped/resumed Activity remain separate")
         .put("cases", entries)
+    result.put("passed", false)
+    writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+        output.write(result.toString(2).toByteArray(Charsets.UTF_8))
+    }
     var host: NativeParityActivity? = null
     var current: AboutFixture? = null
     var failure: Throwable? = null
@@ -164,7 +168,11 @@ internal fun verifyNativeAboutParity(
                 current = null
                 cleanup = captureNativeParityCleanup(cleanup) { owned?.let { entry.put("unfinished_trace", it.trace) } }
                 cleanup = captureNativeParityCleanup(cleanup) { owned?.close() }
-                cleanup = captureNativeParityCleanup(cleanup) { File(directory, "result.json").writeText(result.toString(2)) }
+                cleanup = captureNativeParityCleanup(cleanup) {
+                    writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+                        output.write(result.toString(2).toByteArray(Charsets.UTF_8))
+                    }
+                }
                 if (caseFailure == null) cleanup?.let { throw it }
             }
         }
@@ -186,7 +194,9 @@ internal fun verifyNativeAboutParity(
                                 // A pending command can have an unknown outcome if the lane stops.
                                 result.put("physical_input_injected", JSONObject.NULL)
                             }
-                            File(directory, "result.json").writeText(result.toString(2))
+                            writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+                                output.write(result.toString(2).toByteArray(Charsets.UTF_8))
+                            }
                         }
                         result.put("physical_input_injected", true)
                     }
@@ -233,7 +243,9 @@ internal fun verifyNativeAboutParity(
                 current = null
             }
             entry.put("passed", (0 until runs.length()).all { runs.getJSONObject(it).getBoolean("exercised") })
-            File(directory, "result.json").writeText(result.toString(2))
+            writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+                output.write(result.toString(2).toByteArray(Charsets.UTF_8))
+            }
         }
         val mismatches = (0 until entries.length()).count { !entries.getJSONObject(it).optBoolean("passed") }
         check(mismatches == 0) { "About parity has $mismatches failing case(s); preserve result.json" }
@@ -256,7 +268,11 @@ internal fun verifyNativeAboutParity(
             result.put("cleanup_error", android.util.Log.getStackTraceString(error)).put("passed", false)
         }
         report.append("PARITY_EVIDENCE ").append(directory.name).append("/result.json\n")
-        try { File(directory, "result.json").writeText(result.toString(2)) }
+        try {
+            writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+                output.write(result.toString(2).toByteArray(Charsets.UTF_8))
+            }
+        }
         catch (writeError: Throwable) {
             val previous = failure ?: cleanupError
             if (previous == null) throw writeError else appendNativeParityFailure(previous, writeError)

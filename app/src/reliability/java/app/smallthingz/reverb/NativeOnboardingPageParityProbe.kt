@@ -122,6 +122,7 @@ internal fun verifyNativeOnboardingPageParity(instrumentation: Instrumentation, 
         .put("scope", "Released page content including scroll viewport; excludes screen footer/pager/system insets/background noise")
         .put("comparison", "Exact ARGB; repeat stability; exact text geometry and native exposed-node payloads; no masks")
         .put("cases", entries).put("passed", false)
+    writeOnboardingParityEvidence(directory, result, null)
     var activity: NativeParityActivity? = null
     var activeRender: PageRender? = null
     var primary: Throwable? = null
@@ -273,7 +274,11 @@ internal fun verifyNativeOnboardingPageParity(instrumentation: Instrumentation, 
 }
 
 private fun writeOnboardingParityEvidence(directory: File, result: JSONObject, failure: Throwable?) {
-    try { File(directory, "result.json").writeText(result.toString(2)) }
+    try {
+        writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+            output.write(result.toString(2).toByteArray(Charsets.UTF_8))
+        }
+    }
     catch (error: Throwable) { if (failure == null) throw error else appendNativeParityFailure(failure, error) }
 }
 

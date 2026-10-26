@@ -49,6 +49,10 @@ internal fun verifyNativeFontNotifications(instrumentation: Instrumentation, rep
         .put("test", "Native EmojiCompat readiness callback lifecycle")
         .put("scope", "Empty metadata readiness and attached View invalidation; glyph rasterization is separate")
         .put("retired_cases", JSONArray(listOf("Compose downloadable AndroidFont", "Snapshot write filtering")))
+    result.put("passed", false)
+    writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+        output.write(result.toString(2).toByteArray(Charsets.UTF_8))
+    }
     var previous: EmojiCompat? = null
     var activity: NativeParityActivity? = null
     var terminalFailure: Throwable? = null
@@ -259,10 +263,14 @@ internal fun verifyNativeFontNotifications(instrumentation: Instrumentation, rep
         }
         result.put("passed", terminalFailure == null && cleanupFailure == null && cases.length() == 6)
         report.append("PARITY_EVIDENCE ").append(directory.name).append("/result.json\n")
-        try { File(directory, "result.json").writeText(result.toString(2)) }
+        try {
+            writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+                output.write(result.toString(2).toByteArray(Charsets.UTF_8))
+            }
+        }
         catch (error: Throwable) {
             val primary = terminalFailure ?: cleanupFailure
-            if (primary == null) throw error else primary.addSuppressed(error)
+            if (primary == null) throw error else if (primary !== error) primary.addSuppressed(error)
         }
         if (terminalFailure == null) cleanupFailure?.let { throw it }
     }

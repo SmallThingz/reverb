@@ -82,6 +82,9 @@ internal fun verifyNativeRetentionInputParity(instrumentation: Instrumentation, 
             "hardware keys/undo", "real IME session/composition ordering", "accessibility editable actions",
             "keyed focus and keyboard show/hide", "API28 native cursor geometry")))
         .put("cases", entries).put("passed", false)
+    writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+        output.write(result.toString(2).toByteArray(Charsets.UTF_8))
+    }
     var host: NativeParityActivity? = null
     var primary: Throwable? = null
     var completed = 0
@@ -165,10 +168,14 @@ internal fun verifyNativeRetentionInputParity(instrumentation: Instrumentation, 
         result.put("completed_cases", completed).put("mismatched_cases", mismatches)
             .put("passed", primary == null && cleanup == null && completed == retentionCases.size && mismatches == 0)
         report.append("PARITY_EVIDENCE ").append(directory.name).append("/result.json\n")
-        try { File(directory, "result.json").writeText(result.toString(2)) }
+        try {
+            writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+                output.write(result.toString(2).toByteArray(Charsets.UTF_8))
+            }
+        }
         catch (error: Throwable) {
             val owner = primary ?: cleanup
-            if (owner == null) throw error else owner.addSuppressed(error)
+            if (owner == null) throw error else if (owner !== error) owner.addSuppressed(error)
         }
         if (primary == null) cleanup?.let { throw it }
     }

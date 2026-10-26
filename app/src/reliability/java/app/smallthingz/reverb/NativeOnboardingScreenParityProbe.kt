@@ -62,6 +62,9 @@ internal fun verifyNativeOnboardingScreenParity(instrumentation: Instrumentation
         .put("comparison", "exact unmasked ARGB and existing complete payload signatures; raw trees retained")
         .put("unqualified", JSONArray(listOf("gesture/frame-phase parity", "TalkBack delivery", "system permission UI")))
         .put("cases", entries).put("native_focus_checks", nativeFocusChecks).put("passed", false)
+    writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+        output.write(result.toString(2).toByteArray(Charsets.UTF_8))
+    }
     var host: NativeParityActivity? = null
     var active: ScreenParityRender? = null
     var failure: Throwable? = null
@@ -188,7 +191,9 @@ internal fun verifyNativeOnboardingScreenParity(instrumentation: Instrumentation
         if (failure != null) result.put("passed", false)
         result.put("failure", failure?.stackTraceToString() ?: JSONObject.NULL)
         val writeFailure = captureNativeParityCleanup(failure) {
-            File(directory, "result.json").writeText(result.toString(2))
+            writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+                output.write(result.toString(2).toByteArray(Charsets.UTF_8))
+            }
         }
         if (failure == null) writeFailure?.let { throw it }
         report.append("Full onboarding evidence: ").append(directory.absolutePath).append('\n')

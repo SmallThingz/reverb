@@ -63,6 +63,9 @@ internal fun verifyNativeLibraryAdmissionRegression(instrumentation: Instrumenta
     val directory = File(instrumentation.targetContext.filesDir, "native-library-admission-${System.currentTimeMillis()}")
     check(directory.mkdir())
     val result = JSONObject().put("selector", "native_library_admission").put("passed", false)
+    writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+        output.write(result.toString(2).toByteArray(Charsets.UTF_8))
+    }
     var activity: NativeParityActivity? = null
     var render: MainSettingsParityRender? = null
     var failure: Throwable? = null
@@ -86,7 +89,9 @@ internal fun verifyNativeLibraryAdmissionRegression(instrumentation: Instrumenta
         awaitNativeParityDraw(instrumentation, current.board)
         result.put("admission", current.verifyLibraryAdmission(instrumentation, automation) { partial ->
             result.put("admission", partial)
-            File(directory, "result.json").writeText(result.toString(2))
+            writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+                output.write(result.toString(2).toByteArray(Charsets.UTF_8))
+            }
         })
         check(nativeParityOnMain(instrumentation) { current.forbiddenCalls == 0 })
         result.put("passed", true)
@@ -101,7 +106,11 @@ internal fun verifyNativeLibraryAdmissionRegression(instrumentation: Instrumenta
         catch (cleanup: Throwable) { record(cleanup) }
         result.put("passed", result.getBoolean("passed") && failure == null)
             .put("failure", failure?.stackTraceToString() ?: JSONObject.NULL)
-        try { File(directory, "result.json").writeText(result.toString(2)) }
+        try {
+            writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+                output.write(result.toString(2).toByteArray(Charsets.UTF_8))
+            }
+        }
         catch (write: Throwable) { record(write) }
         report.append("Library admission evidence: ").append(directory.absolutePath).append('\n')
     }
@@ -136,6 +145,9 @@ private fun verifyNativeMainSettingsParity(
         .put("raw_grain_parity", "Unqualified by this supplemental selector; raw selector remains separate")
         .put("settings_radio_scope", "Actual platform Theme and Time/Size groups at the existing Settings, preview and Undo captures; current retention selection only, no additional actions or TalkBack delivery claim")
         .put("settings_radio_comparisons", radioComparisons)
+    writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+        output.write(result.toString(2).toByteArray(Charsets.UTF_8))
+    }
     var activity: NativeParityActivity? = null
     var render: MainSettingsParityRender? = null
     var failure: Throwable? = null
@@ -205,7 +217,9 @@ private fun verifyNativeMainSettingsParity(
                             val nodes = onboardingNativeNodeEvidence(instrumentation, host, current.board,
                                 automation) { partial ->
                                 traversal.put("platform_partial", partial)
-                                File(directory, "result.json").writeText(result.toString(2))
+                                writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+                                    output.write(result.toString(2).toByteArray(Charsets.UTF_8))
+                                }
                             }
                             // Retain both complete traversals even if their semantic comparison fails.
                             traversal.put("platform", nodes)
@@ -230,7 +244,9 @@ private fun verifyNativeMainSettingsParity(
                         val nodes = onboardingNativeNodeEvidence(instrumentation, host, current.board,
                             automation, includeCollections = true) { partial ->
                             entry.put("platform_partial", partial)
-                            File(directory, "result.json").writeText(result.toString(2))
+                            writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+                                output.write(result.toString(2).toByteArray(Charsets.UTF_8))
+                            }
                         }
                         entry.put("platform", nodes)
                         val expectedTheme = if (step == "preview") target else initialMode
@@ -244,7 +260,9 @@ private fun verifyNativeMainSettingsParity(
                                 val traversed = onboardingNativeNodeEvidence(instrumentation, host,
                                     current.board, automation, includeCollections = true) { partial ->
                                     traversal.put("platform_partial", partial)
-                                    File(directory, "result.json").writeText(result.toString(2))
+                                    writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+                                        output.write(result.toString(2).toByteArray(Charsets.UTF_8))
+                                    }
                                 }
                                 traversal.put("platform", traversed)
                                 val traversedGroups = mainSettingsRadioGroups(traversed.getJSONArray("raw"),
@@ -257,7 +275,9 @@ private fun verifyNativeMainSettingsParity(
                             entry.put("layer_admission", verifyNativeMainLayerAdmission(instrumentation,
                                 host, current.board) { partial ->
                                 entry.put("layer_admission", partial)
-                                File(directory, "result.json").writeText(result.toString(2))
+                                writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+                                    output.write(result.toString(2).toByteArray(Charsets.UTF_8))
+                                }
                             })
                         }
                     }
@@ -358,7 +378,11 @@ private fun verifyNativeMainSettingsParity(
         catch (evidenceError: Throwable) { record(evidenceError) }
         result.put("passed", comparisonSucceeded && failure == null)
             .put("failure", failure?.stackTraceToString() ?: JSONObject.NULL)
-        try { File(directory, "result.json").writeText(result.toString(2)) }
+        try {
+            writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+                output.write(result.toString(2).toByteArray(Charsets.UTF_8))
+            }
+        }
         catch (writeError: Throwable) {
             record(writeError)
             result.put("passed", false).put("failure", failure?.stackTraceToString())

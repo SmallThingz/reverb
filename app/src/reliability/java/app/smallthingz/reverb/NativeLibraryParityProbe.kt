@@ -83,6 +83,7 @@ internal fun verifyNativeLibraryParity(instrumentation: Instrumentation, report:
         .put("scope", "Actual FilesScreen and native root/owner: empty, grouped populated, selection, paused expanded player; physical fixture viewport with safe-drawing insets consumed by parent")
         .put("limits", "Programmatic source actions and native View actions; no pointer, accessibility-service traversal, keyboard, popup, playback, trim, deletion or Main navigation qualification")
         .put("cases", cases).put("player_preparation", JSONArray()).put("passed", false)
+    writeLibraryEvidence(directory, result, null)
     val fixtures = LibraryOwnedFixtures(context, directory)
     var host: NativeParityActivity? = null
     var board: LibraryParityBoard? = null
@@ -1005,6 +1006,10 @@ private fun libraryViews(root: View): List<View> = buildList {
 private fun libraryDigest(bytes: ByteArray) = MessageDigest.getInstance("SHA-256").digest(bytes)
     .toHexString()
 private fun writeLibraryEvidence(directory: File, result: JSONObject, primary: Throwable?) {
-    try { File(directory, "result.json").writeText(result.toString(2)) }
+    try {
+        writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+            output.write(result.toString(2).toByteArray(Charsets.UTF_8))
+        }
+    }
     catch (error: Throwable) { if (primary == null) throw error; if (primary !== error) primary.addSuppressed(error) }
 }

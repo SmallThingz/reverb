@@ -111,6 +111,9 @@ internal fun verifyNativeIconClipParity(instrumentation: Instrumentation, report
         .put("comparison", "Exact full-window ARGB and ABAB stability; no masks or tolerance")
         .put("not_qualified", "Whole-screen behavior, accessibility, gestures and other densities")
         .put("cases", cases).put("passed", false)
+    writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+        output.write(result.toString(2).toByteArray(Charsets.UTF_8))
+    }
     var host: NativeParityActivity? = null
     var active: IconClipRender? = null
     var primary: Throwable? = null
@@ -216,7 +219,11 @@ internal fun verifyNativeIconClipParity(instrumentation: Instrumentation, report
         }
         result.put("completed_cases", completed).put("mismatches", mismatches)
             .put("passed", primary == null && completed == 8 && mismatches == 0)
-        try { File(directory, "result.json").writeText(result.toString(2)) }
+        try {
+            writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+                output.write(result.toString(2).toByteArray(Charsets.UTF_8))
+            }
+        }
         catch (error: Throwable) { retain(error) }
         report.append("PARITY_EVIDENCE ").append(directory.name).append("/result.json\n")
     }

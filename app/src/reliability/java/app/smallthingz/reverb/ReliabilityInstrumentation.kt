@@ -8,6 +8,9 @@ import android.provider.DocumentsContract
 import android.util.Log
 import java.io.File
 
+// The failed provider case has already been counted and logged; stop before any later reset.
+private class ProviderFixtureAbort : RuntimeException(null, null, false, false)
+
 /** Standalone runner: no production/test framework dependency and a separate installed package. */
 class ReliabilityInstrumentation : Instrumentation() {
     private var requestedTest: String? = null
@@ -311,6 +314,7 @@ class ReliabilityInstrumentation : Instrumentation() {
                         } catch (error: Throwable) {
                             failures++
                             report.append("FAIL ").append(name).append('\n').append(Log.getStackTraceString(error)).append('\n')
+                            throw ProviderFixtureAbort()
                         }
                     }
                     if (requestedTest == "document_rename_null_response") {
@@ -338,6 +342,7 @@ class ReliabilityInstrumentation : Instrumentation() {
                                 failures++
                                 report.append("FAIL ").append(name).append('\n')
                                     .append(Log.getStackTraceString(error)).append('\n')
+                                throw ProviderFixtureAbort()
                             }
                         }
                     }
@@ -362,6 +367,7 @@ class ReliabilityInstrumentation : Instrumentation() {
                                 failures++
                                 report.append("FAIL ").append(name).append('\n')
                                     .append(Log.getStackTraceString(error)).append('\n')
+                                throw ProviderFixtureAbort()
                             }
                         }
                     }
@@ -375,6 +381,7 @@ class ReliabilityInstrumentation : Instrumentation() {
                                 failures++
                                 report.append("FAIL ").append(name).append('\n')
                                     .append(Log.getStackTraceString(error)).append('\n')
+                                throw ProviderFixtureAbort()
                             }
                         }
                     }
@@ -426,6 +433,8 @@ class ReliabilityInstrumentation : Instrumentation() {
                 }
             }
             check(executed > 0) { "No tests matched: $requestedTest" }
+        } catch (_: ProviderFixtureAbort) {
+            // Preserve the existing FAIL record without counting it twice or running later suites.
         } catch (error: Throwable) {
             failures++
             report.append(Log.getStackTraceString(error)).append('\n')

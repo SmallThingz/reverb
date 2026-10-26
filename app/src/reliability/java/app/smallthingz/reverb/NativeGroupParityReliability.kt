@@ -47,6 +47,8 @@ internal fun verifyNativeGroupParity(instrumentation: Instrumentation, report: S
         .put("font_scale", context.resources.configuration.fontScale.toDouble())
         .put("comparison", "Exact ARGB pixels; no masks or tolerance")
         .put("cases", cases)
+    result.put("passed", false)
+    writeParityEvidence(directory, result, null)
     var activity: NativeParityActivity? = null
     var completed = 0
     var mismatches = 0
@@ -157,10 +159,12 @@ internal fun launchNativeParityActivity(instrumentation: Instrumentation): Nativ
 
 private fun writeParityEvidence(directory: File, result: JSONObject, primaryFailure: Throwable?) {
     try {
-        File(directory, "result.json").writeText(result.toString(2))
+        writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+            output.write(result.toString(2).toByteArray(Charsets.UTF_8))
+        }
     } catch (error: Throwable) {
         if (primaryFailure == null) throw error
-        primaryFailure.addSuppressed(error)
+        if (primaryFailure !== error) primaryFailure.addSuppressed(error)
     }
 }
 

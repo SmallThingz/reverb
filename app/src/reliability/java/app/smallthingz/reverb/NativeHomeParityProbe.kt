@@ -122,6 +122,7 @@ internal fun verifyNativeHomeParity(instrumentation: Instrumentation, report: St
         .put("scope", "Normal Home top bar/noise/body; explicit zero local system insets; full physical fixture viewport")
         .put("limits", "visualizerVisible=false preserves initial blob pixels only; no live audio phase, permission/range/save feedback, navigation overlays or system-inset dispatch qualification")
         .put("cases", cases).put("passed", false)
+    writeHomeEvidence(directory, result, null)
     var host: NativeParityActivity? = null
     var board: HomeParityBoard? = null
     var primary: Throwable? = null
@@ -442,7 +443,11 @@ private class HomeParityBoard(
 }
 
 private fun writeHomeEvidence(directory: File, result: JSONObject, primary: Throwable?) {
-    try { File(directory, "result.json").writeText(result.toString(2)) }
+    try {
+        writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+            output.write(result.toString(2).toByteArray(Charsets.UTF_8))
+        }
+    }
     catch (failure: Throwable) {
         if (primary == null) throw failure
         appendNativeParityFailure(primary, failure)
@@ -487,6 +492,7 @@ private fun verifyNativeHomeInputParity(
         .put("approved_reference_changes", JSONArray().put(APP_TOP_BAR_APPROVED_REFERENCE_CHANGE))
         .put("motion_limit", "Sequential reference/native captures have independent clocks; request/callback wall times are not presentation timestamps. Intermediate images are retained, not used to claim frame parity.")
         .put("cases", entries).put("passed", false)
+    writeHomeEvidence(directory, result, null)
     var host: NativeParityActivity? = null
     var active: HomeParityBoard? = null
     var primary: Throwable? = null
@@ -815,6 +821,7 @@ internal fun verifyNativeHomeAccessibilityParity(instrumentation: Instrumentatio
         .put("scope", "Actual standalone Home platform nodes; native production source mapper and text binding; selected/unselected tabs, service-ready/unready, LTR/RTL")
         .put("limits", "No TalkBack delivery, full Activity/recorder, overlay occlusion, pixel or motion-phase claim; no system setting changes. isFocused is retained raw and checked direct-versus-platform, but not compared across standalone renderers: this fixture lacks Main's unsolicited-focus suppression. Focusability and complete advertised actions remain exact comparisons.")
         .put("cases", cases).put("passed", false)
+    writeHomeEvidence(directory, result, null)
     var host: NativeParityActivity? = null
     var board: HomeParityBoard? = null
     var textLease: AutoCloseable? = null

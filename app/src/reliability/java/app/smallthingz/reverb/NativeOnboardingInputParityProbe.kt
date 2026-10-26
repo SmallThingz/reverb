@@ -5,7 +5,6 @@ import android.app.Instrumentation
 import android.graphics.Bitmap
 import android.graphics.Rect
 import android.os.SystemClock
-import android.util.AtomicFile
 import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.View
@@ -588,9 +587,8 @@ private fun intersectionArea(a:ComposeRect,b:ComposeRect):Float =
         (minOf(a.bottom,b.bottom)-maxOf(a.top,b.top)).coerceAtLeast(0f)
 private fun ComposeRect.array()=JSONArray(listOf(left.toDouble(),top.toDouble(),right.toDouble(),bottom.toDouble()))
 private fun JSONArray.rect()=ComposeRect(getDouble(0).toFloat(),getDouble(1).toFloat(),getDouble(2).toFloat(),getDouble(3).toFloat())
-private fun writeOnboardingInputEvidence(directory:File,result:JSONObject) {
-    val atomic=AtomicFile(File(directory,"result.json"))
-    val stream=atomic.startWrite()
-    try{stream.write(result.toString(2).toByteArray(Charsets.UTF_8));atomic.finishWrite(stream)}
-    catch(error:Throwable){try{atomic.failWrite(stream)}catch(cleanup:Throwable){if(cleanup!==error)error.addSuppressed(cleanup)};throw error}
+private fun writeOnboardingInputEvidence(directory: File, result: JSONObject) {
+    writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+        output.write(result.toString(2).toByteArray(Charsets.UTF_8))
+    }
 }

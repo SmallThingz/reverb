@@ -6,7 +6,6 @@ import android.graphics.Rect
 import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
-import android.util.AtomicFile
 import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
@@ -568,16 +567,8 @@ private fun captureRetentionKeyboardField(
 }
 private fun writeRetentionKeyboardEvidence(directory: File, result: JSONObject, primary: Throwable?) {
     try {
-        val atomic = AtomicFile(File(directory, "result.json"))
-        val stream = atomic.startWrite()
-        try {
-            stream.write(result.toString(2).toByteArray(Charsets.UTF_8))
-            atomic.finishWrite(stream)
-        } catch (error: Throwable) {
-            try { atomic.failWrite(stream) } catch (cleanup: Throwable) {
-                if (cleanup !== error) error.addSuppressed(cleanup)
-            }
-            throw error
+        writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+            output.write(result.toString(2).toByteArray(Charsets.UTF_8))
         }
     } catch (error: Throwable) {
         if (primary == null) throw error else if (primary !== error) primary.addSuppressed(error)

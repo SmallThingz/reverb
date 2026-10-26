@@ -35,6 +35,9 @@ internal fun verifyNativeLegacySavedStateParity(instrumentation: Instrumentation
         .put("format_baseline_apk", "057b909d0b37c4e1ab24c3aaa5b95dedbbfd197dea8ad6a037ec6f2e2efc59cd")
         .put("scope", "Synthetic released-format Bundle/State Parcel roundtrip and actual public registry adapter; no Activity launch")
         .put("limits", "Not an old-binary task restoration, production Activity, ActivityResult delivery, UI, or process-death test")
+    writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+        output.write(result.toString(2).toByteArray(Charsets.UTF_8))
+    }
     var failure: Throwable? = null
     fun runCase(name: String, block: () -> Unit) {
         val entry = JSONObject().put("name", name).put("passed", false)
@@ -60,11 +63,17 @@ internal fun verifyNativeLegacySavedStateParity(instrumentation: Instrumentation
     }
     result.put("passed", failure == null).put("failure", failure?.stackTraceToString() ?: JSONObject.NULL)
     try {
-        File(directory, "result.json").writeText(result.toString(2))
+        writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+            output.write(result.toString(2).toByteArray(Charsets.UTF_8))
+        }
     } catch (error: Throwable) {
         if (failure == null) failure = error else if (failure !== error) failure!!.addSuppressed(error)
         result.put("passed", false).put("failure", failure!!.stackTraceToString())
-        try { File(directory, "result.json").writeText(result.toString(2)) }
+        try {
+            writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+                output.write(result.toString(2).toByteArray(Charsets.UTF_8))
+            }
+        }
         catch (retry: Throwable) { if (failure !== retry) failure!!.addSuppressed(retry) }
     }
     report.appendLine("PARITY_EVIDENCE ${directory.name}/result.json")

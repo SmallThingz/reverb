@@ -36,6 +36,7 @@ import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.lifecycle.setViewTreeViewModelStoreOwner
 import androidx.savedstate.findViewTreeSavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import app.smallthingz.reverb.closePreservingPrimaryFailure
 import app.smallthingz.reverb.NativeDragPointerEvent
 import app.smallthingz.reverb.NativePointerPass
 import app.smallthingz.reverb.NativeViewPhasePointerNode
@@ -121,6 +122,7 @@ internal class NativeSheetTooltip(
     private var popup:NativePlainTooltipWindow?=null
     private var timer:Job?=null
     private var disposed=false
+    private var retiring=false
     private var awaiting=false
     private var longPressed=false
     private var firstDown=false
@@ -134,7 +136,7 @@ internal class NativeSheetTooltip(
                 firstDown=false
                 if(!awaiting) {
                     if(event.changes.all {it.changedToDown&&!it.consumed}&&
-                        event.changes.first().type in listOf(PointerType.Touch,PointerType.Stylus)) {
+                        event.changes.first().type.let {it==PointerType.Touch||it==PointerType.Stylus}) {
                         awaiting=true;firstDown=true;longPressed=false
                         held=MutableStateFlow(true)
                         val thisHold=held
@@ -168,7 +170,11 @@ internal class NativeSheetTooltip(
         return point.x< -x||point.x>anchor.width+x||point.y< -y||point.y>anchor.height+y
     }
     private fun finishGesture() {
-        timer?.cancel();timer=null;awaiting=false;held.value=false;longPressed=false
+        val ownedTimer=timer;timer=null
+        awaiting=false;longPressed=false
+        var failure=closePreservingPrimaryFailure(null) {ownedTimer?.cancel()}
+        failure=closePreservingPrimaryFailure(failure) {held.value=false}
+        failure?.let {throw it}
     }
     private suspend fun show(priority:MutatePriority=MutatePriority.Default) {
         nativeTooltipMutex.mutate(priority) {
@@ -185,17 +191,29 @@ internal class NativeSheetTooltip(
     private fun target(value:Boolean) {
         if(disposed)return
         motion.target(value)
+        if(retiring)return
         if(motion.shouldExist&&popup==null&&anchor.isAttachedToWindow) {
-            popup=NativePlainTooltipWindow(anchor,environment,description,::dismiss).also {it.show()}
+            val next=NativePlainTooltipWindow(anchor,environment,description,::dismiss)
+            popup=next
+            try {next.show()} catch(error:Throwable) {
+                if(popup===next)popup=null
+                throw error
+            }
         }
-        if(animation==null&&popup!=null)animation=scope.launch {
-            try {
+        if(animation==null&&popup!=null) {
+            val next=scope.launch(start=CoroutineStart.LAZY) {
                 while(isActive&&popup!=null)runtime.frames.withFrameNanos {time->
                     motion.frame(time,ValueAnimator.getDurationScale())
                     popup?.frame(motion.sizeScale,motion.alpha)
-                    if(!motion.shouldExist) {popup?.close();popup=null}
+                    if(!motion.shouldExist) {
+                        val ownedPopup=popup;popup=null
+                        ownedPopup?.close()
+                    }
                 }
-            } finally {animation=null}
+            }
+            animation=next
+            next.invokeOnCompletion {if(animation===next)animation=null}
+            next.start()
         }
     }
     fun bindEnvironment(next:ReverbViewEnvironment) {
@@ -217,8 +235,30 @@ internal class NativeSheetTooltip(
             MotionEvent.ACTION_HOVER_EXIT->dismiss()
         }
     }
-    fun retire() {finishGesture();continuation?.cancel();popup?.close();popup=null;animation?.cancel()}
-    override fun close() {if(disposed)return;disposed=true;retire();nodeJob.cancel()}
+    fun retire() {
+        if(retiring)return
+        retiring=true
+        val ownedTimer=timer;timer=null
+        val ownedContinuation=continuation;continuation=null
+        val ownedPopup=popup;popup=null
+        val ownedAnimation=animation;animation=null
+        awaiting=false;longPressed=false
+        try {
+            var failure=closePreservingPrimaryFailure(null) {ownedTimer?.cancel()}
+            failure=closePreservingPrimaryFailure(failure) {held.value=false}
+            failure=closePreservingPrimaryFailure(failure) {ownedContinuation?.cancel()}
+            failure=closePreservingPrimaryFailure(failure) {ownedPopup?.close()}
+            failure=closePreservingPrimaryFailure(failure) {ownedAnimation?.cancel()}
+            failure?.let {throw it}
+        } finally {retiring=false}
+    }
+    override fun close() {
+        if(disposed)return
+        disposed=true
+        var failure=closePreservingPrimaryFailure(null) {retire()}
+        failure=closePreservingPrimaryFailure(failure) {nodeJob.cancel()}
+        failure?.let {throw it}
+    }
 }
 
 /** Nonfocusable native sub-panel, using the released Popup flags/position/size rather than TooltipText. */
@@ -254,7 +294,7 @@ private class NativePlainTooltipWindow(
             ComposeRect(0f,0f,view.width.toFloat(),view.height.toFloat()))
         else NativeTextSemanticsClip.Unclipped
     })
-    private val textLease=bubble.label.bindPlainTextAccessibility(cursor,textGeometry,
+    private var textLease:AutoCloseable?=bubble.label.bindPlainTextAccessibility(cursor,textGeometry,
         sourceNode={labelFacts()}) {labelFacts().present}
     init {
         addView(bubble)
@@ -284,17 +324,24 @@ private class NativePlainTooltipWindow(
         try {manager.addView(this,params)}
         catch(error:Throwable) {
             added=isAttachedToWindow||parent!=null
-            try {close()}catch(cleanup:Throwable){error.addSuppressed(cleanup)}
+            closePreservingPrimaryFailure(error) {close()}
             throw error
         }
     }
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
-        observer=anchor.viewTreeObserver.also {it.addOnGlobalLayoutListener(globalLayout)}
+        if(closed)return
+        val next=anchor.viewTreeObserver
+        observer=next
+        next.addOnGlobalLayoutListener(globalLayout)
     }
     override fun onDetachedFromWindow() {
-        observer?.takeIf {it.isAlive}?.removeOnGlobalLayoutListener(globalLayout);observer=null
-        super.onDetachedFromWindow()
+        val ownedObserver=observer;observer=null
+        var failure=closePreservingPrimaryFailure(null) {
+            ownedObserver?.takeIf {it.isAlive}?.removeOnGlobalLayoutListener(globalLayout)
+        }
+        failure=closePreservingPrimaryFailure(failure) {super.onDetachedFromWindow()}
+        failure?.let {throw it}
     }
     override fun onMeasure(widthMeasureSpec:Int,heightMeasureSpec:Int) {
         anchor.getWindowVisibleDisplayFrame(visibleFrame)
@@ -330,10 +377,19 @@ private class NativePlainTooltipWindow(
         return super.onTouchEvent(event)
     }
     override fun close() {
-        if(closed)return;closed=true
-        try {
-            if(added) {added=false;manager.removeViewImmediate(this)}
-        } finally {textLease.close()}
+        if(closed)return
+        closed=true
+        val ownedWindow=added;added=false
+        val ownedObserver=observer;observer=null
+        val ownedTextLease=textLease;textLease=null
+        var failure=closePreservingPrimaryFailure(null) {
+            if(ownedWindow)manager.removeViewImmediate(this)
+        }
+        failure=closePreservingPrimaryFailure(failure) {
+            ownedObserver?.takeIf {it.isAlive}?.removeOnGlobalLayoutListener(globalLayout)
+        }
+        failure=closePreservingPrimaryFailure(failure) {ownedTextLease?.close()}
+        failure?.let {throw it}
     }
     private fun labelFacts():NativeSourceAccessibilityNode {
         if(!isAttachedToWindow)return NativeSourceAccessibilityNode.absent()

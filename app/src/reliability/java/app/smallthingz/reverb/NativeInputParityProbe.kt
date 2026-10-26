@@ -77,6 +77,10 @@ internal fun verifyNativeInputParity(
         .put("physical_input_injected", false)
         .put("physical_input_scope", "Only nonce-bound host keyboard TAB on explicitly physical display0; no app-side injection")
         .put("limits", "Direct synthetic own-View dispatch; no ripple raster, indirect input, or complete parent gesture arbitration")
+    result.put("passed", false)
+    writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+        output.write(result.toString(2).toByteArray(Charsets.UTF_8))
+    }
     var activity: NativeParityActivity? = null
     var failure: Throwable? = null
     val frames = InputFrameTrace()
@@ -121,7 +125,9 @@ internal fun verifyNativeInputParity(
                             // A pending host command can have an unknown outcome if the lane stops.
                             result.put("physical_input_injected", JSONObject.NULL)
                         }
-                        File(directory, "result.json").writeText(result.toString(2))
+                        writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+                            output.write(result.toString(2).toByteArray(Charsets.UTF_8))
+                        }
                     }
                     result.put("physical_input_injected", true)
                     // TAB may focus the fixture. Park focus on the original parent, then let
@@ -185,10 +191,14 @@ internal fun verifyNativeInputParity(
         result.put("motion_parity_qualified", false)
         cleanupError?.let { result.put("cleanup_error", android.util.Log.getStackTraceString(it)) }
         report.append("PARITY_EVIDENCE ").append(directory.name).append("/result.json\n")
-        try { File(directory, "result.json").writeText(result.toString(2)) }
+        try {
+            writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+                output.write(result.toString(2).toByteArray(Charsets.UTF_8))
+            }
+        }
         catch (error: Throwable) {
             val primary = failure ?: cleanupError
-            if (primary == null) throw error else primary.addSuppressed(error)
+            if (primary == null) throw error else if (primary !== error) primary.addSuppressed(error)
         }
         if (failure == null) cleanupError?.let { throw it }
     }

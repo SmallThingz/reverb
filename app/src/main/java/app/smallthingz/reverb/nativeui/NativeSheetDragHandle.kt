@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import app.smallthingz.reverb.closePreservingPrimaryFailure
+
 import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Canvas
@@ -126,8 +128,17 @@ internal class NativeSheetDragHandle(
         super.onAttachedToWindow();controller.attached()
         controller.bind(NativeClickBinding(identity,true,{performClick()}));controller.focusChanged(isFocused)
     }
-    override fun onDetachedFromWindow() {controller.detached();tooltip.retire();super.onDetachedFromWindow()}
-    override fun close() {controller.detached();tooltip.close()}
+    override fun onDetachedFromWindow() {
+        var failure=closePreservingPrimaryFailure(null) {controller.detached()}
+        failure=closePreservingPrimaryFailure(failure) {tooltip.retire()}
+        failure=closePreservingPrimaryFailure(failure) {super.onDetachedFromWindow()}
+        failure?.let {throw it}
+    }
+    override fun close() {
+        var failure=closePreservingPrimaryFailure(null) {controller.detached()}
+        failure=closePreservingPrimaryFailure(failure) {tooltip.close()}
+        failure?.let {throw it}
+    }
     override fun getAccessibilityClassName():CharSequence="android.view.View"
     internal class HandleMark(context:Context,environment:ReverbViewEnvironment):View(context) {
         var sourceNode:(()->NativeSourceAccessibilityNode)?=null

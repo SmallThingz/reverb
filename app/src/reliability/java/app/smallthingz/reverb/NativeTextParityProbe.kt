@@ -140,6 +140,8 @@ internal fun verifyNativeTextParity(instrumentation: Instrumentation, report: St
         .put("sdk", Build.VERSION.SDK_INT)
         .put("device", "${Build.MANUFACTURER}/${Build.MODEL}")
         .put("cases", cases)
+    result.put("passed", false)
+    writeTextParityEvidence(directory, result, null)
     var activity: NativeParityActivity? = null
     var completed = 0
     var mismatches = 0
@@ -276,10 +278,12 @@ internal fun verifyNativeTextParity(instrumentation: Instrumentation, report: St
 
 private fun writeTextParityEvidence(directory: File, result: JSONObject, primaryFailure: Throwable?) {
     try {
-        File(directory, "result.json").writeText(result.toString(2))
+        writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+            output.write(result.toString(2).toByteArray(Charsets.UTF_8))
+        }
     } catch (error: Throwable) {
         if (primaryFailure == null) throw error
-        primaryFailure.addSuppressed(error)
+        if (primaryFailure !== error) primaryFailure.addSuppressed(error)
     }
 }
 

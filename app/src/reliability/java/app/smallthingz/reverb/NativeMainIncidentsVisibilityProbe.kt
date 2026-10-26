@@ -34,7 +34,10 @@ internal fun verifyNativeMainIncidentsVisibility(instrumentation: Instrumentatio
         .put("unqualified", JSONArray(listOf("physical input/gesture dispatch", "frame/pixel parity",
             "TalkBack delivery", "capture/production data")))
         .put("steps", steps)
-    fun persist() = File(directory, "result.json").writeText(result.toString(2))
+    fun persist() = writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+        output.write(result.toString(2).toByteArray(Charsets.UTF_8))
+    }
+    persist()
     val fixtures = LibraryOwnedFixtures(context, directory)
     val initialTheme = getConfiguredThemeMode(context)
     var activity: NativeParityActivity? = null
