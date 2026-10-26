@@ -176,22 +176,25 @@ internal object PcmNormalizer {
         val segmentBytes = ByteArray(segmentByteCount.toInt())
         val segmentEnd = segmentByteOffset + segmentByteCount
         val crc = CRC32()
-        val scratch = ByteArray(minOf(CRC_SCRATCH_BYTES.toLong(), payloadBytes).toInt())
+        val batchBytes = minOf(CRC_SCRATCH_BYTES.toLong(), payloadBytes).toInt()
+        val wholePayload = segmentByteOffset == 0L && segmentByteCount == payloadBytes
+        val scratch = if (wholePayload) segmentBytes else ByteArray(batchBytes)
         RandomAccessFile(file, "r").use { input ->
             input.seek(payloadDataOffset)
             var remaining = payloadBytes
             var payloadOffset = 0L
             while (remaining > 0L) {
                 checkPcmConversionNotInterrupted()
-                val count = minOf(scratch.size.toLong(), remaining).toInt()
-                input.readFully(scratch, 0, count)
-                crc.update(scratch, 0, count)
+                val count = minOf(batchBytes.toLong(), remaining).toInt()
+                val readOffset = if (wholePayload) payloadOffset.toInt() else 0
+                input.readFully(scratch, readOffset, count)
+                crc.update(scratch, readOffset, count)
 
                 val blockStart = payloadOffset
                 val blockEnd = blockStart + count.toLong()
                 val copyStart = maxOf(blockStart, segmentByteOffset)
                 val copyEnd = minOf(blockEnd, segmentEnd)
-                if (copyEnd > copyStart) {
+                if (!wholePayload && copyEnd > copyStart) {
                     val sourceOffset = (copyStart - blockStart).toInt()
                     val destinationOffset = (copyStart - segmentByteOffset).toInt()
                     val copyCount = (copyEnd - copyStart).toInt()

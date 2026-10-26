@@ -2927,20 +2927,21 @@ open class ReverbService : Service() {
             } catch (error: Exception) { request.fail(error.message ?: getString(R.string.silence_sample_failed)) }
             if (!request.running()) silenceSampleRequest = null
         }
-        if (!silenceGateConfig.enabled) {
-            finishSilenceGate()
-            appendCapturedAudio(bytes, offset, count, slot)
-            return
-        }
         val rate = sampleRate
         val channels = channelMode.channelCount
         val format = pcmSampleFormat
+        if (!silenceGateConfig.enabled) {
+            finishSilenceGate()
+            appendCapturedAudio(bytes, offset, count, slot, captureBatchStartedAtMillis(
+                System.currentTimeMillis(), count, channels * format.bytesPerSample, rate))
+            return
+        }
         val previous = silenceGateStream
         if (silenceGateSlot != slot || silenceGateEpoch != epoch || previous?.sampleRate != rate ||
             previous.channels != channels || previous.format != format) {
             finishSilenceGate()
-            val anchor = (System.currentTimeMillis() - count / (channels * format.bytesPerSample) * 1000L / rate)
-                .coerceAtLeast(0L)
+            val anchor = captureBatchStartedAtMillis(
+                System.currentTimeMillis(), count, channels * format.bytesPerSample, rate)
             silenceGateSlot = slot
             silenceGateEpoch = epoch
             silenceGateStream = SilenceGateStream(rate, channels, format, silenceGateConfig, object : SilenceGateOutput {
