@@ -1024,9 +1024,7 @@ internal class TimelineAudioPreviewController(
                 count
             }
 
-            val targetFrames = (readResult.durationSeconds * PREVIEW_SAMPLE_RATE.toDouble())
-                .roundToLong()
-                .coerceAtLeast(0L)
+            val targetFrames = readResult.sampleBytes / PcmSampleFormat.PCM_16.bytesPerSample
             var lastPlayedFrames = -1L
             var lastPlaybackAdvanceAt = SystemClock.elapsedRealtime()
             while (true) {

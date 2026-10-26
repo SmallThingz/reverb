@@ -15,6 +15,8 @@ internal object PcmStreamNormalizer {
         targetSampleFormat: PcmSampleFormat,
         maximumOutputBatchBytes: Int,
         consumer: PersistentAudioChunkStore.Consumer,
+        leadingContext: List<PersistentAudioChunkStore.Segment> = emptyList(),
+        trailingContext: List<PersistentAudioChunkStore.Segment> = emptyList(),
     ): Long {
         checkPcmConversionNotInterrupted()
         require(segments.isNotEmpty() && firstTargetFrame in 0..targetFrameCount)
@@ -54,13 +56,25 @@ internal object PcmStreamNormalizer {
 
         val step = sourceFrames.toDouble() / targetFrameCount
         val radius = pcmResamplingRadius(step)
-        val before = minOf(radius.toLong(), first.startFrame)
-        // Linear upsampling needs the next same-payload frame even though its filter radius is zero.
-        val after = minOf(if (step < 1.0) 1L else radius.toLong(), last.payloadBytesAtAcquire / frameBytes - last.startFrame - last.frameCount)
+        val ownBefore = minOf(radius.toLong(), first.startFrame)
+        // Linear upsampling needs the next frame even though its filter radius is zero.
+        val requiredAfter = if (step < 1.0) 1L else radius.toLong()
+        val ownAfter = minOf(requiredAfter, last.payloadBytesAtAcquire / frameBytes - last.startFrame - last.frameCount)
+        val availableBefore = leadingContext.sumOf { it.frameCount }
+        val extraBefore = minOf(radius - ownBefore, availableBefore)
+        val extraAfter = minOf(requiredAfter - ownAfter, trailingContext.sumOf { it.frameCount })
+        val before = ownBefore + extraBefore
+        val after = ownAfter + extraAfter
         val bufferedFrames = Math.addExact(Math.addExact(sourceFrames, before), after)
+        val readSegments = if (before == 0L && after == 0L) segments else ContextSegments(
+            segments,
+            sliceContext(leadingContext, availableBefore - extraBefore, extraBefore),
+            sliceContext(trailingContext, 0L, extraAfter),
+            ownBefore, ownAfter,
+        )
         val capacity = radius * 2 + 3
         val window = FloatArray(capacity * channels)
-        val cursor = VerifiedFrames(segments, before, after)
+        val cursor = VerifiedFrames(readSegments)
         var base = 0L
         val converter = PcmRateConverter(capacity, step) { frame, channel ->
             val logical = (base + frame).coerceIn(0L, bufferedFrames - 1)
@@ -107,47 +121,94 @@ internal object PcmStreamNormalizer {
         return produced
     }
 
+    private fun sliceContext(segments: List<PersistentAudioChunkStore.Segment>,
+                             skipFrames: Long, takeFrames: Long): List<PersistentAudioChunkStore.Segment> {
+        if (takeFrames == 0L) return emptyList()
+        val result = ArrayList<PersistentAudioChunkStore.Segment>(minOf(segments.size.toLong(), takeFrames).toInt())
+        var skip = skipFrames
+        var remaining = takeFrames
+        for ((index, segment) in segments.withIndex()) {
+            if ((index and 255) == 0) checkPcmConversionNotInterrupted()
+            if (skip >= segment.frameCount) { skip -= segment.frameCount; continue }
+            val count = minOf(remaining, segment.frameCount - skip)
+            result += if (skip == 0L && count == segment.frameCount) segment else
+                segment.copy(startFrame = segment.startFrame + skip, frameCount = count)
+            skip = 0L
+            remaining -= count
+            if (remaining == 0L) break
+        }
+        check(remaining == 0L)
+        return result
+    }
+
+    /** Shares the selected middle; only the two edge descriptors and bounded halo are new. */
+    private class ContextSegments(
+        private val selected: List<PersistentAudioChunkStore.Segment>,
+        private val leading: List<PersistentAudioChunkStore.Segment>,
+        private val trailing: List<PersistentAudioChunkStore.Segment>,
+        before: Long, after: Long,
+    ) : AbstractList<PersistentAudioChunkStore.Segment>() {
+        private val first = selected.first().let { segment ->
+            val extra = before + if (selected.size == 1) after else 0L
+            if (extra == 0L) segment else segment.copy(startFrame = segment.startFrame - before,
+                frameCount = segment.frameCount + extra)
+        }
+        private val last = if (selected.size == 1) first else selected.last().let { segment ->
+            if (after == 0L) segment else segment.copy(frameCount = segment.frameCount + after)
+        }
+        override val size = Math.addExact(Math.addExact(leading.size, selected.size), trailing.size)
+        override fun get(index: Int): PersistentAudioChunkStore.Segment {
+            if (index < 0 || index >= size) throw IndexOutOfBoundsException(index.toString())
+            val middle = index - leading.size
+            return when {
+                middle < 0 -> leading[index]
+                middle == 0 -> first
+                middle == selected.lastIndex -> last
+                middle < selected.size -> selected[middle]
+                else -> trailing[middle - selected.size]
+            }
+        }
+    }
+
     /** Holds one whole-CRC-verified payload slice plus the caller's bounded decoded ring. */
     private class VerifiedFrames(
         private val segments: List<PersistentAudioChunkStore.Segment>,
-        private val before: Long,
-        private val after: Long,
     ) {
         private val channels = segments.first().record.channelCount
         private val format = segments.first().record.sampleFormat
         private val frameBytes = channels * format.bytesPerSample
         private var index = 0
+        private var segment = segments[0]
+        private var frames = segment.frameCount
         private var start = 0L
         private var frameInSegment = 0L
         private var bytes = EMPTY_BYTES
 
-        private fun frames(): Long = segments[index].frameCount +
-            (if (index == 0) before else 0L) + (if (index == segments.lastIndex) after else 0L)
+        private fun advance() {
+            start += frames
+            index++
+            segment = segments[index]
+            frames = segment.frameCount
+            frameInSegment = 0L
+            bytes = EMPTY_BYTES
+        }
 
         fun seek(frame: Long) {
             check(frame >= start + frameInSegment)
-            while (frame >= start + frames()) {
+            while (frame >= start + frames) {
                 if ((index and 255) == 0) checkPcmConversionNotInterrupted()
-                start += frames()
-                index++
-                bytes = EMPTY_BYTES
+                advance()
             }
             frameInSegment = frame - start
         }
 
         fun next(output: FloatArray, offset: Int) {
-            if (frameInSegment == frames()) {
-                start += frames()
-                index++
-                frameInSegment = 0L
-                bytes = EMPTY_BYTES
-            }
+            if (frameInSegment == frames) advance()
             if (bytes.isEmpty()) {
-                val segment = segments[index]
-                val firstFrame = segment.startFrame - if (index == 0) before else 0L
+                val firstFrame = segment.startFrame
                 bytes = PcmNormalizer.readVerifiedSegment(
                     segment.record.file, segment.payloadOffsetBytes, segment.payloadBytesAtAcquire,
-                    segment.payloadChecksumAtAcquire, firstFrame * frameBytes, frames() * frameBytes,
+                    segment.payloadChecksumAtAcquire, firstFrame * frameBytes, frames * frameBytes,
                 )
             }
             val byteOffset = Math.toIntExact(frameInSegment * frameBytes)

@@ -155,6 +155,60 @@ internal fun retentionPassWaitsOnlyForLeases(
     (!looping.needsMore || (looping.blocked && !looping.progressed && looping.blockedOnLease)) &&
     (!oneShot.needsMore || (oneShot.blocked && !oneShot.progressed && oneShot.blockedOnLease))
 
+/** Exact half-frame accounting when all nonempty runs share one source rate.
+ * Mixed source rates retain a bounded Double fractional carry, not exact rational arithmetic. */
+internal class TargetFrameAccumulator(private val targetSampleRate: Int) {
+    init { require(targetSampleRate > 0) }
+
+    private var wholeFrames = 0L
+    private var activeSampleRate = 0
+    private var activeRemainder = 0L
+    private var earlierRateFraction = 0.0
+
+    fun feed(sourceFrames: Long, sourceSampleRate: Int): Long {
+        require(sourceFrames >= 0L)
+        require(sourceSampleRate > 0)
+        if (sourceFrames == 0L) return roundedBoundary()
+
+        if (activeSampleRate != sourceSampleRate) {
+            if (activeSampleRate != 0 && activeRemainder != 0L) {
+                val fraction = earlierRateFraction +
+                    activeRemainder.toDouble() / activeSampleRate.toDouble()
+                val carry = fraction.toLong() // Nonnegative floor, at most two.
+                wholeFrames = Math.addExact(wholeFrames, carry)
+                earlierRateFraction = fraction - carry.toDouble()
+            }
+            activeSampleRate = sourceSampleRate
+            activeRemainder = 0L
+        }
+
+        // Quotient/remainder prevents sourceFrames * targetSampleRate overflow.
+        // The remainder product fits Long: both factors are positive Int bounds.
+        val scaledRemainder = (sourceFrames % sourceSampleRate) * targetSampleRate
+        val wholeDelta = Math.addExact(
+            Math.multiplyExact(sourceFrames / sourceSampleRate, targetSampleRate.toLong()),
+            scaledRemainder / sourceSampleRate
+        )
+        val remainderSum = activeRemainder + scaledRemainder % sourceSampleRate
+        wholeFrames = Math.addExact(
+            wholeFrames,
+            Math.addExact(wholeDelta, remainderSum / sourceSampleRate)
+        )
+        activeRemainder = remainderSum % sourceSampleRate
+        return roundedBoundary()
+    }
+
+    private fun roundedBoundary(): Long {
+        val rounding = if (earlierRateFraction == 0.0) {
+            // Includes empty input; activeSampleRate==0 must not round to one.
+            if (activeSampleRate != 0 && activeRemainder * 2L >= activeSampleRate) 1L else 0L
+        } else {
+            (earlierRateFraction + activeRemainder.toDouble() / activeSampleRate).roundToLong()
+        }
+        return Math.addExact(wholeFrames, rounding)
+    }
+}
+
 /**
  * Disk-backed append-only PCM timeline.
  *
@@ -668,6 +722,10 @@ internal class PersistentAudioChunkStore internal constructor(
         var startedAtMillis = 0L
         var endedAtMillis = 0L
         var leaseDuration = 0.0
+        val preceding = ArrayDeque<ChunkRecord>()
+        val following = ArrayList<ChunkRecord>()
+        var precedingFrames = 0L
+        var followingFrames = 0L
 
         for (record in chunks) {
             if (record.sampleFrames <= 0L || record.sampleRate <= 0) continue
@@ -675,8 +733,20 @@ internal class PersistentAudioChunkStore internal constructor(
             val chunkStart = cursor
             val chunkEnd = cursor + chunkDuration
             cursor = chunkEnd
-            if (end <= chunkStart) break
-            if (start >= chunkEnd) continue
+            if (end <= chunkStart) {
+                following += record
+                followingFrames += record.sampleFrames
+                if (followingFrames >= PCM_MAX_FILTER_RADIUS.toLong()) break
+                continue
+            }
+            if (start >= chunkEnd) {
+                preceding.addLast(record)
+                precedingFrames += record.sampleFrames
+                while (precedingFrames - preceding.peekFirst().sampleFrames >= PCM_MAX_FILTER_RADIUS.toLong()) {
+                    precedingFrames -= preceding.removeFirst().sampleFrames
+                }
+                continue
+            }
 
             val overlapStart = maxOf(start, chunkStart)
             val overlapEnd = minOf(end, chunkEnd)
@@ -713,14 +783,88 @@ internal class PersistentAudioChunkStore internal constructor(
         }
 
         if (segments.isEmpty()) return null
-        return RangeLease(
-            store = this,
+        return acquireRangeLeaseLocked(
             segments = segments,
             startedAtMillis = startedAtMillis,
             endedAtMillis = endedAtMillis,
             durationSeconds = leaseDuration,
+            leadingCandidates = preceding.descendingIterator().asSequence().map(::snapshotFullSegment).iterator(),
+            trailingCandidates = following.asSequence().map(::snapshotFullSegment).iterator(),
         )
     }
+
+    private fun snapshotFullSegment(record: ChunkRecord) = Segment(
+        record, 0L, record.sampleFrames, record.payloadOffsetBytes, record.payloadBytes,
+        record.payloadChecksum, 0.0, 0.0,
+    )
+
+    private fun acquireRangeLeaseLocked(
+        segments: List<Segment>, startedAtMillis: Long, endedAtMillis: Long, durationSeconds: Double,
+        leadingCandidates: Iterator<Segment>, trailingCandidates: Iterator<Segment>,
+    ): RangeLease {
+        var leading: List<Segment> = emptyList()
+        var trailing: List<Segment> = emptyList()
+        try {
+            leading = acquireOuterContextLocked(segments.first(), true, leadingCandidates)
+            trailing = acquireOuterContextLocked(segments.last(), false, trailingCandidates)
+            return RangeLease(this, segments, startedAtMillis, endedAtMillis, durationSeconds, leading, trailing)
+        } catch (failure: Throwable) {
+            releaseFailedAcquisitionLocked(segments, failure)
+            releaseFailedAcquisitionLocked(leading, failure)
+            releaseFailedAcquisitionLocked(trailing, failure)
+            throw failure
+        }
+    }
+
+    private fun releaseFailedAcquisitionLocked(segments: List<Segment>, failure: Throwable) {
+        for (segment in segments) {
+            try { releaseRecordLocked(segment.record) }
+            catch (cleanup: Throwable) { if (cleanup !== failure) failure.addSuppressed(cleanup) }
+        }
+    }
+
+    /** Context owns only bounded frozen neighbors; it never adds selected timeline frames. */
+    private fun acquireOuterContextLocked(endpoint: Segment, before: Boolean, candidates: Iterator<Segment>): List<Segment> {
+        val ownContext = if (before) endpoint.startFrame else
+            endpoint.payloadBytesAtAcquire / endpoint.record.frameBytes - endpoint.startFrame - endpoint.frameCount
+        var remaining = (PCM_MAX_FILTER_RADIUS.toLong() - ownContext).coerceAtLeast(0L)
+        if (remaining == 0L) return emptyList()
+        val result = ArrayList<Segment>()
+        var adjacent = endpoint
+        try {
+            while (remaining > 0L && candidates.hasNext()) {
+                if ((result.size and 255) == 0) checkPcmConversionNotInterrupted()
+                val candidate = candidates.next()
+                val previous = if (before) candidate else adjacent
+                val next = if (before) adjacent else candidate
+                if (!recordsAreContinuous(previous, next)) break
+                val available = candidate.payloadBytesAtAcquire / candidate.record.frameBytes
+                if (available <= 0L) break
+                val count = minOf(remaining, available)
+                val context = candidate.copy(startFrame = if (before) available - count else 0L,
+                    frameCount = count, timelineStartSeconds = 0.0, timelineEndSeconds = 0.0)
+                acquireRecordLocked(candidate.record)
+                try { result += context } catch (failure: Throwable) {
+                    try { releaseRecordLocked(candidate.record) }
+                    catch (cleanup: Throwable) { if (cleanup !== failure) failure.addSuppressed(cleanup) }
+                    throw failure
+                }
+                remaining -= count
+                adjacent = candidate
+            }
+            if (before) result.reverse()
+            return result
+        } catch (failure: Throwable) {
+            releaseFailedAcquisitionLocked(result, failure)
+            throw failure
+        }
+    }
+
+    private fun recordsAreContinuous(previous: Segment, next: Segment): Boolean =
+        next.continuesPreviousChunkAtAcquire && next.record.id == previous.record.id + 1u &&
+            previous.record.sampleRate == next.record.sampleRate &&
+            previous.record.channelCount == next.record.channelCount &&
+            previous.record.sampleFormat == next.record.sampleFormat
 
     fun syncActivePayloadToDisk(): Long {
         val snapshot = synchronized(this) {
@@ -941,6 +1085,8 @@ internal class PersistentAudioChunkStore internal constructor(
         val startedAtMillis: Long,
         val endedAtMillis: Long,
         val durationSeconds: Double,
+        private val leadingContext: List<Segment> = emptyList(),
+        private val trailingContext: List<Segment> = emptyList(),
     ) : Closeable {
         private var closedLease = false
 
@@ -971,6 +1117,8 @@ internal class PersistentAudioChunkStore internal constructor(
                 var selectedStartedAtMillis = 0L
                 var selectedEndedAtMillis = 0L
                 var selectedDuration = 0.0
+                var firstSelectedIndex = -1
+                var lastSelectedIndex = -1
                 // Both range constructors cache these boundaries with the same ordered
                 // duration additions, including frame rounding in nested child ranges.
                 for (index in segmentIndexAt(start)..segments.lastIndex) {
@@ -990,6 +1138,8 @@ internal class PersistentAudioChunkStore internal constructor(
                     if (childFrames <= 0L) continue
 
                     acquireRecordLocked(segment.record)
+                    if (firstSelectedIndex < 0) firstSelectedIndex = index
+                    lastSelectedIndex = index
                     val absoluteStartFrame = segment.startFrame + firstFrame
                     val childDuration = childFrames.toDouble() / rate.toDouble()
                     selected += segment.copy(
@@ -1009,12 +1159,19 @@ internal class PersistentAudioChunkStore internal constructor(
                     selectedDuration += childDuration
                 }
                 if (selected.isEmpty()) return null
-                return RangeLease(
-                    store = store,
+                return acquireRangeLeaseLocked(
                     segments = selected,
                     startedAtMillis = selectedStartedAtMillis,
                     endedAtMillis = selectedEndedAtMillis,
                     durationSeconds = selectedDuration,
+                    leadingCandidates = sequence {
+                        for (index in firstSelectedIndex - 1 downTo 0) yield(segments[index])
+                        for (index in leadingContext.lastIndex downTo 0) yield(leadingContext[index])
+                    }.iterator(),
+                    trailingCandidates = sequence {
+                        for (index in lastSelectedIndex + 1..segments.lastIndex) yield(segments[index])
+                        yieldAll(trailingContext)
+                    }.iterator(),
                 )
             }
         }
@@ -1046,49 +1203,62 @@ internal class PersistentAudioChunkStore internal constructor(
             checkPcmConversionNotInterrupted()
             val outputFrameBytes = targetChannelCount * targetSampleFormat.bytesPerSample
             require(maximumOutputBatchBytes in outputFrameBytes..PcmNormalizer.DEFAULT_OUTPUT_BATCH_BYTES)
-            val plannedFrames = (durationSeconds * targetSampleRate.toDouble()).roundToLong()
-            var framesToDrop = (plannedFrames - maximumOutputFrames).coerceAtLeast(0L)
+            if (maximumOutputFrames == 0L) return ReadResult(0L, 0.0)
+            var framesToDrop = 0L
+            if (maximumOutputFrames != Long.MAX_VALUE) {
+                val planning = TargetFrameAccumulator(targetSampleRate)
+                var plannedFrames = 0L
+                forEachContinuousRun { first, _, frames ->
+                    plannedFrames = planning.feed(frames, segments[first].record.sampleRate)
+                }
+                framesToDrop = (plannedFrames - maximumOutputFrames).coerceAtLeast(0L)
+            }
             var totalOutputBytes = 0L
             var cumulativeDuration = 0.0
             var cumulativeTargetFrames = 0L
-            var first = 0
-            while (first < segments.size) {
-                var end = first + 1
-                while (end < segments.size && segmentsAreContinuous(segments[end - 1], segments[end])) {
-                    if ((end and 255) == 0) checkPcmConversionNotInterrupted()
-                    end++
-                }
-                val groupStartTargetFrame = cumulativeTargetFrames
-                for (index in first until end) {
-                    if ((index and 255) == 0) checkPcmConversionNotInterrupted()
-                    val segment = segments[index]
-                    cumulativeDuration += segment.frameCount.toDouble() / segment.record.sampleRate
-                    cumulativeTargetFrames = (cumulativeDuration * targetSampleRate).roundToLong()
-                }
-                val targetFrames = (cumulativeTargetFrames - groupStartTargetFrame).coerceAtLeast(0L)
+            val emission = TargetFrameAccumulator(targetSampleRate)
+            forEachContinuousRun { first, end, frames ->
+                val rate = segments[first].record.sampleRate
+                cumulativeDuration += frames.toDouble() / rate
+                val boundary = emission.feed(frames, rate)
+                val targetFrames = boundary - cumulativeTargetFrames
+                cumulativeTargetFrames = boundary
                 if (targetFrames > 0 && framesToDrop < targetFrames) {
                     totalOutputBytes += PcmStreamNormalizer.normalize(
                         segments.subList(first, end), targetFrames, framesToDrop,
                         targetChannelCount, targetSampleFormat, maximumOutputBatchBytes, consumer,
+                        if (first == 0) leadingContext else emptyList(),
+                        if (end == segments.size) trailingContext else emptyList(),
                     )
                     framesToDrop = 0L
                 } else {
                     framesToDrop = (framesToDrop - targetFrames).coerceAtLeast(0L)
                 }
-                first = end
             }
             val outputDuration = if (maximumOutputFrames == Long.MAX_VALUE) cumulativeDuration
                 else totalOutputBytes.toDouble() / outputFrameBytes / targetSampleRate
             return ReadResult(totalOutputBytes, outputDuration)
         }
 
+        private inline fun forEachContinuousRun(visit: (Int, Int, Long) -> Unit) {
+            var first = 0
+            while (first < segments.size) {
+                checkPcmConversionNotInterrupted()
+                var end = first + 1
+                var frames = segments[first].frameCount
+                while (end < segments.size && segmentsAreContinuous(segments[end - 1], segments[end])) {
+                    if ((end and 255) == 0) checkPcmConversionNotInterrupted()
+                    frames = Math.addExact(frames, segments[end].frameCount)
+                    end++
+                }
+                visit(first, end, frames)
+                first = end
+            }
+        }
+
         private fun segmentsAreContinuous(previous: Segment, next: Segment): Boolean =
-            next.continuesPreviousChunkAtAcquire && next.record.id == previous.record.id + 1u &&
-                next.startFrame == 0L &&
-                previous.startFrame + previous.frameCount == previous.payloadBytesAtAcquire / previous.record.frameBytes &&
-                previous.record.sampleRate == next.record.sampleRate &&
-                previous.record.channelCount == next.record.channelCount &&
-                previous.record.sampleFormat == next.record.sampleFormat
+            recordsAreContinuous(previous, next) && next.startFrame == 0L &&
+                previous.startFrame + previous.frameCount == previous.payloadBytesAtAcquire / previous.record.frameBytes
 
         /**
          * Samples a fixed PCM budget across the leased timeline, left to right. The amount
@@ -1195,6 +1365,18 @@ internal class PersistentAudioChunkStore internal constructor(
 
 
 
+        private fun releaseSegmentsLocked(owned: List<Segment>, previousFailure: Exception?): Exception? {
+            var failure = previousFailure
+            for (segment in owned) {
+                try { store.releaseRecordLocked(segment.record) }
+                catch (error: Exception) {
+                    val previous = failure
+                    if (previous == null) failure = error else if (previous !== error) previous.addSuppressed(error)
+                }
+            }
+            return failure
+        }
+
         @Synchronized
         override fun close() {
             var needsMaintenance = false
@@ -1202,15 +1384,9 @@ internal class PersistentAudioChunkStore internal constructor(
                 if (closedLease) return
                 closedLease = true
                 try {
-                    var failure: Exception? = null
-                    for (segment in segments) {
-                        try {
-                            store.releaseRecordLocked(segment.record)
-                        } catch (error: Exception) {
-                            val previous = failure
-                            if (previous == null) failure = error else if (previous !== error) previous.addSuppressed(error)
-                        }
-                    }
+                    var failure = releaseSegmentsLocked(leadingContext, null)
+                    failure = releaseSegmentsLocked(segments, failure)
+                    failure = releaseSegmentsLocked(trailingContext, failure)
                     needsMaintenance = !store.closed && store.retentionMaintenanceNeededLocked()
                     failure?.let { throw it }
                 } finally {

@@ -10,7 +10,7 @@ import kotlin.math.floor
 import kotlin.math.sin
 
 private const val PCM_KERNEL_LOBES = 32.0
-private const val PCM_MAX_FILTER_RADIUS = 4096.0
+internal const val PCM_MAX_FILTER_RADIUS = 4096
 
 internal fun checkPcmConversionNotInterrupted() {
     if (Thread.currentThread().isInterrupted) throw InterruptedIOException("PCM conversion cancelled")
