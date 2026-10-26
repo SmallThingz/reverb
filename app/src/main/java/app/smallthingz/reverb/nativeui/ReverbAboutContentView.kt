@@ -822,9 +822,10 @@ private fun bindAboutDescription(
             val clickable = info.isClickable; val focusable = info.isFocusable; val focused = info.isFocused
             val actions = info.actionList.toList()
             description.populate(info)
-            info.isVisibleToUser = info.isVisibleToUser && exposed() && !aboutHasTransparentAncestor(host)
-            info.isImportantForAccessibility = exposed() && !aboutHasTransparentAncestor(host)
-            info.isScreenReaderFocusable = speakingLeaf && exposed() && !aboutHasTransparentAncestor(host)
+            val visible = exposed() && !aboutHasTransparentAncestor(host)
+            info.isVisibleToUser = info.isVisibleToUser && visible
+            info.isImportantForAccessibility = visible
+            info.isScreenReaderFocusable = speakingLeaf && visible
             info.isClickable = clickable; info.isFocusable = focusable; info.isFocused = focused
             for (action in actions) {
                 if (action.id == AccessibilityNodeInfo.ACTION_CLICK ||
@@ -856,9 +857,10 @@ private fun bindAboutRepository(
             info.isFocusable = true; info.isFocused = host.isFocused
             info.isEnabled = true; info.isSelected = false
             info.isCheckable = false; info.isChecked = false
-            info.isScreenReaderFocusable = exposed() && !aboutHasTransparentAncestor(host)
-            info.isVisibleToUser = info.isVisibleToUser && exposed() && !aboutHasTransparentAncestor(host)
-            info.isImportantForAccessibility = exposed() && !aboutHasTransparentAncestor(host)
+            val visible = exposed() && !aboutHasTransparentAncestor(host)
+            info.isScreenReaderFocusable = visible
+            info.isVisibleToUser = info.isVisibleToUser && visible
+            info.isImportantForAccessibility = visible
             info.maxTextLength = -1; info.movementGranularities = 0
             geometry.capture(host, Offset.Zero,
                 ComposeRect(0f, 0f, host.width.toFloat(), host.height.toFloat()))?.let {
@@ -959,8 +961,9 @@ private fun bindAboutClose(
             info.isFocusable = false; info.isFocused = false
             info.isEnabled = true; info.isScreenReaderFocusable = false
             val visualBounds = bounds(false)
-            info.isVisibleToUser = visible() && !visualBounds.isEmpty
-            info.isImportantForAccessibility = visible()
+            val isVisible = visible()
+            info.isVisibleToUser = isVisible && !visualBounds.isEmpty
+            info.isImportantForAccessibility = isVisible
             info.setBoundsInParent(Rect()); info.setBoundsInScreen(visualBounds)
             info.drawingOrder = 1
             info.actionList.toList().forEach(info::removeAction)
@@ -984,9 +987,10 @@ private fun bindAboutClose(
             info.isEnabled = true; info.isClickable = true; info.isLongClickable = false
             info.isFocusable = true; info.isFocused = host.isFocused
             val touchBounds = bounds(true)
-            info.isVisibleToUser = visible() && !touchBounds.isEmpty
-            info.isImportantForAccessibility = visible()
-            info.isScreenReaderFocusable = visible()
+            val isVisible = visible()
+            info.isVisibleToUser = isVisible && !touchBounds.isEmpty
+            info.isImportantForAccessibility = isVisible
+            info.isScreenReaderFocusable = isVisible
             info.maxTextLength = -1; info.movementGranularities = 0
             info.setBoundsInScreen(touchBounds)
             info.actionList.toList().forEach(info::removeAction)

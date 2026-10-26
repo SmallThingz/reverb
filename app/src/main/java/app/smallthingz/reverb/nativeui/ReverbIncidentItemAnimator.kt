@@ -21,6 +21,10 @@ import androidx.recyclerview.widget.RecyclerView
 import androidx.recyclerview.widget.SimpleItemAnimator
 import kotlin.math.roundToInt
 
+private val IncidentOffsetConverter = TwoWayConverter<IntOffset, AnimationVector2D>(
+    { AnimationVector2D(it.x.toFloat(), it.y.toFloat()) },
+    { IntOffset(it.v1.roundToInt(), it.v2.roundToInt()) })
+
 /** animateItem's MediumLow spring fades/placement; no platform default timing or change crossfade. */
 internal class ReverbIncidentItemAnimator(
     private val frames: MonotonicFrameClock,
@@ -228,12 +232,9 @@ internal class ReverbIncidentItemAnimator(
     }
 
     private class OffsetMotion(initial: IntOffset, initialVelocity: AnimationVector2D) {
-        private val converter = TwoWayConverter<IntOffset, AnimationVector2D>(
-            { AnimationVector2D(it.x.toFloat(), it.y.toFloat()) },
-            { IntOffset(it.v1.roundToInt(), it.v2.roundToInt()) })
         private val animation = TargetBasedAnimation(
             spring<IntOffset>(stiffness = Spring.StiffnessMediumLow, visibilityThreshold = IntOffset(1, 1)),
-            converter, initial, IntOffset.Zero, AnimationVector2D(initialVelocity.v1, initialVelocity.v2))
+            IncidentOffsetConverter, initial, IntOffset.Zero, AnimationVector2D(initialVelocity.v1, initialVelocity.v2))
         private var start = Long.MIN_VALUE
         var velocity = AnimationVector2D(initialVelocity.v1, initialVelocity.v2)
             private set

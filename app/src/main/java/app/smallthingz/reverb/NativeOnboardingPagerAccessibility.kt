@@ -80,7 +80,8 @@ internal class NativeOnboardingPagerAccessibility(
     private val windowEvents: NativeWindowHorizontalAccessibilityEvents,
 ) : View.AccessibilityDelegate(), View.OnAttachStateChangeListener, AutoCloseable {
     private var closed = false
-    private var previousOffset: Float? = null
+    private var previousOffset = 0f
+    private var hasPreviousOffset = false
     private var events: NativeHorizontalAccessibilityEventRegistration? = null
 
     init {
@@ -97,13 +98,13 @@ internal class NativeOnboardingPagerAccessibility(
         // The queue uses this callback only for admission after plain invalidate() calls, never
         // during delayed delivery. Recheck lifetime without rebuilding identical node geometry.
         events = windowEvents.register(host, { !closed && host.isAttachedToWindow }, ::readRange)
-        previousOffset = null // Each attached source observation seeds its initial range.
+        hasPreviousOffset = false // Each attached source observation seeds its initial range.
     }
 
     override fun onViewDetachedFromWindow(view: View) {
         val retired = events
         events = null
-        previousOffset = null
+        hasPreviousOffset = false
         retired?.close()
     }
 
@@ -114,8 +115,10 @@ internal class NativeOnboardingPagerAccessibility(
         if (closed) return
         val current = readOffset()
         val previous = previousOffset
+        val hadPreviousOffset = hasPreviousOffset
         previousOffset = current
-        if (previous != null && current != previous && isNodePresent()) events?.scrollChanged()
+        hasPreviousOffset = true
+        if (hadPreviousOffset && current != previous && isNodePresent()) events?.scrollChanged()
     }
 
     /** Host invokes after actual viewport geometry/max-range changes, including max-only layout. */
