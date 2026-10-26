@@ -1,5 +1,6 @@
 package app.smallthingz.reverb
 
+import app.smallthingz.reverb.ReverbService.RecorderConfigurationSnapshot
 import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Method
 import java.util.concurrent.Callable

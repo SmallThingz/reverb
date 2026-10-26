@@ -14,6 +14,75 @@ import org.junit.Test
 
 class PersistentAudioChunkStoreTimestampTest {
     @Test
+    fun epochZeroParentRange_keepsFirstChunkTimestampAcrossLaterNonzeroChunk() = withRoot { root ->
+        val first = pcmBytes()
+        val second = ByteArray(first.size) { (first[it].toInt() xor 0x5a).toByte() }
+        PersistentAudioChunkStore(root, overwriteOldest = false).use { store ->
+            append(store, first, 0L)
+            append(store, second, 10_000L)
+            requireNotNull(store.acquireRange(0.0, 2.0)).use { range ->
+                assertEquals(0L, range.startedAtMillis)
+                assertEquals(11_000L, range.endedAtMillis)
+                assertEquals(2.0, range.durationSeconds, 0.0)
+                assertArrayEquals(first + second, read(range))
+            }
+        }
+    }
+
+    @Test
+    fun epochZeroChildRange_keepsFirstSelectedTimestampAcrossLaterNonzeroChunk() = withRoot { root ->
+        val first = pcmBytes()
+        val second = ByteArray(first.size) { (first[it].toInt() xor 0x5a).toByte() }
+        PersistentAudioChunkStore(root, overwriteOldest = false).use { store ->
+            append(store, first, 0L)
+            append(store, second, 10_000L)
+            requireNotNull(store.acquireRange(0.0, 2.0)).use { parent ->
+                requireNotNull(parent.acquireSubRange(0.0, 1.5)).use { child ->
+                    assertEquals(0L, child.startedAtMillis)
+                    assertEquals(10_500L, child.endedAtMillis)
+                    assertEquals(1.5, child.durationSeconds, 0.0)
+                    assertArrayEquals(first + second.copyOf(8_000), read(child))
+                }
+            }
+        }
+    }
+
+    @Test
+    fun legacyOffsetDerivedZero_keepsParentAndChildStartAcrossLaterChunk() = withRoot { root ->
+        val first = pcmBytes()
+        val second = ByteArray(first.size) { (first[it].toInt() xor 0x5a).toByte() }
+        PersistentAudioChunkStore(root, overwriteOldest = false).use { store -> append(store, first, 10_000L) }
+        val chunk = onlyChunk(root)
+        val bytes = chunk.readBytes()
+        // Preserve a valid signed legacy header: -250 ms + 2,000 frames at 8 kHz is epoch zero.
+        ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).putLong(16, -250L)
+        val checksum = CRC32().apply { update(bytes, 0, 40) }.value.toInt()
+        ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).putInt(40, checksum)
+        chunk.writeBytes(bytes)
+        assertTrue(File(root, BUFFER_INDEX_A_FILE_NAME).delete())
+        File(root, BUFFER_INDEX_B_FILE_NAME).let { if (it.exists()) assertTrue(it.delete()) }
+        val expected = first.copyOfRange(4_000, first.size) + second.copyOf(8_000)
+        PersistentAudioChunkStore(root, overwriteOldest = false).use { store ->
+            append(store, second, 10_000L)
+            requireNotNull(store.acquireRange(0.25, 1.5)).use { range ->
+                assertEquals(0L, range.startedAtMillis)
+                assertEquals(10_500L, range.endedAtMillis)
+                assertEquals(1.25, range.durationSeconds, 0.0)
+                assertArrayEquals(expected, read(range))
+            }
+            requireNotNull(store.acquireRange(0.0, 2.0)).use { parent ->
+                assertEquals(-250L, parent.startedAtMillis)
+                requireNotNull(parent.acquireSubRange(0.25, 1.5)).use { child ->
+                    assertEquals(0L, child.startedAtMillis)
+                    assertEquals(10_500L, child.endedAtMillis)
+                    assertEquals(1.25, child.durationSeconds, 0.0)
+                    assertArrayEquals(expected, read(child))
+                }
+            }
+        }
+    }
+
+    @Test
     fun nearMaximumParentRange_saturatesBothTimestampsWithoutChangingSelectedPcm() = withRoot { root ->
         val pcm = pcmBytes()
         PersistentAudioChunkStore(root, overwriteOldest = false).use { store ->

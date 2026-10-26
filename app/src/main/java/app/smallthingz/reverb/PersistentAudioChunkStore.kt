@@ -715,7 +715,7 @@ internal class PersistentAudioChunkStore internal constructor(
                 timelineStartSeconds = leaseDuration,
                 timelineEndSeconds = leaseDuration + selectedSegmentDuration,
             )
-            if (startedAtMillis == 0L) {
+            if (segments.size == 1) {
                 startedAtMillis = safeAdd(
                     record.createdAtMillis, startFrame * 1000L / record.sampleRate.coerceAtLeast(1),
                 )
@@ -1008,7 +1008,7 @@ internal class PersistentAudioChunkStore internal constructor(
                         timelineStartSeconds = selectedDuration,
                         timelineEndSeconds = selectedDuration + childDuration,
                     )
-                    if (selectedStartedAtMillis == 0L) {
+                    if (selected.size == 1) {
                         selectedStartedAtMillis = safeAdd(
                             segment.record.createdAtMillis, absoluteStartFrame * 1000L / rate,
                         )
