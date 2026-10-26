@@ -339,6 +339,17 @@ class ReliabilityInstrumentation : Instrumentation() {
                             }
                         }
                     }
+                    if (requestedTest == "fractional_range_export") {
+                        executed++
+                        try {
+                            verifyFractionalRangeExport(targetContext, tree, provider)
+                            report.append("PASS fractional_range_export\n")
+                        } catch (error: Throwable) {
+                            failures++
+                            report.append("FAIL fractional_range_export\n")
+                                .append(Log.getStackTraceString(error)).append('\n')
+                        }
+                    }
                     if (requestedTest == null || requestedTest == "provider_terminal_sweep") {
                         verifyProviderTerminalMatrix(targetContext, tree, provider) { name, test ->
                             executed++

@@ -16,7 +16,9 @@ class PcmRateConverterInteriorTest {
                         var tap = 0
                         val converter = PcmRateConverter(frames, step) { frame, channel ->
                             val expected = (base.toLong() + tap - radius).coerceIn(0L, frames - 1L).toInt()
-                            assertEquals("frames=$frames step=$step position=$position tap=$tap", expected, frame)
+                            if (expected != frame) {
+                                assertEquals("frames=$frames step=$step position=$position tap=$tap", expected, frame)
+                            }
                             assertEquals(1, channel)
                             tap++
                             0.375f
@@ -29,7 +31,7 @@ class PcmRateConverterInteriorTest {
         }
     }
 
-    @Test fun accessorFailureReleasesInteriorWorkspaceForTheNextConversion() {
+    @Test fun accessorFailureDoesNotPoisonSubsequentConversion() {
         val failed = PcmRateConverter(1000, 2.0) { _, _ -> throw IllegalStateException("reader failed") }
         org.junit.Assert.assertThrows(IllegalStateException::class.java) { failed.sample(400.25, 0) }
         val next = PcmRateConverter(1000, 3.0) { _, _ -> 0.125f }
