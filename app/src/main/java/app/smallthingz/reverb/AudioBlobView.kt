@@ -377,16 +377,12 @@ internal class AudioBlobView(context: Context) : View(context) {
         }
         private val cosines = FloatArray(FALLBACK_POINTS) { cos(angles[it]) }
         private val sines = FloatArray(FALLBACK_POINTS) { sin(angles[it]) }
-        private var width = 0
-        private var height = 0
         private var primary = 0
         private var tertiary = 0
         private var paused = 0
         private var gradientState = -1
 
         override fun resize(width: Int, height: Int) {
-            this.width = width
-            this.height = height
             gradientState = -1
         }
 

@@ -521,9 +521,21 @@
       }
     },
     "src/main/java/app/smallthingz/reverb/AudioBlobView.kt": {
-      "compiled_sha256": "3fc0556a0df09a3e1440cd22c3076fe8ebd3574002a0903450c7b10720e582d3",
+      "compiled_sha256": "efeae55a15c3d92b9dbff01276b826284220de81ff52abc34677cdc2126e0291",
       "normalized_sha256": "85baca91d5e481a8d49d8c6d40d70797c25920755b0d2b03ea50e975d0318de8",
       "inverse": [
+        {
+          "from": "        private val sines = FloatArray(FALLBACK_POINTS) { sin(angles[it]) }\n",
+          "to": "        private val sines = FloatArray(FALLBACK_POINTS) { sin(angles[it]) }\n        private var width = 0\n        private var height = 0\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "        override fun resize(width: Int, height: Int) {\n            gradientState = -1\n",
+          "to": "        override fun resize(width: Int, height: Int) {\n            this.width = width\n            this.height = height\n            gradientState = -1\n",
+          "count": 1,
+          "word": false
+        },
         {
           "from": "        val attackMix = 1f - (1f - 0.68f).pow(normalized)\n        val releaseMix = 1f - (1f - 0.13f).pow(normalized)\n        for (index in currentBands.indices) {\n            val mix = if (targetBands[index] > currentBands[index]) attackMix else releaseMix\n            currentBands[index] += (targetBands[index] - currentBands[index]) * mix\n        }\n",
           "to": "        for (index in currentBands.indices) {\n            val rate = if (targetBands[index] > currentBands[index]) 0.68f else 0.13f\n            val mix = 1f - (1f - rate).pow(normalized)\n            currentBands[index] += (targetBands[index] - currentBands[index]) * mix\n        }\n",
