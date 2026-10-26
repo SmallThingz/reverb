@@ -2743,13 +2743,16 @@ internal fun readRecoverableStagingFile(file: File): RecoverableStagingWav? {
     }
 }
 
+// Failed publication can change suppression; only success requires relisting.
+private enum class StagedRecoveryOutcome { NONE, ATTEMPTED, PUBLISHED }
+
 private fun recoverStagedFileOutputs(
     context: Context,
     directory: File,
     files: Array<File>,
     suppressedIds: Set<String>,
-): Boolean {
-    var changed = false
+): StagedRecoveryOutcome {
+    var outcome = StagedRecoveryOutcome.NONE
     files.forEach { file ->
         if (file.absolutePath in suppressedIds) return@forEach
         val name = file.name
@@ -2768,10 +2771,11 @@ private fun recoverStagedFileOutputs(
             val target = RecordingOutputTarget(file.absolutePath, metadata.finalDisplayName, "audio/flac",
                 RecordingStorageType.FILE, directory.absolutePath,
                 resolveRecordingStartTimeMillis(metadata.finalDisplayName, file.lastModified()), file = file, staging = true)
+            if (outcome == StagedRecoveryOutcome.NONE) outcome = StagedRecoveryOutcome.ATTEMPTED
             val recovered = runCatching { finalizeOutputTarget(context, target, trackedFingerprint) }
                 .onFailure { Log.w(TAG, "Unable to recover verified FLAC staging ${target.id}", it) }.isSuccess
             if (recovered) removeVerifiedExportStaging(context, target.storageType, target.id, trackedFingerprint)
-            changed = changed || recovered
+            if (recovered) outcome = StagedRecoveryOutcome.PUBLISHED
             return@forEach
         }
         if (!metadata.finalDisplayName.endsWith(".${ExportFormat.WAV.extension}", ignoreCase = true)) return@forEach
@@ -2790,13 +2794,14 @@ private fun recoverStagedFileOutputs(
         )
         val publishFingerprint = trackedFingerprint ?: readStableFileOutputFingerprint(file) ?: return@forEach
         if (!copyDigestMatches(observation.digest, publishFingerprint.digest)) return@forEach
+        if (outcome == StagedRecoveryOutcome.NONE) outcome = StagedRecoveryOutcome.ATTEMPTED
         val recovered = runCatching { finalizeOutputTarget(context, target, publishFingerprint) }
             .onFailure { Log.w(TAG, "Unable to publish recovered staging recording $file", it) }
             .isSuccess
         if (recovered) removeVerifiedExportStaging(context, target.storageType, target.id, publishFingerprint)
-        changed = changed || recovered
+        if (recovered) outcome = StagedRecoveryOutcome.PUBLISHED
     }
-    return changed
+    return outcome
 }
 
 private data class DocumentTreeEntry(
@@ -2876,8 +2881,8 @@ private fun recoverStagedDocumentOutputs(
     treeUri: Uri,
     files: List<DocumentTreeEntry>,
     suppressedIds: Set<String>,
-): Boolean {
-    var changed = false
+): StagedRecoveryOutcome {
+    var outcome = StagedRecoveryOutcome.NONE
     files.forEach { file ->
         if (file.uri.toString() in suppressedIds) return@forEach
         val name = file.name ?: return@forEach
@@ -2893,10 +2898,11 @@ private fun recoverStagedDocumentOutputs(
             val target = RecordingOutputTarget(file.uri.toString(), metadata.finalDisplayName, "audio/flac",
                 RecordingStorageType.DOCUMENT, treeUri.toString(),
                 resolveRecordingStartTimeMillis(metadata.finalDisplayName, file.modifiedMillis), uri = file.uri, staging = true)
+            if (outcome == StagedRecoveryOutcome.NONE) outcome = StagedRecoveryOutcome.ATTEMPTED
             val recovered = runCatching { finalizeOutputTarget(context, target, trackedFingerprint) }
                 .onFailure { Log.w(TAG, "Unable to recover verified FLAC staging ${target.id}", it) }.isSuccess
             if (recovered) removeVerifiedExportStaging(context, target.storageType, target.id, trackedFingerprint)
-            changed = changed || recovered
+            if (recovered) outcome = StagedRecoveryOutcome.PUBLISHED
             return@forEach
         }
         if (!metadata.finalDisplayName.endsWith(".${ExportFormat.WAV.extension}", ignoreCase = true)) return@forEach
@@ -2920,13 +2926,14 @@ private fun recoverStagedDocumentOutputs(
             file.uri.toString(),
         ) ?: return@forEach
         if (!copyDigestMatches(observation.digest, publishFingerprint.digest)) return@forEach
+        if (outcome == StagedRecoveryOutcome.NONE) outcome = StagedRecoveryOutcome.ATTEMPTED
         val recovered = runCatching { finalizeOutputTarget(context, target, publishFingerprint) }
             .onFailure { Log.w(TAG, "Unable to publish recovered staging document ${file.uri}", it) }
             .isSuccess
         if (recovered) removeVerifiedExportStaging(context, target.storageType, target.id, publishFingerprint)
-        changed = changed || recovered
+        if (recovered) outcome = StagedRecoveryOutcome.PUBLISHED
     }
-    return changed
+    return outcome
 }
 
 internal fun fileDirectoryListingFailureIsAuthoritativeEmpty(
@@ -2979,11 +2986,19 @@ private fun listFileDirectoryRecordings(
         // disappeared. Abort this reconciliation scope so existing catalog rows stay visible.
         throw IOException("Unable to list recordings directory: ${directory.absolutePath}")
     }
-    if (recoverStagedFileOutputs(context, directory, files, suppressedIds)) {
+    val recovery = recoverStagedFileOutputs(context, directory, files, suppressedIds)
+    if (recovery == StagedRecoveryOutcome.PUBLISHED) {
         files = directory.listFiles() ?: throw IOException("Unable to relist recordings directory: ${directory.absolutePath}")
     }
+    // Failed recovery can durably suppress a visible result even when no recovery succeeds.
+    // Keep both snapshots so this scan cannot relax an earlier suppression during replay.
+    val recoveredSuppressedIds = if (recovery == StagedRecoveryOutcome.NONE) emptySet()
+    else pendingOutputCleanupIds(context)
     return files.asSequence()
-        .filter { it.absolutePath !in suppressedIds }
+        .filter { file ->
+            val id = file.absolutePath
+            id !in suppressedIds && id !in recoveredSuppressedIds
+        }
         .filter { isDiscoverableFileRecordingName(it.name) }
         .mapNotNull { file ->
             when (fileDirectoryEntryScanAction(observeStoragePath(file))) {
@@ -3161,12 +3176,20 @@ private fun listDocumentTreeRecordings(
     suppressedIds: Set<String>,
 ): List<RecordingEntity> {
     var files = queryDocumentTreeEntries(context, treeUri)
-    if (recoverStagedDocumentOutputs(context, treeUri, files, suppressedIds)) {
+    val recovery = recoverStagedDocumentOutputs(context, treeUri, files, suppressedIds)
+    if (recovery == StagedRecoveryOutcome.PUBLISHED) {
         files = queryDocumentTreeEntries(context, treeUri)
     }
+    // Recovery can reject and suppress a published copy before another entry succeeds.
+    // Read the journal after recovery/relisting, retaining the original exclusions too.
+    val recoveredSuppressedIds = if (recovery == StagedRecoveryOutcome.NONE) emptySet()
+    else pendingOutputCleanupIds(context)
     return files.asSequence()
         .filter { it.isFile }
-        .filter { file -> file.uri.toString() !in suppressedIds }
+        .filter { file ->
+            val id = file.uri.toString()
+            id !in suppressedIds && id !in recoveredSuppressedIds
+        }
         .filter { file -> isSupportedRecordingName(file.name.orEmpty()) }
         .mapNotNull { file ->
             val uri = file.uri
