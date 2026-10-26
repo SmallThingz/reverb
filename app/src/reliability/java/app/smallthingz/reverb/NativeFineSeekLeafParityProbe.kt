@@ -185,15 +185,8 @@ internal fun verifyNativeFineSeekLeafParity(instrumentation: Instrumentation, re
 }
 
 private fun writeFineLeafEvidence(directory: File, result: JSONObject) {
-    val pending = File(directory, "result.pending.json")
-    try {
-        pending.writeText(result.toString(2))
-        check(pending.renameTo(File(directory, "result.json"))) { "FineSeek evidence rename failed" }
-    } catch (error: Throwable) {
-        // A failed rename must not leave a success-labelled pending result for extraction.
-        try { check(!pending.exists() || pending.delete()) { "Cannot remove unpublished FineSeek evidence" } }
-        catch (cleanup: Throwable) { if (cleanup !== error) error.addSuppressed(cleanup) }
-        throw error
+    writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+        output.write(result.toString(2).toByteArray(Charsets.UTF_8))
     }
 }
 
