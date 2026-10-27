@@ -75,10 +75,13 @@ internal object PcmStreamNormalizer {
         val capacity = radius * 2 + 3
         val window = FloatArray(capacity * channels)
         val cursor = VerifiedFrames(readSegments)
-        var base = 0L
+        var firstWindowFrame = 0
+        var lastWindowFrame = 0
+        var windowStart = 0
         val converter = PcmRateConverter(capacity, step) { frame, channel ->
-            val logical = (base + frame).coerceIn(0L, bufferedFrames - 1)
-            window[(logical % capacity).toInt() * channels + channel]
+            val relative = frame.coerceIn(firstWindowFrame, lastWindowFrame) - firstWindowFrame
+            val slot = windowStart + relative
+            window[(if (slot >= capacity) slot - capacity else slot) * channels + channel]
         }
         val framesPerBatch = maximumOutputBatchBytes / outputFrameBytes
         val output = ByteArray(framesPerBatch * outputFrameBytes)
@@ -103,7 +106,14 @@ internal object PcmStreamNormalizer {
                     cursor.next(window, (nextFrame % capacity).toInt() * channels)
                     nextFrame++
                 }
-                base = center - radius
+                val base = center - radius
+                // The verified window spans less than one ring. Resolve its absolute
+                // position once, avoiding Long remainder for every filter tap/channel.
+                firstWindowFrame = (low - base).toInt()
+                lastWindowFrame = firstWindowFrame + minOf(
+                    (capacity - 1 - firstWindowFrame).toLong(), bufferedFrames - 1 - low,
+                ).toInt()
+                windowStart = (low % capacity).toInt()
                 val localPosition = radius + (position - center)
                 val left = converter.sample(localPosition, 0)
                 val right = if (channels == 2) converter.sample(localPosition, 1) else left
