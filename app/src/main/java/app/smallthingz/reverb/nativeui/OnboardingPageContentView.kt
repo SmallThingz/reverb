@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Build
 import android.view.View
 import android.view.ViewGroup
+import android.view.KeyEvent
 import android.widget.FrameLayout
 import smallthingz.ui.text.TextStyle
 import smallthingz.ui.runtime.MonotonicFrameClock
@@ -76,7 +77,7 @@ internal class OnboardingPageContentView(
     private var boundPalette = initialPalette
     private var closed = false
     private var bindingInitialized = false
-    private var audioInteractionAllowed = true
+    private var pageInteractionAllowed = true
     private var owner: ActionOwner? = null
     private var textAccessibility: NativePageTextAccessibilityOwner? = null
     private var environment = ReverbViewEnvironment(density, resolver, initialPalette)
@@ -162,7 +163,9 @@ internal class OnboardingPageContentView(
     fun connect(lifecycleOwner: LifecycleOwner, actions: OnboardingPageActions): AutoCloseable {
         owner?.let(::releaseOwner)
         val connected = ActionOwner(lifecycleOwner, actions)
-        connected.permissionLease = permissions?.connect(lifecycleOwner, actions.requestPermission)
+        connected.permissionLease = permissions?.connect(lifecycleOwner) { permission ->
+            currentActions()?.requestPermission?.invoke(permission)
+        }
         connected.observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_DESTROY) releaseOwner(connected)
         }
@@ -245,18 +248,25 @@ internal class OnboardingPageContentView(
     fun verticalScrollPosition(): Int = viewport.saveScrollPosition()
     fun maximumVerticalScrollPosition(): Int = viewport.state.maxValue
     val acceptsPointerInput: Boolean get() = state.controlsEnabled && state.interactionEnabled &&
-        (page != 2 || audioInteractionAllowed)
+        pageInteractionAllowed
 
-    fun audioInteractionAllowed(allowed: Boolean) {
-        if (audioInteractionAllowed == allowed) return
-        audioInteractionAllowed = allowed
+    fun pageInteractionAllowed(allowed: Boolean) {
+        if (pageInteractionAllowed == allowed) return
+        pageInteractionAllowed = allowed
         updateAudioExposure()
         if (!allowed) cancelInputs()
     }
 
     private fun updateAudioExposure() {
-        audioGroup?.importantForAccessibility = if (state.interactionEnabled && audioInteractionAllowed)
+        audioGroup?.importantForAccessibility = if (state.interactionEnabled && pageInteractionAllowed)
             IMPORTANT_FOR_ACCESSIBILITY_NO else IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        // The pager can retain a focused page after it leaves placement. Its editor must not
+        // consume keyboard input or mutate the draft while another page is displayed.
+        if (!acceptsPointerInput) return false
+        return super.dispatchKeyEvent(event)
     }
 
     fun pointerNodes(view: View): List<NativeViewPhasePointerNode> {

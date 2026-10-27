@@ -217,8 +217,7 @@ internal class NativeOnboardingScreenView private constructor(
         candidatesInPlacementOrder = { page ->
             buildList {
                 fun visit(view: View) {
-                    if (view.visibility != View.VISIBLE ||
-                        view.importantForAccessibility == View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS) return
+                    if (view.visibility != View.VISIBLE) return
                     if (view.isFocusable) add(view)
                     if (view is ViewGroup) for (index in 0 until view.childCount) visit(view.getChildAt(index))
                 }
@@ -330,7 +329,6 @@ internal class NativeOnboardingScreenView private constructor(
     }
 
     private fun publishState() {
-        pages.forEach { it.audioInteractionAllowed(!backMotion.active) }
         val target = navigation.predictiveBackTarget
         val page = target?.sourcePage ?: pager.settledPage
         val footerPage = target?.sourcePage ?: minOf(page, pager.targetPage)
@@ -342,6 +340,7 @@ internal class NativeOnboardingScreenView private constructor(
         val visiblePage = if (!closed && inputScope != null && isAttachedToWindow && contentLaidOut && isShown &&
             windowVisibility == VISIBLE && !stateIsFinishing && !backMotion.active &&
             !pager.isScrollInProgress && pager.targetPage == pager.settledPage) pager.settledPage else -1
+        pages.forEach { it.pageInteractionAllowed(it.page == visiblePage) }
         if (reportedPage != visiblePage) {
             reportedPage = visiblePage // Set before callback: owner publication may synchronously bind this screen.
             actions.pageChanged(visiblePage)

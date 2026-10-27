@@ -193,7 +193,7 @@ internal class NativeOnboardingScreenOwner(
         skipSilenceChanged = { selected -> edit { skipSilence = selected } },
         pageChanged = ::pageChanged,
         compressionLevelChanged = { level ->
-            if (validFlacCompression(level)) edit { compressionLevel = level }
+            if (visiblePage == 2 && validFlacCompression(level)) edit { compressionLevel = level }
         },
         silenceActions = silenceActions,
     )
