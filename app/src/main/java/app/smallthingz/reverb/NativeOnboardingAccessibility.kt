@@ -36,7 +36,7 @@ internal class NativeOnboardingAccessibility(
         NativeTextSemanticsClipPolicy { NativeTextSemanticsClip.Unclipped }, transformPolicy = transformPolicy)
 
     private fun clip(view: View): NativeTextSemanticsClip = when {
-        view === pager() || view is NativeVerticalViewport ||
+        view === pager() || view is NativeVerticalViewport || view is SettingsExpansionView ||
             view.parent is ReverbGroupLayout || footer.clipsAccessibilityTextAt(view) ->
             NativeTextSemanticsClip.Rectangle(ComposeRect(0f, 0f, view.width.toFloat(), view.height.toFloat()))
         else -> NativeTextSemanticsClip.Unclipped
@@ -64,6 +64,8 @@ internal class NativeOnboardingAccessibility(
     private fun isSemantic(view: View): Boolean = view === pager() ||
         view is NativeVerticalViewport || view is NativeMergedRowAccessibilityHost ||
         view is ReverbParagraphView ||
+        view is SilenceCurveView || view is SettingsCalibrationProgressView ||
+        view.parent is CompressionSliderView ||
         (view is OnboardingIconView && !view.contentDescription.isNullOrEmpty())
 
     /** Existing row returns its exact marker/title/body/status order, excluding its fake role. */
@@ -72,7 +74,8 @@ internal class NativeOnboardingAccessibility(
             return view.mergedRowAccessibility.sourceOrderedChildren()
         val result = ArrayList<View>()
         fun visit(child: View) {
-            if (child.visibility != View.VISIBLE) return
+            if (child.visibility != View.VISIBLE ||
+                child.importantForAccessibility == View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS) return
             if (isSemantic(child)) result += child
             else if (child is ViewGroup) for (index in 0 until child.childCount) visit(child.getChildAt(index))
         }

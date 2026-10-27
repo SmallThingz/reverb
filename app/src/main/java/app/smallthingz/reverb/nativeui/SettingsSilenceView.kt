@@ -11,6 +11,7 @@ import app.smallthingz.reverb.NativeViewPhasePointerNode
 import app.smallthingz.reverb.R
 import app.smallthingz.reverb.SilenceCurveView
 import app.smallthingz.reverb.SilenceGateConfig
+import app.smallthingz.reverb.uncalibratedSilenceCurve
 import kotlinx.coroutines.CoroutineScope
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -126,8 +127,10 @@ private class SilenceBody(
         ReverbTextRole.BODY_SMALL,environment.palette.muted)
     private val error=environment.paragraph(context,"",ReverbTextRole.BODY_SMALL,environment.palette.error)
     private val unavailable=environment.paragraph(context,"",ReverbTextRole.BODY_SMALL,environment.palette.muted)
+    private val needsCalibration=environment.paragraph(context,context.getString(R.string.silence_needs_calibration),
+        ReverbTextRole.BODY_SMALL,environment.palette.muted)
     private val progress=SettingsCalibrationProgressView(context,environment)
-    private val visibleItems=ArrayList<View>(6)
+    private val visibleItems=ArrayList<View>(7)
     private val gesture:SettingsCalibrationGesture=SettingsCalibrationGesture(::canBegin,
         {actions()?.beginHeld()==true},{actions()?.completeTap()},{actions()?.finishHeld()},
         {actions()?.cancel()},{refresh()},
@@ -143,7 +146,9 @@ private class SilenceBody(
         importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO
         ViewCompat.setAccessibilityLiveRegion(sampling,View.ACCESSIBILITY_LIVE_REGION_POLITE)
         ViewCompat.setAccessibilityLiveRegion(error,View.ACCESSIBILITY_LIVE_REGION_POLITE)
+        ViewCompat.setAccessibilityLiveRegion(needsCalibration,View.ACCESSIBILITY_LIVE_REGION_POLITE)
         addView(curve);addView(buttonRow);addView(sampling);addView(progress);addView(error);addView(unavailable)
+        addView(needsCalibration)
         curve.onCommit={points,index->
             if(canEdit()) {
                 select(index.coerceIn(points.indices))
@@ -154,7 +159,7 @@ private class SilenceBody(
         refresh()
     }
     private fun canBegin()=state.enabled&&state.config.enabled&&state.calibrationAllowed&&!state.calibrating
-    private fun canEdit()=state.enabled&&state.config.enabled&&!state.calibrating
+    private fun canEdit()=state.enabled&&state.config.enabled&&state.sampledPeaks!=null&&!state.calibrating
     fun bind(next:SettingsSilenceState,colors:ReverbViewEnvironment) {
         state=next;environment=colors;refresh()
     }
@@ -163,8 +168,12 @@ private class SilenceBody(
         next.calibrationProgress?.let {progress.bind(it,environment)}
     }
     private fun bindCurve() {
-        curve.bind(state.config,selected().coerceIn(state.config.points.indices),state.sampledPeaks,state.maximumHz,
-            environment.palette.primary,environment.palette.ink,environment.palette.muted,canEdit())
+        val presentation=if(state.sampledPeaks==null)uncalibratedSilenceCurve else state.config
+        curve.contentDescription=context.getString(if(state.sampledPeaks==null)R.string.silence_needs_calibration
+            else R.string.silence_graph_description)
+        curve.bind(presentation,selected().coerceIn(presentation.points.indices),state.sampledPeaks,state.maximumHz,
+            if(state.sampledPeaks==null)environment.palette.muted else environment.palette.primary,
+            environment.palette.ink,environment.palette.muted,canEdit())
     }
     private fun refresh() {
         if(closed)return
@@ -179,6 +188,7 @@ private class SilenceBody(
         environment.bindParagraphStyle(sampling,ReverbTextRole.BODY_SMALL,environment.palette.muted)
         environment.bindParagraphStyle(error,ReverbTextRole.BODY_SMALL,environment.palette.error)
         environment.bindParagraphStyle(unavailable,ReverbTextRole.BODY_SMALL,environment.palette.muted)
+        environment.bindParagraphStyle(needsCalibration,ReverbTextRole.BODY_SMALL,environment.palette.muted)
         error.setText(state.calibrationError.orEmpty())
         unavailable.setText(state.calibrationUnavailableReason.orEmpty())
         val showSampling=state.calibrating&&!state.holdingCalibration
@@ -188,8 +198,11 @@ private class SilenceBody(
         error.visibility=if(state.calibrationError!=null)VISIBLE else GONE
         unavailable.visibility=if(!state.calibrationAllowed&&!state.calibrating&&
             state.calibrationUnavailableReason!=null)VISIBLE else GONE
+        needsCalibration.visibility=if(state.sampledPeaks==null&&!state.calibrating)VISIBLE else GONE
         visibleItems.clear()
-        visibleItems.add(curve);visibleItems.add(buttonRow)
+        visibleItems.add(curve)
+        if(needsCalibration.visibility==VISIBLE)visibleItems.add(needsCalibration)
+        visibleItems.add(buttonRow)
         if(sampling.visibility==VISIBLE)visibleItems.add(sampling)
         if(progress.visibility==VISIBLE)visibleItems.add(progress)
         if(error.visibility==VISIBLE)visibleItems.add(error)
@@ -224,7 +237,8 @@ private class SilenceBody(
         try {gesture.cancel()}finally {
             calibrate.close();cancel.close()
             curve.onCommit=null;curve.onSelect=null
-            curve.bind(state.config,selected().coerceIn(state.config.points.indices),null,state.maximumHz,
+            val presentation=if(state.sampledPeaks==null)uncalibratedSilenceCurve else state.config
+            curve.bind(presentation,selected().coerceIn(presentation.points.indices),null,state.maximumHz,
                 environment.palette.primary,environment.palette.ink,environment.palette.muted,false)
         }
     }

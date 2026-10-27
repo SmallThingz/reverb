@@ -21,6 +21,12 @@ internal const val SILENCE_MIN_DB = -96
 internal const val SILENCE_MAX_POINTS = 16
 internal const val SILENCE_HOLD_MILLIS = 200
 internal const val SILENCE_GRAPH_BINS = 96
+private val silenceCurveFrequencies = listOf(20, 40, 80, 160, 315, 630, 1_250, 2_500, 5_000, 10_000, 20_000)
+
+/** Display-only placeholder: zero dB must never become an uncalibrated capture threshold. */
+internal val uncalibratedSilenceCurve = SilenceGateConfig(
+    points = silenceCurveFrequencies.map { SilencePoint(it, 0) },
+)
 
 internal data class SilencePoint(val hz: Int, val db: Int)
 internal data class SilenceGateConfig(
@@ -688,7 +694,7 @@ internal class SilenceGateStream(
 internal fun sampledSilenceCurve(peaks: List<Float>, maxHz: Int): List<SilencePoint> {
     require(peaks.size == SILENCE_GRAPH_BINS && peaks.all { it.isFinite() })
     require(maxHz in SILENCE_MIN_HZ..SILENCE_MAX_HZ)
-    val frequencies = listOf(20, 40, 80, 160, 315, 630, 1_250, 2_500, 5_000, 10_000, 20_000)
+    val frequencies = silenceCurveFrequencies
     return frequencies.mapIndexed { index, hz ->
         // Adjacent points both cover the interval: interpolation cannot undercut measured room peaks.
         val low = frequencies[(index - 1).coerceAtLeast(0)]

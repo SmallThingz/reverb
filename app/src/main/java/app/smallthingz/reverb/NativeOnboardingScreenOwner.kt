@@ -16,6 +16,8 @@ import app.smallthingz.reverb.nativeui.OnboardingPageActions
 import app.smallthingz.reverb.nativeui.OnboardingPageContentState
 import app.smallthingz.reverb.nativeui.OnboardingPermission
 import app.smallthingz.reverb.nativeui.OnboardingPermissionStatus
+import app.smallthingz.reverb.nativeui.SettingsSilenceActions
+import app.smallthingz.reverb.nativeui.SettingsSilenceState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -26,6 +28,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
 
 /** Existing Activity registers these four RequestPermission contracts in the released order. */
 internal data class NativeOnboardingPermissionLaunchers(
@@ -57,8 +60,8 @@ internal data class NativeOnboardingScreenSnapshot(
  * No launcher registration order changes,
  * new permission contract, permission escalation, renderer, Composition or process-wide state.
  *
- * Permission prompts require explicit row taps. Only the existing atomic Finish transaction
- * publishes the buffer and two audio-switch choices.
+ * Permission prompts advance automatically on the first page. Only the atomic Finish transaction
+ * publishes the buffer and audio choices.
  */
 @MainThread
 internal class NativeOnboardingScreenOwner(
@@ -96,6 +99,7 @@ internal class NativeOnboardingScreenOwner(
     private var visiblePage = -1
     private var inputRefreshJob: Job? = null
     private var inputRefreshPending = false
+    private var permissionPromptJob: Job? = null
 
     private var microphoneAllowed = hasMicrophonePermission()
     private var storageAllowed = hasLegacyStoragePermission()
@@ -111,6 +115,49 @@ internal class NativeOnboardingScreenOwner(
     private var configuration: OnboardingConfiguration? = null
     private var draft: NativeOnboardingDraft? = null
     private var finishState = processOnboardingFinish.state.value
+    private var editRevision = 0L
+    private var histogramRaw: String? = null
+    private var histogram: SilenceCalibrationHistogram? = null
+    private val calibrationBindingDelegate = lazy(LazyThreadSafetyMode.NONE) { NativeSettingsCalibrationBinding(
+        activity, scope, activity.window.decorView, activity.lifecycle,
+        readOwner = { config, input ->
+            val current = draft
+            if (!closed && showingOnboarding && visiblePage == 2 &&
+                finishState == OnboardingFinishState.IDLE && current != null &&
+                config.enabled && current.silenceConfig.copy(enabled = current.skipSilence) == config &&
+                configuration?.input == input) editRevision to 0 else null
+        },
+        onCalibrated = { config, measured ->
+            draft?.let { current ->
+                current.silenceConfig = config
+                current.silenceHistogram = encodeSilenceCalibrationHistogram(measured)
+                configuration = configuration?.copy(silenceValid = true)
+                editRevision++
+                publish()
+            }
+        },
+        onChanged = ::publish,
+    ) }
+    private val calibrationBinding by calibrationBindingDelegate
+    private val calibration get() = calibrationBinding.controller
+    private val silenceActions = object : SettingsSilenceActions {
+        override fun configChanged(config: SilenceGateConfig) {
+            if (visiblePage != 2) return
+            edit {
+                silenceConfig = config
+                skipSilence = config.enabled
+                configuration = configuration?.copy(silenceValid = true)
+            }
+        }
+        override fun calibrate() = beginCalibration(held = false)
+        override fun beginHeld(): Boolean {
+            beginCalibration(held = true)
+            return calibration.running && calibration.holding
+        }
+        override fun completeTap() = calibration.completeTap()
+        override fun finishHeld() = calibration.finishHeld()
+        override fun cancel() = calibration.cancel()
+    }
 
     private val lifecycleObserver = LifecycleEventObserver { _, event ->
         when (event) {
@@ -124,6 +171,7 @@ internal class NativeOnboardingScreenOwner(
                     refreshOptionalPermissionStatus()
                     refreshAudioInput()
                     publish()
+                    schedulePermissionPrompt()
                 }
             }
             else -> Unit
@@ -144,6 +192,10 @@ internal class NativeOnboardingScreenOwner(
         },
         skipSilenceChanged = { selected -> edit { skipSilence = selected } },
         pageChanged = ::pageChanged,
+        compressionLevelChanged = { level ->
+            if (validFlacCompression(level)) edit { compressionLevel = level }
+        },
+        silenceActions = silenceActions,
     )
 
     val snapshot: NativeOnboardingScreenSnapshot
@@ -162,6 +214,8 @@ internal class NativeOnboardingScreenOwner(
                     silenceValid = loaded.silenceValid,
                     controlsEnabled = !finishing,
                     interactionEnabled = !finishing,
+                    compressionLevel = current.compressionLevel,
+                    silenceState = silenceState(current, loaded, !finishing),
                 )
             } else null
             return NativeOnboardingScreenSnapshot(showingOnboarding, page, finishing,
@@ -210,6 +264,7 @@ internal class NativeOnboardingScreenOwner(
         showPermissionDenied = !microphoneAllowed && !showingOnboarding
         if (microphoneAllowed && !showingOnboarding) beginPermissionFlow()
         publish()
+        schedulePermissionPrompt()
     }
 
     fun onStoragePermissionResult(granted: Boolean) {
@@ -220,6 +275,7 @@ internal class NativeOnboardingScreenOwner(
         showPermissionDenied = !storageAllowed && !showingOnboarding
         if (storageAllowed && !showingOnboarding) beginPermissionFlow()
         publish()
+        schedulePermissionPrompt()
     }
 
     fun onRecoveryPermissionResult(granted: Boolean) {
@@ -229,6 +285,7 @@ internal class NativeOnboardingScreenOwner(
         if (recoveryAllowed) AppFeedbackCenter.post(
             activity.getString(R.string.recording_recovery_enabled), FeedbackTone.SUCCESS)
         publish()
+        schedulePermissionPrompt()
     }
 
     fun onNotificationPermissionResult(granted: Boolean) {
@@ -237,6 +294,7 @@ internal class NativeOnboardingScreenOwner(
         // Deliberately use the actual result, as the released callback does, rather than reread.
         notificationAllowed = granted
         publish()
+        schedulePermissionPrompt()
     }
 
     fun dismissPermissionDenied() {
@@ -253,6 +311,7 @@ internal class NativeOnboardingScreenOwner(
     fun finish() {
         if (closed || !showingOnboarding || visiblePage != 2) return
         val current = draft ?: return
+        if (calibration.running) calibration.cancel()
         val oneShot = current.oneShotEnabled
         val looping = current.loopingEnabled
         val originalAudio = current.originalAudio
@@ -296,9 +355,22 @@ internal class NativeOnboardingScreenOwner(
         )
 
     private fun requestPermission(permission: OnboardingPermission) {
-        if (closed || !showingOnboarding || configuration == null) return
+        if (closed || !showingOnboarding || visiblePage != 0 || configuration == null) return
         if (permissionSequence.claimManual(permission, permissionStatus(),
                 activity.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))) launchPermission(permission)
+    }
+
+    private fun schedulePermissionPrompt() {
+        if (closed || !attached || !showingOnboarding || visiblePage != 0 || configuration == null ||
+            permissionPromptJob != null) return
+        permissionPromptJob = scope.launch {
+            // Leave renderer/result callbacks before launching another system Activity.
+            yield()
+            permissionPromptJob = null
+            if (closed || !showingOnboarding || visiblePage != 0) return@launch
+            permissionSequence.claimNext(permissionStatus(),
+                activity.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))?.let(::launchPermission)
+        }
     }
 
     private fun launchPermission(permission: OnboardingPermission) {
@@ -335,11 +407,41 @@ internal class NativeOnboardingScreenOwner(
                 appContext, "onboarding permission request", failure)
             AppFeedbackCenter.post(activity.getString(R.string.no_app_available), FeedbackTone.ERROR)
         }
+        if (permissionSequence.pending == null) schedulePermissionPrompt()
     }
 
     private fun pageChanged(page: Int) {
         if (closed || visiblePage == page) return
         visiblePage = page
+        if (page != 2 && calibration.running) calibration.cancel()
+        schedulePermissionPrompt()
+    }
+
+    private fun beginCalibration(held: Boolean) {
+        val current = draft ?: return
+        val input = configuration?.input ?: return
+        val config = current.silenceConfig.copy(enabled = current.skipSilence)
+        if (held) calibration.beginHeld(config, input) else calibration.beginTimed(config, input)
+    }
+
+    private fun silenceState(current: NativeOnboardingDraft, loaded: OnboardingConfiguration,
+        enabled: Boolean): SettingsSilenceState {
+        if (histogramRaw != current.silenceHistogram) {
+            histogramRaw = current.silenceHistogram
+            histogram = decodeSilenceCalibrationHistogram(histogramRaw)
+        }
+        val input = loaded.input
+        return SettingsSilenceState(
+            config = current.silenceConfig.copy(enabled = current.skipSilence),
+            enabled = enabled,
+            maximumHz = minOf(SILENCE_MAX_HZ, input?.sampleRate?.div(2) ?: SILENCE_MAX_HZ),
+            sampledPeaks = input?.let { histogram?.peaksFor(it) },
+            calibrationAllowed = input != null,
+            calibrating = calibration.running,
+            holdingCalibration = calibration.holding,
+            calibrationProgress = calibration.progress,
+            calibrationError = calibration.error,
+        )
     }
 
     /** Event-driven IO refresh preserves untouched choices without reading preferences on UI frames. */
@@ -356,9 +458,14 @@ internal class NativeOnboardingScreenOwner(
                         val loaded = configuration
                         val current = draft
                         if (!closed && showingOnboarding && loaded != null && current != null) {
+                            val before = current.selectedAudio
                             current.refreshUntouchedAudio(fresh.audio)
                             configuration = loaded.copy(input = fresh.input, audio = fresh.audio,
                                 compressionAvailable = fresh.compressionAvailable, silenceValid = fresh.silenceValid)
+                            if (loaded.input != fresh.input || before != current.selectedAudio) {
+                                editRevision++
+                                calibration.cancel(clearMeasurement = true)
+                            }
                             publish()
                         }
                     } catch (cancelled: CancellationException) {
@@ -378,7 +485,9 @@ internal class NativeOnboardingScreenOwner(
     private inline fun edit(update: NativeOnboardingDraft.() -> Unit) {
         if (closed || !showingOnboarding || finishState != OnboardingFinishState.IDLE) return
         val current = draft ?: return
+        if (calibration.running) calibration.cancel()
         current.update()
+        editRevision++
         publish()
     }
 
@@ -399,6 +508,7 @@ internal class NativeOnboardingScreenOwner(
                         configuration = loaded
                         draft = NativeOnboardingDraft.restore(loaded, restoredDraft)
                         publish()
+                        schedulePermissionPrompt()
                     }
                     return@launch
                 }
@@ -422,6 +532,9 @@ internal class NativeOnboardingScreenOwner(
                         configuration = null
                         draft = null
                         showingOnboarding = false
+                        histogramRaw = null
+                        histogram = null
+                        if (calibrationBindingDelegate.isInitialized()) calibrationBinding.close()
                         beginPermissionFlow()
                         publish()
                     }
@@ -498,6 +611,7 @@ internal class NativeOnboardingScreenOwner(
         if (closed) return
         closed = true
         publishTarget = null
+        if (calibrationBindingDelegate.isInitialized()) calibrationBinding.close()
         activity.lifecycle.removeObserver(lifecycleObserver)
         scope.cancel() // Only UI hydration/observation. Never cancels an accepted process commit.
     }

@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_back_discard_hint">Undo or apply your changes. Press Back again to discard them.</string>
+</resources>

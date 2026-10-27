@@ -3,6 +3,7 @@ package app.smallthingz.reverb
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.SystemClock
 import android.view.View
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -42,6 +43,9 @@ internal class NativeSettingsOwner(
     private var changed: () -> Unit = {}
     private var draftReconciliationDepth = 0
     private var previousPresentation: SettingsDraftPresentation? = null
+    private val backConfirmation = SettingsBackConfirmation()
+    var backHint: Any? = null
+        private set
     private var hydrationEffectInitialized = false
     private var hydrationActive = false
     private var hydrationPersisting = false
@@ -112,6 +116,7 @@ internal class NativeSettingsOwner(
 
     private val lifecycleObserver = LifecycleEventObserver { _, event ->
         when (event) {
+            Lifecycle.Event.ON_PAUSE -> { resetBackConfirmation(); notifyChanged() }
             Lifecycle.Event.ON_START -> refreshMoveAvailability()
             Lifecycle.Event.ON_STOP -> moveAvailability.hide()
             Lifecycle.Event.ON_RESUME -> if (batteryObserverInstalled) refreshBattery()
@@ -169,6 +174,7 @@ internal class NativeSettingsOwner(
     /** Wheel/tile owners call this after their complete state transition, not on every draw. */
     fun childInteractionChanged() {
         if (closed) return
+        resetBackConfirmation()
         val current = state
         if (!current.active) quickTileEditorState.closeEditor()
         else quickTileEditorState.restorePendingDraft(current.hydrated && current.interactionReady)
@@ -246,22 +252,41 @@ internal class NativeSettingsOwner(
     fun navigateBack(renderedActivation: Any) {
         if (!acceptsInput(renderedActivation)) return
         when {
-            quickTileEditorState.editorOpen -> { quickTileEditorState.closeEditor(); notifyChanged() }
-            calibration.running -> calibration.cancel()
-            state.hasUnsavedChanges -> undo()
+            state.persisting || notificationDurationInteraction.pending -> resetBackConfirmation()
+            quickTileEditorState.editorOpen -> {
+                resetBackConfirmation(); quickTileEditorState.closeEditor(); notifyChanged()
+            }
+            calibration.running -> { resetBackConfirmation(); calibration.cancel() }
+            state.hasUnsavedChanges -> {
+                if (backConfirmation.confirm(SystemClock.uptimeMillis(), state.editRevision)) {
+                    undo()
+                    releaseInputFocus()
+                    onBack()
+                } else {
+                    backHint = Any()
+                    notifyChanged()
+                    view.announceForAccessibility(context.getString(R.string.settings_back_discard_hint))
+                }
+            }
             else -> { releaseInputFocus(); onBack() }
         }
     }
 
-    /** Released BackHandler has child-editor precedence; surrounding panel owns ordinary Back. */
-    fun closeTileEditorOnBack(): Boolean {
-        if (!state.active || !quickTileEditorState.editorOpen) return false
-        quickTileEditorState.closeEditor()
-        notifyChanged()
-        return true
+    /** The visible Undo action is explicit; it never arms the system-Back confirmation. */
+    fun navigationAction(renderedActivation: Any) {
+        if (!acceptsInput(renderedActivation)) return
+        if (quickTileEditorState.editorOpen || calibration.running || state.persisting ||
+            notificationDurationInteraction.pending || !state.hasUnsavedChanges) navigateBack(renderedActivation)
+        else undo()
+    }
+
+    private fun resetBackConfirmation() {
+        backConfirmation.reset()
+        backHint = null
     }
 
     private fun undo() {
+        resetBackConfirmation()
         val current = state
         if (!current.hasUnsavedChanges) return
         errors = NativeSettingsRetentionErrors()
@@ -546,6 +571,9 @@ internal class NativeSettingsOwner(
         try {
             val old = previousPresentation
             previousPresentation = current
+            if (old == null || old.activation !== current.activation || old.editRevision != current.editRevision ||
+                old.persisting != current.persisting || !current.hasUnsavedChanges || !current.active)
+                resetBackConfirmation()
             if (old == null || old.active != current.active || old.interactionReady != current.interactionReady ||
                 old.persisting != current.persisting || old.editRevision != current.editRevision ||
                 old.calibrationResetRevision != current.calibrationResetRevision) calibration.cancel()

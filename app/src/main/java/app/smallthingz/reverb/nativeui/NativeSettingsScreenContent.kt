@@ -54,13 +54,13 @@ internal class NativeSettingsScreenContent(
     private var focusKeyInitialized=false
     private var previousFocusBuffer:ReverbService.BufferSlot?=null
     private var previousBatteryRestricted=false
-    val topBar=ReverbSettingsTopBarView(context,environment) {inputRoot}
+    val topBar=ReverbSettingsTopBarView(context,environment,animationScope) {inputRoot}
     private val deleteSheet=NativeSettingsTileDeleteSheet(this) {environment}
     private val sections=NativeSettingsSections(context,owner,{environment},lifecycleOwner.lifecycle,
         {inputRoot},frames,animationScope,parentInterested,{input.focusRetention},
         deleteSheet::bind,::structureChanged)
     private val editorBack=object:OnBackPressedCallback(false) {
-        override fun handleOnBackPressed() {owner.closeTileEditorOnBack()}
+        override fun handleOnBackPressed() {owner.navigateBack(owner.state.activation)}
     }.also {backDispatcher.addCallback(lifecycleOwner,it)}
 
     val pointerEnvironment get()=environment
@@ -112,7 +112,9 @@ internal class NativeSettingsScreenContent(
     }
     private fun render() {
         val state=owner.state
-        editorBack.isEnabled=state.active&&owner.quickTileEditorState.editorOpen
+        editorBack.isEnabled=state.active&&(state.hasUnsavedChanges||state.persisting||
+            owner.quickTileEditorState.editorOpen||owner.calibration.running||
+            owner.notificationDurationInteraction.pending)
         importantForAccessibility=if(inputAllowed)IMPORTANT_FOR_ACCESSIBILITY_NO
             else IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
         val focusBuffer=input.focusRetention
@@ -150,11 +152,12 @@ internal class NativeSettingsScreenContent(
         }
         val bar=TopBarValues(state.activation,state.hasUnsavedChanges,state.persisting,
             owner.calibration.running,owner.quickTileEditorState.editorOpen,
-            owner.notificationDurationInteraction.pending,environment)
+            owner.notificationDurationInteraction.pending,owner.backHint,environment)
         if(lastTopBar!=bar) {
             lastTopBar=bar
             topBar.bind(environment,SettingsTopBarBinding(bar.changed,bar.persisting,bar.calibrating,
-                bar.tileOpen,bar.durationPending,{owner.navigateBack(bar.activation)},{owner.done(bar.activation)}))
+                bar.tileOpen,bar.durationPending,{owner.navigationAction(bar.activation)},{owner.done(bar.activation)},
+                bar.backHint))
         }
         topBar.setRemainingWindowInsets(NativeSettingsTopBarInsets(input.insets.left,input.insets.top,input.insets.right))
         if(pendingRetentionFocus) {
@@ -209,7 +212,7 @@ internal class NativeSettingsScreenContent(
         }}
         retire(deleteSheet::close)
         retire {list?.close()};list=null
-        retire(topBar::cancelInput)
+        retire(topBar::close)
         retire(owner::close)
         failure?.let {throw it}
     }
@@ -217,5 +220,6 @@ internal class NativeSettingsScreenContent(
         val path:String,val canMove:Boolean,val restricted:Boolean,val environment:ReverbViewEnvironment,
         val focus:ReverbService.BufferSlot?)
     private data class TopBarValues(val activation:Any,val changed:Boolean,val persisting:Boolean,
-        val calibrating:Boolean,val tileOpen:Boolean,val durationPending:Boolean,val environment:ReverbViewEnvironment)
+        val calibrating:Boolean,val tileOpen:Boolean,val durationPending:Boolean,val backHint:Any?,
+        val environment:ReverbViewEnvironment)
 }

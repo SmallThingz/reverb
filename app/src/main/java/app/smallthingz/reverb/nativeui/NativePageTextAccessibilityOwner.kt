@@ -123,7 +123,7 @@ internal class NativeWindowTextAccessibilityOwner(
         page, cursor,
         geometry( NativeTextSemanticsClipPolicy { view ->
             when {
-                view === sourceScrollViewport ->
+                view === sourceScrollViewport || (view.isWithin(page) && view is SettingsExpansionView) ->
                     NativeTextSemanticsClip.Rectangle(Rect(0f, 0f, view.width.toFloat(), view.height.toFloat()))
                 // These exact native ancestors implement Surface graphicsLayer(clip=true).
                 // Source rectInParent clips semantics to the rectangular layer extent even when
@@ -164,6 +164,7 @@ internal class NativePageTextAccessibilityOwner internal constructor(
         fun visit(view: View) {
             if (view.importantForAccessibility == View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS) return
             if (view is ReverbParagraphView || view is NativeMergedRowAccessibilityHost ||
+                (page is OnboardingPageContentView && view is SettingsCalibrationProgressView) ||
                 (view is OnboardingIconView && !view.contentDescription.isNullOrEmpty())) present[view] = true
             if (view is ViewGroup) {
                 for (index in 0 until view.childCount) visit(view.getChildAt(index))
@@ -186,6 +187,7 @@ internal class NativePageTextAccessibilityOwner internal constructor(
                 } else view.mergedRowAccessibility.bindGeometry(geometry) { exposed(view) }
                 is OnboardingIconView -> view.bindDescriptionAccessibility(cursor,
                     sourceNode?.let { node -> { node(view) } }) { exposed(view) }
+                is SettingsCalibrationProgressView -> view.bindAccessibility(geometry) { exposed(view) }
                 else -> error("Unexpected page accessibility binding")
             }
         }

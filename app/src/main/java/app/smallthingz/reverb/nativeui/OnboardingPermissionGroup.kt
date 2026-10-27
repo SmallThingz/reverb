@@ -74,13 +74,13 @@ internal class OnboardingPermissionGroup(
     fun bind(status: OnboardingPermissionStatus, palette: ReverbPalette) {
         val states = buildList {
             add(PermissionRowState(OnboardingPermission.MICROPHONE, "●",
-                context.getString(R.string.onboarding_microphone_title), null,
+                context.getString(R.string.onboarding_microphone_title), context.getString(R.string.onboarding_microphone_body),
                 status.microphoneAllowed, status.interactionEnabled))
             if (status.storageRequired) add(PermissionRowState(OnboardingPermission.STORAGE, "S",
                 context.getString(R.string.storage_settings_title), context.getString(R.string.onboarding_storage_body),
                 status.storageAllowed, status.interactionEnabled))
             if (status.recoveryRequired) add(PermissionRowState(OnboardingPermission.RECOVERY, "R",
-                context.getString(R.string.recording_recovery_title), context.getString(R.string.recording_recovery_body),
+                context.getString(R.string.recording_recovery_title), context.getString(R.string.onboarding_recovery_body),
                 status.recoveryAllowed, status.interactionEnabled))
             add(PermissionRowState(OnboardingPermission.NOTIFICATIONS, "N",
                 context.getString(R.string.onboarding_notifications_title), context.getString(R.string.onboarding_notifications_body),

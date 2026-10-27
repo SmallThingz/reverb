@@ -217,8 +217,9 @@ internal class NativeOnboardingScreenView private constructor(
         candidatesInPlacementOrder = { page ->
             buildList {
                 fun visit(view: View) {
-                    if (view.visibility != View.VISIBLE) return
-                    if (view.isFocusable && view is NativeClickPhaseHost) add(view)
+                    if (view.visibility != View.VISIBLE ||
+                        view.importantForAccessibility == View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS) return
+                    if (view.isFocusable) add(view)
                     if (view is ViewGroup) for (index in 0 until view.childCount) visit(view.getChildAt(index))
                 }
                 visit(pages[page])
@@ -302,6 +303,11 @@ internal class NativeOnboardingScreenView private constructor(
     private fun createPage(page: Int, value: OnboardingPageContentState): OnboardingPageContentView = OnboardingPageContentView(
         context, page, typography, density, environment.sharedFontResolver, value,
         environment.palette, scrollStates[page], frames, scope, scrolling.pageNestedHost, interactions,
+        inputRoot = { this },
+        parentInterested = { change ->
+            pages.getOrNull(page)?.sourceVerticalViewport?.let { vertical[it]?.interested(change) } == true ||
+                (this::horizontal.isInitialized && horizontal.interested(change))
+        },
     )
 
     private fun addVertical(page: OnboardingPageContentView) {
@@ -324,6 +330,7 @@ internal class NativeOnboardingScreenView private constructor(
     }
 
     private fun publishState() {
+        pages.forEach { it.audioInteractionAllowed(!backMotion.active) }
         val target = navigation.predictiveBackTarget
         val page = target?.sourcePage ?: pager.settledPage
         val footerPage = target?.sourcePage ?: minOf(page, pager.targetPage)
@@ -513,6 +520,14 @@ internal class NativeOnboardingScreenView private constructor(
     }
 
     internal fun pointerNodes(view: View): List<NativeViewPhasePointerNode> {
+        var pageParent: View? = view
+        while (pageParent != null && pageParent !== this) {
+            if (pageParent is OnboardingPageContentView && !pageParent.acceptsPointerInput) return emptyList()
+            pageParent = pageParent.parent as? View
+        }
+        for (page in pages) page.pointerNodes(view).let { if (it.isNotEmpty()) return it }
+        preview?.pointerNodes(view)?.let { if (it.isNotEmpty()) return it }
+        if (view is SilenceCurveView) return pointer.androidLeaf(view)
         return when {
         view === viewport -> horizontal.nodes
         view is NativeVerticalViewport -> vertical[view]?.nodes ?: emptyList()
@@ -551,9 +566,14 @@ private class OnboardingPointerGeometry(private val environment: ReverbViewEnvir
     lateinit var root: NativeOnboardingScreenView
     val coordinates = NativeWindowPointerCoordinates { root }
     private val clicks = java.util.IdentityHashMap<View, NativeClickPhaseNode>()
+    private val androidLeaves = java.util.IdentityHashMap<View, NativeAndroidInteropNode>()
     val rootLayout: NativeViewPointerHitLayout = Layout { root }
     fun click(view: View, endpoint: NativeClickPhaseEndpoint, interested: (NativeDragPointerChange) -> Boolean) =
         clicks.getOrPut(view) { NativeClickPhaseNode(view, endpoint, interested) }
+
+    fun androidLeaf(view: View): List<NativeViewPhasePointerNode> = listOf(androidLeaves.getOrPut(view) {
+        NativeAndroidInteropNode(view, (view.parent as NativeAndroidInteropHost).nativeInteropRequests)
+    })
 
     fun retireRemovedClicks() {
         fun belongs(view: View): Boolean {
@@ -565,11 +585,14 @@ private class OnboardingPointerGeometry(private val environment: ReverbViewEnvir
             return false
         }
         clicks.keys.filterNot(::belongs).forEach { clicks.remove(it)?.cancel() }
+        androidLeaves.keys.filterNot(::belongs).forEach { androidLeaves.remove(it)?.close() }
     }
 
     fun close() {
         clicks.values.forEach { it.cancel() }
         clicks.clear()
+        androidLeaves.values.forEach { it.close() }
+        androidLeaves.clear()
     }
 
     private inner class Layout(private val getView: () -> View) : NativeViewPointerHitLayout {

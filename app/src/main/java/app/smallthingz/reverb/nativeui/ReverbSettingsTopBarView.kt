@@ -1,7 +1,9 @@
 package app.smallthingz.reverb.nativeui
 
 import android.content.Context
+import android.animation.ValueAnimator
 import android.graphics.Canvas
+import android.graphics.drawable.ColorDrawable
 import android.os.Build
 import android.view.MotionEvent
 import android.view.View
@@ -11,6 +13,12 @@ import app.smallthingz.reverb.NativeDragPointerEvent
 import app.smallthingz.reverb.NativePointerPass
 import app.smallthingz.reverb.NativeViewPhasePointerNode
 import app.smallthingz.reverb.R
+import smallthingz.ui.animation.core.Animatable
+import smallthingz.ui.animation.core.tween
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -27,6 +35,7 @@ internal data class SettingsTopBarBinding(
     val notificationDurationPending: Boolean,
     val onNavigation: () -> Unit,
     val onDone: () -> Unit,
+    val backHint: Any? = null,
 ) {
     val doneEnabled get() = hasUnsavedChanges && !settingsPersisting && !calibrationRunning &&
         !quickTileEditorOpen && !notificationDurationPending
@@ -46,12 +55,20 @@ internal data class SettingsTopBarBinding(
 internal class ReverbSettingsTopBarView(
     context: Context,
     initialEnvironment: ReverbViewEnvironment,
+    private val animationScope: CoroutineScope,
     inputRoot: () -> View?,
-) : ViewGroup(context) {
+) : ViewGroup(context), AutoCloseable {
     private var insets = NativeSettingsTopBarInsets(0, 0, 0)
     private val noise = ReverbNoiseDrawable(resources, initialEnvironment.palette.surface,
         ReverbNoiseDrawable.SEED_TOP_BAR)
     private val content = TopBarContent(context, initialEnvironment, inputRoot)
+    private var hint: Any? = null
+    private var hintJob: Job? = null
+    private val hintProgress = Animatable(0f)
+    private val navigationHint = ColorDrawable()
+    private val doneHint = ColorDrawable()
+    private var hintColor = initialEnvironment.palette.onSurface
+    private var hintStrength = 0f
     val title: ReverbParagraphView get() = content.title
     val navigation: ReverbStandardIconButtonView get() = content.navigation
     val done: ReverbStandardIconButtonView get() = content.done
@@ -68,12 +85,55 @@ internal class ReverbSettingsTopBarView(
         clipChildren = false; clipToPadding = false
         if (Build.VERSION.SDK_INT >= 29) isForceDarkAllowed = false
         addView(content)
+        navigation.visual.background = navigationHint
+        done.visual.background = doneHint
     }
 
     fun bind(value: ReverbViewEnvironment, binding: SettingsTopBarBinding) {
         noise.setBackgroundColor(value.palette.surface)
         content.bind(value, binding)
+        hintColor = value.palette.onSurface
+        paintHint(hintStrength)
+        if (hint !== binding.backHint) {
+            hint = binding.backHint
+            hintJob?.cancel()
+            hintJob = null
+            paintHint(0f)
+            val expected = hint
+            if (expected != null) hintJob = animationScope.launch {
+                try {
+                    hintProgress.snapTo(1f)
+                    paintHint(1f)
+                    if (ValueAnimator.getDurationScale() == 0f) delay(600L)
+                    else hintProgress.animateTo(0f, tween(600)) { paintHint(this.value) }
+                } finally {
+                    if (hint === expected) paintHint(0f)
+                }
+            }
+        }
         requestLayout()
+    }
+
+    private fun paintHint(strength: Float) {
+        hintStrength = strength
+        val color = reverbColorWithAlpha(hintColor, strength.coerceIn(0f, 1f) * .18f)
+        navigationHint.color = color
+        doneHint.color = color
+    }
+
+    override fun onDetachedFromWindow() {
+        hintJob?.cancel()
+        hintJob = null
+        paintHint(0f)
+        super.onDetachedFromWindow()
+    }
+
+    override fun close() {
+        hint = null
+        hintJob?.cancel()
+        hintJob = null
+        paintHint(0f)
+        cancelInput()
     }
 
     fun setRemainingWindowInsets(value: NativeSettingsTopBarInsets) {
