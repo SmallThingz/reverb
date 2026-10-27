@@ -3459,8 +3459,15 @@ open class ReverbService : Service() {
             val drainOwner = if (captureBufferSlot == BufferSlot.ONE_SHOT) AcceptedCaptureReadOwner(
                 currentRecord, readContinuityGeneration, readReleaseGeneration, generation,
             ) else null
-            processCapturedAudio(captureScratch, 0, alignedRead, captureBufferSlot, readContinuityGeneration,
-                readEndedAtNanos, captureStartedAtNanos, drainOwner)
+            try {
+                processCapturedAudio(captureScratch, 0, alignedRead, captureBufferSlot, readContinuityGeneration,
+                    readEndedAtNanos, captureStartedAtNanos, drainOwner)
+            } catch (error: Exception) {
+                // Delivered PCM failed in its gate/store phase, not the native input. Preserve
+                // durable intent and report even when generic teardown already owns the service.
+                pauseListeningAfterPersistenceFailure("process captured audio", error)
+                return read
+            }
             requestDurabilitySyncIfDue()
         }
 
