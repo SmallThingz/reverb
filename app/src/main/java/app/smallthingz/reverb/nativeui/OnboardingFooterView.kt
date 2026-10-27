@@ -234,8 +234,9 @@ internal class OnboardingFooterView(
         buttonHeight = max(dp(48), max(back.intrinsicHeight(if (compact) backWidth else unit),
             next.intrinsicHeight(if (compact) continueWidth else unit)))
         if (stackedButtons && MeasureSpec.getMode(heightMeasureSpec) != MeasureSpec.UNSPECIFIED &&
-            dp(16) + dp(8) + dp(14) + buttonHeight * 2 + dp(10) > MeasureSpec.getSize(heightMeasureSpec)) {
-            // A short window must not lose its actions below a newly stacked footer.
+            dp(16) + dp(8) + dp(14) + buttonHeight * 2 + dp(10) + dp(48) > MeasureSpec.getSize(heightMeasureSpec)) {
+            // The screen supplies its total content budget. A stacked footer must leave at least
+            // one minimum interactive row for the scrollable page, not merely fit its own buttons.
             stackedButtons = false
             backWidth = unit + (remaining - unit * 2).coerceIn(-1, 1)
             continueWidth = remaining - backWidth
