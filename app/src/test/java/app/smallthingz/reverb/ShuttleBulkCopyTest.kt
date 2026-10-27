@@ -12,7 +12,7 @@ class ShuttleBulkCopyTest {
             val previous = previousSize?.let { ByteArray(it).also { bytes -> random.nextBytes(bytes) } }
             val currentBefore = current.copyOf()
             val previousBefore = previous?.copyOf()
-            val expected = baselineCrossfade(previous, current, overlap)
+            val expected = alignedCrossfadeReference(previous, current, overlap)
             val actual = crossfadeShuttlePcm16(previous, current, overlap)
             assertArrayEquals(expected.output, actual.output)
             assertArrayEquals(expected.tail, actual.tail)
@@ -52,8 +52,8 @@ class ShuttleBulkCopyTest {
                 val previousLeft = previousFrames?.let(::samples)
                 val previousRight = previousFrames?.let(::samples)
                 val previous = previousLeft?.let { stereo(it, requireNotNull(previousRight)) }
-                val expectedLeft = baselineCrossfade(previousLeft, left, overlap)
-                val expectedRight = baselineCrossfade(previousRight, right, overlap)
+                val expectedLeft = alignedCrossfadeReference(previousLeft, left, overlap)
+                val expectedRight = alignedCrossfadeReference(previousRight, right, overlap)
                 val actual = crossfadeShuttlePcm16(previous, stereo(left, right), overlap, channelCount = 2)
                 assertArrayEquals(stereo(expectedLeft.output, expectedRight.output), actual.output)
                 assertArrayEquals(stereo(expectedLeft.tail, expectedRight.tail), actual.tail)
@@ -61,6 +61,30 @@ class ShuttleBulkCopyTest {
             }
         }
     }
+}
+
+// Keep the historical oracle below untouched. Only unequal-tail mixing intentionally
+// changes: the next grain begins at the pending tail's beginning, not its suffix.
+private fun alignedCrossfadeReference(
+    previousTail: ByteArray?,
+    current: ByteArray,
+    overlapFrames: Int,
+): ShuttleCrossfadeResult {
+    val historical = baselineCrossfade(previousTail, current, overlapFrames)
+    val frames = current.size / 2
+    val overlap = overlapFrames.coerceAtLeast(0)
+    val previousFrames = (previousTail?.size ?: 0) / 2
+    val mixedFrames = minOf(previousFrames, frames - minOf(overlap, frames), overlap)
+    if (previousTail != null && previousFrames > mixedFrames) {
+        repeat(mixedFrames) { frame ->
+            val t = (frame + 1).toFloat() / (mixedFrames + 1).toFloat()
+            val blend = t * t * (3f - 2f * t)
+            val value = (previousTail.readPcm16Mono(frame) * (1f - blend) +
+                current.readPcm16Mono(frame) * blend).roundToInt()
+            historical.output.writePcm16Mono(frame, value)
+        }
+    }
+    return historical
 }
 
 // Exact 7d894ce baseline function and PCM helpers, retained as a byte-level regression oracle.

@@ -295,6 +295,21 @@ internal data class ShuttleCrossfadeResult(
     val tail: ByteArray,
 )
 
+internal fun shuttleOverlapFrames(grainFrames: Int, canonicalOverlapFrames: Int): Int =
+    minOf(canonicalOverlapFrames.coerceAtLeast(0), grainFrames.coerceAtLeast(0) / 3)
+
+internal fun shuttleAnchorAfterGrain(
+    anchorSeconds: Double,
+    startSeconds: Double,
+    endSeconds: Double,
+    durationSeconds: Double,
+    signedRate: Float,
+): Double = when {
+    signedRate >= 0f && endSeconds >= durationSeconds -> durationSeconds
+    signedRate < 0f && startSeconds <= 0.0 -> 0.0
+    else -> anchorSeconds
+}
+
 internal fun crossfadeShuttlePcm16(
     previousTail: ByteArray?,
     current: ByteArray,
@@ -313,12 +328,13 @@ internal fun crossfadeShuttlePcm16(
 
     var outFrame = 0
     if (mixedFrames > 0 && previousTail != null) {
-        val previousStart = previousFrames - mixedFrames
         repeat(mixedFrames) { index ->
             val t = (index + 1).toFloat() / (mixedFrames + 1).toFloat()
             val blend = t * t * (3f - 2f * t)
             for (channel in 0 until channelCount) {
-                val previous = previousTail.readPcm16((previousStart + index) * channelCount + channel)
+                // The pending tail starts at the next source anchor. A truncated grain
+                // must mix its beginning with that same beginning, not a later tail suffix.
+                val previous = previousTail.readPcm16(index * channelCount + channel)
                 val next = current.readPcm16(index * channelCount + channel)
                 val mixed = (previous * (1f - blend) + next * blend)
                     .roundToInt()
@@ -945,19 +961,19 @@ internal class TimelineAudioPreviewController(
                 }
                 val accelerated = transformShuttlePcm16(grain, rate, channelCount)
                 val acceleratedFrames = accelerated.size / frameBytes
+                val completedAnchor = shuttleAnchorAfterGrain(
+                    anchor, start, end, source.durationSeconds, rate,
+                )
                 if (acceleratedFrames <= 2) {
                     finishPendingTail()
                     write(windowShuttlePcm16(accelerated, acceleratedFrames / 2, channelCount))
-                    previousAnchorSeconds = anchor
+                    previousAnchorSeconds = completedAnchor
                     continue
                 }
                 // Keep the output overlap bounded when a boundary truncates a sped-up grain.
                 // Full grains still use the canonical 8 ms overlap; tiny edge grains reserve
-                // at most one quarter of their frames so they cannot disappear into the tail.
-                val grainOverlapFrames = minOf(
-                    overlapFrames,
-                    (acceleratedFrames / 4).coerceAtLeast(1),
-                )
+                // at most one third of their frames so they cannot disappear into the tail.
+                val grainOverlapFrames = shuttleOverlapFrames(acceleratedFrames, overlapFrames)
                 val blended = crossfadeShuttlePcm16(
                     previousTail,
                     accelerated,
@@ -965,8 +981,13 @@ internal class TimelineAudioPreviewController(
                     channelCount,
                 )
                 previousTail = blended.tail
-                previousAnchorSeconds = anchor
+                previousAnchorSeconds = completedAnchor
                 write(blended.output)
+                if (completedAnchor != anchor) {
+                    // This grain consumed the remaining source. Emit its tail once and
+                    // remember the boundary so later endpoint updates cannot replay it.
+                    finishPendingTail()
+                }
             }
         } catch (_: PreviewCancelled) {
             Unit

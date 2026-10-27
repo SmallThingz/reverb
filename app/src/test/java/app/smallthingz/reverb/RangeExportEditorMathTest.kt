@@ -883,6 +883,153 @@ class RangeExportEditorMathTest {
         }
     }
 
+    @Test
+    fun shuttleTruncatedGrainMixesPendingTailFromMatchingStart() {
+        for (reverse in listOf(false, true)) for (channels in 1..2) {
+            val signal = IntArray(12) { frame -> if (reverse) 1_900 - frame * 100 else 800 + frame * 100 }
+            fun interleaved(frames: Int) = pcm(*IntArray(frames * channels) { index ->
+                if (index % channels == 0) signal[index / channels] else -signal[index / channels]
+            })
+            val result = crossfadeShuttlePcm16(interleaved(8), interleaved(12),
+                overlapFrames = 4, channelCount = channels)
+            assertEquals(decode(interleaved(8)), decode(result.output))
+            assertEquals(decode(interleaved(12)).drop(8 * channels), decode(result.tail))
+        }
+    }
+
+    @Test
+    fun shuttleCompletedBoundaryCannotReemitPartialGrain() {
+        for (rate in listOf(-21f, -2f, -1f, 1f, 2f, 21f)) {
+            val forward = rate > 0
+            val anchor = if (forward) 0.048 else 0.018
+            val boundary = if (forward) 0.066 else 0.0
+            val completed = shuttleAnchorAfterGrain(anchor, if (forward) anchor else 0.0,
+                if (forward) boundary else anchor, 0.066, rate)
+            assertEquals(boundary, completed, 0.0)
+            repeat(8) { assertEquals(null, nextShuttleSourceAnchorSeconds(completed, boundary, rate)) }
+            val interior = shuttleAnchorAfterGrain(0.032, 0.008, 0.056, 0.1, rate)
+            assertEquals(0.032, interior, 0.0)
+        }
+    }
+
+    @Test
+    fun shuttleFullGrainOverlapMatchesSourceHopAtAllAudibleRates() {
+        for (sampleRate in listOf(48_000, 96_000)) for (channels in 1..2) {
+            val fullFrames = (0.024 * sampleRate).roundToInt()
+            val overlap = (0.008 * sampleRate).roundToInt()
+            val hop = (0.016 * sampleRate).roundToInt()
+            for (rate in listOf(-21f, -8f, -2f, -1f, 1f, 2f, 8f, 21f)) {
+                val sourceFrames = (shuttleSourceGrainSeconds(rate) * sampleRate).roundToInt()
+                val transformed = transformShuttlePcm16(ByteArray(sourceFrames * channels * 2), rate, channels)
+                val frames = transformed.size / (channels * 2)
+                assertEquals("full grain at $sampleRate/$channels/$rate", fullFrames, frames)
+                assertEquals(overlap, shuttleOverlapFrames(frames, overlap))
+                assertEquals(hop, frames - shuttleOverlapFrames(frames, overlap))
+            }
+            for (frames in listOf(0, 1, 2, 3, 4, 7, hop, fullFrames - 2, fullFrames - 1, fullFrames)) {
+                val tail = shuttleOverlapFrames(frames, overlap)
+                assertTrue(tail in 0..overlap)
+                if (frames > 0) assertTrue("boundary grain must retain a body", frames - tail > 0)
+                if (frames > 2) assertTrue(tail > 0)
+            }
+        }
+    }
+
+    @Test
+    fun shuttleContinuousOneTimesOutputPreservesAlignedSourceThroughBoundaries() {
+        for (sampleRate in listOf(48_000, 96_000)) {
+            val fullFrames = (0.024 * sampleRate).roundToInt()
+            val hop = (0.016 * sampleRate).roundToInt()
+            val overlap = (0.008 * sampleRate).roundToInt()
+            val lengths = listOf(1, 2, 3, 7, fullFrames, hop * 3 + fullFrames,
+                hop * 3 + fullFrames - 1, hop * 3 + fullFrames - 2,
+                hop * 3 + (0.012 * sampleRate).roundToInt(),
+                hop * 3 + (0.018 * sampleRate).roundToInt())
+            for (channels in 1..2) for (reverse in listOf(false, true)) {
+                for (tone in listOf(false, true)) for (frames in lengths) {
+                    val label = "$sampleRate Hz/$channels channels/reverse=$reverse/tone=$tone/$frames frames"
+                    val samples = IntArray(frames * channels) { index ->
+                        val frame = index / channels
+                        val signal = if (tone) (12_000 * sin(2 * PI * 250 * frame / sampleRate)).roundToInt()
+                            else (frame * 37 % 24_001) - 12_000
+                        if (index % channels == 0) signal else -signal
+                    }
+                    val source = pcm(*samples)
+                    val duration = frames.toDouble() / sampleRate
+                    val rate = if (reverse) -1f else 1f
+                    val output = java.io.ByteArrayOutputStream()
+                    var tail = ByteArray(0)
+                    var previousAnchor: Double? = null
+                    var firstOverlap = 0
+                    var finalTailFrames = 0
+                    var grains = 0
+                    fun finishTail() {
+                        if (tail.isNotEmpty()) {
+                            finalTailFrames = tail.size / (channels * 2)
+                            output.write(fadeOutShuttlePcm16(tail, channels))
+                            tail = ByteArray(0)
+                        }
+                    }
+                    // Drive the actual source-anchor, overlap and DSP helpers through a
+                    // complete traversal, then continue sending the same endpoint.
+                    for (step in 0..(frames / hop + 8)) {
+                        val distance = step.toDouble() * hop / sampleRate
+                        val target = if (reverse) (duration - distance).coerceAtLeast(0.0)
+                            else distance.coerceAtMost(duration)
+                        val anchor = nextShuttleSourceAnchorSeconds(previousAnchor, target, rate)
+                        if (anchor == null) {
+                            finishTail()
+                            continue
+                        }
+                        val span = shuttleSourceGrainSeconds(rate)
+                        val start = if (reverse) (anchor - span).coerceAtLeast(0.0) else anchor
+                        val end = if (reverse) anchor else (anchor + span).coerceAtMost(duration)
+                        assertTrue("$label must not replay an exhausted endpoint", end > start)
+                        val grain = transformShuttlePcm16(
+                            sliceShuttlePcm16(source, 0.0, start, end, sampleRate, channels), rate, channels,
+                        )
+                        val grainFrames = grain.size / (channels * 2)
+                        val completed = shuttleAnchorAfterGrain(anchor, start, end, duration, rate)
+                        if (grainFrames <= 2) {
+                            finishTail()
+                            output.write(windowShuttlePcm16(grain, grainFrames / 2, channels))
+                        } else {
+                            val grainOverlap = shuttleOverlapFrames(grainFrames, overlap)
+                            if (grains == 0) firstOverlap = grainOverlap
+                            val blended = crossfadeShuttlePcm16(tail, grain, grainOverlap, channels)
+                            output.write(blended.output)
+                            tail = blended.tail
+                            if (completed != anchor) finishTail()
+                        }
+                        previousAnchor = completed
+                        grains++
+                    }
+                    finishTail()
+                    val actual = decode(output.toByteArray())
+                    assertEquals("$label complete sample count", samples.size, actual.size)
+                    // The oracle is the original continuous signal, with only the
+                    // intentional first/last envelopes. No grain crossfade is modeled.
+                    for (frame in 0 until frames) for (channel in 0 until channels) {
+                        val sourceFrame = if (reverse) frames - 1 - frame else frame
+                        var expected = samples[sourceFrame * channels + channel]
+                        if (frames == 2) expected = 0
+                        if (frame < firstOverlap) {
+                            val t = (frame + 1).toFloat() / (firstOverlap + 1).toFloat()
+                            expected = (expected * t * t * (3f - 2f * t)).roundToInt()
+                        }
+                        if (finalTailFrames > 0 && frame >= frames - finalTailFrames) {
+                            val t = if (finalTailFrames == 1) 1f
+                                else (frame - (frames - finalTailFrames)).toFloat() / (finalTailFrames - 1)
+                            expected = (expected * (1f - t * t * (3f - 2f * t))).roundToInt()
+                        }
+                        assertTrue("$label frame=$frame channel=$channel expected=$expected actual=${actual[frame * channels + channel]}",
+                            kotlin.math.abs(expected - actual[frame * channels + channel]) <= 1)
+                    }
+                }
+            }
+        }
+    }
+
     private fun stereoPcm(left: IntArray, right: IntArray): ByteArray {
         require(left.size == right.size)
         return pcm(*IntArray(left.size * 2) { index ->
