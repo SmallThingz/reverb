@@ -72,7 +72,7 @@ class IncidentHistoryPublicationTest {
         Fixture().use { fixture ->
             fixture.failAfterPublication = 1
             assertThrows(IOException::class.java) { fixture.toggle() }
-            fixture.publication.confirmPending(fixture::publish)
+            fixture.publication.confirmPending(fixture.file, fixture::publish)
             assertEquals(1, fixture.revisions)
             // A later step of the same recovery still fails. An internal confirmation must
             // not rearm the wake-up budget and cancel the collector's existing backoff.
@@ -151,7 +151,7 @@ class IncidentHistoryPublicationTest {
             })
             assertEquals(listOf(rollback), primary.suppressed.toList())
             var attemptedReplay = false
-            fixture.publication.confirmPending { _, _, _ -> attemptedReplay = true }
+            fixture.publication.confirmPending(fixture.file) { _, _, _ -> attemptedReplay = true }
             assertFalse(attemptedReplay)
             assertEquals(1, fixture.revisions)
             assertFalse(fixture.readAuthoritative().single().acknowledged)
@@ -224,6 +224,68 @@ class IncidentHistoryPublicationTest {
         assertFalse(confirmAlreadyRecordedAppExit(history, 42, 30_001L) { error("must append") })
     }
 
+    @Test
+    fun independentRootsRetainAndReplayOnlyTheirOwnUncertainPublications() {
+        Fixture().use { fixture ->
+            val other = File(fixture.directory, "fixture-root").apply { mkdirs() }
+            val otherFile = File(other, "history")
+            val original = listOf(RecordingIncident(10L, acknowledgedAtMillis = Long.MIN_VALUE))
+            val synthetic = listOf(RecordingIncident(20L, description = "synthetic"))
+            fixture.failAfterPublication = 1
+            assertThrows(IOException::class.java) { fixture.write(original) }
+            val originalBytes = fixture.file.readBytes()
+            fixture.failAfterPublication = 1
+            assertThrows(IOException::class.java) {
+                fixture.publication.write(otherFile, synthetic, fixture::publish, fixture::signal)
+            }
+            // A second root neither confirms the first root nor loses its own failed publication.
+            assertArrayEquals(originalBytes, fixture.file.readBytes())
+            val replayed = mutableListOf<File>()
+            fixture.publication.confirmPending(otherFile) { file, incidents, started ->
+                replayed += file
+                assertEquals(synthetic, incidents)
+                fixture.publish(file, incidents, started)
+            }
+            assertEquals(listOf(otherFile), replayed)
+            fixture.publication.confirmPending(otherFile) { _, _, _ -> error("already confirmed") }
+            val failure = IOException("original root still unavailable")
+            assertSame(failure, assertThrows(IOException::class.java) {
+                fixture.publication.confirmPending(fixture.file) { file, incidents, _ ->
+                    assertEquals(fixture.file, file)
+                    assertEquals(original, incidents)
+                    throw failure
+                }
+            })
+            fixture.publication.confirmPending(fixture.file) { file, incidents, started ->
+                replayed += file
+                fixture.publish(file, incidents, started)
+            }
+            assertEquals(listOf(otherFile, fixture.file), replayed)
+            assertEquals(original, fixture.decode(fixture.file))
+            assertEquals(synthetic, fixture.decode(otherFile))
+        }
+    }
+
+    @Test
+    fun anotherRootReadCannotConsumeRecoveryWakeOrTriggerPendingWrite() {
+        Fixture().use { fixture ->
+            val otherFile = File(fixture.directory, "other/history")
+            fixture.failBeforePublication = 1
+            assertThrows(IOException::class.java) { fixture.toggle() }
+            fixture.publication.confirmPending(otherFile) { _, _, _ -> error("no owned publication") }
+            assertFalse(fixture.publication.completeHistoryRead(otherFile))
+            assertTrue(fixture.publication.completeHistoryRead(fixture.file))
+            assertFalse(fixture.publication.completeHistoryRead(fixture.file))
+
+            fixture.failAfterPublication = 1
+            assertThrows(IOException::class.java) { fixture.toggle() }
+            fixture.publication.confirmPending(otherFile) { _, _, _ -> error("foreign publication") }
+            assertFalse(fixture.publication.completeHistoryRead(otherFile))
+            assertTrue(fixture.readAuthoritative().single().acknowledged)
+            assertFalse(fixture.publication.completeHistoryRead(fixture.file))
+        }
+    }
+
     private class Fixture : Closeable {
         val directory = Files.createTempDirectory(
             File("build/tmp/incident-history-publication").apply { mkdirs() }.toPath(), "owned-",
@@ -269,9 +331,9 @@ class IncidentHistoryPublicationTest {
         fun readVisible() = decode(file)
 
         fun readAuthoritative(): List<RecordingIncident> {
-            publication.confirmPending(::publish)
+            publication.confirmPending(file, ::publish)
             val history = readVisible()
-            if (publication.completeHistoryRead()) signal()
+            if (publication.completeHistoryRead(file)) signal()
             return history
         }
 
@@ -279,7 +341,7 @@ class IncidentHistoryPublicationTest {
             publication.write(file, incidents, ::publish, ::signal)
 
         fun toggle() {
-            publication.confirmPending(::publish)
+            publication.confirmPending(file, ::publish)
             val history = readVisible()
             toggles++
             write(history.map { toggleRecordingIncidentAcknowledgement(it, 50L) })

@@ -231,24 +231,22 @@ internal fun validateRecordingIncidentHistorySize(incidents: List<RecordingIncid
 /** Owns an exact history payload across an uncertain AtomicFile publication, never a toggle. */
 internal class IncidentHistoryPublication {
     private data class Pending(val file: File, val incidents: List<RecordingIncident>)
-    private var pending: Pending? = null
-    private var refreshPending = false
+    private val pending = mutableMapOf<File, Pending>()
+    private val refreshPending = mutableSetOf<File>()
 
     fun confirmPending(
+        file: File,
         publish: (File, List<RecordingIncident>, () -> Unit) -> Unit,
     ) {
-        val target = pending ?: return
+        val owner = file.absoluteFile
+        val target = pending[owner] ?: return
         // Retain the same target and wake-up obligation through repeated failures. The history
         // reader already owns bounded backoff; another signal here would reset that backoff.
         publish(target.file, target.incidents) {}
-        pending = null
+        pending.remove(owner)
     }
 
-    fun completeHistoryRead(): Boolean {
-        val refreshCompleted = refreshPending
-        refreshPending = false
-        return refreshCompleted
-    }
+    fun completeHistoryRead(file: File): Boolean = refreshPending.remove(file.absoluteFile)
 
     fun write(
         file: File,
@@ -256,7 +254,8 @@ internal class IncidentHistoryPublication {
         publish: (File, List<RecordingIncident>, () -> Unit) -> Unit,
         onHistoryChanged: () -> Unit,
     ) {
-        confirmPending(publish)
+        val owner = file.absoluteFile
+        confirmPending(owner, publish)
         val target = incidents.toList()
         var publicationStarted = false
         try {
@@ -264,9 +263,8 @@ internal class IncidentHistoryPublication {
         } catch (error: Throwable) {
             // A pre-publication failure must not acquire authority to replay over rollback
             // artifacts. Wake the strict reader, but retain a target only past publication.
-            if (publicationStarted) pending = Pending(file, target)
-            if (!refreshPending) {
-                refreshPending = true
+            if (publicationStarted) pending[owner] = Pending(file, target)
+            if (refreshPending.add(owner)) {
                 onHistoryChanged()
             }
             throw error
@@ -559,13 +557,40 @@ internal fun publishPendingRecordingSession(
     publish(appendPendingRecordingSession(existing, marker, endedByMillis))
 }
 
-private data class PendingProcessIncidentRetry(
+internal data class PendingProcessIncidentRetry(
+    val root: File,
     val occurredAtMillis: Long,
     val description: String,
     val expectedPid: Int,
     val expectedProcessStartElapsedRealtimeMillis: Long,
     val incident: RecordingIncident? = null,
 )
+
+/** Caller serialization owns this queue; a failed retry retains its exact root and position. */
+internal class PendingProcessIncidentRetries {
+    private val pending = mutableListOf<PendingProcessIncidentRetry>()
+
+    fun enqueue(retry: PendingProcessIncidentRetry) {
+        if (pending.none {
+                it.root == retry.root && it.expectedPid == retry.expectedPid &&
+                    it.expectedProcessStartElapsedRealtimeMillis == retry.expectedProcessStartElapsedRealtimeMillis
+            }
+        ) pending += retry
+    }
+
+    fun retryOwned(root: File, retry: (PendingProcessIncidentRetry) -> Unit) {
+        val iterator = pending.iterator()
+        while (iterator.hasNext()) {
+            val current = iterator.next()
+            if (current.root != root) continue
+            retry(current)
+            iterator.remove()
+        }
+    }
+
+    fun incidents(root: File): List<RecordingIncident> =
+        pending.mapNotNull { if (it.root == root) it.incident else null }
+}
 
 internal enum class RecordingExitDisposition {
     INCIDENT,
@@ -780,8 +805,8 @@ internal object RecordingIncidentStore {
     private val mutableHistoryRevision = MutableStateFlow(0L)
     val historyRevision: StateFlow<Long> = mutableHistoryRevision.asStateFlow()
     private val historyMutationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val pendingServiceStopIncidentRetries = mutableListOf<PendingProcessIncidentRetry>()
-    private val pendingCaptureInterruptionRetries = mutableListOf<PendingProcessIncidentRetry>()
+    private val pendingServiceStopIncidentRetries = PendingProcessIncidentRetries()
+    private val pendingCaptureInterruptionRetries = PendingProcessIncidentRetries()
     private val historyPublication = IncidentHistoryPublication()
     private var lastUnexpectedErrorAtMillis = 0L
     private val currentAppProcess by lazy {
@@ -987,6 +1012,7 @@ internal object RecordingIncidentStore {
         val appContext = context.applicationContext
         val stoppedAtMillis = System.currentTimeMillis()
         val retry = PendingProcessIncidentRetry(
+            root = incidentRoot(appContext),
             occurredAtMillis = stoppedAtMillis,
             description = description,
             expectedPid = Process.myPid(),
@@ -1024,6 +1050,7 @@ internal object RecordingIncidentStore {
         val appContext = context.applicationContext
         val interruptedAtMillis = System.currentTimeMillis()
         val retry = PendingProcessIncidentRetry(
+            root = incidentRoot(appContext),
             occurredAtMillis = interruptedAtMillis,
             description = description,
             expectedPid = Process.myPid(),
@@ -1087,6 +1114,7 @@ internal object RecordingIncidentStore {
                 val description = "Capture stopped because known-Stop incident state could not be persisted"
                 enqueueCaptureInterruptionRetry(
                     PendingProcessIncidentRetry(
+                        root = incidentRoot(appContext),
                         occurredAtMillis = interruptedAtMillis,
                         description = description,
                         expectedPid = marker.pid,
@@ -1119,7 +1147,7 @@ internal object RecordingIncidentStore {
         val incidents = readHistory(historyFile(appContext)).filterNot { it.deleted }
         // Only a complete authoritative history read ends the failure episode. A successful
         // internal read/write during still-failing recovery must not reset its wake-up budget.
-        if (historyPublication.completeHistoryRead()) signalHistoryChanged()
+        if (historyPublication.completeHistoryRead(historyFile(appContext).baseFile)) signalHistoryChanged()
         return incidents
     }
 
@@ -1201,14 +1229,7 @@ internal object RecordingIncidentStore {
             marker.processStartElapsedRealtimeMillis == Process.getStartElapsedRealtime()
 
     private fun enqueueServiceStopIncidentRetry(retry: PendingProcessIncidentRetry) {
-        if (pendingServiceStopIncidentRetries.none { pending ->
-                pending.expectedPid == retry.expectedPid &&
-                    pending.expectedProcessStartElapsedRealtimeMillis ==
-                    retry.expectedProcessStartElapsedRealtimeMillis
-            }
-        ) {
-            pendingServiceStopIncidentRetries += retry
-        }
+        pendingServiceStopIncidentRetries.enqueue(retry)
         // StateFlow retains the latest revision even with no active UI. A live UI immediately
         // enters its existing read/backoff loop; a later UI load also sees the incremented value.
         signalHistoryChanged()
@@ -1218,16 +1239,7 @@ internal object RecordingIncidentStore {
         // A pending interruption blocks fresh capture before marker replacement, so another retry
         // from the same process lifetime still refers to that unresolved armed session. Keep the
         // first outage boundary instead of growing an unbounded in-memory queue while I/O is sick.
-        if (pendingCaptureInterruptionRetries.any { pending ->
-                pending.expectedPid == retry.expectedPid &&
-                    pending.expectedProcessStartElapsedRealtimeMillis ==
-                    retry.expectedProcessStartElapsedRealtimeMillis
-            }
-        ) {
-            signalHistoryChanged()
-            return
-        }
-        pendingCaptureInterruptionRetries += retry
+        pendingCaptureInterruptionRetries.enqueue(retry)
         // Reuse the history revision as a process-local retry trigger. The UI collector already
         // performs bounded backoff, and recordCaptureStarted retries again before marker replacement.
         signalHistoryChanged()
@@ -1242,9 +1254,7 @@ internal object RecordingIncidentStore {
     }
 
     private fun retryPendingCaptureInterruptions(context: Context) {
-        val iterator = pendingCaptureInterruptionRetries.iterator()
-        while (iterator.hasNext()) {
-            val retry = iterator.next()
+        pendingCaptureInterruptionRetries.retryOwned(incidentRoot(context)) { retry ->
             val markerFile = sessionFile(context)
             val marker = readSession(markerFile)
             if (marker == null) {
@@ -1256,9 +1266,9 @@ internal object RecordingIncidentStore {
                         completeMissingIncidentMarkerRetry(
                             baseFile = markerFile.baseFile,
                             preserveIncident = { retry.incident?.let { appendIncident(context, it) } },
-                            retireRetry = { iterator.remove() },
+                            retireRetry = {}, // The queue retires only after this barrier succeeds.
                         )
-                        continue
+                        return@retryOwned
                     }
                     StoragePathState.PRESENT,
                     StoragePathState.UNAVAILABLE,
@@ -1278,21 +1288,17 @@ internal object RecordingIncidentStore {
             } else {
                 // Never retarget a retry whose session identity could not be read originally at a
                 // newer/prior marker from the same process lifetime.
-                iterator.remove()
-                continue
+                return@retryOwned
             }
             appendIncident(context, incident)
             if (markerMatches && !disarmInterruptedSession(markerFile, resolvedMarker)) {
                 throw IOException("Unable to retire session after pending capture interruption")
             }
-            iterator.remove()
         }
     }
 
     private fun retryPendingServiceStopIncidents(context: Context) {
-        val iterator = pendingServiceStopIncidentRetries.iterator()
-        while (iterator.hasNext()) {
-            val retry = iterator.next()
+        pendingServiceStopIncidentRetries.retryOwned(incidentRoot(context)) { retry ->
             var incident = retry.incident
             if (incident == null) {
                 val markerFile = sessionFile(context)
@@ -1300,8 +1306,7 @@ internal object RecordingIncidentStore {
                 if (marker == null) {
                     when (atomicFileRegularBackingState(markerFile.baseFile)) {
                         StoragePathState.MISSING -> {
-                            iterator.remove()
-                            continue
+                            return@retryOwned
                         }
                         StoragePathState.PRESENT,
                         StoragePathState.UNAVAILABLE,
@@ -1315,8 +1320,7 @@ internal object RecordingIncidentStore {
                 ) {
                     // The only matching durable marker is gone or no longer armed. Never retarget
                     // this old stop at a newer/prior capture session.
-                    iterator.remove()
-                    continue
+                    return@retryOwned
                 }
                 incident = incidentWithoutExitEvidence(
                     marker = resolvedMarker,
@@ -1325,7 +1329,6 @@ internal object RecordingIncidentStore {
                 )
             }
             appendIncident(context, requireNotNull(incident))
-            iterator.remove()
         }
     }
 
@@ -1518,8 +1521,8 @@ internal object RecordingIncidentStore {
                 captureSessions = (pending.map { it.marker } + listOfNotNull(active)).map { marker ->
                     incidentWithoutExitEvidence(marker, marker.armedAtMillis)
                 },
-                exactIncidents = (pendingCaptureInterruptionRetries + pendingServiceStopIncidentRetries)
-                    .mapNotNull { it.incident },
+                exactIncidents = pendingCaptureInterruptionRetries.incidents(incidentRoot(context)) +
+                    pendingServiceStopIncidentRetries.incidents(incidentRoot(context)),
                 appProcessPid = process?.current?.pid ?: 0,
                 appProcessStartedAtMillis = process?.current?.processStartedAtMillis ?: -1L,
                 pendingAppProcesses = process?.pending.orEmpty().map { it.marker },
@@ -1571,6 +1574,8 @@ internal object RecordingIncidentStore {
         Settings.Global.getInt(context.contentResolver, Settings.Global.BOOT_COUNT, -1)
     }
 
+    // Lexical ownership only: do not resolve symlinks or replace the existing backing-file checks.
+    private fun incidentRoot(context: Context): File = context.noBackupFilesDir.absoluteFile
     private fun sessionFile(context: Context) = AtomicFile(File(context.noBackupFilesDir, SESSION_FILE_NAME))
     private fun pendingSessionFile(context: Context) =
         AtomicFile(File(context.noBackupFilesDir, PENDING_SESSION_FILE_NAME))
@@ -1741,7 +1746,7 @@ internal object RecordingIncidentStore {
     }
 
     private fun readHistory(file: AtomicFile): List<RecordingIncident> {
-        historyPublication.confirmPending(::publishHistory)
+        historyPublication.confirmPending(file.baseFile, ::publishHistory)
         return readAtomic(file, "recording incident history", ::readHistoryPayload) ?: emptyList()
     }
 

@@ -245,7 +245,7 @@ class CaptureBootRecoveryTest {
             currentWallClockMillis = wall,
             currentElapsedRealtimeMillis = elapsed,
             publishIncident = { incident ->
-                publication.confirmPending(::publish)
+                publication.confirmPending(file, ::publish)
                 val existing = history()
                 val index = existing.indexOfFirst { recordingIncidentReferenceMatches(it, incident) }
                 val updated = existing.toMutableList()

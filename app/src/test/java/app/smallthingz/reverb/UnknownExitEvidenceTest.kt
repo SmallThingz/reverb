@@ -266,7 +266,7 @@ class UnknownExitEvidenceTest {
                 publishObservedIncident = { incident ->
                     // Same production history-read confirmation, identity merge, and exact
                     // payload publication coordinator as appendIncident/writeHistory.
-                    publication.confirmPending(::publish)
+                    publication.confirmPending(file, ::publish)
                     val existing = history()
                     val index = existing.indexOfFirst { recordingIncidentReferenceMatches(it, incident) }
                     val updated = existing.toMutableList()
