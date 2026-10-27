@@ -1342,10 +1342,7 @@ open class ReverbService : Service() {
 
         if (!accepted) {
             persistenceError?.let { error ->
-                if (serviceDestroying) {
-                    // Teardown cannot restart/pause capture, but failure must remain visible.
-                    reportTerminalCaptureStoreFailure("capture destination handoff during shutdown", error)
-                } else if (failedWhileListening || rollbackFailed) {
+                if (serviceDestroying || failedWhileListening || rollbackFailed) {
                     // Losing the handoff transaction is an unexpected capture interruption, not
                     // evidence that the user asked recording to stop. Preserve durable intent so
                     // a later foreground bind can retry once persistence is healthy again.
@@ -2983,12 +2980,12 @@ open class ReverbService : Service() {
             silenceGateEpoch = epoch
             silenceGateStream = SilenceGateStream(rate, channels, format, silenceGateConfig, object : SilenceGateOutput {
                 override fun audio(bytes: ByteArray, offset: Int, count: Int, sourceFrame: Long) {
-                    if (epoch <= persistenceInterruptedCaptureEpoch) return
+                    if (!captureGateOutputMayCommit(epoch, persistenceInterruptedCaptureEpoch)) return
                     appendCapturedAudio(bytes, offset, count, slot,
                         recordingTimestampWithOffset(anchor, sourceFrame * 1000L / rate), silenceGateDrainOwner)
                 }
                 override fun gap() {
-                    if (epoch <= persistenceInterruptedCaptureEpoch) return
+                    if (!captureGateOutputMayCommit(epoch, persistenceInterruptedCaptureEpoch)) return
                     forEachAudioStore(PersistentAudioChunkStore::sealActiveChunk)
                     scheduleRetentionMaintenanceIfNeeded()
                 }
@@ -3324,15 +3321,19 @@ open class ReverbService : Service() {
 
     private fun pauseListeningAfterPersistenceFailure(operation: String, error: Exception) {
         val generation = synchronized(listeningIntentLock) {
-            if (serviceDestroying) return
             persistenceFailureBlocked = true
-            val nextGeneration = listeningCommandGeneration.incrementAndGet()
             persistenceInterruptedCaptureEpoch = captureContinuityGeneration.get()
             captureContinuityGeneration.incrementAndGet()
-            if (state == STATE_LISTENING) state = STATE_PAUSED
-            nextGeneration
+            // A failed terminal handoff must retire later callbacks from this same gate batch.
+            // Recheck shutdown here: it can win after the failed transaction releases the lock.
+            if (serviceDestroying) null else {
+                val nextGeneration = listeningCommandGeneration.incrementAndGet()
+                if (state == STATE_LISTENING) state = STATE_PAUSED
+                nextGeneration
+            }
         }
         reportTerminalCaptureStoreFailure(operation, error)
+        if (generation == null) return // Terminal close owns release; never enqueue pause/restart/UI work.
         RecordingIncidentStore.recordCaptureInterrupted(
             this,
             "Capture stopped after persistence failure: $operation",
@@ -6103,3 +6104,7 @@ internal fun acceptedCaptureDrainIsCurrent(
     listeningIntentEnabled: Boolean,
 ): Boolean = readContinuity == currentContinuity && readCommand == currentCommand &&
     readRelease == currentRelease && inputStillOwned && recorderListening && listeningIntentEnabled
+
+/** A persistence failure retires every remaining output callback from its accepted gate epoch. */
+internal fun captureGateOutputMayCommit(epoch: Long, persistenceInterruptedEpoch: Long): Boolean =
+    epoch > persistenceInterruptedEpoch

@@ -46,4 +46,46 @@ class AcceptedCaptureDrainTest {
         gate.finish()
         assertArrayEquals(pcm, output.toByteArray())
     }
+
+    @Test fun failedFirstHandoffRetiresLaterRealGateCallbacksAndFinish() {
+        for (failFirst in listOf(false, true)) {
+            val pcm = ByteBuffer.allocate(1536 * 2).order(ByteOrder.LITTLE_ENDIAN).apply {
+                repeat(1536) { putShort((if (it % 2 == 0) 12_000 else -12_000).toShort()) }
+            }.array()
+            val epoch = 11L
+            var interruptedEpoch = Long.MIN_VALUE
+            var callbacks = 0
+            var handoffAttempts = 0
+            var oneShotFrames = 0
+            var loopFrames = 0
+            var loopOwns = false
+            val gate = SilenceGateStream(16_000, 1, PcmSampleFormat.PCM_16,
+                SilenceGateConfig(true, listOf(SilencePoint(20, -96), SilencePoint(20_000, -96))),
+                object : SilenceGateOutput {
+                    override fun audio(bytes: ByteArray, offset: Int, count: Int, sourceFrame: Long) {
+                        callbacks++
+                        if (!captureGateOutputMayCommit(epoch, interruptedEpoch)) return
+                        val toOne = minOf(2 - oneShotFrames, count / 2)
+                        oneShotFrames += toOne
+                        if (!loopOwns) {
+                            handoffAttempts++
+                            if (failFirst) {
+                                // Successful rollback preserves intent, but never permission to retry this batch.
+                                interruptedEpoch = epoch
+                                return
+                            }
+                            loopOwns = true
+                        }
+                        loopFrames += count / 2 - toOne
+                    }
+                    override fun gap() = error("Loud synthetic gate batch was dropped")
+                })
+            gate.accept(pcm, 0, pcm.size)
+            assertTrue(callbacks == 2)
+            gate.finish()
+            assertTrue(callbacks == 3 && handoffAttempts == 1 && oneShotFrames == 2)
+            assertTrue(loopFrames == if (failFirst) 0 else 1534)
+        }
+    }
+
 }
