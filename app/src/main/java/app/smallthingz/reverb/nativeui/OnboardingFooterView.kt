@@ -82,7 +82,7 @@ private data class FooterActions(val back: () -> Unit, val continueOrFinish: () 
 
 /**
  * Excludes the outer screen's safe-area and 24dp horizontal / 20dp vertical padding.
- * Includes the 16dp gap above dots, the 8dp-high dot row, 14dp gap, and equal-weight buttons.
+ * Includes the 16dp gap above dots, the 8dp-high dot row, 14dp gap, and normally equal-weight buttons.
  * Requires the qualified released labelLarge TextStyle and an immutable exact Density adapter.
  */
 internal class OnboardingFooterView(
@@ -121,6 +121,7 @@ internal class OnboardingFooterView(
     private var buttonHeight = 0
     private var backWidth = 0
     private var continueWidth = 0
+    private var stackedButtons = false
     private val back = FooterButton(context, false, reverbButtonTextStyle(labelLarge), textDensity, resolver, interactions) {
         actions?.back?.invoke()
     }
@@ -212,19 +213,49 @@ internal class OnboardingFooterView(
         val unit = (remaining / 2f).roundToInt()
         backWidth = unit + (remaining - unit * 2).coerceIn(-1, 1)
         continueWidth = remaining - backWidth
+        // Equal weights remain exact when labels fit. Compact padding and measured widths avoid
+        // splitting a short action into individual letters at narrow widths or enlarged font sizes.
+        val compact = back.preferredWidth(false) > backWidth || next.preferredWidth(false) > continueWidth
+        next.compactPadding = compact
+        stackedButtons = false
+        if (compact) {
+            val backMinimum = max(dp(48), back.preferredWidth(true))
+            val nextMinimum = max(dp(48), next.preferredWidth(true))
+            if (backMinimum + nextMinimum <= remaining) {
+                continueWidth = continueWidth.coerceIn(nextMinimum, remaining - backMinimum)
+                backWidth = remaining - continueWidth
+            } else {
+                stackedButtons = true
+                backWidth = width
+                continueWidth = width
+            }
+        }
         // IntrinsicSize.Min queries weighted children at the rounded common weight allocation.
-        buttonHeight = max(dp(48), max(back.intrinsicHeight(unit), next.intrinsicHeight(unit)))
+        buttonHeight = max(dp(48), max(back.intrinsicHeight(if (compact) backWidth else unit),
+            next.intrinsicHeight(if (compact) continueWidth else unit)))
+        if (stackedButtons && MeasureSpec.getMode(heightMeasureSpec) != MeasureSpec.UNSPECIFIED &&
+            dp(16) + dp(8) + dp(14) + buttonHeight * 2 + dp(10) > MeasureSpec.getSize(heightMeasureSpec)) {
+            // A short window must not lose its actions below a newly stacked footer.
+            stackedButtons = false
+            backWidth = unit + (remaining - unit * 2).coerceIn(-1, 1)
+            continueWidth = remaining - backWidth
+            buttonHeight = max(dp(48), max(back.intrinsicHeight(backWidth), next.intrinsicHeight(continueWidth)))
+        }
         back.measure(exact(backWidth), exact(buttonHeight))
         next.measure(exact(continueWidth), exact(buttonHeight))
         setMeasuredDimension(
             resolveSize(width, widthMeasureSpec),
-            resolveSize(dp(16) + dp(8) + dp(14) + buttonHeight, heightMeasureSpec),
+            resolveSize(dp(16) + dp(8) + dp(14) +
+                (if (stackedButtons) buttonHeight * 2 + dp(10) else buttonHeight), heightMeasureSpec),
         )
     }
 
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
         val y = dp(16) + dp(8) + dp(14)
-        if (layoutDirection == LAYOUT_DIRECTION_RTL) {
+        if (stackedButtons) {
+            back.layout(0, y, width, y + buttonHeight)
+            next.layout(0, y + buttonHeight + dp(10), width, y + buttonHeight * 2 + dp(10))
+        } else if (layoutDirection == LAYOUT_DIRECTION_RTL) {
             back.layout(width - backWidth, y, width, y + buttonHeight)
             next.layout(0, y, continueWidth, y + buttonHeight)
         } else {
@@ -281,6 +312,7 @@ private class FooterButton(
 ) : ViewGroup(context), NativeClickPhaseHost, NativeMergedRowAccessibilityHost {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val label = ReverbParagraphView(context, style, density, resolver, android.graphics.Color.TRANSPARENT)
+    var compactPadding = false
     private val accessibilityChildren = listOf(label)
     private val content = object : ViewGroup(context) {
         private val softwareClip = Path()
@@ -312,7 +344,7 @@ private class FooterButton(
             }
         }
         override fun onMeasure(w: Int, h: Int) {
-            val horizontal = dp(if (filled) 24 else 12)
+            val horizontal = horizontalPadding()
             val vertical = dp(8)
             val contentWidth = (MeasureSpec.getSize(w) - horizontal * 2).coerceAtLeast(0)
             val contentHeight = (MeasureSpec.getSize(h) - vertical * 2).coerceAtLeast(0)
@@ -405,8 +437,13 @@ private class FooterButton(
         label.setTypography(style, density, resolver)
     }
 
+    fun preferredWidth(compact: Boolean): Int =
+        label.maxIntrinsicTextWidth() + dp(if (filled && !compact) 24 else 12) * 2
+
+    private fun horizontalPadding(): Int = dp(if (filled && !compactPadding) 24 else 12)
+
     fun intrinsicHeight(width: Int): Int {
-        val horizontal = dp(if (filled) 24 else 12)
+        val horizontal = horizontalPadding()
         label.measure(
             MeasureSpec.makeMeasureSpec((width - horizontal * 2).coerceAtLeast(0), MeasureSpec.AT_MOST),
             MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED),

@@ -185,6 +185,11 @@ internal open class OnboardingCardView(
     private val input = interactions.row(this)
     override val nativeClickEndpoint get() = input.pointerEndpoint
     private var textHeight = 0
+    private var rowPadding = 0
+    private var rowGap = 0
+    private var stackedText = false
+    private var stackedHeader = false
+    private var headerHeight = 0
     private var bodyVisible = false
     private var canActivate = false
     var onActivate: (() -> Unit)? = null
@@ -241,28 +246,47 @@ internal open class OnboardingCardView(
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val width = MeasureSpec.getSize(widthMeasureSpec)
-        val padding = dp(16)
+        rowPadding = dp(16)
+        rowGap = dp(14)
         val markerSize = dp(44)
         val trailWidth = dp(trailingWidthDp)
         val trailHeight = dp(trailingHeightDp)
-        val textWidth = (width - padding * 2 - markerSize - trailWidth - dp(14) * 2).coerceAtLeast(0)
+        val titleWidth = title.maxIntrinsicTextWidth()
+        var textWidth = (width - rowPadding * 2 - markerSize - trailWidth - rowGap * 2).coerceAtLeast(0)
+        // Keep released geometry while it fits; narrow or enlarged text gets space, not a smaller font.
+        if (titleWidth > textWidth) {
+            rowPadding = dp(12)
+            rowGap = dp(8)
+            textWidth = (width - rowPadding * 2 - markerSize - trailWidth - rowGap * 2).coerceAtLeast(0)
+        }
+        stackedText = titleWidth > textWidth
+        stackedHeader = stackedText && width - rowPadding * 2 < markerSize + trailWidth + rowGap
+        headerHeight = if (stackedHeader) markerSize + rowGap + trailHeight else max(markerSize, trailHeight)
+        if (stackedText) textWidth = (width - rowPadding * 2).coerceAtLeast(0)
         marker.view.measure(exact(markerSize), exact(markerSize))
         trailing.measure(exact(trailWidth), exact(trailHeight))
         title.measure(atMost(textWidth), unspecified())
         if (bodyVisible) body.measure(atMost(textWidth), unspecified())
         textHeight = title.measuredHeight + if (bodyVisible) dp(2) + body.measuredHeight else 0
-        val desired = padding * 2 + max(markerSize, max(trailHeight, textHeight))
+        val desired = rowPadding * 2 + if (stackedText) headerHeight + rowGap + textHeight
+            else max(headerHeight, textHeight)
         setMeasuredDimension(resolveSize(width, widthMeasureSpec), resolveSize(desired, heightMeasureSpec))
         mergedRowAccessibility.roleView.measure(exact(measuredWidth), exact(measuredHeight))
     }
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
-        val padding = dp(16)
-        placeStart(marker.view, padding, ((height - marker.view.measuredHeight) / 2f).roundToInt())
-        val textX = padding + dp(44) + dp(14)
-        val textY = ((height - textHeight) / 2f).roundToInt()
+        val markerY = if (stackedText) {
+            rowPadding + if (stackedHeader) 0 else ((headerHeight - marker.view.measuredHeight) / 2f).roundToInt()
+        } else ((height - marker.view.measuredHeight) / 2f).roundToInt()
+        val trailingY = if (stackedText) {
+            rowPadding + if (stackedHeader) marker.view.measuredHeight + rowGap
+                else ((headerHeight - trailing.measuredHeight) / 2f).roundToInt()
+        } else ((height - trailing.measuredHeight) / 2f).roundToInt()
+        placeStart(marker.view, rowPadding, markerY)
+        val textX = if (stackedText) rowPadding else rowPadding + marker.view.measuredWidth + rowGap
+        val textY = if (stackedText) rowPadding + headerHeight + rowGap else ((height - textHeight) / 2f).roundToInt()
         placeStart(title, textX, textY)
         if (bodyVisible) placeStart(body, textX, textY + title.measuredHeight + dp(2))
-        placeStart(trailing, width - padding - trailing.measuredWidth, ((height - trailing.measuredHeight) / 2f).roundToInt())
+        placeStart(trailing, width - rowPadding - trailing.measuredWidth, trailingY)
         mergedRowAccessibility.roleView.layout(0, 0, width, height)
         input.measured(width, height)
     }
