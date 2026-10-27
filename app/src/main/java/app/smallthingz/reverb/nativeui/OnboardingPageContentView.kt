@@ -254,6 +254,7 @@ internal class OnboardingPageContentView(
         if (pageInteractionAllowed == allowed) return
         pageInteractionAllowed = allowed
         updateAudioExposure()
+        if (allowed) textAccessibility?.refresh()
         if (!allowed) cancelInputs()
     }
 
