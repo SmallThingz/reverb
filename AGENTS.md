@@ -140,8 +140,9 @@
 - Background capture uses one-second microphone read batches whenever the app UI is not foreground, independent of
   screen state or transient non-UI service bindings, while live visualization keeps its 8 ms cadence. An in-flight
   microphone read belongs to the capture buffer that owned it when the blocking read began: destination-only handoffs
-  may commit that final read to the old buffer instead of dropping PCM, but Stop, service teardown, timeout, or
-  capture/persistence failure invalidates capture continuity so PCM can never cross a stopped/interrupted boundary. When
+  may commit that final read to the old buffer instead of dropping PCM. Generic service teardown preserves the
+  already-admitted read and its held gate tail while rejecting new work; Stop, timeout, or capture/persistence failure
+  invalidates capture continuity so PCM can never cross a stopped/interrupted boundary. When
   One-shot fills mid-read, overflow may enter Looping only if Looping already owns the destination or that automatic
   destination handoff commits successfully; a failed handoff must not write the remainder after the persistence-failure
   boundary. The 1 Hz durability barrier is capture-driven rather than an independent timer, so it piggybacks on

@@ -263,6 +263,14 @@ open class ReverbService : Service() {
         var releaseGeneration: Long,
     )
 
+    // Only a positive, already-admitted read can carry drain authority into generic teardown.
+    private class AcceptedCaptureReadOwner(
+        val input: CaptureAudioInput,
+        val continuityGeneration: Long,
+        val releaseGeneration: Long,
+        val commandGeneration: Long,
+    )
+
     private val listeningCommandGeneration = AtomicLong()
     // Accepted explicit intent retires queued foreground work without changing healthy PCM.
     private val foregroundAdmissionGeneration = AtomicLong()
@@ -275,6 +283,7 @@ open class ReverbService : Service() {
     @Volatile private var persistenceInterruptedCaptureEpoch = Long.MIN_VALUE
     private var silenceGateConfig = SilenceGateConfig()
     private var silenceGateStream: SilenceGateStream? = null
+    private var silenceGateDrainOwner: AcceptedCaptureReadOwner? = null
     // Audio-thread ownership of the last retained PCM sink, independently of UI destination
     // generations. A final admitted old-destination read must finish before this moves.
     private var lastCaptureSinkSlot: BufferSlot? = null
@@ -1248,6 +1257,7 @@ open class ReverbService : Service() {
 
     private fun switchResolvedCaptureBufferOnAudioThread(
         notifyTiles: Boolean,
+        drainOwner: AcceptedCaptureReadOwner? = null,
         resolveTargetLocked: () -> BufferSlot?,
     ): Boolean {
         check(audioHandler.looper == Looper.myLooper())
@@ -1260,9 +1270,25 @@ open class ReverbService : Service() {
         var failedWhileListening = false
 
         val accepted = synchronized(listeningIntentLock) {
-            if (serviceDestroying) return@synchronized false
+            if (serviceDestroying && drainOwner == null) return@synchronized false
             if (!durableCaptureIntentAuthorityValid) return@synchronized false
             val resolved = resolveTargetLocked() ?: return@synchronized false
+            if (serviceDestroying && !(drainOwner != null &&
+                    activeBufferSlot == BufferSlot.ONE_SHOT && resolved == BufferSlot.LOOPING &&
+                    oneShotBufferEnabled && loopingBufferEnabled && oneShotAudioChunkStore.isFull() &&
+                    acceptedCaptureDrainIsCurrent(
+                        readContinuity = drainOwner.continuityGeneration,
+                        currentContinuity = captureContinuityGeneration.get(),
+                        readCommand = drainOwner.commandGeneration,
+                        currentCommand = listeningCommandGeneration.get(),
+                        readRelease = drainOwner.releaseGeneration,
+                        currentRelease = audioRecordReleaseGeneration.get(),
+                        inputStillOwned = audioRecord === drainOwner.input &&
+                            audioRecordGeneration == drainOwner.commandGeneration,
+                        recorderListening = state == STATE_LISTENING,
+                        listeningIntentEnabled = durableListeningIntentEnabled,
+                    )
+                )) return@synchronized false
             if (activeBufferSlot == resolved) return@synchronized true
 
             val prefs = getRecorderPreferences(this)
@@ -1306,7 +1332,9 @@ open class ReverbService : Service() {
                 switchGeneration = listeningCommandGeneration.incrementAndGet()
                 // This marker is tiny in-memory state only. Keep it inside the destination lock
                 // so older handoff callbacks cannot overwrite a newer winning slot transaction.
-                RecordingQuickTiles.beginHandoff(previousActiveBuffer, resolved, switchGeneration)
+                if (!serviceDestroying) {
+                    RecordingQuickTiles.beginHandoff(previousActiveBuffer, resolved, switchGeneration)
+                }
             }
             changed = true
             true
@@ -1314,7 +1342,10 @@ open class ReverbService : Service() {
 
         if (!accepted) {
             persistenceError?.let { error ->
-                if (failedWhileListening || rollbackFailed) {
+                if (serviceDestroying) {
+                    // Teardown cannot restart/pause capture, but failure must remain visible.
+                    reportTerminalCaptureStoreFailure("capture destination handoff during shutdown", error)
+                } else if (failedWhileListening || rollbackFailed) {
                     // Losing the handoff transaction is an unexpected capture interruption, not
                     // evidence that the user asked recording to stop. Preserve durable intent so
                     // a later foreground bind can retry once persistence is healthy again.
@@ -1330,7 +1361,7 @@ open class ReverbService : Service() {
         if (switchingWhileRecording) {
             if (audioRecordGeneration != Long.MIN_VALUE) audioRecordGeneration = switchGeneration
         }
-        publishQuickTileSnapshotOnAudioThread(refreshTiles = notifyTiles)
+        if (!serviceDestroying) publishQuickTileSnapshotOnAudioThread(refreshTiles = notifyTiles)
         return true
     }
 
@@ -2910,13 +2941,19 @@ open class ReverbService : Service() {
         silenceGateSlot = null
         if (previous != null) {
             silenceGateDelivering = true
-            try { previous.finish() } finally { silenceGateDelivering = false }
+            try { previous.finish() } finally {
+                silenceGateDelivering = false
+                silenceGateDrainOwner = null
+            }
+        } else {
+            silenceGateDrainOwner = null
         }
     }
 
     private fun processCapturedAudio(
         bytes: ByteArray, offset: Int, count: Int, slot: BufferSlot, epoch: Long,
         readEndedAtNanos: Long, captureStartedAtNanos: Long?,
+        drainOwner: AcceptedCaptureReadOwner?,
     ) {
         silenceSampleRequest?.let { request ->
             if (request.running()) try {
@@ -2933,7 +2970,7 @@ open class ReverbService : Service() {
         if (!silenceGateConfig.enabled) {
             finishSilenceGate()
             appendCapturedAudio(bytes, offset, count, slot, captureBatchStartedAtMillis(
-                System.currentTimeMillis(), count, channels * format.bytesPerSample, rate))
+                System.currentTimeMillis(), count, channels * format.bytesPerSample, rate), drainOwner)
             return
         }
         val previous = silenceGateStream
@@ -2948,7 +2985,7 @@ open class ReverbService : Service() {
                 override fun audio(bytes: ByteArray, offset: Int, count: Int, sourceFrame: Long) {
                     if (epoch <= persistenceInterruptedCaptureEpoch) return
                     appendCapturedAudio(bytes, offset, count, slot,
-                        recordingTimestampWithOffset(anchor, sourceFrame * 1000L / rate))
+                        recordingTimestampWithOffset(anchor, sourceFrame * 1000L / rate), silenceGateDrainOwner)
                 }
                 override fun gap() {
                     if (epoch <= persistenceInterruptedCaptureEpoch) return
@@ -2957,6 +2994,9 @@ open class ReverbService : Service() {
                 }
             })
         }
+        // The gate may span several reads. Use its latest actually admitted owner, not the
+        // first read's stale command version after a harmless destination change.
+        silenceGateDrainOwner = drainOwner
         silenceGateDelivering = true
         try { requireNotNull(silenceGateStream).accept(bytes, offset, count) }
         finally { silenceGateDelivering = false }
@@ -3075,6 +3115,7 @@ open class ReverbService : Service() {
         count: Int,
         captureBufferSlot: BufferSlot = activeBufferSlot,
         startedAtMillis: Long? = null,
+        drainOwner: AcceptedCaptureReadOwner? = null,
     ) {
         when (captureBufferSlot) {
             BufferSlot.LOOPING -> {
@@ -3095,7 +3136,9 @@ open class ReverbService : Service() {
                     if (loopingBufferEnabled) {
                         val alreadyOnLooping = activeBufferSlot == BufferSlot.LOOPING
                         val handoffAccepted = !alreadyOnLooping &&
-                            switchResolvedCaptureBufferOnAudioThread(notifyTiles = true) { BufferSlot.LOOPING }
+                            switchResolvedCaptureBufferOnAudioThread(notifyTiles = true, drainOwner = drainOwner) {
+                                BufferSlot.LOOPING
+                            }
                         val overflow = count - writtenToOneShot
                         if (overflow > 0 && oneShotOverflowMayUseLoopingFallback(alreadyOnLooping, handoffAccepted)) {
                             appendToCaptureSink(array, offset + writtenToOneShot, overflow, BufferSlot.LOOPING,
@@ -3236,7 +3279,7 @@ open class ReverbService : Service() {
 
     private fun requestDurabilitySyncIfDue(nowNanos: Long = System.nanoTime()) {
         check(audioHandler.looper == Looper.myLooper())
-        if (state != STATE_LISTENING || audioRecord == null) return
+        if (serviceDestroying || state != STATE_LISTENING || audioRecord == null) return
         val previous = lastDurabilitySyncRequestNanos
         if (previous != 0L && nowNanos - previous < ACTIVE_PAYLOAD_SYNC_INTERVAL_NANOS) return
         if (!durabilitySyncInFlight.compareAndSet(false, true)) return
@@ -3412,8 +3455,11 @@ open class ReverbService : Service() {
             // A destination-only version change may already have moved the UI to the new
             // buffer. Avoid attributing this final old-buffer read to the new visualizer.
             if (commandGenerationUnchanged) publishVisualization(captureScratch, 0, alignedRead)
+            val drainOwner = if (captureBufferSlot == BufferSlot.ONE_SHOT) AcceptedCaptureReadOwner(
+                currentRecord, readContinuityGeneration, readReleaseGeneration, generation,
+            ) else null
             processCapturedAudio(captureScratch, 0, alignedRead, captureBufferSlot, readContinuityGeneration,
-                readEndedAtNanos, captureStartedAtNanos)
+                readEndedAtNanos, captureStartedAtNanos, drainOwner)
             requestDurabilitySyncIfDue()
         }
 
@@ -5048,10 +5094,14 @@ open class ReverbService : Service() {
             },
         ) {
             audioHandler.removeCallbacks(audioReader)
-            state = STATE_READY
             runTerminalStoreCleanup(
+                // Keep the accepted gate tail's input/state owner until it has drained. New
+                // reads and every public admission are already closed by serviceDestroying.
                 seal = { if (captureStoresAdmitted) sealActiveChunks() },
-                releaseInput = ::releaseAudioRecord,
+                releaseInput = {
+                    state = STATE_READY
+                    releaseAudioRecord()
+                },
                 closeLoopingStore = loopingAudioChunkStore::close,
                 closeOneShotStore = oneShotAudioChunkStore::close,
                 onFailure = { error ->
@@ -6039,3 +6089,17 @@ internal fun retainedCaptureServiceStartMode(
 ): Int = if (settingsRuntimeKeepaliveShouldBeSticky(
     listeningIntentEnabled, foregroundStartBlocked, foregroundServiceTimedOut, persistenceFailureBlocked,
 )) android.app.Service.START_STICKY else android.app.Service.START_NOT_STICKY
+
+/** Exact positive-read ownership required for a terminal One-shot overflow transaction. */
+internal fun acceptedCaptureDrainIsCurrent(
+    readContinuity: Long,
+    currentContinuity: Long,
+    readCommand: Long,
+    currentCommand: Long,
+    readRelease: Long,
+    currentRelease: Long,
+    inputStillOwned: Boolean,
+    recorderListening: Boolean,
+    listeningIntentEnabled: Boolean,
+): Boolean = readContinuity == currentContinuity && readCommand == currentCommand &&
+    readRelease == currentRelease && inputStillOwned && recorderListening && listeningIntentEnabled
