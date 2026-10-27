@@ -16,17 +16,17 @@ Run from the repository root with an explicit device selected in `ANDROID_SERIAL
 ```sh
 ./gradlew -I scripts/reliability.gradle :app:assembleReliability
 adb -s "$ANDROID_SERIAL" install -r app/build/outputs/apk/reliability/app-reliability.apk
-adb -s "$ANDROID_SERIAL" shell pm grant app.smallthingz.reverb.reliability android.permission.RECORD_AUDIO
-adb -s "$ANDROID_SERIAL" shell am instrument -w \
+adb -s "$ANDROID_SERIAL" shell am instrument -w -r \
   app.smallthingz.reverb.reliability/app.smallthingz.reverb.ReliabilityInstrumentation
 ```
 
-The input-failure fixture allocates an `AudioRecord`, overrides reads with an
-injected disconnection, and never starts microphone capture. The permission is
-needed for constructing that Android object. Source and export fixtures are
-synthetic and app-private; the suite does not publish files into shared Music.
+The input-failure fixture injects a fake `CaptureAudioInput` and rejects replacement
+before constructing an `AudioRecord`. It neither starts microphone capture nor
+requires microphone permission. Source and export fixtures are synthetic and
+app-private; the suite does not publish files into shared Music.
 
-Require the final `RESULT tests=... failures=0` line. Do not treat a zero `adb`
+Require the final `RESULT tests=... failures=0` line and, with `-r`,
+`INSTRUMENTATION_CODE: -1`. Do not treat a zero `adb`
 exit status as proof that instrumentation assertions passed. A single case can be
 selected with `-e test rename_new_id_missing_old_uri`, `-e test capture_restart_failure`,
 or `-e test wav_format_matrix` before the component name. Use

@@ -13,7 +13,7 @@ class ShuttleBulkCopyTest {
             val currentBefore = current.copyOf()
             val previousBefore = previous?.copyOf()
             val expected = baselineCrossfade(previous, current, overlap)
-            val actual = crossfadeShuttlePcm16Mono(previous, current, overlap)
+            val actual = crossfadeShuttlePcm16(previous, current, overlap)
             assertArrayEquals(expected.output, actual.output)
             assertArrayEquals(expected.tail, actual.tail)
             assertArrayEquals(currentBefore, current)
@@ -29,6 +29,37 @@ class ShuttleBulkCopyTest {
         checkCase(4608, 1152, 576)
         checkCase(4609, null, 576)
         checkCase(4608, 1, 576)
+    }
+
+    @Test fun stereoCrossfadeMatchesOriginalMonoOraclePerChannel() {
+        val random = java.util.Random(0x57e2e0L)
+        fun stereo(left: ByteArray, right: ByteArray): ByteArray {
+            require(left.size == right.size && left.size % 2 == 0)
+            return ByteArray(left.size * 2).also { output ->
+                for (offset in left.indices step 2) {
+                    output[offset * 2] = left[offset]
+                    output[offset * 2 + 1] = left[offset + 1]
+                    output[offset * 2 + 2] = right[offset]
+                    output[offset * 2 + 3] = right[offset + 1]
+                }
+            }
+        }
+        fun samples(frames: Int) = ByteArray(frames * 2).also(random::nextBytes)
+        for (frames in 0..12) for (previousFrames in listOf(null, 0, 1, 2, 9)) {
+            for (overlap in listOf(0, 1, 2, 3, 20, Int.MAX_VALUE)) {
+                val left = samples(frames)
+                val right = samples(frames)
+                val previousLeft = previousFrames?.let(::samples)
+                val previousRight = previousFrames?.let(::samples)
+                val previous = previousLeft?.let { stereo(it, requireNotNull(previousRight)) }
+                val expectedLeft = baselineCrossfade(previousLeft, left, overlap)
+                val expectedRight = baselineCrossfade(previousRight, right, overlap)
+                val actual = crossfadeShuttlePcm16(previous, stereo(left, right), overlap, channelCount = 2)
+                assertArrayEquals(stereo(expectedLeft.output, expectedRight.output), actual.output)
+                assertArrayEquals(stereo(expectedLeft.tail, expectedRight.tail), actual.tail)
+                if (frames == 0 && previous != null) assertSame(previous, actual.tail)
+            }
+        }
     }
 }
 

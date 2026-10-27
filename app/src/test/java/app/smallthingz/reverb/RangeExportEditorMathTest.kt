@@ -673,8 +673,8 @@ class RangeExportEditorMathTest {
         }
 
         val source = pcm(0..199)
-        val first = decode(sliceShuttlePcm16Mono(source, 10.0, 10.032, 10.072, 1_000))
-        val second = decode(sliceShuttlePcm16Mono(source, 10.0, 10.064, 10.104, 1_000))
+        val first = decode(sliceShuttlePcm16(source, 10.0, 10.032, 10.072, 1_000))
+        val second = decode(sliceShuttlePcm16(source, 10.0, 10.064, 10.104, 1_000))
         assertEquals(40, first.size)
         assertEquals(40, second.size)
         assertEquals(first.takeLast(8), second.take(8))
@@ -684,7 +684,7 @@ class RangeExportEditorMathTest {
 
     @Test
     fun shortBoundaryGrainGetsSymmetricWindow() {
-        val windowed = decode(windowShuttlePcm16Mono(pcm(1000, 1000, 1000, 1000, 1000, 1000), 3))
+        val windowed = decode(windowShuttlePcm16(pcm(1000, 1000, 1000, 1000, 1000, 1000), 3))
         assertEquals(6, windowed.size)
         assertEquals(0, windowed[0])
         assertTrue(windowed[0] < windowed[1])
@@ -698,7 +698,7 @@ class RangeExportEditorMathTest {
 
     @Test
     fun sparseShuttleTailFadesToZeroWithoutChangingFrameCount() {
-        val faded = decode(fadeOutShuttlePcm16Mono(pcm(1000, 1000, 1000, 1000, 1000)))
+        val faded = decode(fadeOutShuttlePcm16(pcm(1000, 1000, 1000, 1000, 1000)))
         assertEquals(5, faded.size)
         assertEquals(1000, faded.first())
         assertEquals(0, faded.last())
@@ -736,14 +736,14 @@ class RangeExportEditorMathTest {
         val source = pcm(100, 200, 300, 400, 500, 600, 700, 800)
         assertEquals(
             listOf(100, 200, 300, 400, 500, 600, 700, 800),
-            decode(transformShuttlePcm16Mono(source, 1f)),
+            decode(transformShuttlePcm16(source, 1f)),
         )
         assertEquals(
             listOf(800, 700, 600, 500, 400, 300, 200, 100),
-            decode(transformShuttlePcm16Mono(source, -1f)),
+            decode(transformShuttlePcm16(source, -1f)),
         )
 
-        val twice = transformShuttlePcm16Mono(source, 2f)
+        val twice = transformShuttlePcm16(source, 2f)
         assertEquals(7, twice.size / 2)
         val forward = decode(twice)
         // Decimation filters the ramp's extended edges; direction and alignment
@@ -751,10 +751,10 @@ class RangeExportEditorMathTest {
         assertTrue(forward.first() in 100 until 200)
         assertTrue(forward.last() in 701..800)
         assertTrue(forward.zipWithNext().all { (left, right) -> left < right })
-        val reverseTwice = transformShuttlePcm16Mono(source, -2f)
+        val reverseTwice = transformShuttlePcm16(source, -2f)
         assertEquals(7, reverseTwice.size / 2)
         assertEquals(forward.reversed(), decode(reverseTwice))
-        val eightTimes = transformShuttlePcm16Mono(source, 8f)
+        val eightTimes = transformShuttlePcm16(source, 8f)
         assertEquals(5, eightTimes.size / 2)
         assertEquals(1.1f, shuttleAudibleSpeed(2f), 0.0001f)
         assertEquals(1.1f, shuttleAudibleSpeed(-2f), 0.0001f)
@@ -790,26 +790,108 @@ class RangeExportEditorMathTest {
         for (rate in listOf(8f, -8f)) {
             // Audible 1.7x pitch must retain this tone; filtering at the 8x
             // transport speed instead would incorrectly remove it.
-            val passband = normalizedRms(transformShuttlePcm16Mono(tone(0.2), rate))
+            val passband = normalizedRms(transformShuttlePcm16(tone(0.2), rate))
             assertEquals("$rate shuttle passband", 1.0 / sqrt(2.0), passband, 0.01)
-            val rejected = normalizedRms(transformShuttlePcm16Mono(tone(0.4), rate))
+            val rejected = normalizedRms(transformShuttlePcm16(tone(0.4), rate))
             assertTrue("$rate shuttle aliases with normalized RMS $rejected", rejected < 0.003)
         }
     }
 
     @Test
     fun shuttleCrossfadeBridgesDiscontinuousGrains() {
-        val first = crossfadeShuttlePcm16Mono(null, pcm(0, 0, 1000, 1000), overlapFrames = 2)
+        val first = crossfadeShuttlePcm16(null, pcm(0, 0, 1000, 1000), overlapFrames = 2)
         assertEquals(listOf(0, 0), decode(first.output))
         assertEquals(listOf(1000, 1000), decode(first.tail))
 
-        val second = crossfadeShuttlePcm16Mono(first.tail, pcm(-1000, -1000, 0, 0), overlapFrames = 2)
+        val second = crossfadeShuttlePcm16(first.tail, pcm(-1000, -1000, 0, 0), overlapFrames = 2)
         val mixed = decode(second.output)
         assertEquals(2, mixed.size)
         assertTrue(mixed[0] in 450..500)
         assertTrue(mixed[1] in -500..-450)
         assertEquals(listOf(0, 0), decode(second.tail))
     }
+
+    @Test
+    fun stereoShuttleReverseAndSliceKeepLeftRightFrameOrder() {
+        val left = intArrayOf(100, 200, 300, 400, 500)
+        val right = intArrayOf(-1000, -2000, -3000, -4000, -5000)
+        val source = stereoPcm(left, right)
+        val reverse = transformShuttlePcm16(source, -1f, channelCount = 2)
+        assertEquals(left.reversed(), stereoChannel(reverse, 0))
+        assertEquals(right.reversed(), stereoChannel(reverse, 1))
+        val slice = sliceShuttlePcm16(source, 10.0, 10.001, 10.004, 1000, channelCount = 2)
+        assertEquals(3 * 4, slice.size)
+        assertEquals(listOf(200, 300, 400), stereoChannel(slice, 0))
+        assertEquals(listOf(-2000, -3000, -4000), stereoChannel(slice, 1))
+    }
+
+    @Test
+    fun stereoShuttleTransformsMatchIndependentMonoChannelsForTinyAndAcceleratedGrains() {
+        for (frames in listOf(1, 2, 3, 8, 97)) {
+            val left = IntArray(frames) { 1000 + it * 137 }
+            val right = IntArray(frames) { -9000 + it * 73 }
+            val source = stereoPcm(left, right)
+            for (rate in listOf(-21f, -8f, -2f, -1f, 0f, 1f, 2f, 8f, 21f)) {
+                val actual = transformShuttlePcm16(source, rate, channelCount = 2)
+                val expectedLeft = transformShuttlePcm16(pcm(*left), rate)
+                val expectedRight = transformShuttlePcm16(pcm(*right), rate)
+                assertEquals("$frames frames at $rate", expectedLeft.size * 2, actual.size)
+                assertEquals("left $frames frames at $rate", decode(expectedLeft), stereoChannel(actual, 0))
+                assertEquals("right $frames frames at $rate", decode(expectedRight), stereoChannel(actual, 1))
+            }
+        }
+    }
+
+    @Test
+    fun stereoShuttleWindowsAndFadesMatchIndependentMonoChannels() {
+        for (frames in listOf(1, 2, 5, 11)) {
+            val left = IntArray(frames) { 12000 - it * 311 }
+            val right = IntArray(frames) { -3000 - it * 137 }
+            val source = stereoPcm(left, right)
+            for (edge in listOf(0, 1, 3, 20)) {
+                val actual = windowShuttlePcm16(source, edge, channelCount = 2)
+                assertEquals(frames * 4, actual.size)
+                assertEquals(decode(windowShuttlePcm16(pcm(*left), edge)), stereoChannel(actual, 0))
+                assertEquals(decode(windowShuttlePcm16(pcm(*right), edge)), stereoChannel(actual, 1))
+            }
+            val faded = fadeOutShuttlePcm16(source, channelCount = 2)
+            assertEquals(frames * 4, faded.size)
+            assertEquals(decode(fadeOutShuttlePcm16(pcm(*left))), stereoChannel(faded, 0))
+            assertEquals(decode(fadeOutShuttlePcm16(pcm(*right))), stereoChannel(faded, 1))
+        }
+    }
+
+    @Test
+    fun oppositePolarityStereoSurvivesShuttleTransformAndOverlap() {
+        val left = IntArray(2048) { frame ->
+            val phase = frame % 128
+            (if (phase < 64) phase - 32 else 96 - phase) * 400
+        }
+        val right = IntArray(left.size) { -left[it] }
+        for (rate in listOf(-21f, -8f, -1f, 1f, 8f, 21f)) {
+            val transformed = transformShuttlePcm16(stereoPcm(left, right), rate, channelCount = 2)
+            val windowed = windowShuttlePcm16(transformed, 16, channelCount = 2)
+            val first = crossfadeShuttlePcm16(null, windowed, 16, channelCount = 2)
+            val next = crossfadeShuttlePcm16(first.tail, windowed, 16, channelCount = 2)
+            for (output in listOf(transformed, windowed, first.output, next.output)) {
+                for (channel in 0..1) {
+                    val samples = stereoChannel(output, channel)
+                    val rms = sqrt(samples.sumOf { it.toDouble() * it } / samples.size)
+                    assertTrue("channel $channel at $rate cancelled, RMS=$rms", rms > 1000.0)
+                }
+            }
+        }
+    }
+
+    private fun stereoPcm(left: IntArray, right: IntArray): ByteArray {
+        require(left.size == right.size)
+        return pcm(*IntArray(left.size * 2) { index ->
+            if (index % 2 == 0) left[index / 2] else right[index / 2]
+        })
+    }
+
+    private fun stereoChannel(bytes: ByteArray, channel: Int): List<Int> =
+        decode(bytes).filterIndexed { index, _ -> index % 2 == channel }
 
     @Test
     fun fineTunePuckKeepsLargeHitTargetAndSeparatesTapFromDrag() {

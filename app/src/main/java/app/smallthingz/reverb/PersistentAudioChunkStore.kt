@@ -1089,8 +1089,25 @@ internal class PersistentAudioChunkStore internal constructor(
         private val trailingContext: List<Segment> = emptyList(),
     ) : Closeable {
         private var closedLease = false
+        private var cachedChannelCount = 0
 
         init { store.activeRangeLeases++ }
+
+        /** One stable output layout for this frozen range, including historical mono/stereo spans. */
+        @Synchronized
+        fun maximumChannelCount(): Int {
+            check(!closedLease) { "RangeLease is closed" }
+            if (cachedChannelCount != 0) return cachedChannelCount
+            for ((index, segment) in segments.withIndex()) {
+                if ((index and 255) == 0) checkPcmConversionNotInterrupted()
+                if (segment.record.channelCount == 2) {
+                    cachedChannelCount = 2
+                    return 2
+                }
+            }
+            cachedChannelCount = 1
+            return 1
+        }
 
         @Synchronized
         fun hasExactPcm16Format(sampleRate: Int, channelCount: Int): Boolean {

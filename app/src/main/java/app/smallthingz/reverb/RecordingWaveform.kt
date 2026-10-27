@@ -130,7 +130,7 @@ internal data class WavPcmLayout(
         get() = if (sampleRate > 0) frameCount.toDouble() / sampleRate.toDouble() else 0.0
 }
 
-internal class RecordingPcm16MonoReader internal constructor(
+internal class RecordingPcm16Reader internal constructor(
     private val channel: FileChannel,
     private val validateRead: () -> Boolean,
     private val closeAction: () -> Unit,
@@ -140,6 +140,7 @@ internal class RecordingPcm16MonoReader internal constructor(
     private var closed = false
 
     val durationSeconds: Double get() = layout.durationSeconds
+    val channelCount: Int get() = layout.channelCount
 
     fun readRange(
         startSeconds: Double,
@@ -148,7 +149,7 @@ internal class RecordingPcm16MonoReader internal constructor(
     ): ByteArray {
         check(!closed) { "Recording PCM reader is closed" }
         if (!validateRead()) throw IOException("Recording identity changed while reading")
-        val output = if (flac != null) readFlacPcm16MonoRange(flac, startSeconds, endSeconds, targetSampleRate) else readWavPcm16MonoRange(
+        val output = if (flac != null) readFlacPcm16Range(flac, startSeconds, endSeconds, targetSampleRate) else readWavPcm16Range(
             channel = channel,
             layout = layout,
             startSeconds = startSeconds,
@@ -172,7 +173,7 @@ internal class RecordingPcm16MonoReader internal constructor(
             context: Context,
             recording: RecordingEntity,
             cleanup: RecordingReadCleanup,
-        ): RecordingPcm16MonoReader {
+        ): RecordingPcm16Reader {
             return when (recording.storageType) {
                 RecordingStorageType.FILE -> {
                     val input = openVerifiedFileInputStream(recording, cleanup)
@@ -189,7 +190,7 @@ internal class RecordingPcm16MonoReader internal constructor(
                         if (!validateRead()) {
                             throw IOException("Recording changed on disk while opening")
                         }
-                        RecordingPcm16MonoReader(
+                        RecordingPcm16Reader(
                             channel = input.channel,
                             validateRead = validateRead,
                             closeAction = input::close,
@@ -237,7 +238,7 @@ internal class RecordingPcm16MonoReader internal constructor(
                         if (!validateRead()) {
                             throw IOException("Recording changed in provider while opening")
                         }
-                        RecordingPcm16MonoReader(
+                        RecordingPcm16Reader(
                             channel = input.channel,
                             validateRead = validateRead,
                             closeAction = input::close,
@@ -253,7 +254,7 @@ internal class RecordingPcm16MonoReader internal constructor(
     }
 }
 
-internal fun readWavPcm16MonoRange(
+internal fun readWavPcm16Range(
     channel: FileChannel,
     layout: WavPcmLayout,
     startSeconds: Double,
@@ -261,6 +262,8 @@ internal fun readWavPcm16MonoRange(
     targetSampleRate: Int,
 ): ByteArray {
     require(targetSampleRate > 0)
+    if (layout.channelCount !in 1..2) throw IOException("Unsupported PCM channel count")
+    val outputFrameBytes = layout.channelCount * 2
     val duration = layout.durationSeconds.coerceAtLeast(0.0)
     val start = startSeconds.takeIf { it.isFinite() }?.coerceIn(0.0, duration) ?: return ByteArray(0)
     val end = endSeconds.takeIf { it.isFinite() }?.coerceIn(start, duration) ?: return ByteArray(0)
@@ -282,7 +285,7 @@ internal fun readWavPcm16MonoRange(
         throw IOException("Requested PCM source range is too large")
     }
     val requestedOutputFrames = ceil((end - start) * targetSampleRate.toDouble())
-    if (!requestedOutputFrames.isFinite() || requestedOutputFrames > Int.MAX_VALUE.toDouble() / 2.0) {
+    if (!requestedOutputFrames.isFinite() || requestedOutputFrames > Int.MAX_VALUE.toDouble() / outputFrameBytes) {
         throw IOException("Requested PCM output range is too large")
     }
     val sourceFrames = sourceFrameCount.toInt()
@@ -295,7 +298,7 @@ internal fun readWavPcm16MonoRange(
     )
 
     val outputFrames = requestedOutputFrames.toInt().coerceAtLeast(1)
-    val output = ByteArray(outputFrames * 2)
+    val output = ByteArray(outputFrames * outputFrameBytes)
     val sourceStartPosition = start * layout.sampleRate.toDouble() - firstFrame.toDouble()
 
     fun sample(frame: Int, channelIndex: Int): Float {
@@ -323,15 +326,14 @@ internal fun readWavPcm16MonoRange(
     val converter = PcmRateConverter(sourceFrames, sourceStep, ::sample)
     for (outputFrame in 0 until outputFrames) {
         val sourcePosition = sourceStartPosition + outputFrame.toDouble() * sourceStep
-        var mono = 0f
+        val outputBase = outputFrame * outputFrameBytes
         repeat(layout.channelCount) { channelIndex ->
-            mono += converter.sample(sourcePosition, channelIndex)
+            val encoded = (converter.sample(sourcePosition, channelIndex).coerceIn(-1f, 1f) * 32767f)
+                .roundToInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+            val offset = outputBase + channelIndex * 2
+            output[offset] = encoded.toByte()
+            output[offset + 1] = (encoded ushr 8).toByte()
         }
-        mono /= layout.channelCount.toFloat()
-        val encoded = (mono.coerceIn(-1f, 1f) * 32767f).roundToInt()
-            .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
-        output[outputFrame * 2] = (encoded and 0xff).toByte()
-        output[outputFrame * 2 + 1] = ((encoded ushr 8) and 0xff).toByte()
     }
     return output
 }
@@ -622,11 +624,13 @@ private fun littleEndianInt(bytes: ByteArray, offset: Int): Int =
 private fun littleEndianUInt(bytes: ByteArray, offset: Int): Long =
     littleEndianInt(bytes, offset).toLong() and 0xffff_ffffL
 
-internal fun readFlacPcm16MonoRange(
+internal fun readFlacPcm16Range(
     decoder: FlacPcmDecoder, startSeconds: Double, endSeconds: Double, targetRate: Int,
 ): ByteArray {
     require(targetRate > 0)
     val info = decoder.info
+    if (info.channelCount !in 1..2) throw IOException("Unsupported PCM channel count")
+    val frameBytes = info.channelCount * 2
     val duration = info.frameCount.toDouble() / info.sampleRate
     val start = startSeconds.takeIf { it.isFinite() }?.coerceIn(0.0, duration) ?: return ByteArray(0)
     val end = endSeconds.takeIf { it.isFinite() }?.coerceIn(start, duration) ?: return ByteArray(0)
@@ -636,25 +640,23 @@ internal fun readFlacPcm16MonoRange(
     val first = (floor(start * info.sampleRate).toLong() - radius).coerceIn(0L, info.frameCount - 1)
     val endFrame = minOf(info.frameCount, ceil(end * info.sampleRate).toLong() + 1 + radius)
     val frameCount = endFrame - first
-    require(frameCount <= 16 * 1024 * 1024 / (info.channelCount * 2)) { "FLAC preview is too large" }
+    require(frameCount <= 16 * 1024 * 1024 / frameBytes) { "FLAC preview is too large" }
     val count = ceil((end - start) * targetRate).toLong()
-    require(count in 1..8_388_608L) { "FLAC preview is too large" }
+    require(count in 1..(16L * 1024 * 1024 / frameBytes)) { "FLAC preview is too large" }
     val input = decoder.range(first, frameCount.toInt())
-    val output = ByteArray(count.toInt() * 2)
-    fun sample(frame: Int): Float {
-        val base = frame.coerceIn(0, frameCount.toInt() - 1) * info.channelCount * 2
-        var sum = 0f
-        repeat(info.channelCount) { c ->
-            val offset = base + c * 2
-            sum += (((input[offset].toInt() and 255) or (input[offset + 1].toInt() shl 8)).toShort().toInt()).toFloat()
-        }
-        return sum / info.channelCount
+    val output = ByteArray(count.toInt() * frameBytes)
+    fun sample(frame: Int, channel: Int): Float {
+        val offset = frame.coerceIn(0, frameCount.toInt() - 1) * frameBytes + channel * 2
+        return (((input[offset].toInt() and 255) or (input[offset + 1].toInt() shl 8)).toShort().toInt()).toFloat()
     }
-    val converter = PcmRateConverter(frameCount.toInt(), sourceStep) { frame, _ -> sample(frame) }
+    val converter = PcmRateConverter(frameCount.toInt(), sourceStep, ::sample)
     repeat(count.toInt()) { i ->
         val at = start * info.sampleRate - first + i.toDouble() * info.sampleRate / targetRate
-        val value = converter.sample(at, 0).roundToInt().coerceIn(-32768, 32767)
-        output[i * 2] = value.toByte(); output[i * 2 + 1] = (value shr 8).toByte()
+        repeat(info.channelCount) { channel ->
+            val value = converter.sample(at, channel).roundToInt().coerceIn(-32768, 32767)
+            val offset = i * frameBytes + channel * 2
+            output[offset] = value.toByte(); output[offset + 1] = (value shr 8).toByte()
+        }
     }
     return output
 }

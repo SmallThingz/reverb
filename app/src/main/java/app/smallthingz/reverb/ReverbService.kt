@@ -5375,6 +5375,9 @@ open class ReverbService : Service() {
         val durationSeconds: Double
             get() = lease.durationSeconds
 
+        internal val channelCount: Int
+            get() = lease.maximumChannelCount()
+
         internal fun acquireRange(startSeconds: Double, endSeconds: Double): PersistentAudioChunkStore.RangeLease? =
             lease.acquireSubRange(startSeconds, endSeconds)
 

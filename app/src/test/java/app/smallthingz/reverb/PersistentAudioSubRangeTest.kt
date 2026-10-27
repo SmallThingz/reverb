@@ -1,16 +1,99 @@
 package app.smallthingz.reverb
 
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.file.Files
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.random.Random
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PersistentAudioSubRangeTest {
+    @Test
+    fun mixedSnapshotKeepsStereoWhileMonoChildrenRetainTheirOwnChannelLayout() {
+        val parent = File(System.getProperty("reverb.channelFixtureRoot", "build/tmp/subrange-channel-tests"))
+            .apply { check(mkdirs() || isDirectory) }
+        val root = Files.createTempDirectory(parent.toPath(), "channel-layout-").toFile()
+        fun pcm(frames: Int, channels: Int, left: Int, right: Int = left): ByteArray =
+            ByteArray(frames * channels * 2).also { output ->
+                for (frame in 0 until frames) for (channel in 0 until channels) {
+                    val value = if (channel == 0) left else right
+                    val offset = (frame * channels + channel) * 2
+                    output[offset] = value.toByte()
+                    output[offset + 1] = (value shr 8).toByte()
+                }
+            }
+        fun read(lease: PersistentAudioChunkStore.RangeLease): ByteArray {
+            val output = ByteArrayOutputStream()
+            val result = lease.readNormalized(8000, lease.maximumChannelCount(), PcmSampleFormat.PCM_16) {
+                bytes, offset, count ->
+                output.write(bytes, offset, count)
+                count
+            }
+            assertEquals(output.size().toLong(), result.sampleBytes)
+            return output.toByteArray()
+        }
+        try {
+            PersistentAudioChunkStore(root, overwriteOldest = false, directorySync = {}).use { store ->
+                store.configure(RetentionMode.SIZE, 1_048_576, 8000, 1, PcmSampleFormat.PCM_16)
+                val mono = pcm(8000, 1, 2000)
+                assertEquals(mono.size, store.append(mono, 0, mono.size))
+                requireNotNull(store.acquireRange(0.0, 1.0)).use { frozenMono ->
+                    store.configure(RetentionMode.SIZE, 1_048_576, 8000, 2, PcmSampleFormat.PCM_16)
+                    val stereo = pcm(8000, 2, 12000, -12000)
+                    assertEquals(stereo.size, store.append(stereo, 0, stereo.size))
+                    assertEquals(1, frozenMono.maximumChannelCount())
+                    assertArrayEquals(mono, read(frozenMono))
+                    requireNotNull(store.acquireRange(0.0, 2.0)).use { snapshot ->
+                        assertEquals(2, snapshot.maximumChannelCount())
+                        requireNotNull(snapshot.acquireSubRange(0.25, 0.75)).use { child ->
+                            assertEquals(1, child.maximumChannelCount())
+                            assertArrayEquals(pcm(4000, 1, 2000), read(child))
+                        }
+                        requireNotNull(snapshot.acquireSubRange(1.25, 1.75)).use { child ->
+                            assertEquals(2, child.maximumChannelCount())
+                            assertArrayEquals(pcm(4000, 2, 12000, -12000), read(child))
+                        }
+                        requireNotNull(snapshot.acquireSubRange(0.5, 1.5)).use { child ->
+                            assertEquals(2, child.maximumChannelCount())
+                            assertArrayEquals(pcm(4000, 2, 2000) + pcm(4000, 2, 12000, -12000), read(child))
+                        }
+                    }
+                }
+            }
+        } finally {
+            // Keep synthetic backing chunks for diagnosis even when an assertion fails.
+            println("CHANNEL_FIXTURE_RETAINED ${root.canonicalPath}")
+        }
+    }
+
+    @Test
+    fun channelLayoutMetadataIsCachedButStillRejectsClosedLeases() {
+        val source = metadataSegments(4096)
+        val segments = CountingSegments(source)
+        PersistentAudioChunkStore(File("build/tmp/subrange-unused"), directorySync = {}).use { store ->
+            val lease = newLease(store, segments)
+            try {
+                segments.inspections = 0
+                assertEquals(1, lease.maximumChannelCount())
+                assertTrue(segments.inspections >= source.size)
+                segments.inspections = 0
+                repeat(8) { assertEquals(1, lease.maximumChannelCount()) }
+                assertEquals(0, segments.inspections)
+                lease.close()
+                assertThrows(IllegalStateException::class.java) { lease.maximumChannelCount() }
+            } finally {
+                lease.close()
+            }
+            assertTrue(source.all { it.record.refCount == 0 })
+        }
+    }
+
     @Test
     fun storedMixedRateRangesPreserveFrameRoundingAtBoundariesAndInsideNestedRanges() = withRoot { root ->
         PersistentAudioChunkStore(root, overwriteOldest = false, directorySync = {}).use { store ->

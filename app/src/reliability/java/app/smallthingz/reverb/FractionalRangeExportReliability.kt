@@ -14,6 +14,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ExecutionException
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
@@ -27,6 +28,7 @@ internal fun verifyFractionalRangeExport(
     provider: ReliabilityDocumentsProvider,
 ) {
     check(context.packageName == "app.smallthingz.reverb.reliability")
+    check(Looper.myLooper() != Looper.getMainLooper()) { "QA waits must stay off main" }
     val prefs = getRecorderPreferences(context)
     check(prefs.edit()
         .putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
@@ -123,11 +125,25 @@ internal fun verifyFractionalRangeExport(
             val parent = ReverbService.TimelineSnapshot(requireNotNull(source.acquireRange(0.0, source.durationSeconds())))
             // Public submission owns the parent and its child. Raw end=1f intentionally reaches
             // the Service's exact Double clamp; the UI builder result above is not substituted.
+            val submissionOwner = AtomicInteger(0) // 0 pending, 1 main owns submission, 2 revoked before submission.
+            val submission = FutureTask {
+                if (submissionOwner.compareAndSet(0, 1)) {
+                    recorder.dumpRecordingRange(parent, start, end, receiver, name)
+                }
+                Unit
+            }
             try {
-                recorder.dumpRecordingRange(parent, start, end, receiver, name)
+                check(main.post(submission)) { "Main rejected fractional export submission" }
+                submission.get(15, TimeUnit.SECONDS)
             } catch (error: Throwable) {
-                try { parent.close() } catch (closeError: Throwable) {
-                    if (closeError !== error) error.addSuppressed(closeError)
+                val revoked = submissionOwner.compareAndSet(0, 2)
+                if (revoked) main.removeCallbacks(submission)
+                // A timeout after main claimed submission is an unknown handoff outcome. Its
+                // parent stays owned until the main/worker fences below settle that operation.
+                if (revoked || error is ExecutionException) {
+                    try { parent.close() } catch (closeError: Throwable) {
+                        if (closeError !== error) error.addSuppressed(closeError)
+                    }
                 }
                 throw error
             }
@@ -189,10 +205,13 @@ internal fun verifyFractionalRangeExport(
             }
         }
         // Never reset the provider or delete source/output artifacts on failure. A timeout must
-        // stop this owned export and fence its worker before the synthetic store is closed.
-        if (primaryFailure != null) cleanup { service.get()?.cancelCurrentExport() }
-        var drained = executor == null
-        cleanup {
+        // settle main submission before cancellation/worker fencing, or a late main handoff
+        // could queue export work behind the worker fence and race synthetic source closure.
+        var submissionDrained = false
+        cleanup { awaitMainCallbacks(); submissionDrained = true }
+        if (primaryFailure != null && submissionDrained) cleanup { service.get()?.cancelCurrentExport() }
+        var drained = executor == null && submissionDrained
+        if (submissionDrained) cleanup {
             executor?.submit {}?.get(15, TimeUnit.SECONDS)
             drained = true
         }

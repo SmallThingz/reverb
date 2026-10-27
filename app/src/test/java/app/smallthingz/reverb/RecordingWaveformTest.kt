@@ -134,7 +134,7 @@ class RecordingWaveformTest {
         try {
             FileInputStream(file).channel.use { channel ->
                 val layout = readWavPcmLayout(channel)
-                val pcm = readWavPcm16MonoRange(
+                val pcm = readWavPcm16Range(
                     channel = channel,
                     layout = layout,
                     startSeconds = 0.25,
@@ -150,7 +150,7 @@ class RecordingWaveformTest {
     }
 
     @Test
-    fun floatPreviewSanitizesBeforeResamplingAndStereoDownmix() {
+    fun floatPreviewSanitizesBeforeResamplingAndPreservesStereoChannels() {
         val bits = intArrayOf(
             0, Int.MIN_VALUE, 1, Int.MIN_VALUE + 1,
             0x007fffff, 0x807fffff.toInt(), 0x00800000, 0x80800000.toInt(),
@@ -189,8 +189,8 @@ class RecordingWaveformTest {
                         val expectedLayout = readWavPcmLayout(expectedChannel)
                         for (rate in listOf(4_000, 8_000, 16_000)) {
                             for ((start, end) in listOf(0.0 to 0.064, 0.000_0625 to 0.023_1875, 0.04 to 0.064)) {
-                                val expected = readWavPcm16MonoRange(expectedChannel, expectedLayout, start, end, rate)
-                                val actual = readWavPcm16MonoRange(actualChannel, layout, start, end, rate)
+                                val expected = readWavPcm16Range(expectedChannel, expectedLayout, start, end, rate)
+                                val actual = readWavPcm16Range(actualChannel, layout, start, end, rate)
                                 assertTrue(expected.any { it != 0.toByte() })
                                 assertArrayEquals("channels=$channels rate=$rate range=$start..$end", expected, actual)
                             }
@@ -218,7 +218,7 @@ class RecordingWaveformTest {
                     dataBytes = Int.MAX_VALUE.toLong() + 1L,
                 )
                 val failure = runCatching {
-                    readWavPcm16MonoRange(
+                    readWavPcm16Range(
                         channel = channel,
                         layout = layout,
                         startSeconds = 0.0,
@@ -228,6 +228,52 @@ class RecordingWaveformTest {
                 }.exceptionOrNull()
                 assertTrue(failure is IOException)
                 assertEquals("Requested PCM source range is too large", failure?.message)
+            }
+        } finally {
+            file.delete()
+        }
+    }
+
+    @Test
+    fun savedRecordingReaderPreservesNativeChannelOrderAtEveryPcmFormatAndRate() {
+        val file = testFile("channel-preview-${System.nanoTime()}.wav")
+        try {
+            for (format in PcmSampleFormat.entries) for (channels in 1..2) {
+                val pcm = ByteBuffer.allocate(512 * channels * format.bytesPerSample).order(ByteOrder.LITTLE_ENDIAN)
+                repeat(512) {
+                    repeat(channels) { channel ->
+                        val value = if (channel == 0) 0.5f else -0.25f
+                        when (format) {
+                            PcmSampleFormat.PCM_8 -> pcm.put((128 + value * 128).toInt().toByte())
+                            PcmSampleFormat.PCM_16 -> pcm.putShort((value * 32768).toInt().toShort())
+                            PcmSampleFormat.PCM_FLOAT -> pcm.putFloat(value)
+                        }
+                    }
+                }
+                file.writeBytes(buildWavHeaderBytes(8_000, channels, format, pcm.capacity().toLong()) + pcm.array())
+                FileInputStream(file).use { input ->
+                    var validations = 0
+                    RecordingPcm16Reader(
+                        channel = input.channel,
+                        validateRead = { validations++; true },
+                        closeAction = {}, // The outer stream owns this test descriptor.
+                        layout = readWavPcmLayout(input.channel),
+                    ).use { reader ->
+                        assertEquals(channels, reader.channelCount)
+                        assertEquals(0.064, reader.durationSeconds, 0.000_001)
+                        for (rate in listOf(4_000, 8_000, 16_000)) {
+                            val output = reader.readRange(0.01, 0.05, rate)
+                            assertEquals(rate / 25 * channels * 2, output.size)
+                            val samples = ByteBuffer.wrap(output).order(ByteOrder.LITTLE_ENDIAN)
+                            repeat(rate / 25) {
+                                repeat(channels) { channel ->
+                                    assertEquals(if (channel == 0) 16_384 else -8_192, samples.short.toInt())
+                                }
+                            }
+                        }
+                        assertEquals(6, validations)
+                    }
+                }
             }
         } finally {
             file.delete()
@@ -248,7 +294,7 @@ class RecordingWaveformTest {
                     dataBytes = 2L,
                 )
                 val failure = runCatching {
-                    readWavPcm16MonoRange(
+                    readWavPcm16Range(
                         channel = channel,
                         layout = layout,
                         startSeconds = 0.0,
@@ -258,6 +304,25 @@ class RecordingWaveformTest {
                 }.exceptionOrNull()
                 assertTrue(failure is IOException)
                 assertEquals("Requested PCM output range is too large", failure?.message)
+            }
+        } finally {
+            file.delete()
+        }
+    }
+
+    @Test
+    fun savedRecordingStereoRangeRejectsOversizedOutputBeforeReadingPayload() {
+        val file = testFile("oversized-stereo-output-${System.nanoTime()}.wav")
+        // Deliberately shorter than the declared frame: an incorrect mono byte bound
+        // reaches EOF instead of attempting a huge allocation in this regression test.
+        file.writeBytes(byteArrayOf(0, 0))
+        try {
+            FileInputStream(file).channel.use { channel ->
+                val layout = WavPcmLayout(1, 2, PcmSampleFormat.PCM_16, 0L, 4L)
+                val failure = assertThrows(IOException::class.java) {
+                    readWavPcm16Range(channel, layout, 0.0, 1.0, Int.MAX_VALUE / 2)
+                }
+                assertEquals("Requested PCM output range is too large", failure.message)
             }
         } finally {
             file.delete()
@@ -694,7 +759,7 @@ class RecordingWaveformTest {
         val input = FileInputStream(file)
         val expected = IOException("reader close failed")
         var closeAttempts = 0
-        val reader = RecordingPcm16MonoReader(
+        val reader = RecordingPcm16Reader(
             channel = input.channel,
             validateRead = { true },
             closeAction = {

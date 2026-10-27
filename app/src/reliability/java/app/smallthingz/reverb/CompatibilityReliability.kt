@@ -172,7 +172,7 @@ private fun verifyOrdinaryDocumentExport(context: Context, tree: Uri): Recording
     withRecordingWavChannel(context, saved, RecordingReadCleanup.Propagate) { channel ->
         check(readWavPcmLayout(channel).dataBytes == source.size.toLong())
     }
-    RecordingPcm16MonoReader.open(context, saved, RecordingReadCleanup.Propagate).use { reader ->
+    RecordingPcm16Reader.open(context, saved, RecordingReadCleanup.Propagate).use { reader ->
         check(reader.layout.sampleRate == 16000)
     }
     val listed = listOutputDirectoryRecordings(context, tree).single { it.id == saved.id }

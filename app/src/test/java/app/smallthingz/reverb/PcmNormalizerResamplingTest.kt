@@ -165,19 +165,25 @@ class PcmNormalizerResamplingTest {
         }
     }
 
-    @Test fun savedWavAuditionUsesFilteredHaloAndSignedStereoDownmix() {
+    @Test fun savedWavAuditionUsesFilteredHaloAndPreservesOppositeStereoChannels() {
         for (format in PcmSampleFormat.entries) for (channels in 1..2) {
             val data = pcm(format, channels, frames = 9600)
             withPcm(buildWavHeaderBytes(48000, channels, format, data.size.toLong()) + data) { file, _ ->
                 FileInputStream(file).channel.use { channel ->
                     val layout = readWavPcmLayout(channel)
-                    val output = readWavPcm16MonoRange(channel, layout, 0.05, 0.15, 16000)
-                    assertTrue(output.size / 2 in 1600..1601)
-                    val values = decode(output, PcmSampleFormat.PCM_16, 1, 0).copyOf(1600)
-                    if (channels == 1) {
+                    val output = readWavPcm16Range(channel, layout, 0.05, 0.15, 16000)
+                    assertTrue(output.size / (channels * 2) in 1600..1601)
+                    for (channelIndex in 0 until channels) {
+                        val values = decode(output, PcmSampleFormat.PCM_16, channels, channelIndex).copyOf(1600)
                         assertEquals(0.25, amplitude(values, 1000), 0.012)
                         assertTrue(amplitude(values, 6000) < 0.01)
-                    } else assertTrue(values.all { kotlin.math.abs(it) < 0.0001f })
+                        assertEquals(if (channelIndex == 0) 0.25 else -0.25, values.average(), 0.012)
+                    }
+                    if (channels == 2) {
+                        val left = decode(output, PcmSampleFormat.PCM_16, channels, 0)
+                        val right = decode(output, PcmSampleFormat.PCM_16, channels, 1)
+                        assertTrue(left.indices.all { kotlin.math.abs(left[it] + right[it]) < 0.0001f })
+                    }
                 }
             }
         }
@@ -188,7 +194,7 @@ class PcmNormalizerResamplingTest {
             FileInputStream(file).channel.use { channel ->
                 val layout = WavPcmLayout(Int.MAX_VALUE, 1, PcmSampleFormat.PCM_16, 0, 2)
                 val error = assertThrows(IOException::class.java) {
-                    readWavPcm16MonoRange(channel, layout, 0.0, layout.durationSeconds, 1)
+                    readWavPcm16Range(channel, layout, 0.0, layout.durationSeconds, 1)
                 }
                 assertEquals("PCM conversion ratio is too large", error.message)
             }
