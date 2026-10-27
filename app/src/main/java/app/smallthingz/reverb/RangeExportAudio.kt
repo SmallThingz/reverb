@@ -99,7 +99,7 @@ internal fun nextShuttleSourceAnchorSeconds(
     val direction = if (signedRate >= 0f) 1.0 else -1.0
     val distanceTowardTarget = (targetAnchorSeconds - previous) * direction
     // Below one output hop, replaying another grain would loop mostly the same waveform.
-    // Wait for meaningful source movement instead; the pending tail is faded to silence.
+    // Wait for meaningful source movement instead of replaying the previous waveform.
     if (distanceTowardTarget + 1e-9 < SHUTTLE_SOURCE_HOP_SECONDS) return null
     // A smooth head must not become an audible history lesson on long timelines. If the
     // gesture target gets more than four output hops away, re-anchor at the current target;
@@ -297,6 +297,9 @@ internal data class ShuttleCrossfadeResult(
 
 internal fun shuttleOverlapFrames(grainFrames: Int, canonicalOverlapFrames: Int): Int =
     minOf(canonicalOverlapFrames.coerceAtLeast(0), grainFrames.coerceAtLeast(0) / 3)
+
+internal fun shuttleWaitFinishesPendingTail(signedRate: Float): Boolean =
+    abs(signedRate) < SHUTTLE_MIN_AUDIBLE_SPEED
 
 internal fun shuttleAnchorAfterGrain(
     anchorSeconds: Double,
@@ -929,10 +932,10 @@ internal class TimelineAudioPreviewController(
 
                 val anchor = nextShuttleSourceAnchorSeconds(previousAnchorSeconds, target, rate)
                 if (anchor == null) {
-                    // Source motion below one output hop is intentionally sparse. Repeating a
-                    // mostly identical grain is the buzzing/comb-filter artifact this
-                    // path must avoid. Finish the pending grain and wait for real source motion.
-                    finishPendingTail()
+                    // A stale or sub-hop command at ordinary speed must retain its overlap:
+                    // flushing now would emit source frames that the next grain emits again.
+                    // Sub-1x motion remains intentionally sparse, with a fade between auditions.
+                    if (shuttleWaitFinishesPendingTail(rate)) finishPendingTail()
                     Thread.sleep(8L)
                     continue
                 }

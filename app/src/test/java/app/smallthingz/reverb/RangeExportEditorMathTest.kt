@@ -937,6 +937,45 @@ class RangeExportEditorMathTest {
 
     @Test
     fun shuttleContinuousOneTimesOutputPreservesAlignedSourceThroughBoundaries() {
+        verifyContinuousShuttleSource(interleaveWaitingCommands = false)
+    }
+
+    @Test
+    fun shuttleRepeatedAndSubHopCommandsPreserveContinuousSource() {
+        verifyContinuousShuttleSource(interleaveWaitingCommands = true)
+    }
+
+    @Test
+    fun shuttleWaitingRetainsOrdinaryOverlapButFinishesSparseAuditions() {
+        val pending = pcm(100, 200, 300, 400, 500, 600, 700, 800)
+        for (rate in listOf(-21f, -2f, -1f, 1f, 2f, 21f)) {
+            var tail = pending
+            val emitted = java.io.ByteArrayOutputStream()
+            repeat(8) {
+                if (shuttleWaitFinishesPendingTail(rate) && tail.isNotEmpty()) {
+                    emitted.write(fadeOutShuttlePcm16(tail))
+                    tail = ByteArray(0)
+                }
+            }
+            assertSame("Ordinary waiting must preserve overlap at $rate", pending, tail)
+            assertEquals(0, emitted.size())
+        }
+        for (rate in listOf(-0.99f, -0.25f, -0.02f, 0f, 0.02f, 0.25f, 0.99f)) {
+            var tail = pending
+            val emitted = java.io.ByteArrayOutputStream()
+            repeat(8) {
+                if (shuttleWaitFinishesPendingTail(rate) && tail.isNotEmpty()) {
+                    emitted.write(fadeOutShuttlePcm16(tail))
+                    tail = ByteArray(0)
+                }
+            }
+            assertTrue("Sparse waiting must finish its tail at $rate", tail.isEmpty())
+            assertEquals(pending.size, emitted.size())
+            assertEquals(decode(fadeOutShuttlePcm16(pending)), decode(emitted.toByteArray()))
+        }
+    }
+
+    private fun verifyContinuousShuttleSource(interleaveWaitingCommands: Boolean) {
         for (sampleRate in listOf(48_000, 96_000)) {
             val fullFrames = (0.024 * sampleRate).roundToInt()
             val hop = (0.016 * sampleRate).roundToInt()
@@ -947,7 +986,7 @@ class RangeExportEditorMathTest {
                 hop * 3 + (0.018 * sampleRate).roundToInt())
             for (channels in 1..2) for (reverse in listOf(false, true)) {
                 for (tone in listOf(false, true)) for (frames in lengths) {
-                    val label = "$sampleRate Hz/$channels channels/reverse=$reverse/tone=$tone/$frames frames"
+                    val label = "$sampleRate Hz/$channels channels/reverse=$reverse/tone=$tone/$frames frames/wait=$interleaveWaitingCommands"
                     val samples = IntArray(frames * channels) { index ->
                         val frame = index / channels
                         val signal = if (tone) (12_000 * sin(2 * PI * 250 * frame / sampleRate)).roundToInt()
@@ -972,13 +1011,18 @@ class RangeExportEditorMathTest {
                     }
                     // Drive the actual source-anchor, overlap and DSP helpers through a
                     // complete traversal, then continue sending the same endpoint.
-                    for (step in 0..(frames / hop + 8)) {
-                        val distance = step.toDouble() * hop / sampleRate
+                    val commandsPerHop = if (interleaveWaitingCommands) 8 else 1
+                    for (command in 0..((frames / hop + 8) * commandsPerHop)) {
+                        val step = command / commandsPerHop
+                        // Same-target polls alternate with fresh quarter-hop positions,
+                        // matching worker polls between faster UI updates.
+                        val subHop = if (interleaveWaitingCommands) (command % commandsPerHop) / 2 * 0.25 else 0.0
+                        val distance = (step + subHop) * hop / sampleRate
                         val target = if (reverse) (duration - distance).coerceAtLeast(0.0)
                             else distance.coerceAtMost(duration)
                         val anchor = nextShuttleSourceAnchorSeconds(previousAnchor, target, rate)
                         if (anchor == null) {
-                            finishTail()
+                            if (shuttleWaitFinishesPendingTail(rate)) finishTail()
                             continue
                         }
                         val span = shuttleSourceGrainSeconds(rate)
@@ -1022,8 +1066,10 @@ class RangeExportEditorMathTest {
                                 else (frame - (frames - finalTailFrames)).toFloat() / (finalTailFrames - 1)
                             expected = (expected * (1f - t * t * (3f - 2f * t))).roundToInt()
                         }
-                        assertTrue("$label frame=$frame channel=$channel expected=$expected actual=${actual[frame * channels + channel]}",
-                            kotlin.math.abs(expected - actual[frame * channels + channel]) <= 1)
+                        val actualSample = actual[frame * channels + channel]
+                        if (kotlin.math.abs(expected - actualSample) > 1) {
+                            assertEquals("$label frame=$frame channel=$channel", expected, actualSample)
+                        }
                     }
                 }
             }
