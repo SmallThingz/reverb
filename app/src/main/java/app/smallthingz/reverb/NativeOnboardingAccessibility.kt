@@ -85,6 +85,7 @@ internal class NativeOnboardingAccessibility(
 
     private fun localBounds(view: View) = when (view) {
         is ReverbParagraphView -> view.originalAccessibilityBoundsInView()
+        is SettingsCalibrationProgressView -> view.semanticsBoundsInView()
         else -> ComposeRect(0f, 0f, view.width.toFloat(), view.height.toFloat())
     }
 
