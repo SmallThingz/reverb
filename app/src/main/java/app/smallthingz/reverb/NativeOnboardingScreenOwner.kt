@@ -3,8 +3,11 @@ package app.smallthingz.reverb
 import android.Manifest
 import android.content.pm.PackageManager
 import android.content.ActivityNotFoundException
+import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.result.ActivityResultLauncher
 import androidx.annotation.MainThread
@@ -95,6 +98,8 @@ internal class NativeOnboardingScreenOwner(
             OnboardingPermission.entries.firstOrNull { it.name == name }
         },
         batteryLeftForeground = savedInstanceState?.getBoolean(STATE_BATTERY_LEFT_FOREGROUND) ?: false,
+        settingsReview = savedInstanceState?.getBoolean(STATE_PERMISSION_SETTINGS_REVIEW) ?: false,
+        settingsLeftForeground = savedInstanceState?.getBoolean(STATE_PERMISSION_SETTINGS_LEFT_FOREGROUND) ?: false,
     )
     private var visiblePage = -1
     private var inputRefreshJob: Job? = null
@@ -341,6 +346,8 @@ internal class NativeOnboardingScreenOwner(
         outState.putInt(STATE_PERMISSION_ATTEMPTS, permissionSequence.attemptedMask)
         outState.putString(STATE_PERMISSION_PENDING, permissionSequence.pending?.name)
         outState.putBoolean(STATE_BATTERY_LEFT_FOREGROUND, permissionSequence.batteryLeftForeground)
+        outState.putBoolean(STATE_PERMISSION_SETTINGS_REVIEW, permissionSequence.settingsReview)
+        outState.putBoolean(STATE_PERMISSION_SETTINGS_LEFT_FOREGROUND, permissionSequence.settingsLeftForeground)
         // Unconsumed restoration survives hydration/loading, like SaveableStateRegistry restored data.
         if (showingOnboarding) {
             (draft?.save() ?: restoredDraft)?.let { outState.putBundle(STATE_DRAFT, Bundle(it)) }
@@ -357,7 +364,7 @@ internal class NativeOnboardingScreenOwner(
     private fun requestPermission(permission: OnboardingPermission) {
         if (closed || !showingOnboarding || visiblePage != 0 || configuration == null) return
         if (permissionSequence.claimManual(permission, permissionStatus(),
-                activity.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))) launchPermission(permission)
+                activity.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))) launchPermission(permission, manual = true)
     }
 
     private fun schedulePermissionPrompt() {
@@ -369,12 +376,35 @@ internal class NativeOnboardingScreenOwner(
             permissionPromptJob = null
             if (closed || !showingOnboarding || visiblePage != 0) return@launch
             permissionSequence.claimNext(permissionStatus(),
-                activity.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))?.let(::launchPermission)
+                activity.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))?.let { launchPermission(it) }
         }
     }
 
-    private fun launchPermission(permission: OnboardingPermission) {
+    private fun launchPermission(permission: OnboardingPermission, manual: Boolean = false) {
         try {
+            if (manual) {
+                val name = when (permission) {
+                    OnboardingPermission.MICROPHONE -> Manifest.permission.RECORD_AUDIO
+                    OnboardingPermission.STORAGE -> Manifest.permission.WRITE_EXTERNAL_STORAGE
+                    OnboardingPermission.RECOVERY -> mediaRecoveryPermission()
+                    OnboardingPermission.NOTIFICATIONS -> Manifest.permission.POST_NOTIFICATIONS
+                    OnboardingPermission.BATTERY -> null
+                }
+                val requested = when (permission) {
+                    OnboardingPermission.MICROPHONE -> microphoneRequested
+                    OnboardingPermission.STORAGE -> storageRequested
+                    OnboardingPermission.RECOVERY -> recoveryRequested
+                    OnboardingPermission.NOTIFICATIONS -> notificationsRequested
+                    OnboardingPermission.BATTERY -> false
+                }
+                if (name != null && permissionSequence.beginSettingsReview(requested,
+                        activity.shouldShowRequestPermissionRationale(name))) {
+                    activity.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                        data = Uri.fromParts("package", activity.packageName, null)
+                    })
+                    return
+                }
+            }
             when (permission) {
                 OnboardingPermission.MICROPHONE -> {
                     microphoneRequested = true
@@ -626,5 +656,7 @@ internal class NativeOnboardingScreenOwner(
         const val STATE_PERMISSION_ATTEMPTS = "native_onboarding_permission_attempts"
         const val STATE_PERMISSION_PENDING = "native_onboarding_permission_pending"
         const val STATE_BATTERY_LEFT_FOREGROUND = "native_onboarding_battery_left_foreground"
+        const val STATE_PERMISSION_SETTINGS_REVIEW = "native_onboarding_permission_settings_review"
+        const val STATE_PERMISSION_SETTINGS_LEFT_FOREGROUND = "native_onboarding_permission_settings_left_foreground"
     }
 }

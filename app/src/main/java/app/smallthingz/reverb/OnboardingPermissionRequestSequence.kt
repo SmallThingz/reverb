@@ -8,6 +8,8 @@ internal class OnboardingPermissionRequestSequence(
     attempted: Set<OnboardingPermission> = emptySet(),
     pending: OnboardingPermission? = null,
     batteryLeftForeground: Boolean = false,
+    settingsReview: Boolean = false,
+    settingsLeftForeground: Boolean = false,
 ) {
     var attemptedMask: Int = attempted.fold(0) { bits, permission -> bits or bit(permission) } or
         (pending?.let(::bit) ?: 0)
@@ -15,6 +17,10 @@ internal class OnboardingPermissionRequestSequence(
     var pending: OnboardingPermission? = pending
         private set
     var batteryLeftForeground: Boolean = batteryLeftForeground && pending == OnboardingPermission.BATTERY
+        private set
+    var settingsReview: Boolean = settingsReview && pending != null && pending != OnboardingPermission.BATTERY
+        private set
+    var settingsLeftForeground: Boolean = settingsLeftForeground && this.settingsReview
         private set
 
     fun claimNext(status: OnboardingPermissionStatus, resumed: Boolean): OnboardingPermission? {
@@ -37,22 +43,36 @@ internal class OnboardingPermissionRequestSequence(
         if (pending == permission) {
             pending = null
             batteryLeftForeground = false
+            settingsReview = false
+            settingsLeftForeground = false
         }
+    }
+
+    /** A denied runtime request with no rationale cannot show another system prompt. */
+    fun beginSettingsReview(previouslyRequested: Boolean, showsRationale: Boolean): Boolean {
+        if (pending == null || pending == OnboardingPermission.BATTERY ||
+            !previouslyRequested || showsRationale) return false
+        settingsReview = true
+        return true
     }
 
     fun leftForeground() {
         if (pending == OnboardingPermission.BATTERY) batteryLeftForeground = true
+        if (settingsReview) settingsLeftForeground = true
     }
 
-    /** Battery review is an external Activity, unlike the four result-contract permissions. */
+    /** External reviews finish on return; runtime permission dialogs still require their result. */
     fun returnedToForeground() {
         if (batteryLeftForeground) completed(OnboardingPermission.BATTERY)
+        if (settingsLeftForeground) pending?.let(::completed)
     }
 
     private fun claim(permission: OnboardingPermission) {
         attemptedMask = attemptedMask or bit(permission)
         pending = permission
         batteryLeftForeground = false
+        settingsReview = false
+        settingsLeftForeground = false
     }
 
     private fun missing(status: OnboardingPermissionStatus, permission: OnboardingPermission): Boolean = when (permission) {

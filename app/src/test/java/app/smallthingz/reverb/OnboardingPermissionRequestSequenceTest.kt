@@ -164,4 +164,93 @@ class OnboardingPermissionRequestSequenceTest {
         assertNull(restored.pending)
         assertTrue(restored.claimManual(OnboardingPermission.BATTERY, missing, true))
     }
+
+    @Test fun firstRequestAndRetryableDenialDoNotOpenSettings() {
+        for (requested in listOf(false, true)) {
+            for (rationale in listOf(false, true)) {
+                val sequence = OnboardingPermissionRequestSequence()
+                assertTrue(sequence.claimManual(OnboardingPermission.MICROPHONE, missing, true))
+                assertEquals(requested && !rationale, sequence.beginSettingsReview(requested, rationale))
+                assertEquals(requested && !rationale, sequence.settingsReview)
+            }
+        }
+    }
+
+    @Test fun settingsReviewWorksForEveryRuntimePermissionAndBlocksOverlapUntilReturn() {
+        for (permission in OnboardingPermission.entries.filter { it != OnboardingPermission.BATTERY }) {
+            val sequence = OnboardingPermissionRequestSequence()
+            assertTrue(sequence.claimManual(permission, missing, true))
+            assertTrue(sequence.beginSettingsReview(previouslyRequested = true, showsRationale = false))
+            sequence.returnedToForeground()
+            assertEquals(permission, sequence.pending)
+            assertFalse(sequence.claimManual(permission, missing, true))
+            assertNull(sequence.claimNext(missing, true))
+            sequence.leftForeground()
+            assertTrue(sequence.settingsLeftForeground)
+            sequence.returnedToForeground()
+            assertNull(sequence.pending)
+            assertFalse(sequence.settingsReview)
+            assertFalse(sequence.settingsLeftForeground)
+            assertTrue(sequence.claimManual(permission, missing, true))
+        }
+    }
+
+    @Test fun settingsReviewRestoresAfterActivityRecreationAndDoesNotReopenAutomatically() {
+        val original = OnboardingPermissionRequestSequence(OnboardingPermission.entries.toSet())
+        original.claimManual(OnboardingPermission.MICROPHONE, missing, true)
+        original.beginSettingsReview(previouslyRequested = true, showsRationale = false)
+        original.leftForeground()
+        val restored = OnboardingPermissionRequestSequence(
+            OnboardingPermissionRequestSequence.attemptedFromMask(original.attemptedMask),
+            original.pending, original.batteryLeftForeground, original.settingsReview, original.settingsLeftForeground)
+        assertEquals(OnboardingPermission.MICROPHONE, restored.pending)
+        restored.returnedToForeground()
+        assertNull(restored.pending)
+        assertNull(restored.claimNext(missing, true))
+        assertTrue(restored.claimManual(OnboardingPermission.MICROPHONE, missing, true))
+    }
+
+    @Test fun failedSettingsLaunchReleasesOnlyItsClaimAndDoesNotLeaveReviewState() {
+        val sequence = OnboardingPermissionRequestSequence()
+        sequence.claimManual(OnboardingPermission.MICROPHONE, missing, true)
+        sequence.beginSettingsReview(previouslyRequested = true, showsRationale = false)
+        sequence.completed(OnboardingPermission.NOTIFICATIONS)
+        assertTrue(sequence.settingsReview)
+        sequence.completed(OnboardingPermission.MICROPHONE)
+        assertNull(sequence.pending)
+        assertFalse(sequence.settingsReview)
+        sequence.leftForeground()
+        sequence.returnedToForeground()
+        assertFalse(sequence.settingsLeftForeground)
+        assertEquals(OnboardingPermission.STORAGE, sequence.claimNext(missing, true))
+    }
+
+    @Test fun settingsReturnRereadCanMarkGrantWithoutRequestingItAgain() {
+        val sequence = OnboardingPermissionRequestSequence()
+        sequence.claimManual(OnboardingPermission.MICROPHONE, missing, true)
+        sequence.beginSettingsReview(previouslyRequested = true, showsRationale = false)
+        sequence.leftForeground()
+        sequence.returnedToForeground()
+        val granted = missing.copy(microphoneAllowed = true)
+        assertFalse(sequence.claimManual(OnboardingPermission.MICROPHONE, granted, true))
+        assertEquals(OnboardingPermission.STORAGE, sequence.claimNext(granted, true))
+    }
+
+    @Test fun absentAndBatteryPendingCannotBecomeRuntimeSettingsReview() {
+        val sequence = OnboardingPermissionRequestSequence()
+        assertFalse(sequence.beginSettingsReview(previouslyRequested = true, showsRationale = false))
+        sequence.claimManual(OnboardingPermission.BATTERY, missing, true)
+        assertFalse(sequence.beginSettingsReview(previouslyRequested = true, showsRationale = false))
+        sequence.leftForeground()
+        sequence.returnedToForeground()
+        assertNull(sequence.pending)
+    }
+
+    @Test fun staleSavedSettingsFlagsCannotReleaseARegularRuntimeRequest() {
+        val sequence = OnboardingPermissionRequestSequence(pending = OnboardingPermission.MICROPHONE,
+            settingsReview = false, settingsLeftForeground = true)
+        sequence.returnedToForeground()
+        assertEquals(OnboardingPermission.MICROPHONE, sequence.pending)
+        assertFalse(sequence.settingsLeftForeground)
+    }
 }
