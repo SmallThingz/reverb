@@ -329,14 +329,17 @@ internal class NativeVerticalViewport(
     }
 
     override fun performAccessibilityAction(action: Int, arguments: Bundle?): Boolean {
+        // A retained host can disappear from semantics while still owning platform focus.
+        if (action == AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS) {
+            return super.performAccessibilityAction(action, arguments)
+        }
         if (sourceAccessibilityNode?.invoke()?.present == false) return false
         val direction = when (action) {
             AccessibilityNodeInfo.ACTION_SCROLL_FORWARD, android.R.id.accessibilityActionScrollDown ->
                 NativeVerticalAccessibilityDirection.FORWARD
             AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD, android.R.id.accessibilityActionScrollUp ->
                 NativeVerticalAccessibilityDirection.BACKWARD
-            AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS,
-            AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS ->
+            AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS ->
                 return super.performAccessibilityAction(action, arguments)
             else -> return false
         }
