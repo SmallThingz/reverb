@@ -29,11 +29,11 @@ internal fun boundRangeDurationActionValues(
     maximumSeconds: Double,
     snapshotDurationSeconds: Double? = null,
 ): RangeEditValues {
-    fun duration(candidate: RangeEditValues): Double = if (snapshotDurationSeconds != null) {
-        rangeSelectionDurationExactSeconds(candidate.startSeconds, candidate.endSeconds, snapshotDurationSeconds)
-    } else rangeSelectionDurationExactSeconds(candidate.startSeconds, candidate.endSeconds)
+    fun duration(start: Float, end: Float): Double = if (snapshotDurationSeconds != null) {
+        rangeSelectionDurationExactSeconds(start, end, snapshotDurationSeconds)
+    } else rangeSelectionDurationExactSeconds(start, end)
     if (!maximumSeconds.isFinite() || maximumSeconds <= 0.0 ||
-        duration(values) <= maximumSeconds
+        duration(values.startSeconds, values.endSeconds) <= maximumSeconds
     ) return values
     return when (target) {
         RangeEditTarget.END -> {
@@ -41,7 +41,7 @@ internal fun boundRangeDurationActionValues(
                 rangeSnapshotStartSeconds(it, values.startSeconds, values.endSeconds)
             } ?: values.startSeconds.toDouble()
             var end = (exactStart + maximumSeconds).toFloat()
-            if (duration(RangeEditValues(values.startSeconds, end)) > maximumSeconds) end = java.lang.Math.nextDown(end)
+            if (duration(values.startSeconds, end) > maximumSeconds) end = java.lang.Math.nextDown(end)
             RangeEditValues(values.startSeconds, end.coerceAtLeast(values.startSeconds))
         }
         RangeEditTarget.START -> {
@@ -49,7 +49,7 @@ internal fun boundRangeDurationActionValues(
                 rangeSnapshotEndSeconds(it, values.startSeconds, values.endSeconds)
             } ?: values.endSeconds.toDouble()
             var start = (exactEnd - maximumSeconds).toFloat()
-            if (duration(RangeEditValues(start, values.endSeconds)) > maximumSeconds) start = java.lang.Math.nextUp(start)
+            if (duration(start, values.endSeconds) > maximumSeconds) start = java.lang.Math.nextUp(start)
             RangeEditValues(start.coerceAtMost(values.endSeconds), values.endSeconds)
         }
     }
