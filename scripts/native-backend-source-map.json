@@ -100,9 +100,45 @@
       ]
     },
     "src/main/java/app/smallthingz/reverb/RangeExportEditor.kt": {
-      "compiled_sha256": "07f72d1ae044509baaaa51f44002237d338a9a60fddd13c3aaca7f30d4813e82",
+      "compiled_sha256": "dd0e0625631a5ebc7838256d38c4d9e1a533464373229cf18a621e841d74aad3",
       "normalized_sha256": "b8cec9f92e76daa2d333fa3d1dee063540f0391f813708b906d25780720fbac6",
       "inverse": [
+        {
+          "from": "    val available = availableSeconds.takeIf { it.isFinite() }?.coerceAtLeast(0.0) ?: return null\n    if (!startSeconds.isFinite() || !endSeconds.isFinite() || available <= 0.0) return null\n    val start = rangeSnapshotStartSeconds(available, startSeconds, endSeconds)\n    val end = rangeSnapshotEndSeconds(available, startSeconds, endSeconds)\n    val requestedSelectionMillis = ((end - start) * 1_000.0).roundToLong()\n    if (requestedSelectionMillis <= 0L) return null\n",
+          "to": "    val available = availableSeconds.takeIf { it.isFinite() }?.coerceAtLeast(0.0) ?: return null\n    if (!startSeconds.isFinite() || !endSeconds.isFinite() || available <= 0.0) return null\n    val start = startSeconds.toDouble().coerceIn(0.0, available)\n    val end = endSeconds.toDouble().coerceIn(start, available)\n    val requestedSelectionMillis = ((end - start) * 1_000.0).roundToLong()\n    if (requestedSelectionMillis <= 0L) return null\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "}\n\ninternal fun rangeSelectionDurationExactSeconds(\n    startSeconds: Float,\n    endSeconds: Float,\n    availableSeconds: Double,\n): Double {\n    return rangeSnapshotEndSeconds(availableSeconds, startSeconds, endSeconds) -\n        rangeSnapshotStartSeconds(availableSeconds, startSeconds, endSeconds)\n}\n\ninternal fun rangeExportSelectionWithinLimit(\n    selectedDurationSeconds: Double,\n",
+          "to": "}\n\ninternal fun rangeExportSelectionWithinLimit(\n    selectedDurationSeconds: Double,\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "    timelineDurationSeconds: Float,\n    exportLimitSeconds: Double,\n    snapshotDurationSeconds: Double? = null,\n): Double {\n    val exportLimit = exportLimitSeconds.takeIf { it.isFinite() }\n        ?.coerceAtLeast(0.0) ?: 0.0\n    val reachable = if (snapshotDurationSeconds != null) {\n        if (!snapshotDurationSeconds.isFinite() || snapshotDurationSeconds <= 0.0 ||\n            !values.startSeconds.isFinite() || !values.endSeconds.isFinite()\n        ) 0.0 else when (target) {\n            RangeEditTarget.START -> rangeSnapshotEndSeconds(snapshotDurationSeconds, values.startSeconds, values.endSeconds)\n            RangeEditTarget.END -> (snapshotDurationSeconds -\n                rangeSnapshotStartSeconds(snapshotDurationSeconds, values.startSeconds, values.endSeconds))\n                .takeIf { it.isFinite() }?.coerceAtLeast(0.0) ?: 0.0\n        }\n    } else rangeSelectionDurationReachableLimitSeconds(values, target, timelineDurationSeconds)\n    return minOf(\n        exportLimit,\n        reachable,\n    )\n}\n",
+          "to": "    timelineDurationSeconds: Float,\n    exportLimitSeconds: Double,\n): Double {\n    val exportLimit = exportLimitSeconds.takeIf { it.isFinite() }\n        ?.coerceAtLeast(0.0) ?: 0.0\n    return minOf(\n        exportLimit,\n        rangeSelectionDurationReachableLimitSeconds(values, target, timelineDurationSeconds),\n    )\n}\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "\n    val selectionDurationExactSeconds: Double\n        get() = snapshot?.let {\n            rangeSelectionDurationExactSeconds(startSeconds, endSeconds, it.durationSeconds)\n        } ?: rangeSelectionDurationExactSeconds(startSeconds, endSeconds)\n\n    fun selectionDurationWheelLimitExactSeconds(exportLimitSeconds: Double): Double =\n",
+          "to": "\n    val selectionDurationExactSeconds: Double\n        get() = rangeSelectionDurationExactSeconds(startSeconds, endSeconds)\n\n    fun selectionDurationWheelLimitExactSeconds(exportLimitSeconds: Double): Double =\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "            timelineDurationSeconds = durationSeconds,\n            exportLimitSeconds = exportLimitSeconds,\n            snapshotDurationSeconds = snapshot?.durationSeconds,\n        )\n\n",
+          "to": "            timelineDurationSeconds = durationSeconds,\n            exportLimitSeconds = exportLimitSeconds,\n        )\n\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "        val target = selectionDurationInteraction.commitTarget() ?: return\n        setSelectionDuration(requestedDurationSeconds)\n        applyEditUpdate(RangeEditUpdate(boundRangeDurationActionValues(\n            currentEditValues(), target, maximumSeconds, snapshot?.durationSeconds,\n        )))\n    }\n\n",
+          "to": "        val target = selectionDurationInteraction.commitTarget() ?: return\n        setSelectionDuration(requestedDurationSeconds)\n        applyEditUpdate(RangeEditUpdate(boundRangeDurationActionValues(currentEditValues(), target, maximumSeconds)))\n    }\n\n",
+          "count": 1,
+          "word": false
+        },
         {
           "from": "        if (fineAdjustShuttleActive) {\n            fineAdjustShuttleActive = false\n        }\n        previewController.stop()\n",
           "to": "        if (fineAdjustShuttleActive) {\n            fineAdjustShuttleActive = false\n            previewController.stopShuttle()\n            isScrubbing = false\n        }\n        previewController.stop()\n",
@@ -151,7 +187,14 @@
           "count": 1,
           "word": false
         }
-      ]
+      ],
+      "origin": {
+        "kind": "authorized production endpoint helper fixes; source-only reconstruction for released renderer guard",
+        "source_commit": "81dcee3beb147a7422a0521d488d5080e3e7ff6c",
+        "prior_compiled_source_commit": "1036704c4d44e9ba7fe465e08c8cc9b6f4e17452",
+        "prior_compiled_sha256": "07f72d1ae044509baaaa51f44002237d338a9a60fddd13c3aaca7f30d4813e82",
+        "scope": "Pin actual current compiled helper bytes; reverse only the reviewed endpoint changes before applying unchanged frozen renderer reconstruction. No compiled renderer/reference replacement or relaxed hash/count checks."
+      }
     },
     "src/main/java/app/smallthingz/reverb/RecordingInlinePlayer.kt": {
       "compiled_sha256": "1d62ac068bdfb80f43032d233a91e82839dcec94da06d451e6affa89e2a31d9b",
@@ -681,6 +724,37 @@
           "word": false
         }
       ]
+    },
+    "src/main/java/app/smallthingz/reverb/CaptureScreen.kt": {
+      "compiled_sha256": "6fb19ed4b31be817ac07fd31d7857c2d919a0f473b285c523242599408cc5013",
+      "normalized_sha256": "c5f8077047f1328a616f5c9f65411aa58b230af8ff6e8097db7481c55c138dbf",
+      "inverse": [
+        {
+          "from": "): ExportRange {\n    val available = availableSeconds.takeIf { it.isFinite() }?.coerceAtLeast(0.0) ?: 0.0\n    val exactStart = rangeSnapshotStartSeconds(available, requestedStartSeconds, requestedEndSeconds)\n    val exactEnd = rangeSnapshotEndSeconds(available, requestedStartSeconds, requestedEndSeconds)\n    val start = exactStart.toFloat()\n    val end = exactEnd.toFloat()\n    val maxDuration = exportDurationLimitExactSeconds(\n        exportConfig.format,\n",
+          "to": "): ExportRange {\n    val available = availableSeconds.takeIf { it.isFinite() }?.coerceAtLeast(0.0) ?: 0.0\n    val start = requestedStartSeconds.toDouble().coerceIn(0.0, available).toFloat()\n    val end = requestedEndSeconds.toDouble().coerceIn(start.toDouble(), available).toFloat()\n    val maxDuration = exportDurationLimitExactSeconds(\n        exportConfig.format,\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "        exportConfig.sampleFormat,\n    )\n    val selectedDuration = exactEnd - exactStart\n    // Empty input is rejection, not overflow: never expand it into a different export.\n    return if (selectedDuration <= 0.0 || rangeExportSelectionWithinLimit(selectedDuration, maxDuration)) {\n",
+          "to": "        exportConfig.sampleFormat,\n    )\n    val selectedDuration = rangeSelectionDurationExactSeconds(start, end)\n    // Empty input is rejection, not overflow: never expand it into a different export.\n    return if (selectedDuration <= 0.0 || rangeExportSelectionWithinLimit(selectedDuration, maxDuration)) {\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "    } else {\n        ExportRange(\n            startSeconds = (exactEnd - maxDuration).coerceAtLeast(0.0).toFloat(),\n            endSeconds = end,\n            warningDurationSeconds = maxDuration.toFloat(),\n",
+          "to": "    } else {\n        ExportRange(\n            startSeconds = (end.toDouble() - maxDuration).coerceAtLeast(0.0).toFloat(),\n            endSeconds = end,\n            warningDurationSeconds = maxDuration.toFloat(),\n",
+          "count": 1,
+          "word": false
+        }
+      ],
+      "origin": {
+        "kind": "authorized production endpoint helper fixes; source-only reconstruction for released renderer guard",
+        "source_commit": "81dcee3beb147a7422a0521d488d5080e3e7ff6c",
+        "prior_compiled_source_commit": "1036704c4d44e9ba7fe465e08c8cc9b6f4e17452",
+        "prior_compiled_sha256": "c5f8077047f1328a616f5c9f65411aa58b230af8ff6e8097db7481c55c138dbf",
+        "scope": "Pin actual current compiled helper bytes; reverse only the reviewed endpoint changes before applying unchanged frozen renderer reconstruction. No compiled renderer/reference replacement or relaxed hash/count checks."
+      }
     }
   },
   "references": {
