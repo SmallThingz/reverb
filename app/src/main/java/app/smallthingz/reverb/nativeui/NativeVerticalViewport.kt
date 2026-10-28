@@ -329,6 +329,7 @@ internal class NativeVerticalViewport(
     }
 
     override fun performAccessibilityAction(action: Int, arguments: Bundle?): Boolean {
+        if (sourceAccessibilityNode?.invoke()?.present == false) return false
         val direction = when (action) {
             AccessibilityNodeInfo.ACTION_SCROLL_FORWARD, android.R.id.accessibilityActionScrollDown ->
                 NativeVerticalAccessibilityDirection.FORWARD
