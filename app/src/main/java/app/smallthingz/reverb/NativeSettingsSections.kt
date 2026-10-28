@@ -284,7 +284,7 @@ internal class NativeSettingsSections(
         var activation = initial.activation
         fun state(current: SettingsDraftPresentation) = SettingsStorageState(
             owner.exportPathText, current.displayed.snapshot.exportDirectoryUri != null,
-            owner.canMove, current.persisting)
+            owner.canMove && !owner.settingsCommitBlocked, current.persisting)
         val body = SettingsStorageSection(context, state(initial), environment(), inputRoot,
             { owner.useDefaultDirectory(activation) }, { owner.chooseDirectory(activation) },
             { owner.moveExistingRecordings(activation) })

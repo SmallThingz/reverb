@@ -169,15 +169,20 @@ internal class NativeOnboardingScreenOwner(
             Lifecycle.Event.ON_PAUSE -> permissionSequence.leftForeground()
             Lifecycle.Event.ON_RESUME -> {
                 permissionSequence.returnedToForeground()
+                val previouslyMicrophoneAllowed = microphoneAllowed
+                val previouslyStorageAllowed = storageAllowed
+                microphoneAllowed = hasMicrophonePermission()
+                storageAllowed = hasLegacyStoragePermission()
+                requiredPermissionsGranted = microphoneAllowed && storageAllowed
                 if (showingOnboarding) {
-                    microphoneAllowed = hasMicrophonePermission()
-                    storageAllowed = hasLegacyStoragePermission()
-                    requiredPermissionsGranted = microphoneAllowed && storageAllowed
                     refreshOptionalPermissionStatus()
                     refreshAudioInput()
-                    publish()
                     schedulePermissionPrompt()
+                } else if (microphoneAllowed != previouslyMicrophoneAllowed || storageAllowed != previouslyStorageAllowed) {
+                    // Settings may return through pause/resume without another onStart (multi-window).
+                    beginPermissionFlow()
                 }
+                publish()
             }
             else -> Unit
         }

@@ -194,8 +194,12 @@ internal class NativeSettingsOwner(
         )
     }
 
+    val settingsCommitBlocked: Boolean
+        get() = state.persisting || calibration.running || quickTileEditorState.editorOpen ||
+            notificationDurationInteraction.pending
+
     suspend fun persistSettings(): Boolean {
-        if (state.persisting || calibration.running || quickTileEditorState.editorOpen) return false
+        if (settingsCommitBlocked) return false
         val admission = currentSaveAdmission() ?: return false
         val attempt = draft.beginPersistence() ?: return false
         try {
@@ -234,8 +238,7 @@ internal class NativeSettingsOwner(
 
     fun done(renderedActivation: Any) {
         val current = state
-        if (!acceptsInput(renderedActivation) || !current.hasUnsavedChanges || current.persisting ||
-            calibration.running || quickTileEditorState.editorOpen || notificationDurationInteraction.pending) return
+        if (!acceptsInput(renderedActivation) || !current.hasUnsavedChanges || settingsCommitBlocked) return
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
             runSettingsSaveContinuation(
                 submittedOwner = renderedActivation,
@@ -481,9 +484,8 @@ internal class NativeSettingsOwner(
     }
 
     fun moveExistingRecordings(renderedActivation: Any) {
-        if (!acceptsInput(renderedActivation)) return
+        if (!acceptsInput(renderedActivation) || !canMove || settingsCommitBlocked) return
         val current = state
-        if (current.persisting) return
         val moveTargetTreeUri = current.displayed.snapshot.exportDirectoryUri?.let(Uri::parse)
         val appContext = context.applicationContext
         val appResources = appContext.resources

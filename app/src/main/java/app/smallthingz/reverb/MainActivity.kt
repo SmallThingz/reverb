@@ -1,5 +1,6 @@
 package app.smallthingz.reverb
 
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
@@ -123,9 +124,15 @@ class MainActivity : ComponentActivity() {
                 NativeDirectoryPickerRegistration(launcher::launch, launcher::unregister)
             },
             openApplicationSettings = {
-                startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                    data = Uri.fromParts("package", packageName, null)
-                })
+                try {
+                    startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                        data = Uri.fromParts("package", packageName, null)
+                    })
+                } catch (_: ActivityNotFoundException) {
+                    AppFeedbackCenter.post(getString(R.string.no_app_available), FeedbackTone.ERROR)
+                } catch (_: SecurityException) {
+                    AppFeedbackCenter.post(getString(R.string.no_app_available), FeedbackTone.ERROR)
+                }
             },
         )
         setContentView(content)

@@ -140,7 +140,7 @@ internal class NativeSettingsScreenContent(
             list=it;addView(it,0);lastSections=null;structureChanged()
         }
         val sectionValues=SectionValues(state,owner.errors,owner.exportPathText,owner.canMove,
-            owner.batteryOptimizationRestricted,environment,input.focusRetention)
+            owner.settingsCommitBlocked,owner.batteryOptimizationRestricted,environment,input.focusRetention)
         val tileEditorChanged=tileEditorPublication.changed(owner.quickTileEditorState)
         if(lastSections!=sectionValues) {
             lastSections=sectionValues
@@ -217,7 +217,7 @@ internal class NativeSettingsScreenContent(
         failure?.let {throw it}
     }
     private data class SectionValues(val state:SettingsDraftPresentation,val errors:NativeSettingsRetentionErrors,
-        val path:String,val canMove:Boolean,val restricted:Boolean,val environment:ReverbViewEnvironment,
+        val path:String,val canMove:Boolean,val commitBlocked:Boolean,val restricted:Boolean,val environment:ReverbViewEnvironment,
         val focus:ReverbService.BufferSlot?)
     private data class TopBarValues(val activation:Any,val changed:Boolean,val persisting:Boolean,
         val calibrating:Boolean,val tileOpen:Boolean,val durationPending:Boolean,val backHint:Any?,
