@@ -51,4 +51,49 @@ class RangeSnapshotDurationTest {
         assertEquals(0.0, rangeSelectionDurationExactSeconds(2f, 3f, 1.0), 0.0)
         assertEquals(0.0, rangeSelectionDurationExactSeconds(1f, 0f, 2.0), 0.0)
     }
+
+    @Test
+    fun renderedFullEndpointRoundedDown_keepsEveryTerminalFrame() {
+        val frames = 536_870_880L
+        val available = frames / sampleRate
+        assertTrue(available.toFloat().toDouble() < available)
+        val end = rangeSnapshotEndSeconds(available, 0f, available.toFloat())
+        assertEquals(available, end, 0.0)
+        assertEquals(frames, kotlin.math.ceil(end * sampleRate).toLong().coerceAtMost(frames))
+    }
+
+    @Test
+    fun adjacentInteriorEndpoint_isNotPromotedToSnapshotEnd() {
+        val available = 536_870_880L / sampleRate
+        val interior = java.lang.Math.nextDown(available.toFloat())
+        assertEquals(interior.toDouble(), rangeSnapshotEndSeconds(available, 0f, interior), 0.0)
+    }
+
+    @Test
+    fun wheelReachableMaximum_usesExactSnapshotEndInBothDirections() {
+        val available = 536_879_999L / sampleRate
+        val values = RangeEditValues(0f, available.toFloat())
+        assertEquals(11_185f, values.endSeconds, 0f)
+        for (target in RangeEditTarget.entries) {
+            assertEquals(available, rangeSelectionDurationWheelLimitSeconds(
+                values, target, available.toFloat(), 50_000.0, available,
+            ), 0.0)
+        }
+    }
+
+    @Test
+    fun fullDurationAction_doesNotTrimRoundedEndpointWithinExactCap() {
+        val values = RangeEditValues(0f, maximumSeconds.toFloat())
+        for (target in RangeEditTarget.entries) {
+            assertEquals(values, boundRangeDurationActionValues(values, target, maximumSeconds, maximumSeconds))
+        }
+    }
+
+    @Test
+    fun savedFullRange_remembersZeroEndOffsetAfterRoundingDown() {
+        val available = 1_000_000_070L / sampleRate
+        assertTrue(available - available.toFloat().toDouble() > 0.0005)
+        val remembered = rememberedRangeExportFromSavedRange(available, 0f, available.toFloat())
+        assertEquals(0L, remembered!!.endOffsetMillis)
+    }
 }

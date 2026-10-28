@@ -380,8 +380,10 @@ internal fun buildCustomExportRange(
     exportConfig: ExportUiConfig,
 ): ExportRange {
     val available = availableSeconds.takeIf { it.isFinite() }?.coerceAtLeast(0.0) ?: 0.0
-    val start = requestedStartSeconds.toDouble().coerceIn(0.0, available).toFloat()
-    val end = requestedEndSeconds.toDouble().coerceIn(start.toDouble(), available).toFloat()
+    val exactStart = rangeSnapshotStartSeconds(available, requestedStartSeconds, requestedEndSeconds)
+    val exactEnd = rangeSnapshotEndSeconds(available, requestedStartSeconds, requestedEndSeconds)
+    val start = exactStart.toFloat()
+    val end = exactEnd.toFloat()
     val maxDuration = exportDurationLimitExactSeconds(
         exportConfig.format,
         exportConfig.codec,
@@ -389,13 +391,13 @@ internal fun buildCustomExportRange(
         exportConfig.channelCount,
         exportConfig.sampleFormat,
     )
-    val selectedDuration = rangeSelectionDurationExactSeconds(start, end, available)
+    val selectedDuration = exactEnd - exactStart
     // Empty input is rejection, not overflow: never expand it into a different export.
     return if (selectedDuration <= 0.0 || rangeExportSelectionWithinLimit(selectedDuration, maxDuration)) {
         ExportRange(start, end, null)
     } else {
         ExportRange(
-            startSeconds = (end.toDouble() - maxDuration).coerceAtLeast(0.0).toFloat(),
+            startSeconds = (exactEnd - maxDuration).coerceAtLeast(0.0).toFloat(),
             endSeconds = end,
             warningDurationSeconds = maxDuration.toFloat(),
         )

@@ -2127,8 +2127,8 @@ open class ReverbService : Service() {
             beforeAcquire = { ensureExportNotCancelled(exportToken) },
             acquire = { owned ->
                 val totalDuration = owned.durationSeconds
-                val boundedStart = startOffsetSeconds.toDouble().coerceIn(0.0, totalDuration)
-                val boundedEnd = endOffsetSeconds.toDouble().coerceIn(boundedStart, totalDuration)
+                val boundedStart = rangeSnapshotStartSeconds(totalDuration, startOffsetSeconds, endOffsetSeconds)
+                val boundedEnd = rangeSnapshotEndSeconds(totalDuration, startOffsetSeconds, endOffsetSeconds)
                 val maxDuration = exportDurationLimitExactSeconds(
                     format = exportConfig.format,
                     codec = exportConfig.codec,

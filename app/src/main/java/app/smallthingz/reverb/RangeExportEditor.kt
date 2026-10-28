@@ -154,8 +154,8 @@ internal fun rememberedRangeExportFromSavedRange(
 ): RememberedRangeExport? {
     val available = availableSeconds.takeIf { it.isFinite() }?.coerceAtLeast(0.0) ?: return null
     if (!startSeconds.isFinite() || !endSeconds.isFinite() || available <= 0.0) return null
-    val start = startSeconds.toDouble().coerceIn(0.0, available)
-    val end = endSeconds.toDouble().coerceIn(start, available)
+    val start = rangeSnapshotStartSeconds(available, startSeconds, endSeconds)
+    val end = rangeSnapshotEndSeconds(available, startSeconds, endSeconds)
     val requestedSelectionMillis = ((end - start) * 1_000.0).roundToLong()
     if (requestedSelectionMillis <= 0L) return null
     val availableMillis = (available * 1_000.0).roundToLong().coerceAtLeast(1L)
@@ -324,13 +324,8 @@ internal fun rangeSelectionDurationExactSeconds(
     endSeconds: Float,
     availableSeconds: Double,
 ): Double {
-    if (!startSeconds.isFinite() || !endSeconds.isFinite() ||
-        !availableSeconds.isFinite() || availableSeconds <= 0.0
-    ) return 0.0
-    // Match snapshot export acquisition before comparing against the exact payload limit.
-    val start = startSeconds.toDouble().coerceIn(0.0, availableSeconds)
-    val end = endSeconds.toDouble().coerceIn(start, availableSeconds)
-    return end - start
+    return rangeSnapshotEndSeconds(availableSeconds, startSeconds, endSeconds) -
+        rangeSnapshotStartSeconds(availableSeconds, startSeconds, endSeconds)
 }
 
 internal fun rangeExportSelectionWithinLimit(
@@ -364,12 +359,23 @@ internal fun rangeSelectionDurationWheelLimitSeconds(
     target: RangeEditTarget,
     timelineDurationSeconds: Float,
     exportLimitSeconds: Double,
+    snapshotDurationSeconds: Double? = null,
 ): Double {
     val exportLimit = exportLimitSeconds.takeIf { it.isFinite() }
         ?.coerceAtLeast(0.0) ?: 0.0
+    val reachable = if (snapshotDurationSeconds != null) {
+        if (!snapshotDurationSeconds.isFinite() || snapshotDurationSeconds <= 0.0 ||
+            !values.startSeconds.isFinite() || !values.endSeconds.isFinite()
+        ) 0.0 else when (target) {
+            RangeEditTarget.START -> rangeSnapshotEndSeconds(snapshotDurationSeconds, values.startSeconds, values.endSeconds)
+            RangeEditTarget.END -> (snapshotDurationSeconds -
+                rangeSnapshotStartSeconds(snapshotDurationSeconds, values.startSeconds, values.endSeconds))
+                .takeIf { it.isFinite() }?.coerceAtLeast(0.0) ?: 0.0
+        }
+    } else rangeSelectionDurationReachableLimitSeconds(values, target, timelineDurationSeconds)
     return minOf(
         exportLimit,
-        rangeSelectionDurationReachableLimitSeconds(values, target, timelineDurationSeconds),
+        reachable,
     )
 }
 
@@ -678,6 +684,7 @@ internal class RangeExportEditorState(
             target = selectionDurationInteraction.target ?: lastTarget,
             timelineDurationSeconds = durationSeconds,
             exportLimitSeconds = exportLimitSeconds,
+            snapshotDurationSeconds = snapshot?.durationSeconds,
         )
 
     val durationActionAvailable: Boolean
@@ -810,7 +817,9 @@ internal class RangeExportEditorState(
     fun setSelectionDurationFromAction(requestedDurationSeconds: Float, maximumSeconds: Double) {
         val target = selectionDurationInteraction.commitTarget() ?: return
         setSelectionDuration(requestedDurationSeconds)
-        applyEditUpdate(RangeEditUpdate(boundRangeDurationActionValues(currentEditValues(), target, maximumSeconds)))
+        applyEditUpdate(RangeEditUpdate(boundRangeDurationActionValues(
+            currentEditValues(), target, maximumSeconds, snapshot?.durationSeconds,
+        )))
     }
 
     fun endSelectionDurationEdit() {
