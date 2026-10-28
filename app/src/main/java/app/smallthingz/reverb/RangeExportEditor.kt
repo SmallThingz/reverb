@@ -319,6 +319,20 @@ internal fun rangeSelectionDurationExactSeconds(
     return (endSeconds.toDouble() - startSeconds.toDouble()).coerceAtLeast(0.0)
 }
 
+internal fun rangeSelectionDurationExactSeconds(
+    startSeconds: Float,
+    endSeconds: Float,
+    availableSeconds: Double,
+): Double {
+    if (!startSeconds.isFinite() || !endSeconds.isFinite() ||
+        !availableSeconds.isFinite() || availableSeconds <= 0.0
+    ) return 0.0
+    // Match snapshot export acquisition before comparing against the exact payload limit.
+    val start = startSeconds.toDouble().coerceIn(0.0, availableSeconds)
+    val end = endSeconds.toDouble().coerceIn(start, availableSeconds)
+    return end - start
+}
+
 internal fun rangeExportSelectionWithinLimit(
     selectedDurationSeconds: Double,
     maximumDurationSeconds: Double,
@@ -654,7 +668,9 @@ internal class RangeExportEditorState(
     private var lastAuditionAtMillis = 0L
 
     val selectionDurationExactSeconds: Double
-        get() = rangeSelectionDurationExactSeconds(startSeconds, endSeconds)
+        get() = snapshot?.let {
+            rangeSelectionDurationExactSeconds(startSeconds, endSeconds, it.durationSeconds)
+        } ?: rangeSelectionDurationExactSeconds(startSeconds, endSeconds)
 
     fun selectionDurationWheelLimitExactSeconds(exportLimitSeconds: Double): Double =
         rangeSelectionDurationWheelLimitSeconds(

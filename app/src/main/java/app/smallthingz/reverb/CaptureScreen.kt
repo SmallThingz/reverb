@@ -389,7 +389,7 @@ internal fun buildCustomExportRange(
         exportConfig.channelCount,
         exportConfig.sampleFormat,
     )
-    val selectedDuration = rangeSelectionDurationExactSeconds(start, end)
+    val selectedDuration = rangeSelectionDurationExactSeconds(start, end, available)
     // Empty input is rejection, not overflow: never expand it into a different export.
     return if (selectedDuration <= 0.0 || rangeExportSelectionWithinLimit(selectedDuration, maxDuration)) {
         ExportRange(start, end, null)
