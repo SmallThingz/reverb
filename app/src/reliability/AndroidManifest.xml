@@ -24,6 +24,9 @@
             android:exported="false"
             android:screenOrientation="landscape"
             android:theme="@style/Theme.Reverb" />
+        <service
+            android:name="app.smallthingz.reverb.CaptureFrameIdentityService"
+            android:exported="false" />
         <provider
             android:name="app.smallthingz.reverb.ReliabilityDocumentsProvider"
             android:authorities="${applicationId}.reliability.documents"

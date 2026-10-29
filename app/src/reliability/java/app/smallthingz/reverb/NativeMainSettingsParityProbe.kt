@@ -620,7 +620,7 @@ private fun verifyMainSettingsPageKeyDispatch(
             slider?.setOnKeyListener(null)
             toggle?.setOnKeyListener(null)
             if (settings.owner.state.hasUnsavedChanges)
-                settings.owner.navigateBack(settings.owner.state.activation) // Existing Undo, never Save.
+                settings.owner.navigationAction(settings.owner.state.activation) // Explicit Undo; system Back now confirms discard.
             check(settings.owner.snapshot == baseline && !settings.owner.state.hasUnsavedChanges) {
                 "Keyboard regression did not discard its unsaved Settings draft"
             }

@@ -51,6 +51,7 @@ class ReliabilityInstrumentation : Instrumentation() {
                 "native_main_incidents_visibility",
                 "native_home_accessibility",
                 "native_onboarding_audio_flow",
+                "native_settings_back_guard", "native_onboarding_controls_current", "native_onboarding_permission_entry", "native_onboarding_responsive",
                 "native_library_parity", "native_library_playback", "native_library_transactions", "native_library_menu", "native_range_parity", "native_content_restoration", "native_legacy_state_parity", "native_icon_clip_parity", "native_retention_keyboard",
                 "native_activity_lifecycle", "native_incidents_parity", "native_onboarding_input_parity", "native_incidents_interaction",
                 "native_settings_compression", "native_settings_duration", "native_settings_calibration", "native_fine_seek_leaf",
@@ -74,6 +75,18 @@ class ReliabilityInstrumentation : Instrumentation() {
             } else if (requestedTest == "native_motion_spline") {
                 executed++
                 verifyNativeMotionSplineParity(report)
+            } else if (requestedTest == "range_preview_continuity") {
+                executed++
+                verifyRangePreviewContinuity(this, report)
+            } else if (requestedTest == "capture_preview_concurrency") {
+                executed++
+                verifyCapturePreviewConcurrency(this, report)
+            } else if (requestedTest == "capture_frame_identity") {
+                executed++
+                verifyCaptureFrameIdentity(targetContext, report)
+            } else if (requestedTest == "capture_teardown_identity") {
+                executed++
+                verifyCaptureTeardownFrameIdentity(targetContext, report)
             } else if (requestedTest == "native_library_fixture_observation") {
                 executed++
                 observeNativeLibraryMigratedFixtures(this, report, fixtureSessionNonce)
@@ -105,6 +118,18 @@ class ReliabilityInstrumentation : Instrumentation() {
             } else if (requestedTest == "native_onboarding_audio_flow") {
                 executed++
                 verifyNativeOnboardingAudioFlow(this, report)
+            } else if (requestedTest == "native_settings_back_guard") {
+                executed++
+                verifyNativeSettingsBackGuard(this, report)
+            } else if (requestedTest == "native_onboarding_controls_current") {
+                executed++
+                verifyNativeOnboardingControlsCurrent(this, report)
+            } else if (requestedTest == "native_onboarding_responsive") {
+                executed++
+                verifyNativeOnboardingResponsive(this, report)
+            } else if (requestedTest == "native_onboarding_permission_entry") {
+                executed++
+                verifyNativeOnboardingPermissionEntry(this, report)
             } else if (requestedTest == "native_incidents_parity") {
                 executed++
                 verifyNativeIncidentsParity(this, report)
