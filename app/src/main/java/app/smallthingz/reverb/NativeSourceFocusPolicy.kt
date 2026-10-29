@@ -85,7 +85,7 @@ internal class NativeSourceFocusPolicy(
         return nativeRequestSourceOwnerFocus(
             state = state,
             ownerFocused = root.isFocused,
-            activeIsMigrated = { it.isFocused && belongs(it) && retainedAndroidView(it) == null },
+            activeIsMigrated = { it.isFocused && belongs(it) && ancestorsAllowFocus(it) && retainedAndroidView(it) == null },
             direction = direction,
             previousRect = previousRect,
             hasFocus = root.hasFocus() || state.active != null,
@@ -120,7 +120,7 @@ internal class NativeSourceFocusPolicy(
                     group.sourceFocusChildAt(index) else group.getChildAt(index)
                 if (child.visibility != View.VISIBLE || !child.isAttachedToWindow) continue
                 all += child
-                if (child is ViewGroup) collect(child)
+                if (child is ViewGroup && child.descendantFocusability != ViewGroup.FOCUS_BLOCK_DESCENDANTS) collect(child)
             }
         }
         collect(root)
@@ -190,6 +190,7 @@ internal class NativeSourceFocusPolicy(
     private fun requestTarget(candidate: View, direction: Int): Boolean {
         // Direct leaf requests bypass ViewGroup.addFocusables/onRequestFocusInDescendants.
         // Keep source candidate ordering, but honor its ancestor onEnter before transferring focus.
+        if (!ancestorsAllowFocus(candidate)) return false
         if (!nativeMayEnterSourceFocus(candidate, state.active) { it.parent as? View }) return false
         // FocusGroupNode supplies the prior actual target rect in the embedded View's coordinates.
         val previous = state.active?.let(::bounds)
@@ -206,7 +207,18 @@ internal class NativeSourceFocusPolicy(
 
     private fun canFocus(view: View): Boolean =
         view !== root && view.isAttachedToWindow && view.visibility == View.VISIBLE &&
-            view.isEnabled && view.isFocusable && (!root.isInTouchMode || view.isFocusableInTouchMode)
+            view.isEnabled && view.isFocusable && ancestorsAllowFocus(view) &&
+            (!root.isInTouchMode || view.isFocusableInTouchMode)
+
+    private fun ancestorsAllowFocus(view: View): Boolean {
+        var parent = view.parent as? ViewGroup
+        while (parent != null) {
+            if (parent.descendantFocusability == ViewGroup.FOCUS_BLOCK_DESCENDANTS) return false
+            if (parent === root) break
+            parent = parent.parent as? ViewGroup
+        }
+        return true
+    }
 
     private fun eligibleForSearch(view: View): Boolean = view.isAttachedToWindow && view.isLaidOut
 

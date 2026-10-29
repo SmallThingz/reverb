@@ -22,6 +22,7 @@ import android.os.LocaleList
 import android.os.Bundle
 import android.os.Handler
 import android.text.TextUtils
+import android.view.accessibility.AccessibilityNodeInfo
 import android.view.inputmethod.InputContentInfo
 import android.text.Editable
 import android.text.InputType
@@ -94,6 +95,15 @@ internal class ReverbSingleLineInputView private constructor(
         initialConfiguration: NativeSingleLineInputConfiguration) : this(
         context, initialEnvironment, initialConfiguration, legacyNativeCursorBinding(context,
             2f * initialEnvironment.textDensity.density, initialConfiguration.cursorColor))
+    override fun createAccessibilityNodeInfo(): AccessibilityNodeInfo? =
+        if (nativeSurfaceInputAllowed(this)) super.createAccessibilityNodeInfo() else null
+
+    override fun performAccessibilityAction(action: Int, arguments: Bundle?): Boolean {
+        if (!nativeSurfaceInputAllowed(this) && action != AccessibilityNodeInfo.ACTION_CLEAR_FOCUS &&
+            action != AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS) return false
+        return super.performAccessibilityAction(action, arguments)
+    }
+
     private var environment = initialEnvironment
     private val cursorDrawable = legacyCursor?.cursor ?: NativeEditableCursorDrawable(
         2f * initialEnvironment.textDensity.density, initialConfiguration.cursorColor)
@@ -121,6 +131,8 @@ internal class ReverbSingleLineInputView private constructor(
 
 
     init {
+        // The cursor-only style does not inherit EditText's touch-mode focus default.
+        isFocusableInTouchMode = true
         background = null
         foreground = null
         // AndroidComposeView opts out of the platform overlay; cursor/selection own field focus.

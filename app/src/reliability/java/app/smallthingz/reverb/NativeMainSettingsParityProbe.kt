@@ -8,6 +8,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Rect
 import android.os.Build
+import android.os.Bundle
 import android.os.SystemClock
 import android.view.View
 import android.view.KeyEvent
@@ -54,6 +55,11 @@ internal fun verifyNativeMainSettingsParity(instrumentation: Instrumentation, re
 /** Supplemental exact comparison with only the explicitly changed grain input shared. */
 internal fun verifyNativeMainSettingsCommonGrainParity(instrumentation: Instrumentation, report: StringBuilder) {
     verifyNativeMainSettingsParity(instrumentation, report, commonGrainInput = true)
+}
+
+/** Accepted f9610538 selection roles, with a separately generated exact reference. */
+internal fun verifyNativeMainSettingsReadableSelectionParity(instrumentation: Instrumentation, report: StringBuilder) {
+    verifyNativeMainSettingsParity(instrumentation, report, commonGrainInput = true, readableSelection = true)
 }
 
 /** Bounded Library structural-parent regression using the existing isolated native Main host. */
@@ -122,10 +128,13 @@ private fun verifyNativeMainSettingsParity(
     instrumentation: Instrumentation,
     report: StringBuilder,
     commonGrainInput: Boolean,
+    readableSelection: Boolean = false,
 ) {
     check(instrumentation.targetContext.packageName == "app.smallthingz.reverb.nativeparity.reliability")
     check(instrumentation.targetContext.applicationContext.javaClass == Application::class.java)
-    val directoryPrefix = if (commonGrainInput) "native-main-settings-common-grain" else "native-main-settings"
+    check(!readableSelection || commonGrainInput)
+    val directoryPrefix = if (readableSelection) "native-main-settings-readable-selection"
+        else if (commonGrainInput) "native-main-settings-common-grain" else "native-main-settings"
     val directory = File(instrumentation.targetContext.filesDir, "$directoryPrefix-${System.currentTimeMillis()}")
     check(directory.mkdir())
     val runs = JSONArray()
@@ -145,6 +154,21 @@ private fun verifyNativeMainSettingsParity(
         .put("raw_grain_parity", "Unqualified by this supplemental selector; raw selector remains separate")
         .put("settings_radio_scope", "Actual platform Theme and Time/Size groups at the existing Settings, preview and Undo captures; current retention selection only, no additional actions or TalkBack delivery claim")
         .put("settings_radio_comparisons", radioComparisons)
+    if (readableSelection) {
+        result.put("selector", "native_main_settings_readable_selection_parity")
+            .put("frozen_oracle_sha256", result.getString("oracle_sha256"))
+            .put("oracle_sha256", ReadableSelectionOracleProvenance.mainOutputSha256)
+            .put("reference_input_override", "Common grain plus separate exact selected fill/ink supplemental oracle; frozen raw reference unchanged")
+            .put("raw_selection_parity", "UNQUALIFIED: old strict selector and its retained failure remain separate")
+            .put("supplemental_oracle", JSONObject()
+                .put("accepted_commit", ReadableSelectionOracleProvenance.acceptedCommit)
+                .put("policy", ReadableSelectionOracleProvenance.policy)
+                .put("settings_input_sha256", ReadableSelectionOracleProvenance.settingsInputSha256)
+                .put("main_input_sha256", ReadableSelectionOracleProvenance.mainInputSha256)
+                .put("settings_output_sha256", ReadableSelectionOracleProvenance.settingsOutputSha256)
+                .put("main_output_sha256", ReadableSelectionOracleProvenance.mainOutputSha256))
+        result.getJSONArray("approved_reference_changes").put(ReadableSelectionOracleProvenance.policy)
+    }
     writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
         output.write(result.toString(2).toByteArray(Charsets.UTF_8))
     }
@@ -191,7 +215,7 @@ private fun verifyNativeMainSettingsParity(
                 requireNativeParityHost(instrumentation, host)
                 render = nativeParityOnMain(instrumentation) {
                     host.fixtureRoot.removeAllViews()
-                    MainSettingsParityRender(host, reference, initialMode, systemDark, commonGrain)
+                    MainSettingsParityRender(host, reference, initialMode, systemDark, commonGrain, readableSelection)
                 }
                 val current = checkNotNull(render)
                 fun capture(step: String, readyAction: Int) {
@@ -289,6 +313,10 @@ private fun verifyNativeMainSettingsParity(
                 capture("main", R.string.open_settings)
                 click(R.string.open_settings)
                 capture("settings", target.labelRes)
+                val heldEditors = if (!reference) nativeParityOnMain(instrumentation) {
+                    mainParityViews(current.board).filterIsInstance<SettingsRetentionInputView>().toList()
+                } else emptyList()
+                if (!reference) check(heldEditors.size == 2) { "Expected both actual retention editors" }
                 click(target.labelRes)
                 capture("preview", R.string.undo)
                 check(nativeParityOnMain(instrumentation) { current.effectiveDark } == !initialDark)
@@ -297,6 +325,22 @@ private fun verifyNativeMainSettingsParity(
                 check(nativeParityOnMain(instrumentation) { current.effectiveDark } == initialDark)
                 click(R.string.onboarding_back)
                 capture("main-restored", R.string.open_settings)
+                if (!reference) nativeParityOnMain(instrumentation) {
+                    for (editor in heldEditors) {
+                        check(editor.isAttachedToWindow) { "Expected the actual retained Settings editor" }
+                        val before = editor.text.toString()
+                        check(editor.createAccessibilityNodeInfo() == null) { "Inactive editor still exposes a node" }
+                        val args = Bundle().apply {
+                            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, before + "9")
+                        }
+                        check(!editor.performAccessibilityAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
+                            "Held inactive editor accepted an accessibility edit"
+                        }
+                        check(!editor.performAccessibilityAction(AccessibilityNodeInfo.ACTION_FOCUS, null))
+                        check(editor.text.toString() == before && !editor.isFocused)
+                    }
+                    run.put("retained_settings_editor_actions_rejected", heldEditors.size)
+                }
                 // Acquiring keyboard focus changes touch mode; do it only after every parity capture.
                 if (pass == 3) {
                     val pageKeys = JSONObject()
@@ -390,7 +434,8 @@ private fun verifyNativeMainSettingsParity(
         report.append("Main/Settings evidence: ").append(directory.absolutePath).append('\n')
     }
     failure?.let { throw it }
-    val selector = if (commonGrainInput) "native_main_settings_parity_common_grain" else "native_main_settings_parity"
+    val selector = if (readableSelection) "native_main_settings_readable_selection_parity"
+        else if (commonGrainInput) "native_main_settings_parity_common_grain" else "native_main_settings_parity"
     report.append("PASS ").append(selector)
         .append(" exact settled route/preview/Undo; physical input unqualified\n")
 }
@@ -651,6 +696,7 @@ internal class MainSettingsParityRender(
     private val initialMode: AppThemeMode,
     private val systemDark: Boolean,
     private val commonGrain: NativeParityCommonGrainSession?,
+    private val readableSelection: Boolean = false,
 ) : AutoCloseable {
     val board = FrameLayout(activity)
     private val density = Density(activity.resources.displayMetrics.density, activity.resources.configuration.fontScale)
@@ -698,7 +744,8 @@ internal class MainSettingsParityRender(
                 view.setContent {
                     CompositionLocalProvider(LocalContext provides activity, LocalDensity provides density) {
                         ReverbTheme(darkTheme = effectiveDark) {
-                            ReleasedMainScreenParityOracle(false, false, ::forbidden, ::themeChanged)
+                            if (readableSelection) ReadableSelectionMainScreenOracle(false, false, ::forbidden, ::themeChanged)
+                            else ReleasedMainScreenParityOracle(false, false, ::forbidden, ::themeChanged)
                         }
                     }
                 }
@@ -710,7 +757,8 @@ internal class MainSettingsParityRender(
                     CompositionLocalProvider(LocalContext provides activity, LocalDensity provides density,
                         LocalResources provides referenceResources) {
                         ReverbTheme(darkTheme = effectiveDark) {
-                            ReleasedMainScreenParityOracle(false, false, ::forbidden, ::themeChanged)
+                            if (readableSelection) ReadableSelectionMainScreenOracle(false, false, ::forbidden, ::themeChanged)
+                            else ReleasedMainScreenParityOracle(false, false, ::forbidden, ::themeChanged)
                         }
                     }
                 }

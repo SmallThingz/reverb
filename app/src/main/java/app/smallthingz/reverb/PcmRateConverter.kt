@@ -30,6 +30,16 @@ internal fun interface PcmFrameSamples {
     fun sample(frame: Int, channel: Int): Float
 }
 
+/** Primitive Float fields avoid per-tap boxing and raw-bit packing on Android. */
+internal class PcmStereoFrame {
+    @JvmField var left = 0f
+    @JvmField var right = 0f
+}
+
+internal fun interface PcmStereoFrames {
+    fun sample(frame: Int, target: PcmStereoFrame)
+}
+
 /**
  * Bounded-support conversion over an already verified PCM window. Downsampling uses
  * a Blackman-windowed sinc at 90% of target Nyquist, with a transition band before
@@ -76,7 +86,56 @@ internal class PcmRateConverter(
         } finally { current.inUse = false }
     }
 
+    /**
+     * Only for pure stereo reads: channel access is interleaved, while each sum keeps
+     * scalar tap order. The verified stream resolves its ring slot once per tap.
+     * A mixed scalar/pair caller can reach the second cancellation checkpoint after
+     * both sums; neither result is published before that checkpoint.
+     */
+    fun sampleStereo(position: Double, readStereo: PcmStereoFrames, output: FloatArray) {
+        require(output.size >= 2)
+        if ((observations++ and 255) == 0) checkPcmConversionNotInterrupted()
+        require(position.isFinite())
+        val base = floor(position).toInt().coerceIn(0, sourceFrames - 1)
+        val fraction = (position - base).coerceIn(0.0, 1.0)
+        // The holder belongs to this workspace, including the linear branch. A
+        // nested accessor receives another workspace rather than overwriting it.
+        val shared = workspace.get()
+        val current = if (shared.inUse) KernelWorkspace() else shared
+        if (radius > 0) current.prepare(radius, cutoff, fraction)
+        current.inUse = true
+        val left: Float
+        val right: Float
+        try {
+            val pair = current.stereoFrame
+            if (radius == 0) {
+                readStereo.sample(base, pair)
+                val firstLeft = pair.left
+                val firstRight = pair.right
+                readStereo.sample(minOf(base + 1, sourceFrames - 1), pair)
+                left = firstLeft + (pair.left - firstLeft) * fraction.toFloat()
+                right = firstRight + (pair.right - firstRight) * fraction.toFloat()
+            } else {
+                var leftSum = 0.0
+                var rightSum = 0.0
+                for (tap in 0 until current.count) {
+                    val frame = (base.toLong() + tap - radius).coerceIn(0L, sourceFrames - 1L).toInt()
+                    readStereo.sample(frame, pair)
+                    val weight = current.weights[tap]
+                    leftSum += pair.left * weight
+                    rightSum += pair.right * weight
+                }
+                left = (leftSum / current.weightSum).toFloat()
+                right = (rightSum / current.weightSum).toFloat()
+            }
+        } finally { current.inUse = false }
+        if ((observations++ and 255) == 0) checkPcmConversionNotInterrupted()
+        output[0] = left
+        output[1] = right
+    }
+
     private class KernelWorkspace {
+        val stereoFrame = PcmStereoFrame()
         var weights = DoubleArray(0)
         var count = 0
         var weightSum = 1.0

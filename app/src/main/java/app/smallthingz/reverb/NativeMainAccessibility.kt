@@ -19,7 +19,7 @@ import java.util.IdentityHashMap
 
 /**
  * Finite Main-screen source mapping over the actual placed Views. The caller supplies the released
- * layer order and only its explicit own-node hideFromAccessibility flags. No retained semantic tree,
+ * layer order, own-node hideFromAccessibility flags and inactive surface admission. No retained semantic tree,
  * replacement text cursor, alpha-based subtree removal or layout reconstruction is introduced.
  */
 internal class NativeMainAccessibility(
@@ -29,6 +29,7 @@ internal class NativeMainAccessibility(
     private val ownNodeHidden: (View) -> Boolean,
     private val clip: (View) -> NativeTextSemanticsClip,
     private val minimumTouch: (View) -> Float,
+    private val inactiveLayer: (View) -> Boolean = { false },
 ) : NativeSourceAccessibilityNodeProvider {
     val geometry = NativePlainTextViewGeometry(windowRoot, NativeTextSemanticsClipPolicy(clip))
     private val unclipped = NativePlainTextViewGeometry(windowRoot,
@@ -36,7 +37,18 @@ internal class NativeMainAccessibility(
 
     /** Every node uses its OWN source minimum, independently of which node is queried. */
     fun node(view: View): NativeSourceAccessibilityNode =
-        capture()[view] ?: NativeSourceAccessibilityNode.absent()
+        if (inInactiveLayer(view)) NativeSourceAccessibilityNode(false, true, false, Rect())
+        else capture()[view] ?: NativeSourceAccessibilityNode.absent()
+
+    /** Surface admission is inherited; own-node hiding deliberately is not. */
+    fun inInactiveLayer(view: View): Boolean {
+        var current: View? = view
+        while (current != null && current !== root) {
+            if (inactiveLayer(current)) return true
+            current = current.parent as? View
+        }
+        return false
+    }
 
     override fun invoke(view: View): NativeSourceAccessibilityNode = node(view)
 
@@ -53,7 +65,7 @@ internal class NativeMainAccessibility(
             val child = children[read]
             var layer: View? = child
             while (layer != null && layer.parent !== root) layer = layer.parent as? View
-            if (layer !in layers || nodes[layer]?.present == true) children[write++] = child
+            if (!inInactiveLayer(child) && (layer !in layers || nodes[layer]?.present == true)) children[write++] = child
         }
         if (write != children.size) children.subList(write, children.size).clear()
     }
@@ -66,7 +78,7 @@ internal class NativeMainAccessibility(
         for (read in firstIndex until children.size) {
             val child = children[read]
             val semantic = semanticChild(child)
-            if (semantic == null || nodes[semantic]?.present == true) children[write++] = child
+            if (!inInactiveLayer(child) && (semantic == null || nodes[semantic]?.present == true)) children[write++] = child
         }
         if (write != children.size) children.subList(write, children.size).clear()
     }
@@ -169,7 +181,7 @@ internal class NativeMainAccessibility(
         val uncovered = Region(rootBounds.left, rootBounds.top, rootBounds.right, rootBounds.bottom)
 
         fun visit(view: View, remaining: Region, retainOffscreen: Boolean) {
-            if (!view.isAttachedToWindow || view.visibility != View.VISIBLE || remaining.isEmpty) return
+            if (inactiveLayer(view) || !view.isAttachedToWindow || view.visibility != View.VISIBLE || remaining.isEmpty) return
             val minimum = minimumTouch(view)
             val local = bounds(view, minimum)
             val mapped = if (minimum > 0f) touchGeometry(view, local, minimum)

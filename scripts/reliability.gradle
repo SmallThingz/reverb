@@ -34,6 +34,24 @@ allprojects {
                 }
             }
         }
+        // Separate, reversible QA oracle for the accepted f9610538 selected-color policy.
+        // Frozen source files and existing raw selectors remain unchanged.
+        def readableSelectionDir = layout.buildDirectory.dir('generated/readable-selection-oracle')
+        def readableSelectionGenerator = rootProject.file('scripts/generate-settings-selection-oracle.py')
+        def generateReadableSelection = tasks.register('generateReadableSelectionOracle', Exec) {
+            inputs.file(readableSelectionGenerator)
+            inputs.files(file('src/reliability/java/app/smallthingz/reverb/SettingsScreenRenderer.kt'),
+                file('src/reliability/java/app/smallthingz/reverb/ReleasedMainScreenParityOracle.kt'))
+            outputs.dir(readableSelectionDir)
+            commandLine 'python3', readableSelectionGenerator.absolutePath,
+                '--root', rootProject.projectDir.absolutePath,
+                '--output', readableSelectionDir.get().asFile.absolutePath
+        }
+        android.sourceSets.getByName('reliability').java.srcDir(readableSelectionDir.get().asFile)
+        android.sourceSets.getByName('reliability').kotlin.srcDir(readableSelectionDir.get().asFile)
+        tasks.matching { it.name == 'compileReliabilityKotlin' || it.name == 'compileReliabilityJavaWithJavac' }
+            .configureEach { dependsOn(generateReadableSelection) }
+
         // AGP 9.4 enables unit tests only for testBuildType (debug) by default.
         // Keep the opt-in oracle tests on their own dependency/source classpath.
         androidComponents.beforeVariants(androidComponents.selector().withBuildType('reliability')) { variant ->

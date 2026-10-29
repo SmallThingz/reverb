@@ -15,6 +15,168 @@ import org.junit.Test
 
 class PersistentAudioSubRangeTest {
     @Test
+    fun explicitSealedFixtureUsesCanonicalLeaseClock() = withRoot { root ->
+        val rate = 16_000
+        val totalFrames = 32_768_001
+        PersistentAudioChunkStore(root, directorySync = {}).use { store ->
+            store.configure(RetentionMode.SIZE, 134_217_728L, rate, 1, PcmSampleFormat.PCM_16)
+            val first = ByteArray(8_001 * 2)
+            assertEquals(first.size, store.append(first, 0, first.size))
+            store.sealActiveChunk()
+            val block = ByteArray(16_384 * 2)
+            var appended = 8_001
+            while (appended < totalFrames) {
+                val frames = minOf(16_384, 512_000 - appended % 512_000, totalFrames - appended)
+                assertEquals(frames * 2, store.append(block, 0, frames * 2))
+                appended += frames
+                if (appended % 512_000 == 0) store.sealActiveChunk()
+            }
+            store.sealActiveChunk()
+            assertEquals(totalFrames * 2L, store.countFilledBytes())
+            val displayedEnd = store.durationSeconds().toFloat()
+            assertEquals(2048f, displayedEnd, 0f)
+            requireNotNull(store.acquireRange(0.0, store.durationSeconds())).use { parent ->
+                assertEquals(listOf(8_001L, 503_999L) + List(63) { 512_000L } + 1L,
+                    parent.segmentsForTest().map { it.frameCount })
+                assertEquals(totalFrames.toDouble() / rate, parent.durationSeconds, 0.0)
+                assertTrue(displayedEnd.toDouble() < parent.durationSeconds)
+                requireNotNull(parent.acquireSubRange(2047.875, parent.durationSeconds)).use { tail ->
+                    assertEquals(2_001L, tail.segmentsForTest().sumOf { it.frameCount })
+                }
+                assertNull(parent.acquireSubRange(parent.durationSeconds, parent.durationSeconds))
+            }
+        }
+    }
+
+    @Test
+    fun ordinaryAutomaticChunksSelectTheSameFramesAsOneContiguousTimeline() = withRoot { root ->
+        val rate = 16_000
+        val totalFrames = 32_768_001L
+        PersistentAudioChunkStore(root, overwriteOldest = false, directorySync = {}).use { store ->
+            store.configure(RetentionMode.SIZE, 80L * 1024 * 1024, rate, 1, PcmSampleFormat.PCM_16)
+            // Only the first boundary is explicit; all 1 MiB boundaries use normal append rollover.
+            val batch = ByteArray(32_000)
+            fun appendFrames(count: Long) {
+                var remaining = count
+                while (remaining > 0L) {
+                    val bytes = minOf(remaining, batch.size / 2L).toInt() * 2
+                    assertEquals(bytes, store.append(batch, 0, bytes))
+                    remaining -= bytes / 2
+                }
+            }
+            appendFrames(8_001)
+            store.sealActiveChunk()
+            appendFrames(totalFrames - 8_001)
+            store.sealActiveChunk()
+            requireNotNull(store.acquireRange(0.0, store.durationSeconds())).use { parent ->
+                val source = parent.segmentsForTest()
+                assertEquals(listOf(8_001L) + List(62) { 524_288L } + 254_144L, source.map { it.frameCount })
+                assertEquals(totalFrames.toDouble() / rate, parent.durationSeconds, 0.0)
+                val boundary = (8_001L + 62L * 524_288L).toDouble() / rate
+                val driftedBoundary = 2032.1160625000016
+                val windows = buildList {
+                    for (point in listOf(Math.nextDown(boundary), boundary, Math.nextUp(boundary), driftedBoundary)) {
+                        add(point - 0.125 to point)
+                        add(point to point + 0.125)
+                    }
+                    add(0.0 to parent.durationSeconds)
+                    add(2047.875 to parent.durationSeconds)
+                    add(Math.nextDown(parent.durationSeconds) to parent.durationSeconds)
+                }
+                for ((start, end) in windows) {
+                    val first = floor(start * rate).toLong().coerceIn(0L, totalFrames)
+                    val last = ceil(end * rate).toLong().coerceIn(first, totalFrames)
+                    fun assertFrames(lease: PersistentAudioChunkStore.RangeLease) {
+                        val selected = lease.segmentsForTest()
+                        var prefix = 0L
+                        val expected = source.mapNotNull { segment ->
+                            val localStart = maxOf(first, prefix) - prefix
+                            val localEnd = minOf(last, prefix + segment.frameCount) - prefix
+                            prefix += segment.frameCount
+                            if (localEnd > localStart)
+                                Triple(segment.record.id, localStart, localEnd - localStart) else null
+                        }
+                        assertEquals(expected, selected.map { Triple(it.record.id, it.startFrame, it.frameCount) })
+                        val firstSource = source.indexOfFirst { it.record === selected.first().record }
+                        assertEquals(first, source.take(firstSource).sumOf { it.frameCount } + selected.first().startFrame)
+                        assertEquals(last - first, selected.sumOf { it.frameCount })
+                        assertEquals((last - first).toDouble() / rate, lease.durationSeconds, 0.0)
+                    }
+                    requireNotNull(store.acquireRange(start, end)).use(::assertFrames)
+                    requireNotNull(parent.acquireSubRange(start, end)).use { child ->
+                        assertFrames(child)
+                        requireNotNull(child.acquireSubRange(0.0, child.durationSeconds)).use(::assertFrames)
+                        if (last - first > 5L) {
+                            val nestedStart = 1.25 / rate
+                            val nestedEnd = child.durationSeconds - 1.25 / rate
+                            val nestedFirst = floor(nestedStart * rate).toLong()
+                            val nestedLast = ceil(nestedEnd * rate).toLong()
+                            requireNotNull(child.acquireSubRange(nestedStart, nestedEnd)).use { nested ->
+                                val selected = nested.segmentsForTest()
+                                val firstSource = source.indexOfFirst { it.record === selected.first().record }
+                                assertEquals(first + nestedFirst,
+                                    source.take(firstSource).sumOf { it.frameCount } + selected.first().startFrame)
+                                assertEquals(nestedLast - nestedFirst, selected.sumOf { it.frameCount })
+                            }
+                        }
+                    }
+                }
+                assertNull(parent.acquireSubRange(parent.durationSeconds, Math.nextUp(parent.durationSeconds)))
+                assertNull(store.acquireRange(parent.durationSeconds, Math.nextUp(parent.durationSeconds)))
+                requireNotNull(parent.acquireSubRange(2047.875, parent.durationSeconds)).use { tail ->
+                    assertEquals(2_001L, tail.segmentsForTest().sumOf { it.frameCount })
+                }
+                assertTrue(source.all { it.record.refCount == 1 })
+                requireNotNull(parent.acquireSubRange(driftedBoundary, driftedBoundary + 0.125)).use { child ->
+                    var outputBytes = 0L
+                    val result = child.readNormalized(rate, 1, PcmSampleFormat.PCM_16) { _, _, count ->
+                        outputBytes += count
+                        count
+                    }
+                    assertEquals(child.segmentsForTest().sumOf { it.frameCount } * 2, outputBytes)
+                    assertEquals(outputBytes, result.sampleBytes)
+                }
+            }
+        }
+    }
+
+    @Test
+    fun sameRateFormatChangesKeepOneFrameClockAndChildrenKeepPins() = withRoot { root ->
+        PersistentAudioChunkStore(root, overwriteOldest = false, directorySync = {}).use { store ->
+            val rate = 11_025
+            val counts = listOf(41, 53, 67)
+            counts.forEachIndexed { index, frames ->
+                val format = if (index == 1) PcmSampleFormat.PCM_FLOAT else PcmSampleFormat.PCM_16
+                val channels = if (index == 2) 2 else 1
+                store.configure(RetentionMode.SIZE, 1_048_576, rate, channels, format)
+                val bytes = ByteArray(frames * channels * format.bytesPerSample)
+                assertEquals(bytes.size, store.append(bytes, 0, bytes.size))
+                store.sealActiveChunk()
+            }
+            val parent = requireNotNull(store.acquireRange(0.0, store.durationSeconds()))
+            val source = parent.segmentsForTest()
+            val start = Math.nextDown(41.0 / rate)
+            val end = Math.nextUp(94.0 / rate)
+            val first = floor(start * rate).toLong()
+            val last = ceil(end * rate).toLong()
+            val child = requireNotNull(parent.acquireSubRange(start, end))
+            try {
+                assertEquals(listOf(0L, 41L, 94L), source.map { it.timelineStartFrame })
+                assertEquals(last - first, child.segmentsForTest().sumOf { it.frameCount })
+                parent.close()
+                assertTrue(child.segmentsForTest().all { it.record.refCount > 0 })
+                requireNotNull(child.acquireSubRange(0.0, child.durationSeconds)).use { nested ->
+                    assertEquals(last - first, nested.segmentsForTest().sumOf { it.frameCount })
+                }
+            } finally {
+                child.close()
+                parent.close()
+            }
+            assertTrue(source.all { it.record.refCount == 0 })
+        }
+    }
+
+    @Test
     fun mixedSnapshotKeepsStereoWhileMonoChildrenRetainTheirOwnChannelLayout() {
         val parent = File(System.getProperty("reverb.channelFixtureRoot", "build/tmp/subrange-channel-tests"))
             .apply { check(mkdirs() || isDirectory) }

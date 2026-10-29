@@ -83,6 +83,14 @@ internal object PcmStreamNormalizer {
             val slot = windowStart + relative
             window[(if (slot >= capacity) slot - capacity else slot) * channels + channel]
         }
+        val stereoSamples = PcmStereoFrames { frame, target ->
+            val relative = frame.coerceIn(firstWindowFrame, lastWindowFrame) - firstWindowFrame
+            val slot = windowStart + relative
+            val index = (if (slot >= capacity) slot - capacity else slot) * channels
+            target.left = window[index]
+            target.right = window[index + 1]
+        }
+        val stereoOutput = FloatArray(2)
         val framesPerBatch = maximumOutputBatchBytes / outputFrameBytes
         val output = ByteArray(framesPerBatch * outputFrameBytes)
         var targetIndex = firstTargetFrame
@@ -115,8 +123,16 @@ internal object PcmStreamNormalizer {
                 ).toInt()
                 windowStart = (low % capacity).toInt()
                 val localPosition = radius + (position - center)
-                val left = converter.sample(localPosition, 0)
-                val right = if (channels == 2) converter.sample(localPosition, 1) else left
+                val left: Float
+                val right: Float
+                if (channels == 2) {
+                    converter.sampleStereo(localPosition, stereoSamples, stereoOutput)
+                    left = stereoOutput[0]
+                    right = stereoOutput[1]
+                } else {
+                    left = converter.sample(localPosition, 0)
+                    right = left
+                }
                 if (targetChannelCount == 1) {
                     offset = PcmNormalizer.encodeSample(output, offset, if (channels == 2) (left + right) * 0.5f else left, targetSampleFormat)
                 } else {

@@ -291,6 +291,10 @@ internal class PersistentAudioChunkStore internal constructor(
     private var directoryOwner: Closeable? = null
     private var directoryAdmission: DirectoryAdmission? = null
     private var activeRangeLeases = 0
+    @Volatile private var rangeLeaseCloseFailed = false
+
+    // Release failures may be reported by an owner without escaping its successful work.
+    internal fun hasRangeLeaseCloseFailure(): Boolean = rangeLeaseCloseFailed
 
     private var loaded = false
     private var closed = false
@@ -710,18 +714,35 @@ internal class PersistentAudioChunkStore internal constructor(
     ): RangeLease? {
         ensureLoadedLocked()
         if (!startOffsetSeconds.isFinite() || !endOffsetSeconds.isFinite()) return null
-        val totalDuration = totalDurationSecondsLocked()
+        // Quantize a single-rate timeline before subtracting chunk prefixes, just as
+        // for one contiguous chunk. Mixed-rate timelines retain their local clocks.
+        // Fall back above Double's exact integer range; never overflow a frame prefix.
+        var frameRate = 0
+        var timelineFrames = 0L
+        for (record in chunks) {
+            if (record.sampleFrames <= 0L || record.sampleRate <= 0) continue
+            if ((frameRate != 0 && frameRate != record.sampleRate) ||
+                record.sampleFrames > 9_007_199_254_740_992L - timelineFrames) {
+                frameRate = 0
+                break
+            }
+            frameRate = record.sampleRate
+            timelineFrames += record.sampleFrames
+        }
+        val totalDuration = if (frameRate > 0) timelineFrames.toDouble() / frameRate else totalDurationSecondsLocked()
         if (totalDuration <= 0.0) return null
-
         val start = startOffsetSeconds.coerceIn(0.0, totalDuration)
         val end = endOffsetSeconds.coerceIn(start, totalDuration)
         if (end <= start) return null
-
+        val requestedStartFrame = floor(start * frameRate).toLong()
+        val requestedEndFrame = if (end == totalDuration) timelineFrames else ceil(end * frameRate).toLong()
         val segments = ArrayList<Segment>()
         var cursor = 0.0
+        var cursorFrames = 0L
         var startedAtMillis = 0L
         var endedAtMillis = 0L
         var leaseDuration = 0.0
+        var leaseFrames = 0L
         val preceding = ArrayDeque<ChunkRecord>()
         val following = ArrayList<ChunkRecord>()
         var precedingFrames = 0L
@@ -730,16 +751,18 @@ internal class PersistentAudioChunkStore internal constructor(
         for (record in chunks) {
             if (record.sampleFrames <= 0L || record.sampleRate <= 0) continue
             val chunkDuration = record.sampleFrames.toDouble() / record.sampleRate.toDouble()
-            val chunkStart = cursor
-            val chunkEnd = cursor + chunkDuration
+            val chunkStartFrame = cursorFrames
+            val chunkStart = if (frameRate > 0) cursorFrames.toDouble() / frameRate else cursor
+            if (frameRate > 0) cursorFrames += record.sampleFrames
+            val chunkEnd = if (frameRate > 0) cursorFrames.toDouble() / frameRate else cursor + chunkDuration
             cursor = chunkEnd
-            if (end <= chunkStart) {
+            if (if (frameRate > 0) requestedEndFrame <= chunkStartFrame else end <= chunkStart) {
                 following += record
                 followingFrames += record.sampleFrames
                 if (followingFrames >= PCM_MAX_FILTER_RADIUS.toLong()) break
                 continue
             }
-            if (start >= chunkEnd) {
+            if (if (frameRate > 0) requestedStartFrame >= cursorFrames else start >= chunkEnd) {
                 preceding.addLast(record)
                 precedingFrames += record.sampleFrames
                 while (precedingFrames - preceding.peekFirst().sampleFrames >= PCM_MAX_FILTER_RADIUS.toLong()) {
@@ -752,9 +775,11 @@ internal class PersistentAudioChunkStore internal constructor(
             val overlapEnd = minOf(end, chunkEnd)
             val localStartSeconds = overlapStart - chunkStart
             val localEndSeconds = overlapEnd - chunkStart
-            val startFrame = floor(localStartSeconds * record.sampleRate).toLong()
+            val startFrame = (if (frameRate > 0) requestedStartFrame - chunkStartFrame
+                else floor(localStartSeconds * record.sampleRate).toLong())
                 .coerceIn(0L, record.sampleFrames)
-            val endFrame = ceil(localEndSeconds * record.sampleRate).toLong()
+            val endFrame = (if (frameRate > 0) requestedEndFrame - chunkStartFrame
+                else ceil(localEndSeconds * record.sampleRate).toLong())
                 .coerceIn(startFrame, record.sampleFrames)
             val frameCount = endFrame - startFrame
             if (frameCount <= 0L) continue
@@ -769,7 +794,9 @@ internal class PersistentAudioChunkStore internal constructor(
                 payloadBytesAtAcquire = record.payloadBytes,
                 payloadChecksumAtAcquire = record.payloadChecksum,
                 timelineStartSeconds = leaseDuration,
-                timelineEndSeconds = leaseDuration + selectedSegmentDuration,
+                timelineEndSeconds = if (frameRate > 0) (leaseFrames + frameCount).toDouble() / frameRate
+                    else leaseDuration + selectedSegmentDuration,
+                timelineStartFrame = if (frameRate > 0) leaseFrames else -1L,
             )
             if (segments.size == 1) {
                 startedAtMillis = safeAdd(
@@ -779,7 +806,9 @@ internal class PersistentAudioChunkStore internal constructor(
             endedAtMillis = safeAdd(
                 record.createdAtMillis, endFrame * 1000L / record.sampleRate.coerceAtLeast(1),
             )
-            leaseDuration += selectedSegmentDuration
+            if (frameRate > 0) leaseFrames += frameCount
+            leaseDuration = if (frameRate > 0) leaseFrames.toDouble() / frameRate
+                else leaseDuration + selectedSegmentDuration
         }
 
         if (segments.isEmpty()) return null
@@ -842,7 +871,8 @@ internal class PersistentAudioChunkStore internal constructor(
                 if (available <= 0L) break
                 val count = minOf(remaining, available)
                 val context = candidate.copy(startFrame = if (before) available - count else 0L,
-                    frameCount = count, timelineStartSeconds = 0.0, timelineEndSeconds = 0.0)
+                    frameCount = count, timelineStartSeconds = 0.0, timelineEndSeconds = 0.0,
+                    timelineStartFrame = -1L)
                 acquireRecordLocked(candidate.record)
                 try { result += context } catch (failure: Throwable) {
                     try { releaseRecordLocked(candidate.record) }
@@ -1134,23 +1164,31 @@ internal class PersistentAudioChunkStore internal constructor(
                 var selectedStartedAtMillis = 0L
                 var selectedEndedAtMillis = 0L
                 var selectedDuration = 0.0
+                var selectedFrames = 0L
+                val frameRate = if (segments.first().timelineStartFrame >= 0L) segments.first().record.sampleRate else 0
+                val requestedStartFrame = floor(start * frameRate).toLong()
+                val requestedEndFrame = if (end == durationSeconds && frameRate > 0)
+                    segments.last().timelineStartFrame + segments.last().frameCount
+                    else ceil(end * frameRate).toLong()
                 var firstSelectedIndex = -1
                 var lastSelectedIndex = -1
-                // Both range constructors cache these boundaries with the same ordered
-                // duration additions, including frame rounding in nested child ranges.
-                for (index in segmentIndexAt(start)..segments.lastIndex) {
+                // On a frame clock, lookup and rounding share the same integer axis.
+                for (index in segmentIndexAt(start, if (frameRate > 0) requestedStartFrame else null)..segments.lastIndex) {
                     val segment = segments[index]
                     val rate = segment.record.sampleRate
                     if (rate <= 0 || segment.frameCount <= 0L) continue
                     val segmentStart = segment.timelineStartSeconds
                     val segmentEnd = segment.timelineEndSeconds
-                    if (end <= segmentStart) break
-                    if (start >= segmentEnd) continue
+                    val prefix = segment.timelineStartFrame
+                    if (if (prefix >= 0L) requestedEndFrame <= prefix else end <= segmentStart) break
+                    if (if (prefix >= 0L) requestedStartFrame >= prefix + segment.frameCount else start >= segmentEnd) continue
 
                     val localStart = maxOf(start, segmentStart) - segmentStart
                     val localEnd = minOf(end, segmentEnd) - segmentStart
-                    val firstFrame = floor(localStart * rate).toLong().coerceIn(0L, segment.frameCount)
-                    val lastFrame = ceil(localEnd * rate).toLong().coerceIn(firstFrame, segment.frameCount)
+                    val firstFrame = (if (prefix >= 0L) requestedStartFrame - prefix else floor(localStart * rate).toLong())
+                        .coerceIn(0L, segment.frameCount)
+                    val lastFrame = (if (prefix >= 0L) requestedEndFrame - prefix else ceil(localEnd * rate).toLong())
+                        .coerceIn(firstFrame, segment.frameCount)
                     val childFrames = lastFrame - firstFrame
                     if (childFrames <= 0L) continue
 
@@ -1163,7 +1201,9 @@ internal class PersistentAudioChunkStore internal constructor(
                         startFrame = absoluteStartFrame,
                         frameCount = childFrames,
                         timelineStartSeconds = selectedDuration,
-                        timelineEndSeconds = selectedDuration + childDuration,
+                        timelineEndSeconds = if (frameRate > 0) (selectedFrames + childFrames).toDouble() / frameRate
+                            else selectedDuration + childDuration,
+                        timelineStartFrame = if (frameRate > 0) selectedFrames else -1L,
                     )
                     if (selected.size == 1) {
                         selectedStartedAtMillis = safeAdd(
@@ -1173,7 +1213,9 @@ internal class PersistentAudioChunkStore internal constructor(
                     selectedEndedAtMillis = safeAdd(
                         segment.record.createdAtMillis, (absoluteStartFrame + childFrames) * 1000L / rate,
                     )
-                    selectedDuration += childDuration
+                    if (frameRate > 0) selectedFrames += childFrames
+                    selectedDuration = if (frameRate > 0) selectedFrames.toDouble() / frameRate
+                        else selectedDuration + childDuration
                 }
                 if (selected.isEmpty()) return null
                 return acquireRangeLeaseLocked(
@@ -1370,12 +1412,15 @@ internal class PersistentAudioChunkStore internal constructor(
             return envelope
         }
 
-        private fun segmentIndexAt(seconds: Double): Int {
+        private fun segmentIndexAt(seconds: Double, frame: Long? = null): Int {
             var low = 0
             var high = segments.lastIndex
             while (low < high) {
                 val middle = (low + high) ushr 1
-                if (seconds < segments[middle].timelineEndSeconds) high = middle else low = middle + 1
+                val segment = segments[middle]
+                val beforeEnd = if (frame != null && segment.timelineStartFrame >= 0L)
+                    frame < segment.timelineStartFrame + segment.frameCount else seconds < segment.timelineEndSeconds
+                if (beforeEnd) high = middle else low = middle + 1
             }
             return low.coerceIn(0, segments.lastIndex)
         }
@@ -1396,6 +1441,15 @@ internal class PersistentAudioChunkStore internal constructor(
 
         @Synchronized
         override fun close() {
+            try {
+                closeOwnedRange()
+            } catch (failure: Throwable) {
+                store.rangeLeaseCloseFailed = true
+                throw failure
+            }
+        }
+
+        private fun closeOwnedRange() {
             var needsMaintenance = false
             synchronized(store) {
                 if (closedLease) return
@@ -1428,6 +1482,7 @@ internal class PersistentAudioChunkStore internal constructor(
         val timelineStartSeconds: Double,
         val timelineEndSeconds: Double,
         val continuesPreviousChunkAtAcquire: Boolean = record.continuesPreviousChunk,
+        val timelineStartFrame: Long = -1L,
     )
 
     internal data class ChunkRecord(

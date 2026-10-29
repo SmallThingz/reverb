@@ -1,6 +1,10 @@
 package app.smallthingz.reverb
 
 import android.app.Instrumentation
+import android.accessibilityservice.AccessibilityServiceInfo
+import android.content.Context
+import android.view.accessibility.AccessibilityManager
+import app.smallthingz.reverb.nativeui.ReverbLibraryRecyclerView
 import android.graphics.Rect as AndroidRect
 import android.os.Build
 import android.view.View
@@ -265,12 +269,20 @@ internal fun onboardingNativeNodeEvidence(
         for (index in 0 until node.childCount) {
             val child = node.getChild(index)
             if (child == null) {
-                missingChild = JSONObject().put("parent_path", JSONArray(path))
+                val missingChildCount = node.childCount
+                val missing = JSONObject().put("parent_path", JSONArray(path))
                     .put("parent", JSONObject(item.toString()).put("depth", depth)
-                        .put("child_count", node.childCount))
+                        .put("child_count", missingChildCount))
                     .put("missing_child_index", index)
+                missingChild = missing
+                try {
+                    missing.put("failure_only_diagnostic",
+                        missingNativeChildDiagnostic(instrumentation, content, node, rect))
+                } catch (diagnostic: Throwable) {
+                    missing.put("diagnostic_error", android.util.Log.getStackTraceString(diagnostic))
+                }
                 error("Missing child in stable accessibility tree: parent path=$path, " +
-                    "class=${node.className}, bounds=$rect, depth=$depth, child=$index/${node.childCount}")
+                    "class=${node.className}, bounds=$rect, depth=$depth, child=$index/$missingChildCount")
             }
             try { visit(child, depth + 1, path + index) } finally { child.recycle() }
         }
@@ -319,3 +331,95 @@ private val onboardingSemanticRoleClasses = setOf(
     "android.widget.Spinner", "android.widget.ImageView", "android.widget.Switch",
     "android.widget.SeekBar", "android.widget.ProgressBar",
 )
+
+/** Read-only evidence after a missing child; never retries, skips, or credits the failed traversal. */
+@Suppress("DEPRECATION")
+private fun missingNativeChildDiagnostic(
+    instrumentation: Instrumentation, content: View, parent: AccessibilityNodeInfo, bounds: AndroidRect,
+): JSONObject {
+    val beforeHash = parent.hashCode()
+    val beforeCount = parent.childCount
+    val native = nativeParityOnMain(instrumentation) {
+        val manager = content.context.getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager
+        val serviceCount = manager.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK).size
+        val result = JSONObject().put("manager_enabled", manager.isEnabled)
+            .put("touch_exploration_enabled", manager.isTouchExplorationEnabled)
+            .put("enabled_service_count", serviceCount)
+            .put("service_admission_without_test_override", manager.isEnabled && serviceCount > 0)
+            .put("identity_scope", "Public node hash and View identity, not private platform source IDs")
+        fun describe(view: View): JSONObject {
+            val location = IntArray(2)
+            view.getLocationOnScreen(location)
+            val info = view.createAccessibilityNodeInfo()
+            try {
+                return JSONObject().put("native_class", view.javaClass.name)
+                    .put("view_identity", System.identityHashCode(view)).put("view_id", view.id)
+                    .put("attached", view.isAttachedToWindow).put("laid_out", view.isLaidOut)
+                    .put("shown", view.isShown).put("important", view.importantForAccessibility)
+                    .put("physical_bounds", JSONArray(listOf(location[0], location[1], location[0]+view.width, location[1]+view.height)))
+                    .put("node_present", info != null).put("node_hash", info?.hashCode() ?: JSONObject.NULL)
+                    .put("node_text", info?.text?.toString() ?: JSONObject.NULL)
+                    .put("paragraph_text", (view as? ReverbParagraphView)?.getText() ?: JSONObject.NULL)
+                    .put("paragraph_source_present", (view as? ReverbParagraphView)?.isAccessibilityNodePresent() ?: JSONObject.NULL)
+            } finally { info?.recycle() }
+        }
+        val viewports = JSONArray()
+        val loopLabels = JSONArray()
+        val maximumViews = 1024
+        val pending = java.util.ArrayDeque<View>()
+        val admitted = ArrayList<View>()
+        pending.addLast(content)
+        var count = 0
+        while (pending.isNotEmpty()) {
+            val view = pending.removeLast()
+            check(++count <= maximumViews) { "Diagnostic View traversal exceeded bounded evidence" }
+            val group = view as? android.view.ViewGroup
+            val childCount = group?.childCount ?: 0
+            // Admit the whole child batch before enumeration: a wide parent cannot
+            // allocate an oversized queue, and a deep tree never recurses.
+            check(childCount <= maximumViews - count - pending.size) {
+                "Diagnostic View traversal exceeded bounded evidence"
+            }
+            for (index in childCount - 1 downTo 0) {
+                pending.addLast(checkNotNull(group!!.getChildAt(index)))
+            }
+            admitted.add(view)
+        }
+        // Complete the bounded physical-tree preflight before any provider callback:
+        // source children and node creation may themselves inspect descendants.
+        for (view in admitted) {
+            if (view is ReverbParagraphView && view.getText() == content.context.getString(R.string.retention_loop_label))
+                loopLabels.put(describe(view))
+            if (view is ReverbLibraryRecyclerView) {
+                val location = IntArray(2)
+                view.getLocationOnScreen(location)
+                val physical = AndroidRect(location[0], location[1], location[0]+view.width, location[1]+view.height)
+                if (physical == bounds) {
+                    val children = view.sourceAccessibilityChildren?.invoke().orEmpty()
+                    check(children.size <= 1024)
+                    viewports.put(describe(view).put("source_events_bound", view.sourceAccessibilityEventsBound)
+                        .put("source_node_present", view.sourceAccessibilityNode?.invoke()?.present ?: JSONObject.NULL)
+                        .put("atomic_source_children", JSONArray(children.map(::describe))))
+                }
+            }
+        }
+        result.put("matching_viewports", viewports).put("loop_labels", loopLabels)
+    }
+    val refreshed = parent.refresh()
+    val after = JSONArray()
+    if (refreshed) {
+        check(parent.childCount <= 1024)
+        for (index in 0 until parent.childCount) {
+            val child = parent.getChild(index)
+            try {
+                after.put(JSONObject().put("index", index).put("present", child != null)
+                    .put("node_hash", child?.hashCode() ?: JSONObject.NULL)
+                    .put("class", child?.className?.toString() ?: JSONObject.NULL)
+                    .put("text", child?.text?.toString() ?: JSONObject.NULL))
+            } finally { child?.recycle() }
+        }
+    }
+    return JSONObject().put("parent_hash_before", beforeHash).put("parent_children_before", beforeCount)
+        .put("atomic_native_snapshot", native).put("parent_refreshed_after_failure", refreshed)
+        .put("parent_hash_after", parent.hashCode()).put("children_after_failure_refresh", after)
+}

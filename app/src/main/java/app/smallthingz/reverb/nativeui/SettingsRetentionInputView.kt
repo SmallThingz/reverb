@@ -12,6 +12,7 @@
 package app.smallthingz.reverb.nativeui
 
 import android.content.Context
+import android.view.accessibility.AccessibilityNodeInfo
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Typeface
@@ -94,6 +95,15 @@ internal class SettingsRetentionInputView private constructor(
     constructor(context: Context, initialEnvironment: ReverbViewEnvironment) : this(
         context, initialEnvironment, legacyNativeCursorBinding(context,
             2f * initialEnvironment.textDensity.density, initialEnvironment.palette.primary))
+    override fun createAccessibilityNodeInfo(): AccessibilityNodeInfo? =
+        if (nativeSurfaceInputAllowed(this)) super.createAccessibilityNodeInfo() else null
+
+    override fun performAccessibilityAction(action: Int, arguments: Bundle?): Boolean {
+        if (!nativeSurfaceInputAllowed(this) && action != AccessibilityNodeInfo.ACTION_CLEAR_FOCUS &&
+            action != AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS) return false
+        return super.performAccessibilityAction(action, arguments)
+    }
+
     private var environment = initialEnvironment
     private val cursorDrawable = legacyCursor?.cursor ?: NativeEditableCursorDrawable(
         2f * initialEnvironment.textDensity.density, initialEnvironment.palette.primary)
@@ -125,6 +135,8 @@ internal class SettingsRetentionInputView private constructor(
     }
 
     init {
+        // The cursor-only style does not inherit EditText's touch-mode focus default.
+        isFocusableInTouchMode = true
         background = null
         foreground = null
         // AndroidComposeView opts out of the platform overlay; cursor/selection own field focus.

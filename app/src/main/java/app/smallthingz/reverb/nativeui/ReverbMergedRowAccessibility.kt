@@ -264,6 +264,10 @@ internal class ReverbMergedRowAccessibility(
     }
 
     override fun performAccessibilityAction(view: View, action: Int, args: Bundle?): Boolean {
+        // Retiring a surface must still be able to clear focus held before its node disappeared.
+        if (action == AccessibilityNodeInfo.ACTION_CLEAR_FOCUS ||
+            action == AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS)
+            return super.performAccessibilityAction(view, action, args)
         val current = snapshot()
         if (!host.isAttachedToWindow || !current.present) return false
         return when (action) {

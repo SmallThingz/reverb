@@ -52,7 +52,7 @@ internal class NativeMainScreenView private constructor(
     private val releaseInputFocus: () -> Unit,
     private val pointer: MainPointerGeometry,
 ) : NativePagerTouchRoot(context, pointer.coordinates::rootToScreen, pointer.coordinates::coordinates,
-    pointer.layout, pointer.coordinates::begin, mouseButtons = true), AutoCloseable {
+    pointer.layout, pointer.coordinates::begin, mouseButtons = true), AutoCloseable, NativeSurfaceInputAdmission {
     private val job = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + job)
     private val frames = requireNotNull(scope.coroutineContext[MonotonicFrameClock])
@@ -84,6 +84,7 @@ internal class NativeMainScreenView private constructor(
     private var about: ReverbAboutDialog? = null
     private val clipLeases = IdentityHashMap<View, Any>()
     private val shellLayouts = IdentityHashMap<View, ShellLayout>()
+    private val blockedSurfaceFocus = IdentityHashMap<ViewGroup, Int>()
     private var drawOrder = emptyList<View>()
     private var orderedSettings: View? = null
     private var orderedLibrary: View? = null
@@ -103,7 +104,7 @@ internal class NativeMainScreenView private constructor(
         onAlertChanged = { alert -> hasIncidentAlert = alert; requestRender() })
     private var hasIncidentAlert: Boolean = incidentsOwner.state.history.hasAlert
     private val source = NativeMainAccessibility(windowRoot, this, { drawOrder }, ::ownNodeHidden,
-        ::sourceClip, minimumTouch = { view ->
+        ::sourceClip, inactiveLayer = ::inactiveSurface, minimumTouch = { view ->
             val sourceClick = view is NativeClickPhaseHost &&
                 (view !is NativeMergedRowAccessibilityHost || view.mergesAccessibilityDescendants)
             if (sourceClick || view is NativeRangeEndpointView) dpFloat(48) else 0f
@@ -234,6 +235,7 @@ internal class NativeMainScreenView private constructor(
                     navigation.dragTarget == NativeMainPanel.LIBRARY, navigation.libraryDragProgress,
                     navigation.libraryBackEnabled) { navigate { closeLibrary() } }
                 ensurePanels()
+                updateSurfaceAdmission()
                 settings?.bind(settingsInput(), environment)
                 library?.bind(libraryInput(), environment)
                 home.bindShell(homeNavigation(), hasIncidentAlert, homeInsets())
@@ -455,6 +457,7 @@ internal class NativeMainScreenView private constructor(
         }
         val placement = navigation.feedbackPlacement(libraryMotion.panelProgress)
         updateDrawOrder(placement.z)
+        updateSurfaceAdmission()
         val bottom = dp(placement.bottomPaddingDp) + if (placement.addNavigationBarBottom) navigationBottom else 0
         if (bottom != measuredFeedbackBottom) { measuredFeedbackBottom = bottom; requestLayout() }
         invalidate()
@@ -499,6 +502,10 @@ internal class NativeMainScreenView private constructor(
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         val focused = findFocus()
+        if (focused != null && source.inInactiveLayer(focused)) {
+            focused.clearFocus()
+            return true
+        }
         val settingsAtDispatch = settings
         val settingsViewport = settingsAtDispatch?.listViewport
         val settingsKeys = settingsPointer
@@ -567,6 +574,36 @@ internal class NativeMainScreenView private constructor(
     private fun libraryNavigation() = ReverbAppTopBarActions(
         { navigate { openAbout() } }, { navigate { openIncidentsFromLibrary() } },
         { navigate { openSettingsFromLibrary() } }, { navigate { closeLibrary() } })
+
+    // A reveal remains owned by the current surface until its navigation commit. Cancelling a
+    // reveal therefore never admits its retained destination to keyboard or accessibility input.
+    private fun inactiveSurface(view: View) = when (view) {
+        home -> !navigation.homeGesturesEnabled
+        settings -> !navigation.settingsPanelActive
+        libraryLayer, libraryToolbar -> !navigation.libraryActive || navigation.showSettings
+        else -> false
+    }
+
+    override fun admitsSurfaceInput(descendant: View): Boolean = !source.inInactiveLayer(descendant)
+
+    private fun updateSurfaceAdmission() {
+        val surfaces = listOfNotNull(home, settings, libraryLayer, libraryToolbar)
+        blockedSurfaceFocus.keys.filter { it !in surfaces }.forEach(blockedSurfaceFocus::remove)
+        for (surface in surfaces) {
+            if (inactiveSurface(surface)) {
+                if (!blockedSurfaceFocus.containsKey(surface)) {
+                    blockedSurfaceFocus[surface] = surface.descendantFocusability
+                    surface.descendantFocusability = FOCUS_BLOCK_DESCENDANTS
+                }
+                // Block first: clearFocus may synchronously request a replacement target.
+                surface.findFocus()?.clearFocus()
+            } else blockedSurfaceFocus.remove(surface)?.let { surface.descendantFocusability = it }
+            // Settings owns its importance while hydration/input readiness changes.
+            if (surface !== settings) surface.importantForAccessibility =
+                if (inactiveSurface(surface)) IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+                else IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+    }
 
     private fun ownNodeHidden(view: View) = when (view) {
         home -> !navigation.homeGesturesEnabled
@@ -648,6 +685,7 @@ internal class NativeMainScreenView private constructor(
         release(feedback::close); release(scrollEvents::close)
         scope.cancel()
         clipLeases.clear()
+        blockedSurfaceFocus.clear()
         removeAllViews()
         failure?.let { throw it }
     }

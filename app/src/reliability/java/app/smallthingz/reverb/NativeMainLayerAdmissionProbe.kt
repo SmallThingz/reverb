@@ -3,6 +3,7 @@ package app.smallthingz.reverb
 import android.app.Instrumentation
 import android.view.View
 import android.view.ViewGroup
+import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.FrameLayout
 import app.smallthingz.reverb.nativeui.NativeMergedRowAccessibilityHost
 import app.smallthingz.reverb.nativeui.NativeSettingsScreenContent
@@ -55,6 +56,7 @@ private fun verifyActualMainLayerAdmission(
     val home = admissionViews(main).filterIsInstance<ReverbHomeScaffoldView>().single()
     val settings = admissionViews(main).filterIsInstance<NativeSettingsScreenContent>().single()
     check(home.parent === main && settings.parent === main && main.isAttachedToWindow && main.isLaidOut)
+    check(!home.isFocusable && !settings.isFocusable) { "Surface roots must not be standalone focus targets" }
     val bar = home.topBar
     val actions = (0 until bar.childCount).map { index ->
         when (val child = bar.getChildAt(index)) {
@@ -76,8 +78,8 @@ private fun verifyActualMainLayerAdmission(
     try {
         val poses = listOf(
             Triple("offscreen", main.height.toFloat(), 0),
-            Triple("home_visible_while_settings_open", 0f, 3),
-            Triple("half_visible", main.height / 2f, 3),
+            Triple("inactive_home_visible_while_settings_open", 0f, 0),
+            Triple("inactive_home_half_visible", main.height / 2f, 0),
             Triple("late_partial", main.height - 1f, 0),
         )
         for ((name, translation, expectedActions) in poses) {
@@ -126,14 +128,40 @@ private fun verifyActualMainLayerAdmission(
             check(current.all(::admissionNodePresent)) {
                 "$name: Main advertised a candidate whose current native node is absent"
             }
-            if (name == "offscreen") {
+            if (expectedActions == 0) {
                 check(homeCount == 0 && settingsCount > 0) {
-                    "Offscreen Home must be absent while the actual Settings subtree remains advertised"
+                    "Inactive Home must be absent while the actual Settings subtree remains advertised"
                 }
             } else if (expectedActions > 0) {
                 check(homeCount > 0) { "$name: a present Home layer lost all its advertised descendants" }
             }
-            record.put("passed", true)
+            // Exercise held View references, not just fresh child enumeration. These actual Home
+            // top-bar actions are inactive while Settings owns navigation, even in a visible pose.
+            val focusedBefore = main.findFocus()
+            for (action in actions) {
+                val view = action as View
+                check(!view.performAccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, null)) {
+                    "$name: a held inactive Home action still accepted an accessibility click"
+                }
+                check(!view.performAccessibilityAction(AccessibilityNodeInfo.ACTION_FOCUS, null)) {
+                    "$name: a held inactive Home action still accepted accessibility input focus"
+                }
+                val touchFocusable = view.isFocusableInTouchMode
+                val focusable = view.isFocusable
+                try {
+                    // Remove touch-mode eligibility as a confounder: the surface boundary itself
+                    // must reject a direct leaf request, including a stale retained View reference.
+                    view.isFocusableInTouchMode = true
+                    check(!view.requestFocus(View.FOCUS_FORWARD)) {
+                        "$name: a direct leaf request entered the inactive Home subtree"
+                    }
+                } finally {
+                    view.isFocusableInTouchMode = touchFocusable
+                    view.isFocusable = focusable
+                }
+            }
+            check(main.findFocus() === focusedBefore) { "$name: blocked requests changed the active focus" }
+            record.put("stale_action_and_direct_focus_rejected", true).put("passed", true)
         }
         evidence.put("passed", true)
     } finally {
@@ -168,9 +196,11 @@ private fun verifyAttachedLayerFilter(activity: NativeParityActivity, evidence: 
     root.addView(unknown)
     val layers = listOf(settings, home)
     var hiddenHome = false
+    var inactiveHome = false
     val source = NativeMainAccessibility(activity.fixtureRoot, root, { layers },
         ownNodeHidden = { hiddenHome && it === home },
-        clip = { NativeTextSemanticsClip.Unclipped }, minimumTouch = { 0f })
+        clip = { NativeTextSemanticsClip.Unclipped }, minimumTouch = { 0f },
+        inactiveLayer = { inactiveHome && it === home })
     val cases = JSONArray()
     evidence.put("cases", cases)
     try {
@@ -213,6 +243,20 @@ private fun verifyAttachedLayerFilter(activity: NativeParityActivity, evidence: 
             "Attached fixture did not establish a partially visible, own-node-hidden Home with a present action"
         }
         checkCandidates("hidden_but_present_retained",
+            listOf(prefix, unknown, home, settings, homeAction, settingsAction, unknownChild))
+
+        inactiveHome = true
+        check(!source.node(home).present && !source.node(homeAction).present && source.node(homeAction).hidden)
+        checkCandidates("inactive_subtree_excludes_direct_and_flattened_children",
+            listOf(prefix, unknown, settings, settingsAction, unknownChild))
+        val semanticChildren = arrayListOf(prefix, homeAction, settingsAction, unknownChild)
+        source.retainPresentSemanticChildren(semanticChildren, 1) { it }
+        check(semanticChildren == listOf(prefix, settingsAction)) {
+            "Semantic child admission retained an inactive descendant or changed its prefix"
+        }
+        inactiveHome = false
+        check(source.node(homeAction).present) { "Reactivating the surface did not restore its child node" }
+        checkCandidates("reactivated_subtree_restores_same_children",
             listOf(prefix, unknown, home, settings, homeAction, settingsAction, unknownChild))
         evidence.put("passed", true)
     } finally {

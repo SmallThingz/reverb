@@ -589,9 +589,12 @@ internal class ReverbParagraphView(
         sourceAccessibilityNode?.invoke()?.populate(info)
     }
 
-    override fun performAccessibilityAction(action: Int, arguments: Bundle?): Boolean =
-        textAccessibility?.performAction(action, arguments)
+    override fun performAccessibilityAction(action: Int, arguments: Bundle?): Boolean {
+        if (!isAccessibilityNodePresent() && action != AccessibilityNodeInfo.ACTION_CLEAR_FOCUS &&
+            action != AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS) return false
+        return textAccessibility?.performAction(action, arguments)
             ?: super.performAccessibilityAction(action, arguments)
+    }
 
     override fun addExtraDataToAccessibilityNodeInfo(
         info: AccessibilityNodeInfo,

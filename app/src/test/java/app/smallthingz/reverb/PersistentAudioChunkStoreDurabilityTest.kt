@@ -329,14 +329,19 @@ class PersistentAudioChunkStoreDurabilityTest {
         val lease = requireNotNull(store.acquireRange(0.0, store.durationSeconds()))
 
         configure(store, 4_096L)
+        assertFalse(store.hasRangeLeaseCloseFailure())
         failChunkDirectorySync = true
         assertThrows(IOException::class.java) { lease.close() }
+        assertTrue(store.hasRangeLeaseCloseFailure())
         failChunkDirectorySync = false
+        lease.close()
+        assertTrue(store.hasRangeLeaseCloseFailure())
 
         // Retrying retention after the close failure must not find any record still pinned by
         // the already-closed lease. Otherwise the retired second chunk survives until restart.
         configure(store, 4_096L)
         store.close()
+        assertTrue(store.hasRangeLeaseCloseFailure())
         val chunks = File(root, BUFFER_CHUNKS_FOLDER_NAME)
         assertFalse(File(chunks, "1").exists())
         assertTrue(
@@ -344,6 +349,32 @@ class PersistentAudioChunkStoreDurabilityTest {
                 file.name.startsWith(".reverb-retired-delete-") && file.name.endsWith(".pending")
             },
         )
+    }
+
+    @Test
+    fun rangeLeaseClose_latchesMaintenanceCallbackFailureWithoutRetryingIt() = withStoreRoot { root ->
+        val failure = IOException("Injected lease-close maintenance callback failure")
+        var callbacks = 0
+        val store = PersistentAudioChunkStore(root, overwriteOldest = false, directorySync = {},
+            onMaintenanceNeeded = { callbacks++; throw failure })
+        try {
+            configure(store, 131_072L)
+            val pcm = pcmBytes(8_192)
+            assertEquals(pcm.size, store.append(pcm, 0, pcm.size))
+            store.sealActiveChunk()
+            val lease = requireNotNull(store.acquireRange(0.0, store.durationSeconds()))
+            store.configure(RetentionMode.SIZE, 4_096L, 8_000, 1, PcmSampleFormat.PCM_16,
+                deferRetentionCleanup = true)
+            assertFalse(store.hasRangeLeaseCloseFailure())
+            assertSame(failure, assertThrows(IOException::class.java) { lease.close() })
+            assertTrue(store.hasRangeLeaseCloseFailure())
+            lease.close()
+            assertEquals(1, callbacks)
+            assertTrue(store.hasRangeLeaseCloseFailure())
+        } finally {
+            store.close()
+        }
+        assertTrue(store.hasRangeLeaseCloseFailure())
     }
 
     @Test
