@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.3-rc1 — 2026-10-29 (prerelease)
+
+- Move the app UI to native Android Views backed by the separate smallthingz.ui library, retaining the capture, Library, Settings, and onboarding flows.
+- Fix touch editing and keyboard focus, and prevent hidden panels from exposing stale accessibility actions.
+- Correct fractional range selection at ordinary audio-chunk boundaries and improve export cleanup failure reporting.
+- Reduce stereo preview conversion work while preserving exact PCM output.
+- Improve permission retry and settings-return handling, onboarding controls, and saved UI state restoration.
+
 ## 0.1.2-rc1 — 2026-10-02 (prerelease)
 
 - Accelerated large-history startup and saved-WAV discovery while retaining full integrity checks before export and deletion.

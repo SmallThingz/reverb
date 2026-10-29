@@ -15,8 +15,8 @@ that exact failure for 0.1.1, followed by a separate dependency-metadata rejecti
 
    ```sh
    python3 scripts/test_verify_release.py
-   python3 scripts/verify_release.py v0.1.2 \
-     .tmp/release-0.1.2-20261020/reverb-0.1.2.apk \
+   python3 scripts/verify_release.py v0.1.3-rc1 \
+     .maintenance/release-0.1.3-rc1-20261029/reverb-0.1.3-rc1.apk \
      --build-tools ../../.android/sdk/build-tools/37.0.0
    ```
 
@@ -43,8 +43,8 @@ F-Droid Gradle parser cannot resolve arbitrary variables. The signing guard read
 that same Android configuration instead of maintaining a second version constant.
 
 Verify the current upstream `check_tags` and Gradle parser against the exact release
-tag and the current central fdroiddata metadata. They must select `0.1.2` (4),
-and its `Binaries` URL must resolve to `reverb-0.1.2.apk` on `v0.1.2`.
+tag and the current central fdroiddata metadata. They must select `0.1.3-rc1` (5),
+and its `Binaries` URL must resolve to `reverb-0.1.3-rc1.apk` on `v0.1.3-rc1`.
 Check the central `UpdateCheckMode` and `AutoUpdateMode` rather than assuming that
 GitHub's prerelease label creates a separate F-Droid beta channel. Future prereleases
 must leave GitHub's latest stable release intact.

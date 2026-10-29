@@ -1,0 +1,5 @@
+Move the app UI to native Android Views using smallthingz.ui.
+Fix touch editing, keyboard focus, and stale accessibility actions from hidden panels.
+Correct fractional range selection at audio-chunk boundaries and improve export cleanup reporting.
+Reduce stereo preview conversion work while preserving PCM output.
+Improve permission retry, onboarding controls, and saved UI state restoration.
