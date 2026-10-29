@@ -4,6 +4,7 @@ import android.app.ApplicationExitInfo
 import java.io.ByteArrayInputStream
 import java.io.DataInputStream
 import java.io.IOException
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
@@ -336,11 +337,7 @@ class RecordingIncidentStoreTest {
     @Test
     fun serviceStopRetry_deduplicatesActualQueueAndSignalsEveryAttempt() {
         val store = RecordingIncidentStore
-        val retryType = Class.forName("app.smallthingz.reverb.PendingProcessIncidentRetry")
-        val constructor = retryType.getDeclaredConstructor(
-            java.lang.Long.TYPE, String::class.java, java.lang.Integer.TYPE,
-            java.lang.Long.TYPE, RecordingIncident::class.java,
-        ).apply { isAccessible = true }
+        val retryType = PendingProcessIncidentRetry::class.java
         val enqueue = store.javaClass.getDeclaredMethod("enqueueServiceStopIncidentRetry", retryType)
             .apply { isAccessible = true }
         val queueField = store.javaClass.getDeclaredField("pendingServiceStopIncidentRetries")
@@ -349,27 +346,32 @@ class RecordingIncidentStoreTest {
             .apply { isAccessible = true }
         synchronized(store) {
             @Suppress("UNCHECKED_CAST")
-            val queue = queueField.get(store) as MutableList<Any>
+            val queue = PendingProcessIncidentRetries::class.java.getDeclaredField("pending")
+                .apply { isAccessible = true }
+                .get(queueField.get(store)) as MutableList<PendingProcessIncidentRetry>
             @Suppress("UNCHECKED_CAST")
             val revision = revisionField.get(store) as kotlinx.coroutines.flow.MutableStateFlow<Long>
             val originalQueue = queue.toList()
             val originalRevision = revision.value
             try {
                 queue.clear()
-                val first = constructor.newInstance(10_000L, "first boundary", 42, 9_000L, null)
-                val duplicate = constructor.newInstance(20_000L, "later boundary", 42, 9_000L,
+                val root = File("build/tmp/service-stop-retry-test/owner")
+                val first = PendingProcessIncidentRetry(root, 10_000L, "first boundary", 42, 9_000L)
+                val duplicate = PendingProcessIncidentRetry(root, 20_000L, "later boundary", 42, 9_000L,
                     RecordingIncident(occurredAtMillis = 20_000L))
-                val otherPid = constructor.newInstance(10_000L, "other pid", 43, 9_000L, null)
-                val otherStart = constructor.newInstance(10_000L, "other start", 42, 9_001L, null)
-                for (retry in listOf(first, duplicate, otherPid, otherStart, first)) {
+                val otherPid = PendingProcessIncidentRetry(root, 10_000L, "other pid", 43, 9_000L)
+                val otherStart = PendingProcessIncidentRetry(root, 10_000L, "other start", 42, 9_001L)
+                val otherRoot = first.copy(root = File("build/tmp/service-stop-retry-test/other-owner"))
+                for (retry in listOf(first, duplicate, otherPid, otherStart, otherRoot, first)) {
                     val before = revision.value
                     enqueue.invoke(store, retry)
                     assertEquals(before + 1L, revision.value)
                 }
-                assertEquals(3, queue.size)
+                assertEquals(4, queue.size)
                 assertSame(first, queue[0])
                 assertSame(otherPid, queue[1])
                 assertSame(otherStart, queue[2])
+                assertSame(otherRoot, queue[3])
             } finally {
                 queue.clear()
                 queue.addAll(originalQueue)
