@@ -1,6 +1,12 @@
 # Changelog
 
-## 0.1.3-rc1 — 2026-10-29 (prerelease)
+## 0.1.3-rc2 — 2026-10-29 (prerelease)
+
+- Fix native animation compatibility on Android 9–12 while preserving system animation-scale settings.
+- Resolve release validation findings in native focus, accessibility, drawing, and string fallback handling.
+- Include the native UI, range-selection, preview, and recovery improvements listed below.
+
+## 0.1.3-rc1 — 2026-10-29 (withdrawn; no APK published)
 
 - Move the app UI to native Android Views backed by the separate smallthingz.ui library, retaining the capture, Library, Settings, and onboarding flows.
 - Fix touch editing and keyboard focus, and prevent hidden panels from exposing stale accessibility actions.

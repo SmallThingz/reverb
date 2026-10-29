@@ -11,7 +11,6 @@
  */
 package app.smallthingz.reverb.nativeui
 
-import android.animation.ValueAnimator
 import android.content.Context
 import android.content.res.Configuration
 import android.graphics.Canvas
@@ -136,7 +135,7 @@ internal class ReverbMaterialSwitchView(
             sizeMotion = SwitchFloatMotion(targetSize)
             offsetMotion = SwitchFloatMotion(targetOffset)
         } else {
-            val scale = ValueAnimator.getDurationScale()
+            val scale = reverbAnimatorDurationScale(context)
             size.retarget(targetSize, snap = visuallyPressed, durationScale = scale)
             offset.retarget(targetOffset, snap = visuallyPressed, durationScale = scale)
             postFrameIfNeeded()
@@ -186,7 +185,7 @@ internal class ReverbMaterialSwitchView(
     override fun doFrame(frameTimeNanos: Long) {
         framePosted = false
         if (!isAttachedToWindow) return
-        val scale = ValueAnimator.getDurationScale()
+        val scale = reverbAnimatorDurationScale(context)
         sizeMotion?.frame(frameTimeNanos, scale)
         offsetMotion?.frame(frameTimeNanos, scale)
         invalidate()

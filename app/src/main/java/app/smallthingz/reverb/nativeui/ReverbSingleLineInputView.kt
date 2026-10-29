@@ -158,9 +158,9 @@ internal class ReverbSingleLineInputView private constructor(
         fontFeatureSettings = ""
         textScaleX = 1f
         textLocales = LocaleList.getDefault()
-        breakStrategy = Layout.BREAK_STRATEGY_SIMPLE
+        breakStrategy = android.graphics.text.LineBreaker.BREAK_STRATEGY_SIMPLE
         hyphenationFrequency = Layout.HYPHENATION_FREQUENCY_NONE
-        justificationMode = Layout.JUSTIFICATION_MODE_NONE
+        justificationMode = android.graphics.text.LineBreaker.JUSTIFICATION_MODE_NONE
         if (Build.VERSION.SDK_INT >= 33) {
             lineBreakStyle = android.graphics.text.LineBreakConfig.LINE_BREAK_STYLE_NONE
             lineBreakWordStyle = android.graphics.text.LineBreakConfig.LINE_BREAK_WORD_STYLE_NONE
@@ -307,6 +307,8 @@ internal class ReverbSingleLineInputView private constructor(
         if (keyCode == KeyEvent.KEYCODE_ENTER || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER) false
         else super.onKeyUp(keyCode, event)
 
+    // Matches TextView's default IME traversal; focusSearch's annotation omits these logical directions.
+    @android.annotation.SuppressLint("WrongConstant")
     private fun sourceEditorAction(action: Int) {
         when (action) {
             EditorInfo.IME_ACTION_DONE -> onDone?.invoke()

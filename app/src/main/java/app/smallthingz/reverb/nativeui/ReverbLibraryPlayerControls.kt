@@ -1,6 +1,5 @@
 package app.smallthingz.reverb.nativeui
 
-import android.animation.ValueAnimator
 import android.content.Context
 import smallthingz.ui.runtime.MonotonicFrameClock
 import kotlinx.coroutines.CoroutineScope
@@ -134,7 +133,7 @@ private class PlayerTrimActionRow(context: Context, private var environment: Rev
     private var spinner: ReverbIncidentLoadingView? = null
     private var owner: String? = null
     private var action: (() -> Unit)? = null
-    private val indication = ReverbRowIndication.install(this, environment.palette.onSurface, ValueAnimator::getDurationScale)
+    private val indication = ReverbRowIndication.install(this, environment.palette.onSurface, { reverbAnimatorDurationScale(context) })
     private val input = ReverbClickController(this, object : NativeClickEnvironment {
         override val nativeInputRoot: View = inputRoot
         override val minimumTouchWidthPx get() = 48f * environment.textDensity.density

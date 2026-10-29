@@ -1,7 +1,6 @@
 package app.smallthingz.reverb.nativeui
 
 import android.content.Context
-import android.animation.ValueAnimator
 import android.graphics.Canvas
 import android.graphics.Outline
 import android.graphics.Paint
@@ -88,10 +87,10 @@ internal class ReverbIncidentCardView(
         onPrimaryAction = { performPrimaryAction(); true },
         onOpenMenu = { openMenu(); true })
     private val bodyIndication = ReverbRowIndication.install(this, initialAppearance.palette.ink) {
-        ValueAnimator.getDurationScale()
+        reverbAnimatorDurationScale(context)
     }
     private val checkIndication = ReverbRowIndication.install(body.checkTarget, initialAppearance.palette.ink) {
-        ValueAnimator.getDurationScale()
+        reverbAnimatorDurationScale(context)
     }
     /** Current scroll recognizer interest, supplied by the containing list for this down. */
     var parentInterestedInDown: (MotionEvent) -> Boolean = { false }

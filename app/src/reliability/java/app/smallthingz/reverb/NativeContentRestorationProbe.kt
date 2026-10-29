@@ -139,7 +139,7 @@ internal fun verifyNativeContentRestoration(instrumentation: Instrumentation, re
 }
 
 private class RestorationLane(private val host: NativeParityActivity) : AutoCloseable {
-    private val runtime = NativeAboutWindowRuntime()
+    private val runtime = NativeAboutWindowRuntime(host)
     private val lifecycle = LifecycleEventObserver { _, _ ->
         runtime.setStarted(host.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
     }

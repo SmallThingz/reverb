@@ -1,6 +1,5 @@
 package app.smallthingz.reverb.nativeui
 
-import android.animation.ValueAnimator
 import android.view.View
 import android.view.ViewGroup
 import app.smallthingz.reverb.BufferClearPhase
@@ -222,7 +221,7 @@ private class CaptureClearProgressBody(
             current?.let(::removeView)
             val replacement = if (wantDeterminate) SettingsCalibrationProgressView(context, next)
                 else ReverbIndeterminateLinearProgressView(context, next, host.runtime.frames,
-                    host.runtime.scope, ValueAnimator::getDurationScale)
+                    host.runtime.scope, { reverbAnimatorDurationScale(context) })
             progress = replacement
             addView(replacement, 0)
             progressLease = when (replacement) {

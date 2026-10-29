@@ -1,6 +1,5 @@
 package app.smallthingz.reverb.nativeui
 
-import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Outline
@@ -140,9 +139,10 @@ private class SegmentCell<T>(
     private val background=ReleasedSpringValue.color(Color(if(selected) environment.palette.settingsSelection else android.graphics.Color.TRANSPARENT))
     private var selectionInk=SettingsSelectionInk(environment.palette)
     private var foregroundColor=if(selected) environment.palette.settingsOnSelection else environment.palette.muted
-    private val backgroundDriver=ViewSpringDriver(this,background,{ publishFill(it.toArgb()) })
+    private val backgroundDriver=ViewSpringDriver(this,background,{ publishFill(it.toArgb()) },
+        { reverbAnimatorDurationScale(context) })
     private val indication=ReverbRowIndication.install(this,
-        if(selected) environment.palette.settingsOnSelection else environment.palette.ink,ValueAnimator::getDurationScale)
+        if(selected) environment.palette.settingsOnSelection else environment.palette.ink,{ reverbAnimatorDurationScale(context) })
     private val sink=ReverbRowIndicationSink(indication) { x,y,out->out.set(x,y) }
     private val input=ReverbClickController(this,object:NativeClickEnvironment {
         override val nativeInputRoot:View? get()=inputRoot()

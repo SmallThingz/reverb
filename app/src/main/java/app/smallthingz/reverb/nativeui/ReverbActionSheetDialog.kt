@@ -69,7 +69,7 @@ internal class ReverbActionSheetDialog(
     var environment=initialEnvironment;private set
     private var onOwnerDismiss=onDismiss
     private var disposed=false
-    private val runtime=NativeAboutWindowRuntime()
+    private val runtime=NativeAboutWindowRuntime(context)
     private val anchorLifecycle=anchor.findViewTreeLifecycleOwner()?.lifecycle
     private var dismissalAllowed:()->Boolean={true}
     private var hasDismissalAdmission=false

@@ -1,6 +1,5 @@
 package app.smallthingz.reverb.nativeui
 
-import android.animation.ValueAnimator
 import android.graphics.drawable.Drawable
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -43,7 +42,7 @@ private class OnboardingNativeInteractions(
     inputRoot: () -> View?,
 ) : OnboardingFooterInteractions {
     private val indication = ReverbRowIndication.install(
-        indicationHost, android.graphics.Color.BLACK, ValueAnimator::getDurationScale,
+        indicationHost, android.graphics.Color.BLACK, { reverbAnimatorDurationScale(inputHost.context) },
     )
     override val foreground: Drawable get() = indication
     private val shadow = setShadowElevationPx?.let {

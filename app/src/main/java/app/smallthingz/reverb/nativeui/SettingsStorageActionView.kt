@@ -1,6 +1,5 @@
 package app.smallthingz.reverb.nativeui
 
-import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Color as AndroidColor
 import android.graphics.Rect
@@ -33,7 +32,7 @@ internal class SettingsStorageActionView(
     private val radius=if(icon==null)12f else 14f
     private val surface=ReverbGroupLayout(context,radius)
     private val content=ActionContent(context)
-    private val indication=ReverbRowIndication.install(content,initial.palette.onSurface,ValueAnimator::getDurationScale)
+    private val indication=ReverbRowIndication.install(content,initial.palette.onSurface,{ reverbAnimatorDurationScale(context) })
     private val controller=ReverbClickController(content,object:NativeClickEnvironment {
         override val nativeInputRoot:View? get()=inputRoot()
         override val minimumTouchWidthPx get()=48f*environment.textDensity.density

@@ -6,7 +6,6 @@
 
 package app.smallthingz.reverb.nativeui
 
-import android.animation.ValueAnimator
 import android.graphics.Outline
 import android.os.Build
 import android.view.Choreographer
@@ -58,7 +57,7 @@ internal class ReverbAboutDialog(
     private var currentOnDismiss = onDismiss
     private val visibilityMotion = ReverbAboutVisibilityMotion()
     private val predictiveMotion = ReverbAboutPredictiveMotion()
-    private val runtime = NativeAboutWindowRuntime()
+    private val runtime = NativeAboutWindowRuntime(context)
     private var predictiveSession = false
     private val choreographer = Choreographer.getInstance()
     private var callbackPosted = false
@@ -89,7 +88,7 @@ internal class ReverbAboutDialog(
     private val frameCallback = Choreographer.FrameCallback { frameNanos ->
         callbackPosted = false
         if (!disposed && root.isAttachedToWindow && hostStarted()) {
-            val scale = ValueAnimator.getDurationScale()
+            val scale = reverbAnimatorDurationScale(context)
             visibilityMotion.frame(frameNanos, scale)
             val predictiveCommitted = predictiveMotion.frame(frameNanos, scale)
             applyMotion()

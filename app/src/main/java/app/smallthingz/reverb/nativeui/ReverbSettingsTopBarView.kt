@@ -1,7 +1,6 @@
 package app.smallthingz.reverb.nativeui
 
 import android.content.Context
-import android.animation.ValueAnimator
 import android.graphics.Canvas
 import android.graphics.drawable.ColorDrawable
 import android.os.Build
@@ -104,7 +103,7 @@ internal class ReverbSettingsTopBarView(
                 try {
                     hintProgress.snapTo(1f)
                     paintHint(1f)
-                    if (ValueAnimator.getDurationScale() == 0f) delay(600L)
+                    if (reverbAnimatorDurationScale(context) == 0f) delay(600L)
                     else hintProgress.animateTo(0f, tween(600)) { paintHint(this.value) }
                 } finally {
                     if (hint === expected) paintHint(0f)

@@ -1,6 +1,5 @@
 package app.smallthingz.reverb.nativeui
 
-import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Outline
@@ -39,7 +38,7 @@ internal class ReverbIncidentBackView(
             { NativeMergedRowAccessibilityState(true, null, null, children) },
             invokeSourceClick = { onBack(); true })
     }
-    private val indication = ReverbRowIndication.install(this, palette.ink, ValueAnimator::getDurationScale)
+    private val indication = ReverbRowIndication.install(this, palette.ink, { reverbAnimatorDurationScale(context) })
     private val controller = ReverbClickController(this, object : NativeClickEnvironment {
         override val nativeInputRoot get() = pointerInputRoot
         override val minimumTouchWidthPx get() = 48f * resources.displayMetrics.density

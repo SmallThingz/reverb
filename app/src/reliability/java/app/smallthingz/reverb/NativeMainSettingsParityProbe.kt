@@ -766,7 +766,7 @@ internal class MainSettingsParityRender(
             view.createComposition(context)
             board.addView(view, FrameLayout.LayoutParams(-1, -1))
         } else {
-            val frames = NativeAboutWindowRuntime()
+            val frames = NativeAboutWindowRuntime(activity)
             runtime = frames
             activity.lifecycle.addObserver(runtimeLifecycle)
             frames.setStarted(activity.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))

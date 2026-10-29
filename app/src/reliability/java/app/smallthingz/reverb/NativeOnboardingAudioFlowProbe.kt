@@ -291,7 +291,7 @@ private class OnboardingAudioQaFixture(
     private val restoreOff: Boolean = false,
     page: Int = 0,
 ) : AutoCloseable {
-    private val runtime = NativeAboutWindowRuntime().apply { setStarted(true) }
+    private val runtime = NativeAboutWindowRuntime(host).apply { setStarted(true) }
     val view: NativeOnboardingScreenView
     val render: ScreenParityRender
     var permissionRequests = 0

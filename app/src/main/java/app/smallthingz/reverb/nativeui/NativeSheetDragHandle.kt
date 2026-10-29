@@ -2,7 +2,6 @@ package app.smallthingz.reverb.nativeui
 
 import app.smallthingz.reverb.closePreservingPrimaryFailure
 
-import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
@@ -30,7 +29,7 @@ internal class NativeSheetDragHandle(
     private val identity=Any()
     val mark=HandleMark(context,environment)
     private val indication=ReverbRowIndication.install(this,environment.palette.onSurface,
-        ValueAnimator::getDurationScale)
+        { reverbAnimatorDurationScale(context) })
     private val controller=ReverbClickController(this,object:NativeClickEnvironment {
         override val nativeInputRoot get()=inputRoot()
         override val minimumTouchWidthPx get()=48f*environment.textDensity.density

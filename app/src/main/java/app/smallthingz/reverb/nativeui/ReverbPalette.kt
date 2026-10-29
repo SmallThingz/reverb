@@ -97,6 +97,8 @@ internal data class ReverbPalette(
             }
 
         /** Resource injection also allows each SDK mapping to be checked against the oracle. */
+        // The public entry supplies the real SDK. Tests inject resource IDs without Android APIs.
+        @android.annotation.SuppressLint("NewApi")
         internal fun resolve(
             darkTheme: Boolean,
             sdkInt: Int,

@@ -37,7 +37,7 @@ internal fun verifyNativeOnboardingResponsive(instrumentation: Instrumentation, 
         for ((widthDp, fontScale, rtl) in listOf(Triple(320, 1.3f, false), Triple(480, 1f, false), Triple(320, 2f, true))) {
             val host = launchNativeParityActivity(instrumentation)
             awaitNativeParityDraw(instrumentation, host.fixtureRoot)
-            val runtime = NativeAboutWindowRuntime().apply { setStarted(true) }
+            val runtime = NativeAboutWindowRuntime(host).apply { setStarted(true) }
             var screen: NativeOnboardingScreenView? = null
             var controlled: NativeOnboardingScreenView? = null
             var forbidden = 0

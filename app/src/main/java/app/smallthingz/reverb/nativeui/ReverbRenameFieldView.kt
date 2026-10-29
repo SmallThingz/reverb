@@ -312,6 +312,8 @@ internal class ReverbRenameFieldView(
         else super.addExtraDataToAccessibilityNodeInfo(info,key,args)
     }
 
+    // This exposed owner replaces the hidden Editor's event fields; super adds native state.
+    @android.annotation.SuppressLint("MissingSuperCall")
     override fun onInitializeAccessibilityEvent(event:AccessibilityEvent) {
         // createEvent supplies no synthesized text/content for click/focus/subtree events.
         event.className="android.view.View"

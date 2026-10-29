@@ -206,7 +206,8 @@ private class SettingsAudioDropdownView<T>(
         strokeCap = Paint.Cap.BUTT
     }
     private val backgroundSpring = ReleasedSpringValue.color(Color(initialPalette.field))
-    private val backgroundDriver = ViewSpringDriver(this, backgroundSpring, { fill.color = it.toArgb() })
+    private val backgroundDriver = ViewSpringDriver(this, backgroundSpring, { fill.color = it.toArgb() },
+        { reverbAnimatorDurationScale(context) })
     private var content: SettingsDropdownContent<T>? = null
     private var textHeight = 0
     private var textGap = 0

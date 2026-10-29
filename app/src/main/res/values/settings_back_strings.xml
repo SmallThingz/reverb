@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <string name="settings_back_discard_hint">Undo or apply your changes. Press Back again to discard them.</string>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Keep the English fallback until this new hint has locale-specific translations. -->
+    <string name="settings_back_discard_hint" tools:ignore="MissingTranslation">Undo or apply your changes. Press Back again to discard them.</string>
 </resources>

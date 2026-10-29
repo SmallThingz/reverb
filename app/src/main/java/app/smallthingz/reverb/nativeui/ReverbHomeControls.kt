@@ -1,6 +1,5 @@
 package app.smallthingz.reverb.nativeui
 
-import android.animation.ValueAnimator
 import android.content.Context
 import android.content.res.Configuration
 import android.graphics.Canvas
@@ -221,7 +220,7 @@ internal abstract class HomeClickable(
 ) : ViewGroup(context), NativeClickPhaseHost {
     protected var action: () -> Unit = {}
     protected val indication = ReverbRowIndication.install(this, currentEnvironment.palette.ink,
-        ValueAnimator::getDurationScale)
+        { reverbAnimatorDurationScale(context) })
     private val key = Any()
     private val performCurrentClick: () -> Unit = { performClick() }
     private var clickBinding: NativeClickBinding? = null

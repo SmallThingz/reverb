@@ -1,6 +1,6 @@
 package app.smallthingz.reverb.nativeui
 
-import android.animation.ValueAnimator
+import android.content.Context
 import smallthingz.ui.runtime.MonotonicFrameClock
 import smallthingz.ui.runtime.PausableMonotonicFrameClock
 import smallthingz.ui.MotionDurationScale
@@ -13,7 +13,8 @@ import kotlinx.coroutines.cancel
  * One native About window's real UI dispatcher and child jobs. No Recomposer/Composition is created.
  * The pinned dispatcher owns frame phase; stopped-window admission pauses new frame requests.
  */
-internal class NativeAboutWindowRuntime : AutoCloseable {
+internal class NativeAboutWindowRuntime(context: Context) : AutoCloseable {
+    private val applicationContext = context.applicationContext
     private val main = AndroidUiDispatcher.Main
     private val clock = PausableMonotonicFrameClock(checkNotNull(main[MonotonicFrameClock])).apply { pause() }
     private var started = false
@@ -34,7 +35,7 @@ internal class NativeAboutWindowRuntime : AutoCloseable {
         }
     }
     private val duration = object : MotionDurationScale {
-        override val scaleFactor get() = ValueAnimator.getDurationScale()
+        override val scaleFactor get() = reverbAnimatorDurationScale(applicationContext)
     }
     val scope = CoroutineScope(main + SupervisorJob() + frames + duration)
 

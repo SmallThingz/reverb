@@ -1,6 +1,5 @@
 package app.smallthingz.reverb.nativeui
 
-import android.animation.ValueAnimator
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -392,7 +391,7 @@ private class AboutCloseButton(context: Context, private var appearance: AboutCo
     var nativeInputRoot: View? = null
     private val key = Any()
     val visual = AboutCloseVisual(context, appearance.palette.muted)
-    private val indication = ReverbRowIndication.install(visual, appearance.palette.ink, ValueAnimator::getDurationScale)
+    private val indication = ReverbRowIndication.install(visual, appearance.palette.ink, { reverbAnimatorDurationScale(context) })
     private val controller = ReverbClickController(visual, object : NativeClickEnvironment {
         override val nativeInputRoot: View? get() = this@AboutCloseButton.nativeInputRoot
         override val minimumTouchWidthPx get() = 48f * appearance.density.density
@@ -551,7 +550,7 @@ private class AboutRepositoryRow(context: Context, private var appearance: About
         reverbAboutRepositoryTitleColor(appearance.palette, appearance.titleSmall))
     val label = aboutParagraph(context, appearance, appearance.bodySmall, appearance.palette.muted)
     private val indication = ReverbRowIndication.install(this,
-        reverbAboutRepositoryContentColor(appearance.palette), ValueAnimator::getDurationScale)
+        reverbAboutRepositoryContentColor(appearance.palette), { reverbAnimatorDurationScale(context) })
     private val controller = ReverbClickController(this, object : NativeClickEnvironment {
         override val nativeInputRoot: View? get() = this@AboutRepositoryRow.nativeInputRoot
         override val minimumTouchWidthPx get() = 48f * appearance.density.density
@@ -950,6 +949,8 @@ private fun bindAboutClose(
     fun visible() = present() && !aboutHasTransparentAncestor(host)
     val role = object : View(host.context) {
         init { importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES; setWillNotDraw(true) }
+        // Accessibility-only role leaf must never draw a platform background or foreground.
+        @android.annotation.SuppressLint("MissingSuperCall")
         override fun draw(canvas: Canvas) = Unit
         override fun dispatchTouchEvent(event: MotionEvent) = false
         override fun dispatchHoverEvent(event: MotionEvent) = false

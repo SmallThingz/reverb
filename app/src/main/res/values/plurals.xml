@@ -1,10 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <plurals name="recordings_selected">
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Keep English fallback for locales whose app translations are not yet available. -->
+    <plurals name="recordings_selected" tools:ignore="MissingTranslation">
         <item quantity="one">%d selected</item>
         <item quantity="other">%d selected</item>
     </plurals>
-    <plurals name="recordings_deleted">
+    <plurals name="recordings_deleted" tools:ignore="MissingTranslation">
         <item quantity="one">%d recording deleted.</item>
         <item quantity="other">%d recordings deleted.</item>
     </plurals>

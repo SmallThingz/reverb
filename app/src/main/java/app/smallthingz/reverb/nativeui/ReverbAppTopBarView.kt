@@ -1,6 +1,5 @@
 package app.smallthingz.reverb.nativeui
 
-import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Outline
@@ -321,7 +320,7 @@ private class ReverbTopBarActionLeaf(
             accessibilityChildren, rolePresent = false) },
         invokeSourceClick = { if (isEnabled && click != null) { click?.invoke(); true } else false },
     )
-    private val indication = ReverbRowIndication.install(this, environment.palette.ink, ValueAnimator::getDurationScale)
+    private val indication = ReverbRowIndication.install(this, environment.palette.ink, { reverbAnimatorDurationScale(context) })
     private val controller = ReverbClickController(this, object : NativeClickEnvironment {
         override val nativeInputRoot: View = inputRoot
         override val minimumTouchWidthPx get() = 48f * environment.textDensity.density
@@ -424,7 +423,7 @@ private class ReverbTopBarBrandAction(context: Context, private var environment:
     )
     private val softwareClip = Path()
     private var click: (() -> Unit)? = null
-    private val indication = ReverbRowIndication.install(this, environment.palette.ink, ValueAnimator::getDurationScale)
+    private val indication = ReverbRowIndication.install(this, environment.palette.ink, { reverbAnimatorDurationScale(context) })
     private val controller = ReverbClickController(this, object : NativeClickEnvironment {
         override val nativeInputRoot: View = inputRoot
         override val minimumTouchWidthPx get() = 48f * environment.textDensity.density

@@ -199,7 +199,7 @@ private class PermissionLibraryAction(context:Context,private val host:NativeMat
     private val visual=LibraryVisual(context)
     private var action:(()->Unit)?=action
     private val indication=ReverbRowIndication.install(visual,environment.palette.onSurface,
-        android.animation.ValueAnimator::getDurationScale)
+        { reverbAnimatorDurationScale(context) })
     private val controller=ReverbClickController(visual,object:NativeClickEnvironment {
         override val nativeInputRoot:View get()=host.inputRoot
         override val minimumTouchWidthPx get()=48f*environment.textDensity.density

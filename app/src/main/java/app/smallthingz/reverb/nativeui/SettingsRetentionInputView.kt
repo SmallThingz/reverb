@@ -162,9 +162,9 @@ internal class SettingsRetentionInputView private constructor(
         fontFeatureSettings = ""
         textScaleX = 1f
         textLocales = LocaleList.getDefault()
-        breakStrategy = Layout.BREAK_STRATEGY_SIMPLE
+        breakStrategy = android.graphics.text.LineBreaker.BREAK_STRATEGY_SIMPLE
         hyphenationFrequency = Layout.HYPHENATION_FREQUENCY_NONE
-        justificationMode = Layout.JUSTIFICATION_MODE_NONE
+        justificationMode = android.graphics.text.LineBreaker.JUSTIFICATION_MODE_NONE
         if (Build.VERSION.SDK_INT >= 33) {
             lineBreakStyle = android.graphics.text.LineBreakConfig.LINE_BREAK_STYLE_NONE
             lineBreakWordStyle = android.graphics.text.LineBreakConfig.LINE_BREAK_WORD_STYLE_NONE

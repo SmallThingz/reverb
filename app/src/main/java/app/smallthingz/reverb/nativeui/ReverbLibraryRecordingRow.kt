@@ -1,6 +1,5 @@
 package app.smallthingz.reverb.nativeui
 
-import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Outline
@@ -120,9 +119,9 @@ internal class ReverbLibraryRecordingRow(
         scheduleFrame()
     }
     private val bodyIndication = ReverbRowIndication.install(body, initialEnvironment.palette.ink,
-        ValueAnimator::getDurationScale)
+        { reverbAnimatorDurationScale(context) })
     private val leadingIndication = ReverbRowIndication.install(body.leading, initialEnvironment.palette.ink,
-        ValueAnimator::getDurationScale)
+        { reverbAnimatorDurationScale(context) })
     var parentInterestedInDown: (MotionEvent) -> Boolean = { false }
     private val bodyInput = input(body, bodyIndication)
     private val leadingInput = input(body.leading, leadingIndication)

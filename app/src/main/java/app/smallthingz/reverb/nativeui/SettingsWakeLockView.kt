@@ -207,10 +207,10 @@ private class WakeSwitch(context:Context,checked:Boolean,private var environment
             else {val save=canvas.save();try{canvas.clipPath(clip);super.draw(canvas)}finally{canvas.restoreToCount(save)}}
         }
     }
-    private val trackDriver=ViewSpringDriver(this,track,{trackView.invalidate()})
-    private val thumbDriver=ViewSpringDriver(this,thumb,{thumbView.invalidate()})
-    private val offsetDriver=ViewSpringDriver(this,offset,{updateOffset()})
-    private val overlayDriver=ViewSpringDriver(this,overlay,{trackView.invalidate()})
+    private val trackDriver=ViewSpringDriver(this,track,{trackView.invalidate()}, { reverbAnimatorDurationScale(context) })
+    private val thumbDriver=ViewSpringDriver(this,thumb,{thumbView.invalidate()}, { reverbAnimatorDurationScale(context) })
+    private val offsetDriver=ViewSpringDriver(this,offset,{updateOffset()}, { reverbAnimatorDurationScale(context) })
+    private val overlayDriver=ViewSpringDriver(this,overlay,{trackView.invalidate()}, { reverbAnimatorDurationScale(context) })
     init {addView(trackView);importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS}
     fun bind(checked:Boolean,next:ReverbViewEnvironment) {
         environment=next

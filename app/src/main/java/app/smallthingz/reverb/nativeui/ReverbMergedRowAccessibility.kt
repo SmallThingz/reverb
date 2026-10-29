@@ -310,6 +310,8 @@ internal class ReverbMergedRowAccessibility(
             isLongClickable = false
             isScreenReaderFocusable = false
         }
+        // Accessibility-only role leaf must never draw a platform background or foreground.
+        @android.annotation.SuppressLint("MissingSuperCall")
         override fun draw(canvas: Canvas) = Unit
         override fun dispatchTouchEvent(event: MotionEvent): Boolean = false
         override fun dispatchHoverEvent(event: MotionEvent): Boolean = false

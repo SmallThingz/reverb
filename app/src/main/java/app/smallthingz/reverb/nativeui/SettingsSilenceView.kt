@@ -144,9 +144,9 @@ private class SilenceBody(
 
     init {
         importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO
-        ViewCompat.setAccessibilityLiveRegion(sampling,View.ACCESSIBILITY_LIVE_REGION_POLITE)
-        ViewCompat.setAccessibilityLiveRegion(error,View.ACCESSIBILITY_LIVE_REGION_POLITE)
-        ViewCompat.setAccessibilityLiveRegion(needsCalibration,View.ACCESSIBILITY_LIVE_REGION_POLITE)
+        ViewCompat.setAccessibilityLiveRegion(sampling,ViewCompat.ACCESSIBILITY_LIVE_REGION_POLITE)
+        ViewCompat.setAccessibilityLiveRegion(error,ViewCompat.ACCESSIBILITY_LIVE_REGION_POLITE)
+        ViewCompat.setAccessibilityLiveRegion(needsCalibration,ViewCompat.ACCESSIBILITY_LIVE_REGION_POLITE)
         addView(curve);addView(buttonRow);addView(sampling);addView(progress);addView(error);addView(unavailable)
         addView(needsCalibration)
         curve.onCommit={points,index->

@@ -165,6 +165,7 @@ internal class ReverbIconDrawable(
         setTintEnabled(tintMode != null)
     }
 
+    @androidx.annotation.RequiresApi(29)
     override fun setTintBlendMode(blendMode: BlendMode?) {
         require(blendMode == null || blendMode == BlendMode.SRC_IN) { "Reverb icons use SrcIn tint only" }
         setTintEnabled(blendMode != null)

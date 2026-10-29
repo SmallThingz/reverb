@@ -406,7 +406,7 @@ private class FineLeafRender(private val host: NativeParityActivity, private val
                 }
             }
         } else {
-            val owner = NativeAboutWindowRuntime()
+            val owner = NativeAboutWindowRuntime(host)
             runtime = owner
             val observer = LifecycleEventObserver { _, event ->
                 if (event == Lifecycle.Event.ON_START) owner.setStarted(true)

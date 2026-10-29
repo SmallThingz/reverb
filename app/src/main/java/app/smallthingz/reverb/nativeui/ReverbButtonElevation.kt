@@ -11,7 +11,6 @@
  */
 package app.smallthingz.reverb.nativeui
 
-import android.animation.ValueAnimator
 import android.graphics.Color
 import android.graphics.Outline
 import android.os.Build
@@ -113,7 +112,7 @@ internal class ReverbFilledButtonElevation(
     fun bindEnabled(enabled: Boolean) {
         checkMainThread()
         if (closed) return
-        state.setEnabled(enabled, ValueAnimator.getDurationScale())
+        state.setEnabled(enabled, reverbAnimatorDurationScale(host.context))
         stateChanged()
     }
 
@@ -121,7 +120,7 @@ internal class ReverbFilledButtonElevation(
     fun begin(kind: ReverbButtonElevationInteraction): ReverbButtonElevationToken? {
         checkMainThread()
         if (closed || !attached || !host.isAttachedToWindow) return null
-        val token = state.begin(kind, ValueAnimator.getDurationScale())
+        val token = state.begin(kind, reverbAnimatorDurationScale(host.context))
         stateChanged()
         return token
     }
@@ -129,7 +128,7 @@ internal class ReverbFilledButtonElevation(
     fun end(token: ReverbButtonElevationToken?) {
         checkMainThread()
         if (closed || token == null) return
-        state.end(token, ValueAnimator.getDurationScale())
+        state.end(token, reverbAnimatorDurationScale(host.context))
         stateChanged()
     }
 
@@ -174,7 +173,7 @@ internal class ReverbFilledButtonElevation(
             detached()
             return
         }
-        state.frame(frameTimeNanos, ValueAnimator.getDurationScale())
+        state.frame(frameTimeNanos, reverbAnimatorDurationScale(host.context))
         applyElevation()
         postFrameIfNeeded()
     }

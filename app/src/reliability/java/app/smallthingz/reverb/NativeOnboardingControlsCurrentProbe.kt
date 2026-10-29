@@ -45,7 +45,7 @@ internal fun verifyNativeOnboardingControlsCurrent(instrumentation: Instrumentat
         for (dark in listOf(false, true)) {
             val host = launchNativeParityActivity(instrumentation)
             awaitNativeParityDraw(instrumentation, host.fixtureRoot)
-            val runtime = NativeAboutWindowRuntime().apply { setStarted(true) }
+            val runtime = NativeAboutWindowRuntime(host).apply { setStarted(true) }
             var view: NativeOnboardingScreenView? = null
             try {
                 lateinit var state: OnboardingPageContentState

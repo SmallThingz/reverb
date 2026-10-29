@@ -6,7 +6,6 @@
  */
 package app.smallthingz.reverb.nativeui
 
-import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Outline
@@ -239,7 +238,7 @@ internal class SettingsMenuItemView(
     private val vertical = dp(8f)
     private val radius = 12f * density.density
     private val clip = Path()
-    private val indication = ReverbRowIndication.install(this, palette.ink, ValueAnimator::getDurationScale)
+    private val indication = ReverbRowIndication.install(this, palette.ink, { reverbAnimatorDurationScale(context) })
     private val sink = ReverbRowIndicationSink(indication) { x, y, point -> point.set(x, y) }
     var pointerRoot: View? = null
     val input = ReverbClickController(this, object : NativeClickEnvironment {

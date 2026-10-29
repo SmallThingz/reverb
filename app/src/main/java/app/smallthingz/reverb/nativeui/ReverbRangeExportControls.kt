@@ -1,6 +1,5 @@
 package app.smallthingz.reverb.nativeui
 
-import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Rect
 import android.view.KeyEvent
@@ -198,7 +197,7 @@ internal class ExportContent(
     private var loadingView: ReverbIncidentLoadingView? = null
     val label = environment.paragraph(context, context.getString(R.string.export), ReverbTextRole.LABEL_LARGE)
     private val indication = ReverbRowIndication.install(this, environment.palette.onSurface,
-        ValueAnimator::getDurationScale)
+        { reverbAnimatorDurationScale(context) })
     private val controller = ReverbClickController(this, object : NativeClickEnvironment {
         override val nativeInputRoot get() = inputRoot()
         override val minimumTouchWidthPx get() = 48f * environment.textDensity.density

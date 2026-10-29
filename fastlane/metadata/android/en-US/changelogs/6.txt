@@ -1,0 +1,3 @@
+Fix native animation compatibility on Android 9–12 while preserving system animation-scale settings.
+Include the native UI, keyboard and accessibility fixes, precise range selection, improved export cleanup, and lower stereo preview conversion work.
+Improve permission retry, onboarding controls, and saved UI state restoration.

@@ -98,7 +98,7 @@ class MainActivity : ComponentActivity() {
         val dark = themePresentation.mode.nativeIsDark(systemDark())
         renderedDark = dark
         environment = ReverbViewEnvironment(Density(this), createFontFamilyResolver(this), ReverbPalette.resolve(this, dark))
-        runtime = NativeAboutWindowRuntime()
+        runtime = NativeAboutWindowRuntime(this)
         lifecycle.addObserver(runtimeLifecycle)
         runtime.setStarted(lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
 
