@@ -1,5 +1,9 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.input.phase.NativeDragPointerChange
+import smallthingz.ui.input.phase.NativeDragPointerEvent
+import smallthingz.ui.input.phase.NativePointerPass
+
 import kotlin.math.abs
 import kotlinx.coroutines.CancellationException
 

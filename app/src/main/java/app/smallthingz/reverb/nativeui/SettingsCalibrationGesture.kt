@@ -1,7 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
-import app.smallthingz.reverb.NativeDragPointerEvent
-import app.smallthingz.reverb.NativePointerPass
+import smallthingz.ui.input.phase.NativeDragPointerEvent
+import smallthingz.ui.input.phase.NativePointerPass
 import smallthingz.ui.geometry.Offset
 
 /** Exact Initial/Final detector from released SkipSilenceSettings176–239; callback updates keep it. */

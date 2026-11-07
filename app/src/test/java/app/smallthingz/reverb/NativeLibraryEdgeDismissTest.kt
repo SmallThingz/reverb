@@ -1,5 +1,15 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.input.phase.NativeClickPhaseConsumption
+import smallthingz.ui.input.phase.NativeDragAxis
+import smallthingz.ui.input.phase.NativeDragPointerChange
+import smallthingz.ui.input.phase.NativeDragPointerEvent
+import smallthingz.ui.input.phase.NativeDragPointerRouter
+import smallthingz.ui.input.phase.NativeDragSink
+import smallthingz.ui.input.phase.NativePhasePointerNode
+import smallthingz.ui.input.phase.NativePointerPass
+import smallthingz.ui.input.phase.NativePointerPhaseTree
+
 import smallthingz.ui.geometry.Offset
 import smallthingz.ui.input.pointer.PointerType
 import smallthingz.ui.unit.Velocity

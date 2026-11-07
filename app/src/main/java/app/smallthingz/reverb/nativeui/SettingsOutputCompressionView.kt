@@ -3,7 +3,7 @@ package app.smallthingz.reverb.nativeui
 import android.content.Context
 import android.view.View
 import android.view.ViewGroup
-import app.smallthingz.reverb.NativeDragPointerChange
+import smallthingz.ui.input.phase.NativeDragPointerChange
 import app.smallthingz.reverb.R
 import kotlinx.coroutines.CoroutineScope
 import kotlin.math.max

@@ -29,8 +29,8 @@ import smallthingz.ui.text.TextStyle
 import smallthingz.ui.text.font.FontFamily
 import smallthingz.ui.unit.Density
 import app.smallthingz.reverb.R
-import app.smallthingz.reverb.NativeClickPhaseEndpoint
-import app.smallthingz.reverb.NativeClickPhaseHost
+import smallthingz.ui.input.phase.NativeClickPhaseEndpoint
+import smallthingz.ui.input.phase.NativeClickPhaseHost
 import java.io.Closeable
 import kotlin.math.max
 import kotlin.math.min

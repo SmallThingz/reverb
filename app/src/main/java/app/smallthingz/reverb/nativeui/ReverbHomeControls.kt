@@ -27,11 +27,11 @@ import smallthingz.ui.animation.core.AnimationVector4D
 import smallthingz.ui.animation.core.tween
 import smallthingz.ui.geometry.Offset
 import smallthingz.ui.geometry.Size
-import app.smallthingz.reverb.NativeClickPhaseHost
-import app.smallthingz.reverb.NativeClickPhaseNode
-import app.smallthingz.reverb.NativeViewPointerHitLayout
-import app.smallthingz.reverb.NativeWindowPointerCoordinates
-import app.smallthingz.reverb.ReverbClickPhaseEndpoint
+import smallthingz.ui.input.phase.NativeClickPhaseHost
+import smallthingz.ui.input.phase.NativeClickPhaseNode
+import smallthingz.ui.input.phase.NativeViewPointerHitLayout
+import smallthingz.ui.input.phase.NativeWindowPointerCoordinates
+import smallthingz.ui.input.phase.ViewClickPhaseEndpoint
 import smallthingz.ui.graphics.Color
 import smallthingz.ui.graphics.toArgb
 import app.smallthingz.reverb.R
@@ -246,7 +246,7 @@ internal abstract class HomeClickable(
         ).acceptsPointer(event.x, event.y,
             event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER, minimumTouchWidthPx)
     }, RowIndicationSink(indication) { x, y, target -> target.set(x, y) })
-    override val nativeClickEndpoint = ReverbClickPhaseEndpoint(input)
+    override val nativeClickEndpoint = ViewClickPhaseEndpoint(input)
 
     fun hitLayout(coordinates: NativeWindowPointerCoordinates): NativeViewPointerHitLayout {
         val node = NativeClickPhaseNode(this, nativeClickEndpoint) { false }

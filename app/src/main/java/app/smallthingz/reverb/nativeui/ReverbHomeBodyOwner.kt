@@ -9,10 +9,10 @@ import android.view.ViewConfiguration
 import smallthingz.ui.geometry.Offset
 import smallthingz.ui.geometry.Size
 import app.smallthingz.reverb.NativeHomeHorizontalDrag
-import app.smallthingz.reverb.NativePagerTouchRoot
+import smallthingz.ui.input.phase.PhasePointerRoot
 import app.smallthingz.reverb.ReverbService.BufferSlot
 import app.smallthingz.reverb.nativeHomeSwipeSurface
-import app.smallthingz.reverb.nativeMinimumTouchDistance
+import smallthingz.ui.input.phase.nativeMinimumTouchDistance
 import kotlinx.coroutines.CoroutineScope
 
 /**
@@ -137,7 +137,7 @@ internal class ReverbHomeBodyOwner(
         closed = true
         removeFrame()
         view.removeOnAttachStateChangeListener(attachment)
-        (view.swipeSurface as NativePagerTouchRoot).cancelPointerInput()
+        (view.swipeSurface as PhasePointerRoot).cancelPointerInput()
         restartHomeDragInput(motion, detector, frames.durationScale)
         view.close()
     }

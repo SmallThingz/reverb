@@ -5,6 +5,8 @@
  */
 package app.smallthingz.reverb
 
+import smallthingz.ui.input.phase.NativeDragSink
+
 import smallthingz.ui.geometry.Offset
 import smallthingz.ui.unit.Velocity
 import app.smallthingz.reverb.nativeui.NativeVerticalScrollOwner

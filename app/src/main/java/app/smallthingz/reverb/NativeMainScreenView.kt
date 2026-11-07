@@ -1,5 +1,12 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.input.phase.NativeClickPhaseHost
+import smallthingz.ui.input.phase.NativeClickPhaseNode
+import smallthingz.ui.input.phase.NativeViewPhasePointerNode
+import smallthingz.ui.input.phase.NativeViewPointerHitLayout
+import smallthingz.ui.input.phase.NativeWindowPointerCoordinates
+import smallthingz.ui.input.phase.PhasePointerRoot
+
 import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
 import smallthingz.ui.text.view.NativeTextSemanticsClip
 import android.content.Context
@@ -53,7 +60,7 @@ internal class NativeMainScreenView private constructor(
     private val registerDirectoryResult: ((Uri?) -> Unit) -> NativeDirectoryPickerRegistration,
     private val releaseInputFocus: () -> Unit,
     private val pointer: MainPointerGeometry,
-) : NativePagerTouchRoot(context, pointer.coordinates::rootToScreen, pointer.coordinates::coordinates,
+) : PhasePointerRoot(context, pointer.coordinates::rootToScreen, pointer.coordinates::coordinates,
     pointer.layout, pointer.coordinates::begin, mouseButtons = true), AutoCloseable, NativeSurfaceInputAdmission {
     private val job = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + job)

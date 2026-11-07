@@ -10,8 +10,8 @@ import android.view.ViewConfiguration
 import android.view.ViewGroup
 import smallthingz.ui.runtime.MonotonicFrameClock
 import androidx.lifecycle.Lifecycle
-import app.smallthingz.reverb.NativeAndroidInteropHost
-import app.smallthingz.reverb.NativeAndroidInteropRequests
+import smallthingz.ui.input.NativeAndroidInteropHost
+import smallthingz.ui.input.NativeAndroidInteropRequests
 import app.smallthingz.reverb.NativeRangeEndpointActions
 import app.smallthingz.reverb.NativeRangeExportPresentation
 import app.smallthingz.reverb.NativeRangeSelectionDurationWheel

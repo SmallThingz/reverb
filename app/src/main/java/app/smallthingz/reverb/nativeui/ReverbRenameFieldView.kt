@@ -25,10 +25,10 @@ import smallthingz.ui.text.PlatformTextStyle
 import smallthingz.ui.text.TextStyle
 import smallthingz.ui.text.style.LineHeightStyle
 import smallthingz.ui.unit.dp
-import app.smallthingz.reverb.NativeAndroidInteropHost
-import app.smallthingz.reverb.NativeAndroidInteropNode
-import app.smallthingz.reverb.NativeAndroidInteropRequests
-import app.smallthingz.reverb.NativeViewPointerHitLayout
+import smallthingz.ui.input.NativeAndroidInteropHost
+import smallthingz.ui.input.phase.NativeAndroidInteropNode
+import smallthingz.ui.input.NativeAndroidInteropRequests
+import smallthingz.ui.input.phase.NativeViewPointerHitLayout
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel

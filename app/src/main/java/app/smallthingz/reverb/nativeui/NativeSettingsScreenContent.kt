@@ -1,5 +1,10 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.input.phase.NativeDragPointerChange
+import smallthingz.ui.input.phase.NativeDragPointerEvent
+import smallthingz.ui.input.phase.NativePointerPass
+import smallthingz.ui.input.phase.NativeViewPhasePointerNode
+
 import smallthingz.ui.text.view.NativeTextSemanticsClip
 import android.content.Context
 import android.graphics.Rect

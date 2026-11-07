@@ -1,6 +1,9 @@
 /* Source-derived FilesScreen edge pointerInput and foundation 1.11.2 vertical drag helpers. */
 package app.smallthingz.reverb
 
+import smallthingz.ui.input.phase.NativeDragPointerEvent
+import smallthingz.ui.input.phase.NativePointerPass
+
 import smallthingz.ui.input.pointer.PointerType
 import kotlin.math.abs
 import kotlin.math.sign

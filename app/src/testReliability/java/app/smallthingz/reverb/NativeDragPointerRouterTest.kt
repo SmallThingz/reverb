@@ -1,5 +1,14 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.input.phase.NativeDragAxis
+import smallthingz.ui.input.phase.NativeDragPointerChange
+import smallthingz.ui.input.phase.NativeDragPointerEvent
+import smallthingz.ui.input.phase.NativeDragPointerRouter
+import smallthingz.ui.input.phase.NativeDragSink
+import smallthingz.ui.input.phase.NativeDragVelocity
+import smallthingz.ui.input.phase.NativePointerHistory
+import smallthingz.ui.input.phase.NativePointerPass
+
 import smallthingz.ui.geometry.Offset
 import smallthingz.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.util.VelocityTracker

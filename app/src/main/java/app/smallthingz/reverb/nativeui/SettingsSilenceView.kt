@@ -5,9 +5,9 @@ import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewGroup
 import androidx.core.view.ViewCompat
-import app.smallthingz.reverb.NativeDragPointerEvent
-import app.smallthingz.reverb.NativePointerPass
-import app.smallthingz.reverb.NativeViewPhasePointerNode
+import smallthingz.ui.input.phase.NativeDragPointerEvent
+import smallthingz.ui.input.phase.NativePointerPass
+import smallthingz.ui.input.phase.NativeViewPhasePointerNode
 import app.smallthingz.reverb.R
 import app.smallthingz.reverb.SilenceCurveView
 import app.smallthingz.reverb.SilenceGateConfig
@@ -106,8 +106,8 @@ private class SilenceBody(
     private val selected:()->Int,
     private val select:(Int)->Unit,
     private val actions:()->SettingsSilenceActions?,
-):ViewGroup(context),SettingsExpansionContent, app.smallthingz.reverb.NativeAndroidInteropHost {
-    override val nativeInteropRequests = app.smallthingz.reverb.NativeAndroidInteropRequests()
+):ViewGroup(context),SettingsExpansionContent, smallthingz.ui.input.NativeAndroidInteropHost {
+    override val nativeInteropRequests = smallthingz.ui.input.NativeAndroidInteropRequests()
     override fun requestDisallowInterceptTouchEvent(disallowIntercept: Boolean) {
         nativeInteropRequests.request(disallowIntercept)
         super.requestDisallowInterceptTouchEvent(disallowIntercept)
@@ -243,8 +243,8 @@ private class CalibrationButtonRow(
     context:Context,
     private val calibrate:View,
     private val fit:View,
-):ViewGroup(context),app.smallthingz.reverb.NativeAndroidInteropHost {
-    override val nativeInteropRequests=app.smallthingz.reverb.NativeAndroidInteropRequests()
+):ViewGroup(context),smallthingz.ui.input.NativeAndroidInteropHost {
+    override val nativeInteropRequests=smallthingz.ui.input.NativeAndroidInteropRequests()
     override fun requestDisallowInterceptTouchEvent(disallowIntercept:Boolean) {
         nativeInteropRequests.request(disallowIntercept)
         super.requestDisallowInterceptTouchEvent(disallowIntercept)

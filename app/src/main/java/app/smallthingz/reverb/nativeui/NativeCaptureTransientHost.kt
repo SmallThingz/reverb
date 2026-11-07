@@ -14,11 +14,11 @@ import smallthingz.ui.runtime.MonotonicFrameClock
 import app.smallthingz.reverb.CaptureSaveStatus
 import app.smallthingz.reverb.NativeCaptureUiOwner
 import app.smallthingz.reverb.NativeCaptureUiState
-import app.smallthingz.reverb.NativeClickPhaseNode
-import app.smallthingz.reverb.NativeDragPointerEvent
-import app.smallthingz.reverb.NativePointerPass
-import app.smallthingz.reverb.NativeViewPhasePointerNode
-import app.smallthingz.reverb.NativeViewPointerHitLayout
+import smallthingz.ui.input.phase.NativeClickPhaseNode
+import smallthingz.ui.input.phase.NativeDragPointerEvent
+import smallthingz.ui.input.phase.NativePointerPass
+import smallthingz.ui.input.phase.NativeViewPhasePointerNode
+import smallthingz.ui.input.phase.NativeViewPointerHitLayout
 import app.smallthingz.reverb.R
 import app.smallthingz.reverb.formatRecordingStartTimestamp
 import app.smallthingz.reverb.formatSavedRecordingDuration

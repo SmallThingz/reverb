@@ -207,7 +207,7 @@ internal open class OnboardingCardView(
     private val trailingHeightDp: Int,
     interactions: OnboardingNativeInteractionsFactory,
     accessibilityRole: NativeMergedRowRole = NativeMergedRowRole.BUTTON,
-) : ViewGroup(context), NativeMergedRowAccessibilityHost, app.smallthingz.reverb.NativeClickPhaseHost {
+) : ViewGroup(context), NativeMergedRowAccessibilityHost, smallthingz.ui.input.phase.NativeClickPhaseHost {
     private val title = ParagraphView(context, typography.titleMedium, density, resolver, 0)
     private val body = ParagraphView(context, typography.bodyMedium, density, resolver, 0)
     private val input = interactions.row(this)
@@ -374,7 +374,7 @@ internal class OnboardingAudioRow(
     resolver: FontFamily.Resolver,
     palette: ReverbPalette,
     interactions: OnboardingNativeInteractionsFactory,
-) : ViewGroup(context), NativeMergedRowAccessibilityHost, app.smallthingz.reverb.NativeClickPhaseHost {
+) : ViewGroup(context), NativeMergedRowAccessibilityHost, smallthingz.ui.input.phase.NativeClickPhaseHost {
     private val title = ParagraphView(context, typography.bodyLarge, density, resolver, 0)
     private val toggle = ReverbMaterialSwitchView(context, palette)
     private val input = interactions.row(this)

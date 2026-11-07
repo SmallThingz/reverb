@@ -35,8 +35,8 @@ internal class SettingsNotificationSaveView(
     onEnabledChange:(Boolean)->Unit,
     private var onSecondsChange:(Int)->Unit,
     private var readEditRevision:()->Long?,
-):ViewGroup(context),AutoCloseable, app.smallthingz.reverb.NativeAndroidInteropHost {
-    override val nativeInteropRequests = app.smallthingz.reverb.NativeAndroidInteropRequests()
+):ViewGroup(context),AutoCloseable, smallthingz.ui.input.NativeAndroidInteropHost {
+    override val nativeInteropRequests = smallthingz.ui.input.NativeAndroidInteropRequests()
     override fun requestDisallowInterceptTouchEvent(disallowIntercept: Boolean) {
         nativeInteropRequests.request(disallowIntercept)
         super.requestDisallowInterceptTouchEvent(disallowIntercept)

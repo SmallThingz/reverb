@@ -14,7 +14,7 @@ import app.smallthingz.reverb.NativeLibraryController
 import app.smallthingz.reverb.NativeLibraryInput
 import app.smallthingz.reverb.NativeLibraryPresentation
 import app.smallthingz.reverb.NativeRecordingRenameCallbacks
-import app.smallthingz.reverb.NativeViewPhasePointerNode
+import smallthingz.ui.input.phase.NativeViewPhasePointerNode
 import app.smallthingz.reverb.RecordingEntity
 import app.smallthingz.reverb.RecordingPlaybackRequest
 import app.smallthingz.reverb.R

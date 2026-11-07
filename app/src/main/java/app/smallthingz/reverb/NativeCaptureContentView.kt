@@ -1,5 +1,8 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.input.phase.NativeViewPointerHitLayout
+import smallthingz.ui.input.phase.NativeWindowPointerCoordinates
+
 import smallthingz.ui.text.view.NativePlainTextViewGeometry
 import smallthingz.ui.text.view.NativeSourceAccessibilityNode
 import smallthingz.ui.text.view.NativeTextSemanticsClip

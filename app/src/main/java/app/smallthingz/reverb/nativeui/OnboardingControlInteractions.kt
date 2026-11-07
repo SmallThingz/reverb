@@ -15,8 +15,8 @@ import android.graphics.drawable.Drawable
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
-import app.smallthingz.reverb.NativeClickPhaseEndpoint
-import app.smallthingz.reverb.ReverbClickPhaseEndpoint
+import smallthingz.ui.input.phase.NativeClickPhaseEndpoint
+import smallthingz.ui.input.phase.ViewClickPhaseEndpoint
 import java.util.IdentityHashMap
 import kotlin.math.min
 
@@ -109,7 +109,7 @@ private class OnboardingNativeInteractions(
         override fun longPressOwnershipChanged(owns: Boolean) = Unit
     }
     private val input = ViewClickController(inputHost, environment, sink)
-    override val pointerEndpoint: NativeClickPhaseEndpoint = ReverbClickPhaseEndpoint(input)
+    override val pointerEndpoint: NativeClickPhaseEndpoint = ViewClickPhaseEndpoint(input)
     private var enabled = inputHost.isEnabled
 
     override fun bind(enabled: Boolean, contentColor: Int) {

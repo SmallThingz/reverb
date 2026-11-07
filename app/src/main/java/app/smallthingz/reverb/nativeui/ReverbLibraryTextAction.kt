@@ -23,9 +23,9 @@ import android.view.ViewGroup
 import android.view.ViewOutlineProvider
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.core.view.ViewCompat
-import app.smallthingz.reverb.NativeClickPhaseEndpoint
-import app.smallthingz.reverb.NativeClickPhaseHost
-import app.smallthingz.reverb.ReverbClickPhaseEndpoint
+import smallthingz.ui.input.phase.NativeClickPhaseEndpoint
+import smallthingz.ui.input.phase.NativeClickPhaseHost
+import smallthingz.ui.input.phase.ViewClickPhaseEndpoint
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -94,7 +94,7 @@ private class LibraryTextActionSurface(context: Context, private var environment
         override fun interestedParent(event: MotionEvent): Boolean = false
         override fun longPressOwnershipChanged(owns: Boolean) = Unit
     }, RowIndicationSink(indication) { x, y, point -> point.set(x, y) })
-    override val nativeClickEndpoint: NativeClickPhaseEndpoint = ReverbClickPhaseEndpoint(controller)
+    override val nativeClickEndpoint: NativeClickPhaseEndpoint = ViewClickPhaseEndpoint(controller)
     override val mergedRowAccessibility = run {
         val children = listOf(label)
         MergedRowAccessibility(this, NativeMergedRowRole.BUTTON,

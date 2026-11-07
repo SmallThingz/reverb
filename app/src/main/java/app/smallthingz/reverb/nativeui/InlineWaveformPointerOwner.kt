@@ -1,6 +1,6 @@
 package app.smallthingz.reverb.nativeui
 
-import app.smallthingz.reverb.NativeDragPointerEvent
+import smallthingz.ui.input.phase.NativeDragPointerEvent
 
 /** Exact released pointerInput keys; trimSaving is read live and does not restart the detector. */
 internal data class InlineWaveformPointerKey(

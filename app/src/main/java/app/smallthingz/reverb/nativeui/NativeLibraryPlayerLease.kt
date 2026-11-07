@@ -13,7 +13,7 @@ import app.smallthingz.reverb.NativeInlinePlayerInput
 import app.smallthingz.reverb.NativeInlinePlayerPresentation
 import app.smallthingz.reverb.NativeLibraryController
 import app.smallthingz.reverb.NativeRecordingInlinePlayerController
-import app.smallthingz.reverb.NativeViewPhasePointerNode
+import smallthingz.ui.input.phase.NativeViewPhasePointerNode
 import app.smallthingz.reverb.RecordingEntity
 import kotlinx.coroutines.CoroutineScope
 

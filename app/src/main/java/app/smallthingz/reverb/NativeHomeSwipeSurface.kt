@@ -1,5 +1,14 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.input.phase.NativeClickPhaseEndpoint
+import smallthingz.ui.input.phase.NativeClickPhaseNode
+import smallthingz.ui.input.phase.NativeDragPointerEvent
+import smallthingz.ui.input.phase.NativePointerPass
+import smallthingz.ui.input.phase.NativeViewPhasePointerNode
+import smallthingz.ui.input.phase.NativeViewPointerHitLayout
+import smallthingz.ui.input.phase.NativeWindowPointerCoordinates
+import smallthingz.ui.input.phase.PhasePointerRoot
+
 import android.content.Context
 import android.view.View
 import smallthingz.ui.geometry.Offset
@@ -15,8 +24,8 @@ internal fun nativeHomeSwipeSurface(
     endpoint: NativeClickPhaseEndpoint,
     detector: NativeHomeHorizontalDrag,
     minimumTarget: () -> Float,
-): NativePagerTouchRoot {
-    lateinit var root: NativePagerTouchRoot
+): PhasePointerRoot {
+    lateinit var root: PhasePointerRoot
     val coordinates = NativeWindowPointerCoordinates { root }
     val dragNode = object : NativeViewPhasePointerNode {
         override val view: View get() = root

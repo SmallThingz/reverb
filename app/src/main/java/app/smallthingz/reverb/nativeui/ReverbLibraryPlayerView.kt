@@ -13,9 +13,9 @@ import android.view.accessibility.AccessibilityNodeInfo
 import smallthingz.ui.text.font.FontFamily
 import androidx.core.view.ViewCompat
 import app.smallthingz.reverb.InlineFineSeekTarget
-import app.smallthingz.reverb.NativeDragPointerEvent
-import app.smallthingz.reverb.NativePointerPass
-import app.smallthingz.reverb.NativeViewPhasePointerNode
+import smallthingz.ui.input.phase.NativeDragPointerEvent
+import smallthingz.ui.input.phase.NativePointerPass
+import smallthingz.ui.input.phase.NativeViewPhasePointerNode
 import app.smallthingz.reverb.R
 import app.smallthingz.reverb.formatPlaybackTime
 import app.smallthingz.reverb.formatRangeTimeInput

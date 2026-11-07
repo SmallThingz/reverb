@@ -30,7 +30,7 @@ import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.lifecycle.setViewTreeViewModelStoreOwner
 import androidx.savedstate.findViewTreeSavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
-import app.smallthingz.reverb.NativePagerTouchRoot
+import smallthingz.ui.input.phase.PhasePointerRoot
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
@@ -47,7 +47,7 @@ internal class SettingsMenuWindow(
     private val input: SettingsMenuPointerBinding,
     private val onDismissRequest: () -> Unit,
     private val onTerminal: () -> Unit,
-) : NativePagerTouchRoot(
+) : PhasePointerRoot(
     anchor.context,
     rootToScreen = input.geometry::rootToScreen,
     coordinates = input.geometry::coordinates,

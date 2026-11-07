@@ -22,11 +22,11 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
 import android.view.accessibility.AccessibilityNodeInfo
-import app.smallthingz.reverb.NativeClickPhaseHost
-import app.smallthingz.reverb.NativeClickPhaseNode
-import app.smallthingz.reverb.NativeViewPointerHitLayout
-import app.smallthingz.reverb.NativeViewPhasePointerNode
-import app.smallthingz.reverb.NativeDragPointerChange
+import smallthingz.ui.input.phase.NativeClickPhaseHost
+import smallthingz.ui.input.phase.NativeClickPhaseNode
+import smallthingz.ui.input.phase.NativeViewPointerHitLayout
+import smallthingz.ui.input.phase.NativeViewPhasePointerNode
+import smallthingz.ui.input.phase.NativeDragPointerChange
 import smallthingz.ui.geometry.Offset
 import smallthingz.ui.animation.view.ViewColorTransition
 import kotlin.math.max

@@ -33,9 +33,9 @@ import android.view.ViewGroup
 import android.view.ViewOutlineProvider
 import smallthingz.ui.text.style.TextOverflow
 import app.smallthingz.reverb.R
-import app.smallthingz.reverb.NativeClickPhaseHost
-import app.smallthingz.reverb.NativeClickPhaseEndpoint
-import app.smallthingz.reverb.ReverbClickPhaseEndpoint
+import smallthingz.ui.input.phase.NativeClickPhaseHost
+import smallthingz.ui.input.phase.NativeClickPhaseEndpoint
+import smallthingz.ui.input.phase.ViewClickPhaseEndpoint
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -349,7 +349,7 @@ private class ReverbTopBarActionLeaf(
         override fun interestedParent(event: MotionEvent) = false
         override fun longPressOwnershipChanged(owns: Boolean) = Unit
     }, RowIndicationSink(indication) { x, y, point -> point.set(x, y) })
-    override val nativeClickEndpoint: NativeClickPhaseEndpoint = ReverbClickPhaseEndpoint(controller)
+    override val nativeClickEndpoint: NativeClickPhaseEndpoint = ViewClickPhaseEndpoint(controller)
     override fun containsPointerLayer(x: Float, y: Float) =
         reverbGroupGeometry(width.toFloat(), height.toFloat(), environment.textDensity.density, 15f).contains(x, y)
     init {
@@ -453,7 +453,7 @@ private class ReverbTopBarBrandAction(context: Context, private var environment:
         override fun interestedParent(event: MotionEvent) = false
         override fun longPressOwnershipChanged(owns: Boolean) = Unit
     }, RowIndicationSink(indication) { x, y, point -> point.set(x, y) })
-    override val nativeClickEndpoint: NativeClickPhaseEndpoint = ReverbClickPhaseEndpoint(controller)
+    override val nativeClickEndpoint: NativeClickPhaseEndpoint = ViewClickPhaseEndpoint(controller)
     override fun containsPointerLayer(x: Float, y: Float) =
         reverbGroupGeometry(width.toFloat(), height.toFloat(), environment.textDensity.density,
             min(width, height) / (2f * environment.textDensity.density)).contains(x, y)

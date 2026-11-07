@@ -30,9 +30,9 @@ import smallthingz.ui.text.font.FontFamily
 import smallthingz.ui.text.font.FontWeight
 import smallthingz.ui.unit.Density
 import app.smallthingz.reverb.IncidentPresentation
-import app.smallthingz.reverb.NativeClickPhaseHost
-import app.smallthingz.reverb.NativeClickPhaseEndpoint
-import app.smallthingz.reverb.ReverbClickPhaseEndpoint
+import smallthingz.ui.input.phase.NativeClickPhaseHost
+import smallthingz.ui.input.phase.NativeClickPhaseEndpoint
+import smallthingz.ui.input.phase.ViewClickPhaseEndpoint
 import androidx.core.view.ViewCompat
 import app.smallthingz.reverb.R
 import app.smallthingz.reverb.RecordingIncident
@@ -332,7 +332,7 @@ private class IncidentBody(
     private var endpoint: NativeClickPhaseEndpoint? = null
     override val nativeClickEndpoint get() = checkNotNull(endpoint)
     var input: ViewClickController? = null
-        set(value) { field = value; endpoint = value?.let(::ReverbClickPhaseEndpoint) }
+        set(value) { field = value; endpoint = value?.let(::ViewClickPhaseEndpoint) }
     private var appearance = initial
     private var clickLabel: String? = null
     private val date = label(initial.bodyLarge.copy(fontWeight = FontWeight.SemiBold))
@@ -514,7 +514,7 @@ private class IncidentCheckTarget(
     private var endpoint: NativeClickPhaseEndpoint? = null
     override val nativeClickEndpoint get() = checkNotNull(endpoint)
     var input: ViewClickController? = null
-        set(value) { field = value; endpoint = value?.let(::ReverbClickPhaseEndpoint) }
+        set(value) { field = value; endpoint = value?.let(::ViewClickPhaseEndpoint) }
     var geometryChanged: () -> Unit = {}
     private var density = initialDensity
     private var checked = false

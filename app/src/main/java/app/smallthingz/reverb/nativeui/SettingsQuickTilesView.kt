@@ -492,8 +492,8 @@ internal class QuickTileInlineView(
         wheel = null
     }
     private fun dp(value: Int) = (value * environment.textDensity.density).roundToInt()
-    private inner class Body(context: Context) : ViewGroup(context), app.smallthingz.reverb.NativeAndroidInteropHost {
-    override val nativeInteropRequests = app.smallthingz.reverb.NativeAndroidInteropRequests()
+    private inner class Body(context: Context) : ViewGroup(context), smallthingz.ui.input.NativeAndroidInteropHost {
+    override val nativeInteropRequests = smallthingz.ui.input.NativeAndroidInteropRequests()
     override fun requestDisallowInterceptTouchEvent(disallowIntercept: Boolean) {
         nativeInteropRequests.request(disallowIntercept)
         super.requestDisallowInterceptTouchEvent(disallowIntercept)

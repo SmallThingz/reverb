@@ -22,11 +22,11 @@ import androidx.lifecycle.LifecycleOwner
 import app.smallthingz.reverb.FeedbackEvent
 import app.smallthingz.reverb.FeedbackTone
 import app.smallthingz.reverb.NativeAppFeedbackOwner
-import app.smallthingz.reverb.NativeDragPointerEvent
-import app.smallthingz.reverb.NativePointerPass
-import app.smallthingz.reverb.NativeViewPhasePointerNode
-import app.smallthingz.reverb.NativeViewPointerHitLayout
-import app.smallthingz.reverb.NativeWindowPointerCoordinates
+import smallthingz.ui.input.phase.NativeDragPointerEvent
+import smallthingz.ui.input.phase.NativePointerPass
+import smallthingz.ui.input.phase.NativeViewPhasePointerNode
+import smallthingz.ui.input.phase.NativeViewPointerHitLayout
+import smallthingz.ui.input.phase.NativeWindowPointerCoordinates
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel

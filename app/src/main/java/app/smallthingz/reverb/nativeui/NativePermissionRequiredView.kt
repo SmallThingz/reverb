@@ -23,13 +23,13 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
 import android.view.accessibility.AccessibilityNodeInfo
-import app.smallthingz.reverb.NativeClickPhaseHost
-import app.smallthingz.reverb.NativeClickPhaseNode
-import app.smallthingz.reverb.NativeDragPointerEvent
-import app.smallthingz.reverb.NativePointerPass
-import app.smallthingz.reverb.NativeViewPhasePointerNode
-import app.smallthingz.reverb.NativeViewPointerHitLayout
-import app.smallthingz.reverb.ReverbClickPhaseEndpoint
+import smallthingz.ui.input.phase.NativeClickPhaseHost
+import smallthingz.ui.input.phase.NativeClickPhaseNode
+import smallthingz.ui.input.phase.NativeDragPointerEvent
+import smallthingz.ui.input.phase.NativePointerPass
+import smallthingz.ui.input.phase.NativeViewPhasePointerNode
+import smallthingz.ui.input.phase.NativeViewPointerHitLayout
+import smallthingz.ui.input.phase.ViewClickPhaseEndpoint
 import app.smallthingz.reverb.R
 import kotlin.math.max
 import kotlin.math.min
@@ -221,7 +221,7 @@ private class PermissionLibraryAction(context:Context,private val host:NativeMat
         override fun interestedParent(event:MotionEvent)=false
         override fun longPressOwnershipChanged(owns:Boolean)=Unit
     },RowIndicationSink(indication){x,y,p->p.set(x,y)})
-    private val endpoint=ReverbClickPhaseEndpoint(controller)
+    private val endpoint=ViewClickPhaseEndpoint(controller)
     private val click=NativeClickPhaseNode(visual,endpoint,host.interestedParent)
     private val clipLease=host.registerTextClip(surface)
     private val parentLease=if(host.sourceProvider!=null) {

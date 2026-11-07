@@ -1,5 +1,16 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.input.NativeAndroidInteropHost
+import smallthingz.ui.input.phase.NativeAndroidInteropNode
+import smallthingz.ui.input.phase.NativeClickPhaseEndpoint
+import smallthingz.ui.input.phase.NativeClickPhaseHost
+import smallthingz.ui.input.phase.NativeClickPhaseNode
+import smallthingz.ui.input.phase.NativeDragPointerChange
+import smallthingz.ui.input.phase.NativeViewPhasePointerNode
+import smallthingz.ui.input.phase.NativeViewPointerHitLayout
+import smallthingz.ui.input.phase.NativeWindowPointerCoordinates
+import smallthingz.ui.input.phase.PhasePointerRoot
+
 import smallthingz.ui.text.view.NativeTextSemanticsClip
 import smallthingz.ui.text.view.NativeTextSemanticsClipPolicy
 import smallthingz.ui.text.view.NativeTextSemanticsTransformPolicy
@@ -59,7 +70,7 @@ internal class NativeOnboardingScreenView private constructor(
     private val restored: NativeOnboardingViewportSavedState,
     externalWindowText: NativeWindowTextAccessibilityOwner?,
     observeWindowInsets: Boolean,
-) : NativePagerTouchRoot(
+) : PhasePointerRoot(
     context, pointer.coordinates::rootToScreen, pointer.coordinates::coordinates,
     pointer.rootLayout, pointer.coordinates::begin,
 ), AutoCloseable {

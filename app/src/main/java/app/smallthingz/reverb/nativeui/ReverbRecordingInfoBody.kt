@@ -9,8 +9,8 @@ import android.view.ViewGroup
 import smallthingz.ui.geometry.Rect
 import app.smallthingz.reverb.NativeVerticalPhaseBinding
 import app.smallthingz.reverb.NativeVerticalScrollAccessibilityBinding
-import app.smallthingz.reverb.NativeViewPhasePointerNode
-import app.smallthingz.reverb.NativeViewPointerHitLayout
+import smallthingz.ui.input.phase.NativeViewPhasePointerNode
+import smallthingz.ui.input.phase.NativeViewPointerHitLayout
 import app.smallthingz.reverb.R
 import app.smallthingz.reverb.RecordingEntity
 import app.smallthingz.reverb.describeRecordingLocation
@@ -55,8 +55,8 @@ internal class ReverbRecordingInfoBody(
             val surface = row.surface
             val shield = object : NativeViewPhasePointerNode {
                 override val view: View get() = surface
-                override fun dispatch(event: app.smallthingz.reverb.NativeDragPointerEvent,
-                                      pass: app.smallthingz.reverb.NativePointerPass) = Unit
+                override fun dispatch(event: smallthingz.ui.input.phase.NativeDragPointerEvent,
+                                      pass: smallthingz.ui.input.phase.NativePointerPass) = Unit
                 override fun cancel() = Unit
             }
             surfaceLayouts += host.hit(surface, listOf(shield), clip = { surface.containsVisualPoint(it.x, it.y) })

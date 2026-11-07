@@ -23,8 +23,8 @@ import android.view.ViewOutlineProvider
 import smallthingz.ui.geometry.Offset
 import smallthingz.ui.geometry.Size
 import app.smallthingz.reverb.NativeHomePointerRoot
-import app.smallthingz.reverb.NativeViewPointerHitLayout
-import app.smallthingz.reverb.NativeWindowPointerCoordinates
+import smallthingz.ui.input.phase.NativeViewPointerHitLayout
+import smallthingz.ui.input.phase.NativeWindowPointerCoordinates
 import kotlin.math.ceil
 import kotlin.math.min
 import smallthingz.ui.animation.view.ViewColorTransition
@@ -41,7 +41,7 @@ internal abstract class ReverbHomeControlSurface(context: Context) : ViewGroup(c
         override val placed get() = content.isAttachedToWindow && content.visibility == VISIBLE
         override val size get() = Size(width.toFloat(), height.toFloat())
         override val minimumTouchTarget get() = Size.Zero
-        override val nodes = emptyList<app.smallthingz.reverb.NativeViewPhasePointerNode>()
+        override val nodes = emptyList<smallthingz.ui.input.phase.NativeViewPhasePointerNode>()
         override val childrenInHitOrder get() = childHitLayouts()
         override fun screenToLocal(screen: Offset) = inputCoordinates.coordinates(content).local(screen)
         override fun withinLayerBounds(local: Offset) = contains(local.x, local.y)

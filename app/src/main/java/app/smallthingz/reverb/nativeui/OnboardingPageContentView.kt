@@ -18,8 +18,8 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
 import app.smallthingz.reverb.R
 import app.smallthingz.reverb.DEFAULT_FLAC_COMPRESSION
-import app.smallthingz.reverb.NativeDragPointerChange
-import app.smallthingz.reverb.NativeViewPhasePointerNode
+import smallthingz.ui.input.phase.NativeDragPointerChange
+import smallthingz.ui.input.phase.NativeViewPhasePointerNode
 import app.smallthingz.reverb.SilenceGateConfig
 import kotlin.math.roundToInt
 

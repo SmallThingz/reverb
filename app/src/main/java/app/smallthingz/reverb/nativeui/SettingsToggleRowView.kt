@@ -11,8 +11,8 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import androidx.core.view.ViewCompat
-import app.smallthingz.reverb.NativeClickPhaseEndpoint
-import app.smallthingz.reverb.NativeClickPhaseHost
+import smallthingz.ui.input.phase.NativeClickPhaseEndpoint
+import smallthingz.ui.input.phase.NativeClickPhaseHost
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt

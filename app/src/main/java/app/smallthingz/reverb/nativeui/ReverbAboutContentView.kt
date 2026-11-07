@@ -37,16 +37,16 @@ import android.view.accessibility.AccessibilityManager
 import smallthingz.ui.geometry.Offset
 import smallthingz.ui.geometry.Size
 import smallthingz.ui.geometry.Rect as ComposeRect
-import app.smallthingz.reverb.NativePagerTouchRoot
-import app.smallthingz.reverb.NativeWindowPointerCoordinates
-import app.smallthingz.reverb.NativePointerCoordinates
-import app.smallthingz.reverb.NativeViewPointerHitLayout
-import app.smallthingz.reverb.NativeViewPhasePointerNode
-import app.smallthingz.reverb.NativeClickPhaseNode
-import app.smallthingz.reverb.ReverbClickPhaseEndpoint
+import smallthingz.ui.input.phase.PhasePointerRoot
+import smallthingz.ui.input.phase.NativeWindowPointerCoordinates
+import smallthingz.ui.input.phase.NativePointerCoordinates
+import smallthingz.ui.input.phase.NativeViewPointerHitLayout
+import smallthingz.ui.input.phase.NativeViewPhasePointerNode
+import smallthingz.ui.input.phase.NativeClickPhaseNode
+import smallthingz.ui.input.phase.ViewClickPhaseEndpoint
 import app.smallthingz.reverb.NativeVerticalPhaseBinding
-import app.smallthingz.reverb.NativeDragPointerEvent
-import app.smallthingz.reverb.NativePointerPass
+import smallthingz.ui.input.phase.NativeDragPointerEvent
+import smallthingz.ui.input.phase.NativePointerPass
 import smallthingz.ui.graphics.Color
 import smallthingz.ui.graphics.compositeOver
 import smallthingz.ui.graphics.toArgb
@@ -89,7 +89,7 @@ internal class ReverbAboutContentView private constructor(
     private val runtime: NativeAboutWindowRuntime,
     initialScrollPosition: Int,
     private val input: AboutInputGeometry,
-) : NativePagerTouchRoot(context, input::rootToScreen, input::coordinates, input.rootHit, input::prepare) {
+) : PhasePointerRoot(context, input::rootToScreen, input::coordinates, input.rootHit, input::prepare) {
     constructor(context: Context, initialAppearance: AboutContentAppearance, versionName: String,
                 requestDismiss: () -> Unit, runtime: NativeAboutWindowRuntime, initialScrollPosition: Int = 0) :
         this(context, initialAppearance, versionName, requestDismiss, runtime, initialScrollPosition,
@@ -429,7 +429,7 @@ private class AboutCloseButton(context: Context, private var appearance: AboutCo
         override fun longPressOwnershipChanged(owns: Boolean) = Unit
     }, RowIndicationSink(indication) { x, y, output -> output.set(x, y) })
 
-    val clickEndpoint = ReverbClickPhaseEndpoint(controller)
+    val clickEndpoint = ViewClickPhaseEndpoint(controller)
 
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -579,7 +579,7 @@ private class AboutRepositoryRow(context: Context, private var appearance: About
         override fun interestedParent(event: MotionEvent) = false // Shared touch phases supply actual vertical interest.
         override fun longPressOwnershipChanged(owns: Boolean) = Unit
     }, RowIndicationSink(indication) { x, y, output -> output.set(x, y) })
-    val clickEndpoint = ReverbClickPhaseEndpoint(controller)
+    val clickEndpoint = ViewClickPhaseEndpoint(controller)
     init {
         isClickable = true; isFocusable = true
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES

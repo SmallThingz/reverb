@@ -33,12 +33,12 @@ import smallthingz.ui.graphics.Color
 import smallthingz.ui.graphics.compositeOver
 import smallthingz.ui.graphics.toArgb
 import smallthingz.ui.unit.Density
-import app.smallthingz.reverb.NativeClickPhaseNode
-import app.smallthingz.reverb.NativeDragPointerChange
-import app.smallthingz.reverb.NativeDragPointerEvent
-import app.smallthingz.reverb.NativePointerPass
-import app.smallthingz.reverb.NativeViewPhasePointerNode
-import app.smallthingz.reverb.ReverbClickPhaseEndpoint
+import smallthingz.ui.input.phase.NativeClickPhaseNode
+import smallthingz.ui.input.phase.NativeDragPointerChange
+import smallthingz.ui.input.phase.NativeDragPointerEvent
+import smallthingz.ui.input.phase.NativePointerPass
+import smallthingz.ui.input.phase.NativeViewPhasePointerNode
+import smallthingz.ui.input.phase.ViewClickPhaseEndpoint
 import app.smallthingz.reverb.R
 import app.smallthingz.reverb.rangeFineTuneConstrainedY
 import kotlinx.coroutines.CoroutineScope
@@ -114,7 +114,7 @@ internal class ReverbSpringFineSeekView(
         }
         override fun cancel() { model.cancel() }
     }
-    val puckClickNode = NativeClickPhaseNode(puck, ReverbClickPhaseEndpoint(puck.controller),
+    val puckClickNode = NativeClickPhaseNode(puck, ViewClickPhaseEndpoint(puck.controller),
         environment.parentInterested)
 
     init {

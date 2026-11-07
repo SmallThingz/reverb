@@ -17,9 +17,9 @@ import smallthingz.ui.runtime.MonotonicFrameClock
 import smallthingz.ui.MotionDurationScale
 import smallthingz.ui.text.font.FontWeight
 import androidx.core.view.ViewCompat
-import app.smallthingz.reverb.NativeClickPhaseHost
+import smallthingz.ui.input.phase.NativeClickPhaseHost
 import app.smallthingz.reverb.RangeExportEditorState
-import app.smallthingz.reverb.ReverbClickPhaseEndpoint
+import smallthingz.ui.input.phase.ViewClickPhaseEndpoint
 import app.smallthingz.reverb.ReverbService
 import app.smallthingz.reverb.R
 import kotlinx.coroutines.CoroutineScope
@@ -215,7 +215,7 @@ internal class ExportContent(
             environment.textDensity.density, 20f).acceptsPointer(event.x, event.y,
             event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER, minimumTouchWidthPx)
     }, RowIndicationSink(indication) { x, y, point -> point.set(x, y) })
-    override val nativeClickEndpoint = ReverbClickPhaseEndpoint(controller)
+    override val nativeClickEndpoint = ViewClickPhaseEndpoint(controller)
     override fun containsPointerLayer(x: Float, y: Float) = reverbGroupGeometry(
         width.toFloat(), height.toFloat(), environment.textDensity.density, 20f).contains(x, y)
 

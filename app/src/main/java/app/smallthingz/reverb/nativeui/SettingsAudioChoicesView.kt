@@ -193,7 +193,7 @@ private class SettingsAudioDropdownView<T>(
     interactions: OnboardingNativeInteractionsFactory,
     private val onBinding: (View, SettingsDropdownContent<T>) -> Unit,
     private val open: (View, SettingsDropdownContent<T>) -> Unit,
-) : ViewGroup(context), app.smallthingz.reverb.NativeClickPhaseHost, AutoCloseable {
+) : ViewGroup(context), smallthingz.ui.input.phase.NativeClickPhaseHost, AutoCloseable {
     private val title = ParagraphView(context, bodySmall, density, resolver, initialPalette.muted)
     private val selected = ParagraphView(context, bodyLarge, density, resolver, initialPalette.ink)
     private val arrow = OnboardingIconView(context, ReverbIcon.ArrowDropDown, initialPalette.muted)

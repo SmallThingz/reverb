@@ -2,10 +2,10 @@ package app.smallthingz.reverb.nativeui
 
 import smallthingz.ui.geometry.Offset
 import smallthingz.ui.input.pointer.PointerType
-import app.smallthingz.reverb.NativeDragPointerChange
-import app.smallthingz.reverb.NativeDragPointerEvent
-import app.smallthingz.reverb.NativePointerConsumption
-import app.smallthingz.reverb.NativePointerPass
+import smallthingz.ui.input.phase.NativeDragPointerChange
+import smallthingz.ui.input.phase.NativeDragPointerEvent
+import smallthingz.ui.input.phase.NativePointerConsumption
+import smallthingz.ui.input.phase.NativePointerPass
 import app.smallthingz.reverb.rangeFineTuneDeltaSeconds
 import app.smallthingz.reverb.rangeFineTuneSeekPull
 import org.junit.Assert.assertEquals

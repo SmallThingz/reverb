@@ -19,8 +19,8 @@ internal class SettingsRetentionValueView(
     label:String,
     private val editor:View,
     private var environment:ReverbViewEnvironment,
-):ViewGroup(context), app.smallthingz.reverb.NativeAndroidInteropHost {
-    override val nativeInteropRequests = app.smallthingz.reverb.NativeAndroidInteropRequests()
+):ViewGroup(context), smallthingz.ui.input.NativeAndroidInteropHost {
+    override val nativeInteropRequests = smallthingz.ui.input.NativeAndroidInteropRequests()
     override fun requestDisallowInterceptTouchEvent(disallowIntercept: Boolean) {
         nativeInteropRequests.request(disallowIntercept)
         super.requestDisallowInterceptTouchEvent(disallowIntercept)

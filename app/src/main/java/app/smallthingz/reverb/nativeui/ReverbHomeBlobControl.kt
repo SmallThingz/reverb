@@ -34,8 +34,8 @@ import app.smallthingz.reverb.AUDIO_BLOB_READOUT_INK
 import app.smallthingz.reverb.AUDIO_BLOB_READOUT_SUPPORT
 import app.smallthingz.reverb.audioBlobReadoutSupport
 import app.smallthingz.reverb.R
-import app.smallthingz.reverb.NativeClickPhaseHost
-import app.smallthingz.reverb.ReverbClickPhaseEndpoint
+import smallthingz.ui.input.phase.NativeClickPhaseHost
+import smallthingz.ui.input.phase.ViewClickPhaseEndpoint
 import kotlin.math.max
 import kotlin.math.abs
 import kotlin.math.sqrt
@@ -114,7 +114,7 @@ internal class ReverbHomeBlobControl(
             if (token.kind == NativeStateToken.Kind.FOCUS) setFocusVisible(false)
         }
     })
-    override val nativeClickEndpoint = ReverbClickPhaseEndpoint(click)
+    override val nativeClickEndpoint = ViewClickPhaseEndpoint(click)
 
     init {
         clipChildren = false

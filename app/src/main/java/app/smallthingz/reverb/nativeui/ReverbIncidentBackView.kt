@@ -23,8 +23,8 @@ import android.view.ViewOutlineProvider
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
 import app.smallthingz.reverb.R
-import app.smallthingz.reverb.NativeClickPhaseHost
-import app.smallthingz.reverb.ReverbClickPhaseEndpoint
+import smallthingz.ui.input.phase.NativeClickPhaseHost
+import smallthingz.ui.input.phase.ViewClickPhaseEndpoint
 import kotlin.math.min
 import kotlin.math.roundToInt
 
@@ -61,7 +61,7 @@ internal class ReverbIncidentBackView(
         override fun longPressOwnershipChanged(owns: Boolean) = Unit
     }, RowIndicationSink(indication) { x, y, target -> target.set(x, y) })
 
-    override val nativeClickEndpoint = ReverbClickPhaseEndpoint(controller)
+    override val nativeClickEndpoint = ViewClickPhaseEndpoint(controller)
 
     override fun containsPointerLayer(x: Float, y: Float): Boolean = reverbGroupGeometry(
         width.toFloat(), height.toFloat(), resources.displayMetrics.density,

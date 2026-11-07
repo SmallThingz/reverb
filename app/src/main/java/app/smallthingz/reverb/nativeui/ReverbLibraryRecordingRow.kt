@@ -17,9 +17,9 @@ import android.graphics.Outline
 import android.graphics.Paint
 import android.os.Build
 import kotlinx.coroutines.CoroutineScope
-import app.smallthingz.reverb.NativeClickPhaseHost
-import app.smallthingz.reverb.NativeClickPhaseEndpoint
-import app.smallthingz.reverb.ReverbClickPhaseEndpoint
+import smallthingz.ui.input.phase.NativeClickPhaseHost
+import smallthingz.ui.input.phase.NativeClickPhaseEndpoint
+import smallthingz.ui.input.phase.ViewClickPhaseEndpoint
 import smallthingz.ui.unit.IntSize
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -409,7 +409,7 @@ private abstract class RecordingRowInputTarget(context: Context) : ViewGroup(con
     }
     private var endpoint: NativeClickPhaseEndpoint? = null
     var input: ViewClickController? = null
-        set(value) { field = value; endpoint = value?.let(::ReverbClickPhaseEndpoint) }
+        set(value) { field = value; endpoint = value?.let(::ViewClickPhaseEndpoint) }
     override val nativeClickEndpoint: NativeClickPhaseEndpoint get() = checkNotNull(endpoint)
     override val sourceClickPresent: Boolean get() = isClickable
     var clickLabel: String? = null

@@ -16,9 +16,9 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import androidx.core.view.ViewCompat
-import app.smallthingz.reverb.NativeClickPhaseEndpoint
-import app.smallthingz.reverb.NativeClickPhaseHost
-import app.smallthingz.reverb.ReverbClickPhaseEndpoint
+import smallthingz.ui.input.phase.NativeClickPhaseEndpoint
+import smallthingz.ui.input.phase.NativeClickPhaseHost
+import smallthingz.ui.input.phase.ViewClickPhaseEndpoint
 import app.smallthingz.reverb.R
 import app.smallthingz.reverb.formatRangeTimeInput
 import kotlin.math.max
@@ -150,7 +150,7 @@ private class PlayerTrimActionRow(context: Context, private var environment: Rev
         override fun interestedParent(event: MotionEvent) = true
         override fun longPressOwnershipChanged(owns: Boolean) = Unit
     }, RowIndicationSink(indication) { x, y, point -> point.set(x, y) })
-    override val nativeClickEndpoint: NativeClickPhaseEndpoint = ReverbClickPhaseEndpoint(input)
+    override val nativeClickEndpoint: NativeClickPhaseEndpoint = ViewClickPhaseEndpoint(input)
     init {
         isClickable = true
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES

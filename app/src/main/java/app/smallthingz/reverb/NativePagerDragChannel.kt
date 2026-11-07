@@ -5,6 +5,9 @@
  */
 package app.smallthingz.reverb
 
+import smallthingz.ui.input.phase.NativeDragPointerEvent
+import smallthingz.ui.input.phase.NativeDragSink
+
 import smallthingz.ui.foundation.gestures.ScrollScope
 import smallthingz.ui.geometry.Offset
 import smallthingz.ui.unit.Velocity

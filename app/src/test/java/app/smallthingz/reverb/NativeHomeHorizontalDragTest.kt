@@ -1,5 +1,9 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.input.phase.NativeDragPointerChange
+import smallthingz.ui.input.phase.NativeDragPointerEvent
+import smallthingz.ui.input.phase.NativePointerPass
+
 import smallthingz.ui.geometry.Offset
 import smallthingz.ui.input.pointer.PointerType
 import org.junit.Assert.*

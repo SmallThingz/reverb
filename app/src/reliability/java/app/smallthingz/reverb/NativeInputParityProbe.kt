@@ -1,5 +1,13 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.input.phase.NativeClickPhaseNode
+import smallthingz.ui.input.phase.NativeDragPointerChange
+import smallthingz.ui.input.phase.NativeDragPointerEvent
+import smallthingz.ui.input.phase.NativePointerCoordinates
+import smallthingz.ui.input.phase.NativePointerPass
+import smallthingz.ui.input.phase.ViewClickPhaseEndpoint
+import smallthingz.ui.input.phase.nativePointerSubset
+
 import smallthingz.ui.interaction.view.NativeClickBinding
 import smallthingz.ui.interaction.view.NativeClickEnvironment
 import smallthingz.ui.interaction.view.NativeClickIndication
@@ -342,7 +350,7 @@ private fun verifyPublicPointerSubset(
                 var longClicks = 0
                 target.view.controller.bind(NativeClickBinding("subset-classification", true,
                     onClick = {}, onLongClick = { longClicks++ }))
-                val endpoint = ReverbClickPhaseEndpoint(target.view.controller)
+                val endpoint = ViewClickPhaseEndpoint(target.view.controller)
                 val node = NativeClickPhaseNode(target.view, endpoint) { false }
                 val point = smallthingz.ui.geometry.Offset(12.25f, 24.5f)
                 val transform = NativePointerCoordinates(android.graphics.Matrix(), android.graphics.Matrix(),

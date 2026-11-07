@@ -39,14 +39,14 @@ import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.lifecycle.setViewTreeViewModelStoreOwner
 import androidx.savedstate.findViewTreeSavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
-import app.smallthingz.reverb.NativeClickPhaseNode
-import app.smallthingz.reverb.NativeDragPointerChange
-import app.smallthingz.reverb.NativeDragPointerEvent
-import app.smallthingz.reverb.NativePagerTouchRoot
-import app.smallthingz.reverb.NativePointerPass
-import app.smallthingz.reverb.NativeViewPhasePointerNode
-import app.smallthingz.reverb.NativeViewPointerHitLayout
-import app.smallthingz.reverb.NativeWindowPointerCoordinates
+import smallthingz.ui.input.phase.NativeClickPhaseNode
+import smallthingz.ui.input.phase.NativeDragPointerChange
+import smallthingz.ui.input.phase.NativeDragPointerEvent
+import smallthingz.ui.input.phase.PhasePointerRoot
+import smallthingz.ui.input.phase.NativePointerPass
+import smallthingz.ui.input.phase.NativeViewPhasePointerNode
+import smallthingz.ui.input.phase.NativeViewPointerHitLayout
+import smallthingz.ui.input.phase.NativeWindowPointerCoordinates
 import app.smallthingz.reverb.NativeWindowScrollAccessibilityEvents
 import app.smallthingz.reverb.NativeVerticalPhaseBinding
 import app.smallthingz.reverb.NativeVerticalScrollAccessibilityBinding
@@ -323,7 +323,7 @@ internal class ReverbActionSheetDialog(
 
 /** Passed once to concrete body/action owners, without discovering or guessing their input shapes. */
 internal class NativeActionSheetContentContext(
-    val inputRoot:NativePagerTouchRoot,
+    val inputRoot:PhasePointerRoot,
     initialEnvironment:ReverbViewEnvironment,
     val runtime:NativeAboutWindowRuntime,
     val nestedScroll:NativeVerticalNestedHost,
@@ -350,7 +350,7 @@ internal class SheetRoot(
     private val density:Float,
     private val measured:()->Unit,
     private val motion:()->Unit,
-):NativePagerTouchRoot(context,pointer.geometry::rootToScreen,pointer.geometry::coordinates,
+):PhasePointerRoot(context,pointer.geometry::rootToScreen,pointer.geometry::coordinates,
     pointer.layout,pointer.geometry::begin,mouseButtons=true) {
     private var imeBottom=0
     /** Source traversal semantics is inside imePadding, although its real Window remains full-size. */

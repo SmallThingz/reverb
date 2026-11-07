@@ -1,5 +1,14 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.input.NativeAndroidInteropHost
+import smallthingz.ui.input.phase.NativeAndroidInteropNode
+import smallthingz.ui.input.phase.NativeClickPhaseHost
+import smallthingz.ui.input.phase.NativeClickPhaseNode
+import smallthingz.ui.input.phase.NativeViewPhasePointerNode
+import smallthingz.ui.input.phase.NativeViewPointerHitLayout
+import smallthingz.ui.input.phase.NativeWindowPointerCoordinates
+import smallthingz.ui.input.phase.PhasePointerRoot
+
 import smallthingz.ui.text.view.NativeTextSemanticsClip
 import smallthingz.ui.text.view.NativeTextSemanticsClipPolicy
 import android.Manifest
@@ -345,13 +354,13 @@ internal class SettingsInteractionRender(
                 view.createComposition(context)
                 board.addView(view, FrameLayout.LayoutParams(-1, -1))
             } else {
-                lateinit var root: NativePagerTouchRoot
+                lateinit var root: PhasePointerRoot
                 val geometry = NativeWindowPointerCoordinates { root }
                 val routing = SettingsInteractionPointers({ root }, geometry, density.density) {
                     native?.pointerNodes?.invoke(it).orEmpty()
                 }
                 pointer = routing
-                root = object : NativePagerTouchRoot(activity, geometry::rootToScreen, geometry::coordinates,
+                root = object : PhasePointerRoot(activity, geometry::rootToScreen, geometry::coordinates,
                     routing.layout, geometry::begin, mouseButtons = true) {
                     private val focus = NativeSourceFocusPolicy(this,
                         takeOwnerFocus = { super.requestFocus(FOCUS_DOWN, null) },
@@ -542,7 +551,7 @@ internal class SettingsInteractionRender(
             val primary = failure
             if (primary == null) failure = error else if (primary !== error) primary.addSuppressed(error)
         } }
-        release { if (::inputRoot.isInitialized) (inputRoot as? NativePagerTouchRoot)?.cancelPointerInput() }
+        release { if (::inputRoot.isInitialized) (inputRoot as? PhasePointerRoot)?.cancelPointerInput() }
         release { nativeFocus?.close() }
         release { pointer?.close() }; release { native?.close?.invoke() }; release { text?.close() }
         release { compose?.disposeComposition() }; composition = null

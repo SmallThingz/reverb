@@ -1,5 +1,10 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.input.phase.NativeDragPointerChange
+import smallthingz.ui.input.phase.NativeDragPointerEvent
+import smallthingz.ui.input.phase.NativePointerCoordinates
+import smallthingz.ui.input.phase.NativePointerPass
+
 import android.app.Application
 import android.app.Instrumentation
 import android.graphics.Matrix

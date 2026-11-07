@@ -2,8 +2,8 @@ package app.smallthingz.reverb.nativeui
 
 import smallthingz.ui.geometry.Offset
 import app.smallthingz.reverb.FineSeekInputSession
-import app.smallthingz.reverb.NativeDragPointerEvent
-import app.smallthingz.reverb.NativePointerPass
+import smallthingz.ui.input.phase.NativeDragPointerEvent
+import smallthingz.ui.input.phase.NativePointerPass
 import app.smallthingz.reverb.RangeDurationWheelInteraction
 import app.smallthingz.reverb.RangeInputGesture
 import app.smallthingz.reverb.cancelFineSeekOwnedAudio

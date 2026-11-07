@@ -22,8 +22,8 @@ import android.view.accessibility.AccessibilityNodeInfo
 import smallthingz.ui.graphics.Color
 import smallthingz.ui.graphics.toArgb
 import androidx.core.view.ViewCompat
-import app.smallthingz.reverb.NativeClickPhaseEndpoint
-import app.smallthingz.reverb.NativeClickPhaseHost
+import smallthingz.ui.input.phase.NativeClickPhaseEndpoint
+import smallthingz.ui.input.phase.NativeClickPhaseHost
 import smallthingz.ui.animation.view.ViewColorTransition
 import smallthingz.ui.animation.view.ViewSpringDriver
 import kotlin.math.max

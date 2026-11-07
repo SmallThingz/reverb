@@ -1,5 +1,10 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.input.phase.NativeViewPhasePointerNode
+import smallthingz.ui.input.phase.NativeViewPointerHitLayout
+import smallthingz.ui.input.phase.NativeWindowPointerCoordinates
+import smallthingz.ui.input.phase.PhasePointerRoot
+
 import android.app.Application
 import android.app.Instrumentation
 import android.content.Context
@@ -416,7 +421,7 @@ private class FineLeafRender(private val host: NativeParityActivity, private val
             host.lifecycle.addObserver(observer)
             owner.setStarted(host.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
             val geometry = FineLeafPointerGeometry(density)
-            val nativeRoot = NativePagerTouchRoot(host, geometry.coordinates::rootToScreen,
+            val nativeRoot = PhasePointerRoot(host, geometry.coordinates::rootToScreen,
                 geometry.coordinates::coordinates, geometry.layout, geometry.coordinates::begin)
             root = nativeRoot
             geometry.root = nativeRoot
@@ -483,7 +488,7 @@ private class FineLeafRender(private val host: NativeParityActivity, private val
             if (primary == null) primary = error else if (primary !== error) primary!!.addSuppressed(error)
         } }
         trace.updatePlaying = {}
-        release { if (::root.isInitialized) (root as? NativePagerTouchRoot)?.cancelPointerInput() }
+        release { if (::root.isInitialized) (root as? PhasePointerRoot)?.cancelPointerInput() }
         release { if (::root.isInitialized) host.fixtureRoot.removeView(root) }
         release { compose?.disposeComposition() }
         release { native?.release() }
@@ -507,7 +512,7 @@ private class FineLeafColumn(context: Context, private val fine: View, density: 
 }
 
 private class FineLeafPointerGeometry(private val density: Density) {
-    lateinit var root: NativePagerTouchRoot
+    lateinit var root: PhasePointerRoot
     lateinit var viewport: NativeVerticalViewport
     lateinit var vertical: NativeVerticalPhaseBinding
     lateinit var fine: ReverbSpringFineSeekView

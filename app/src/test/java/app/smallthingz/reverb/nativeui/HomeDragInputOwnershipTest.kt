@@ -1,9 +1,9 @@
 package app.smallthingz.reverb.nativeui
 
-import app.smallthingz.reverb.NativeDragPointerChange
-import app.smallthingz.reverb.NativeDragPointerEvent
+import smallthingz.ui.input.phase.NativeDragPointerChange
+import smallthingz.ui.input.phase.NativeDragPointerEvent
 import app.smallthingz.reverb.NativeHomeHorizontalDrag
-import app.smallthingz.reverb.NativePointerPass
+import smallthingz.ui.input.phase.NativePointerPass
 import app.smallthingz.reverb.ReverbService.BufferSlot
 import app.smallthingz.reverb.oppositeBufferSlot
 import org.junit.Assert.assertEquals

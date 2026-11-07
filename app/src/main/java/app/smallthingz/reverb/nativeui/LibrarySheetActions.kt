@@ -3,7 +3,7 @@ package app.smallthingz.reverb.nativeui
 import android.content.Context
 import android.view.View
 import android.view.ViewGroup
-import app.smallthingz.reverb.NativeViewPointerHitLayout
+import smallthingz.ui.input.phase.NativeViewPointerHitLayout
 import kotlin.math.max
 import kotlin.math.roundToInt
 

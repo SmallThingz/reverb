@@ -25,9 +25,9 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
 import android.view.accessibility.AccessibilityNodeInfo
-import app.smallthingz.reverb.NativeClickPhaseEndpoint
-import app.smallthingz.reverb.NativeClickPhaseHost
-import app.smallthingz.reverb.ReverbClickPhaseEndpoint
+import smallthingz.ui.input.phase.NativeClickPhaseEndpoint
+import smallthingz.ui.input.phase.NativeClickPhaseHost
+import smallthingz.ui.input.phase.ViewClickPhaseEndpoint
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -66,7 +66,7 @@ internal class ReverbStandardIconButtonView(
         override fun interestedParent(event: MotionEvent) = false
         override fun longPressOwnershipChanged(owns: Boolean) = Unit
     }, RowIndicationSink(indication) { x, y, point -> point.set(x, y) })
-    private val endpoint: NativeClickPhaseEndpoint = ReverbClickPhaseEndpoint(controller)
+    private val endpoint: NativeClickPhaseEndpoint = ViewClickPhaseEndpoint(controller)
 
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO

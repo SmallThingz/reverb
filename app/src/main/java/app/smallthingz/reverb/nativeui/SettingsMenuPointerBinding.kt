@@ -6,15 +6,15 @@ import android.view.ViewConfiguration
 import smallthingz.ui.geometry.Offset
 import smallthingz.ui.geometry.Size
 import smallthingz.ui.unit.Density
-import app.smallthingz.reverb.NativeClickPhaseNode
-import app.smallthingz.reverb.NativeDragPointerEvent
-import app.smallthingz.reverb.NativePagerTouchRoot
-import app.smallthingz.reverb.NativePointerPass
+import smallthingz.ui.input.phase.NativeClickPhaseNode
+import smallthingz.ui.input.phase.NativeDragPointerEvent
+import smallthingz.ui.input.phase.PhasePointerRoot
+import smallthingz.ui.input.phase.NativePointerPass
 import app.smallthingz.reverb.NativeVerticalPhaseBinding
-import app.smallthingz.reverb.NativeViewPhasePointerNode
-import app.smallthingz.reverb.NativeViewPointerHitLayout
-import app.smallthingz.reverb.NativeWindowPointerCoordinates
-import app.smallthingz.reverb.ReverbClickPhaseEndpoint
+import smallthingz.ui.input.phase.NativeViewPhasePointerNode
+import smallthingz.ui.input.phase.NativeViewPointerHitLayout
+import smallthingz.ui.input.phase.NativeWindowPointerCoordinates
+import smallthingz.ui.input.phase.ViewClickPhaseEndpoint
 import java.util.IdentityHashMap
 import kotlin.math.roundToInt
 
@@ -23,7 +23,7 @@ internal class SettingsMenuPointerBinding(
     private val content: SettingsMenuContent,
     private val density: Density,
 ) : AutoCloseable {
-    private var root: NativePagerTouchRoot? = null
+    private var root: PhasePointerRoot? = null
     val geometry = NativeWindowPointerCoordinates { checkNotNull(root) }
     private val config = ViewConfiguration.get(content.context)
     private val vertical = NativeVerticalPhaseBinding(
@@ -64,7 +64,7 @@ internal class SettingsMenuPointerBinding(
         override fun withinLayerBounds(local: Offset) = true
     }
 
-    fun bindRoot(root: NativePagerTouchRoot) {
+    fun bindRoot(root: PhasePointerRoot) {
         check(this.root == null)
         this.root = root
         refreshRows()
@@ -76,7 +76,7 @@ internal class SettingsMenuPointerBinding(
         for (row in retained) {
             row.pointerRoot = root
             rowLayouts.getOrPut(row) {
-                val node = NativeClickPhaseNode(row,ReverbClickPhaseEndpoint(row.input),vertical::interested)
+                val node = NativeClickPhaseNode(row,ViewClickPhaseEndpoint(row.input),vertical::interested)
                 Layout(row,listOf(node),{ emptyList() },clip = {
                     reverbGroupGeometry(row.width.toFloat(),row.height.toFloat(),density.density,12f)
                         .contains(it.x,it.y)

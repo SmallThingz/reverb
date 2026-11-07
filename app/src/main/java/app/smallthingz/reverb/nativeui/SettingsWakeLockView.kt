@@ -26,9 +26,9 @@ import smallthingz.ui.graphics.Color
 import smallthingz.ui.graphics.toArgb
 import smallthingz.ui.unit.dp
 import androidx.core.view.ViewCompat
-import app.smallthingz.reverb.NativeClickPhaseEndpoint
-import app.smallthingz.reverb.NativeClickPhaseHost
-import app.smallthingz.reverb.ReverbClickPhaseEndpoint
+import smallthingz.ui.input.phase.NativeClickPhaseEndpoint
+import smallthingz.ui.input.phase.NativeClickPhaseHost
+import smallthingz.ui.input.phase.ViewClickPhaseEndpoint
 import app.smallthingz.reverb.R
 import java.util.Collections
 import java.util.IdentityHashMap
@@ -97,7 +97,7 @@ private class WakeLockRow(
         override fun interestedParent(event:MotionEvent)=false
         override fun longPressOwnershipChanged(owns:Boolean)=Unit
     },indication)
-    override val nativeClickEndpoint:NativeClickPhaseEndpoint=ReverbClickPhaseEndpoint(input)
+    override val nativeClickEndpoint:NativeClickPhaseEndpoint=ViewClickPhaseEndpoint(input)
     override val mergedRowAccessibility=run {
         val children=listOf(title,summary)
         MergedRowAccessibility(this,NativeMergedRowRole.SWITCH,

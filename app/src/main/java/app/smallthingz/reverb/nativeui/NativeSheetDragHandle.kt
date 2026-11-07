@@ -19,8 +19,8 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
-import app.smallthingz.reverb.NativeClickPhaseHost
-import app.smallthingz.reverb.ReverbClickPhaseEndpoint
+import smallthingz.ui.input.phase.NativeClickPhaseHost
+import smallthingz.ui.input.phase.ViewClickPhaseEndpoint
 import kotlin.math.max
 import kotlin.math.roundToInt
 import smallthingz.ui.animation.view.ViewColorTransition
@@ -50,7 +50,7 @@ internal class NativeSheetDragHandle(
         override fun interestedParent(event:MotionEvent)=false
         override fun longPressOwnershipChanged(owns:Boolean)=Unit
     },RowIndicationSink(indication) {x,y,out->out.set(x,y)})
-    override val nativeClickEndpoint=ReverbClickPhaseEndpoint(controller)
+    override val nativeClickEndpoint=ViewClickPhaseEndpoint(controller)
     val tooltip=NativeSheetTooltip(this,environment,runtime,mark.contentDescription.toString())
     var sourceNode:(()->NativeSourceAccessibilityNode)?=null
     init {

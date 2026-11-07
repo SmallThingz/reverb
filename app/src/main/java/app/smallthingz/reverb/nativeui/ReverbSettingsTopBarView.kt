@@ -14,9 +14,9 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import smallthingz.ui.geometry.Rect as ComposeRect
-import app.smallthingz.reverb.NativeDragPointerEvent
-import app.smallthingz.reverb.NativePointerPass
-import app.smallthingz.reverb.NativeViewPhasePointerNode
+import smallthingz.ui.input.phase.NativeDragPointerEvent
+import smallthingz.ui.input.phase.NativePointerPass
+import smallthingz.ui.input.phase.NativeViewPhasePointerNode
 import app.smallthingz.reverb.R
 import smallthingz.ui.animation.core.Animatable
 import smallthingz.ui.animation.core.tween

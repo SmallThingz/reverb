@@ -1,5 +1,10 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.input.phase.NativeViewPhasePointerNode
+import smallthingz.ui.input.phase.NativeViewPointerHitLayout
+import smallthingz.ui.input.phase.NativeWindowPointerCoordinates
+import smallthingz.ui.input.phase.PhasePointerRoot
+
 import smallthingz.ui.text.view.ParagraphView
 import android.Manifest
 import android.animation.ValueAnimator
@@ -932,7 +937,7 @@ internal class LibraryParityBoard(
 private class LibraryNativeFocusRoot(
     context: Context,
     private val pointer: LibraryFixturePointerGeometry = LibraryFixturePointerGeometry(),
-) : NativePagerTouchRoot(context, pointer.coordinates::rootToScreen, pointer.coordinates::coordinates,
+) : PhasePointerRoot(context, pointer.coordinates::rootToScreen, pointer.coordinates::coordinates,
     pointer.layout, pointer.coordinates::begin, mouseButtons = true), AutoCloseable {
     private var focus: NativeSourceFocusPolicy? = null
     init {
