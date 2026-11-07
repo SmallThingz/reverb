@@ -38,15 +38,42 @@ internal fun verifyFractionalRangeExport(
     check(context.packageName == "app.smallthingz.reverb.reliability")
     check(Looper.myLooper() != Looper.getMainLooper()) { "QA waits must stay off main" }
     val prefs = getRecorderPreferences(context)
-    check(prefs.edit()
-        .putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
-        .putInt(PrefKey.OUTPUT_FORMAT, ExportFormat.WAV.storageCode.toInt())
-        .putInt(PrefKey.OUTPUT_CODEC, ExportCodec.PCM_16.storageCode.toInt())
-        .putInt(PrefKey.PCM_SAMPLE_FORMAT, PcmSampleFormat.PCM_16.storageCode.toInt())
-        .putInt(PrefKey.SAMPLE_RATE, 16_000)
-        .putInt(PrefKey.CHANNEL_MODE, ChannelMode.MONO.storageCode.toInt())
-        .commit())
     check(!readDurableCaptureIntentPreferences(prefs).enabled)
+    fun requireNoPendingJobs() {
+        val readinessDeadline = android.os.SystemClock.uptimeMillis() + 15_000L
+        while (!DurableSaveJobs.readiness.value.loaded) {
+            check(DurableSaveJobs.readiness.value.recoveryFailure == null) { "Save recovery unavailable" }
+            check(android.os.SystemClock.uptimeMillis() < readinessDeadline) { "Save recovery not ready" }
+            Thread.sleep(10)
+        }
+        // Successful retirement retains a SAVING/1f published row until catalog acknowledgement.
+        check(DurableSaveJobs.state.value.all {
+            it.phase == SavePhase.SAVING && it.progress == 1f && it.error == null &&
+                !it.publishedRecordingId.isNullOrBlank() && !it.publishedRecordingIdentity.isNullOrBlank()
+        }) { "Unsettled save presentation owns QA state" }
+        val jobs = durableSaveJournalRoot(context)
+        when (storagePathState(jobs)) {
+            StoragePathState.MISSING -> Unit
+            StoragePathState.PRESENT -> {
+                check(OsConstants.S_ISDIR(Os.lstat(jobs.path).st_mode))
+                check(checkNotNull(jobs.listFiles()).isEmpty()) { "Retained save journal owns QA state" }
+            }
+            else -> error("Save journal unavailable")
+        }
+    }
+    requireNoPendingJobs()
+    val touched = listOf(PrefKey.AUDIO_MEMORY_ENABLED, PrefKey.OUTPUT_FORMAT, PrefKey.OUTPUT_CODEC,
+        PrefKey.PCM_SAMPLE_FORMAT, PrefKey.SAMPLE_RATE, PrefKey.CHANNEL_MODE, PrefKey.EXPORT_DIRECTORY_URI)
+    val originalPreferences = touched.associateWith(prefs::snapshotDurablePreferenceValue)
+    check(originalPreferences.values.all(::durablePreferenceSnapshotIsExactlyRestorable))
+    val originalTree = getConfiguredExportTreeUri(context)
+    val originalMode = provider.mode
+    val providerRoot = File(context.filesDir, "reliability-documents")
+    val providerBefore = fractionalProviderProof(providerRoot)
+    val runPrefix = "fractional-" + java.util.UUID.randomUUID().toString() + "-"
+    var preferencesTouched = false
+    var appliedPreferences = originalPreferences
+    var restorationCandidates = setOf(originalPreferences)
     val connected = CountDownLatch(1)
     val service = AtomicReference<ReverbService>()
     val connection = object : ServiceConnection {
@@ -70,6 +97,7 @@ internal fun verifyFractionalRangeExport(
     var store: PersistentAudioChunkStore? = null
     var ordinaryStore: PersistentAudioChunkStore? = null
     var executor: ExecutorService? = null
+    var admissionExecutor: ExecutorService? = null
     var primaryFailure: Throwable? = null
     val main = Handler(Looper.getMainLooper())
     fun awaitMainCallbacks() {
@@ -78,8 +106,41 @@ internal fun verifyFractionalRangeExport(
         fence.get(15, TimeUnit.SECONDS)
     }
     try {
+        check(!readDurableCaptureIntentPreferences(prefs).enabled)
+        check(touched.associateWith(prefs::snapshotDurablePreferenceValue) == originalPreferences) { "QA preferences changed during admission" }
+        check(DurableSaveJobs.state.value.none { it.publishedRecordingId == null })
+        val activityManager = context.getSystemService(android.app.ActivityManager::class.java)
+        check(activityManager.getRunningServices(Int.MAX_VALUE).none { it.service.packageName == context.packageName }) {
+            "Existing QA Service owns runtime state"
+        }
+        appliedPreferences = originalPreferences + mapOf(
+            PrefKey.AUDIO_MEMORY_ENABLED to false,
+            PrefKey.OUTPUT_FORMAT to ExportFormat.WAV.storageCode.toInt(),
+            PrefKey.OUTPUT_CODEC to ExportCodec.PCM_16.storageCode.toInt(),
+            PrefKey.PCM_SAMPLE_FORMAT to PcmSampleFormat.PCM_16.storageCode.toInt(),
+            PrefKey.SAMPLE_RATE to 16_000,
+            PrefKey.CHANNEL_MODE to ChannelMode.MONO.storageCode.toInt(),
+        ).mapValues { DurablePreferenceValueSnapshot(true, it.value) }
+        restorationCandidates = setOf(originalPreferences, appliedPreferences)
+        preferencesTouched = true
+        check(prefs.edit()
+            .putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
+            .putInt(PrefKey.OUTPUT_FORMAT, ExportFormat.WAV.storageCode.toInt())
+            .putInt(PrefKey.OUTPUT_CODEC, ExportCodec.PCM_16.storageCode.toInt())
+            .putInt(PrefKey.PCM_SAMPLE_FORMAT, PcmSampleFormat.PCM_16.storageCode.toInt())
+            .putInt(PrefKey.SAMPLE_RATE, 16_000)
+            .putInt(PrefKey.CHANNEL_MODE, ChannelMode.MONO.storageCode.toInt())
+            .commit())
+        check(touched.associateWith(prefs::snapshotDurablePreferenceValue) == appliedPreferences)
+        restorationCandidates = setOf(appliedPreferences)
+        val withTree = appliedPreferences + (PrefKey.EXPORT_DIRECTORY_URI to
+            DurablePreferenceValueSnapshot(true, checkNotNull(canonicalDocumentTreeId(tree.toString()))))
+        restorationCandidates = setOf(appliedPreferences, withTree)
         check(setConfiguredExportTreeUri(context, tree))
-        provider.reset(ReliabilityDocumentsProvider.Mode.RENAME_NEW_ID)
+        appliedPreferences = withTree
+        check(touched.associateWith(prefs::snapshotDurablePreferenceValue) == appliedPreferences)
+        restorationCandidates = setOf(appliedPreferences)
+        provider.mode = ReliabilityDocumentsProvider.Mode.RENAME_NEW_ID
         bound = context.bindService(Intent(context, ReverbService::class.java), connection, Context.BIND_AUTO_CREATE)
         check(bound)
         check(connected.await(15, TimeUnit.SECONDS)) { "QA recorder did not bind" }
@@ -100,6 +161,9 @@ internal fun verifyFractionalRangeExport(
         val worker = ReverbService::class.java.getDeclaredField("exportWorkExecutor").apply { isAccessible = true }
             .get(recorder) as ExecutorService
         executor = worker
+        val admission = ReverbService::class.java.getDeclaredField("durableSaveAdmissionExecutor").apply { isAccessible = true }
+            .get(recorder) as ExecutorService
+        admissionExecutor = admission
 
         val source = PersistentAudioChunkStore(root)
         store = source
@@ -164,7 +228,7 @@ internal fun verifyFractionalRangeExport(
         fun exportAndCheck(name: String, start: Float, end: Float, firstFrame: Int, frames: Int,
             selectedSource: PersistentAudioChunkStore = source) {
             val providerRoot = File(context.filesDir, "reliability-documents")
-            val unpublishedBefore = if (frames == 0) fingerprints(providerRoot) else null
+            val unpublishedBefore = if (frames == 0) fractionalProviderProof(providerRoot) else null
             val writesBefore = provider.writeOpenCalls
             val delivered = CountDownLatch(1)
             val terminalCount = AtomicInteger()
@@ -189,7 +253,7 @@ internal fun verifyFractionalRangeExport(
             val submissionOwner = AtomicInteger(0) // 0 pending, 1 main owns submission, 2 revoked before submission.
             val submission = FutureTask {
                 if (submissionOwner.compareAndSet(0, 1)) {
-                    recorder.dumpRecordingRange(parent, start, end, receiver, name)
+                    recorder.dumpRecordingRange(parent, start, end, receiver, runPrefix + name)
                 }
                 Unit
             }
@@ -209,6 +273,8 @@ internal fun verifyFractionalRangeExport(
                 throw error
             }
             check(delivered.await(15, TimeUnit.SECONDS)) { "Fractional export did not deliver a terminal result" }
+            awaitMainCallbacks()
+            admission.submit {}.get(15, TimeUnit.SECONDS)
             worker.submit {}.get(15, TimeUnit.SECONDS)
             awaitMainCallbacks()
             check(terminalCount.get() == 1) { "Fractional export delivered duplicate terminal results" }
@@ -224,8 +290,10 @@ internal fun verifyFractionalRangeExport(
             if (frames == 0) {
                 check(saved.get() == null) { "Empty terminal range published a recording" }
                 val rejected = checkNotNull(failure.get()) { "Empty terminal range did not fail" }
-                check(rejected.message == context.getString(R.string.nothing_to_export) && rejected.cause == null)
-                check(provider.writeOpenCalls == writesBefore && fingerprints(providerRoot) == unpublishedBefore) {
+                if (rejected.message != context.getString(R.string.nothing_to_export) || rejected.cause != null) {
+                    throw IllegalStateException("Empty range must report only nothing_to_export without a cause", rejected)
+                }
+                check(provider.writeOpenCalls == writesBefore && fractionalProviderProof(providerRoot) == unpublishedBefore) {
                     "Empty terminal range changed provider output"
                 }
                 return
@@ -346,14 +414,15 @@ internal fun verifyFractionalRangeExport(
                 else if (cleanupFailure !== error) cleanupFailure!!.addSuppressed(error)
             }
         }
-        // Never reset the provider or delete source/output artifacts on failure. A timeout must
-        // settle main submission before cancellation/worker fencing, or a late main handoff
-        // could queue export work behind the worker fence and race synthetic source closure.
+        // Never reset the provider or delete source/output artifacts on failure.
+        // Settle main submission and admission before writer fencing: admission can still
+        // queue materialization and close its parent snapshot after the terminal callback.
         var submissionDrained = false
         cleanup { awaitMainCallbacks(); submissionDrained = true }
         if (primaryFailure != null && submissionDrained) cleanup { service.get()?.cancelCurrentExport() }
-        var drained = executor == null && submissionDrained
+        var drained = executor == null && admissionExecutor == null && submissionDrained
         if (submissionDrained) cleanup {
+            admissionExecutor?.submit {}?.get(15, TimeUnit.SECONDS)
             executor?.submit {}?.get(15, TimeUnit.SECONDS)
             drained = true
         }
@@ -363,9 +432,48 @@ internal fun verifyFractionalRangeExport(
             cleanup { ordinaryStore?.close() }
         }
         else cleanup { error("QA export worker did not drain; synthetic source retained open") }
-        if (bound) cleanup { context.unbindService(connection) }
-        if (drained) cleanup { check(setConfiguredExportTreeUri(context, null)) }
-        if (primaryFailure == null && cleanupFailure == null && drained) cleanup {
+        val hadBoundService = bound
+        if (bound) cleanup { context.unbindService(connection); bound = false }
+        var serviceDrained = service.get() == null && !hadBoundService
+        if (drained && service.get() != null) cleanup {
+            val owner = checkNotNull(service.get())
+            val thread = ReverbService::class.java.getDeclaredField("audioThread").apply { isAccessible = true }
+                .get(owner) as Thread
+            thread.join(15_000)
+            check(!thread.isAlive && ReverbService::class.java.getDeclaredField("serviceDestroying")
+                .apply { isAccessible = true }.get(owner) == true) { "QA Service teardown incomplete; preserve preferences" }
+            serviceDrained = true
+        }
+        if (!serviceDrained) cleanup { error("QA Service ownership unresolved; preserve preferences and artifacts") }
+        if (drained && serviceDrained && preferencesTouched) cleanup {
+            check(!readDurableCaptureIntentPreferences(prefs).enabled) { "Capture ownership changed; do not restore preferences" }
+            check(touched.associateWith(prefs::snapshotDurablePreferenceValue) in restorationCandidates) {
+                "QA preferences changed during fixture; preserve newer settings"
+            }
+            check(setConfiguredExportTreeUri(context, originalTree))
+            val beforeRawRestore = touched.associateWith(prefs::snapshotDurablePreferenceValue)
+            val editor = prefs.edit()
+            originalPreferences.forEach { (key, value) -> editor.restoreDurablePreferenceValue(key, value) }
+            check(commitDurablePreferenceOrRestoreInMemory(
+                commit = { editor.commit() },
+                restoreInMemory = {
+                    val rollback = prefs.edit()
+                    beforeRawRestore.forEach { (key, value) -> rollback.restoreDurablePreferenceValue(key, value) }
+                    check(rollback.commit()) { "Raw preference restoration rollback was not durable" }
+                },
+            ))
+            check(touched.associateWith(prefs::snapshotDurablePreferenceValue) == originalPreferences)
+        }
+        if (drained) cleanup { provider.mode = originalMode }
+        cleanup {
+            val after = fractionalProviderProof(providerRoot)
+            check(after.first == providerBefore.first) { "Provider directory replaced" }
+            check(providerBefore.second.all { (name, proof) -> after.second[name] == proof }) {
+                "Preexisting provider file changed or disappeared"
+            }
+        }
+        if (primaryFailure == null && cleanupFailure == null && drained && serviceDrained) cleanup {
+            requireNoPendingJobs()
             check(store != null && ordinaryStore != null && ordinaryRoot != null && ownedRoots.size == 2)
             val firstSource = checkNotNull(store)
             val secondSource = checkNotNull(ordinaryStore)
@@ -385,7 +493,7 @@ internal fun verifyFractionalRangeExport(
 private data class FractionalFixtureEntry(val path: Path, val identity: StructStat)
 
 /** Preflight both current-run roots before deleting anything; never follow a symbolic link. */
-private fun deleteSuccessfulFractionalFixtureSources(roots: List<FractionalFixtureEntry>) {
+private fun deleteSuccessfulFractionalFixtureSources(roots: List<FractionalFixtureEntry>) = synchronized(DurablePcmPins.mutationLock) {
     fun checkIdentity(entry: FractionalFixtureEntry) {
         val current = Os.lstat(entry.path.toString())
         check(current.st_dev == entry.identity.st_dev && current.st_ino == entry.identity.st_ino &&
@@ -399,6 +507,15 @@ private fun deleteSuccessfulFractionalFixtureSources(roots: List<FractionalFixtu
         val current = Os.lstat(root.path.toString())
         check(current.st_dev == root.identity.st_dev && current.st_ino == root.identity.st_ino &&
             OsConstants.S_ISDIR(current.st_mode)) { "Synthetic fixture root replaced: ${root.path}" }
+        val references = File(root.path.toFile(), "durable-pcm-refs")
+        when (storagePathState(references)) {
+            StoragePathState.MISSING -> Unit
+            StoragePathState.PRESENT -> {
+                check(OsConstants.S_ISDIR(Os.lstat(references.path).st_mode))
+                check(checkNotNull(references.listFiles()).isEmpty()) { "Synthetic source retains durable references" }
+            }
+            else -> error("Synthetic source reference authority unavailable")
+        }
         Files.walkFileTree(root.path, object : SimpleFileVisitor<Path>() {
             override fun preVisitDirectory(path: Path, attrs: BasicFileAttributes): FileVisitResult {
                 val identity = Os.lstat(path.toString())
@@ -410,6 +527,9 @@ private fun deleteSuccessfulFractionalFixtureSources(roots: List<FractionalFixtu
                 val identity = Os.lstat(path.toString())
                 check(attrs.isRegularFile && OsConstants.S_ISREG(identity.st_mode)) {
                     "Non-regular synthetic fixture entry preserved: $path"
+                }
+                if (path.parent == root.path.resolve(BUFFER_CHUNKS_FOLDER_NAME)) {
+                    check(!DurablePcmPins.isProtected(path.toFile())) { "Synthetic PCM remains protected" }
                 }
                 entries += FractionalFixtureEntry(path, identity)
                 return FileVisitResult.CONTINUE
@@ -425,4 +545,40 @@ private fun deleteSuccessfulFractionalFixtureSources(roots: List<FractionalFixtu
         } else checkIdentity(entry)
         Files.delete(entry.path)
     }
+}
+
+/** Direct children only; bind each read to a non-following native descriptor. */
+private fun fractionalProviderProof(root: File): Pair<Pair<Long, Long>, Map<String, Pair<String, String>>> {
+    check(OsConstants.S_ISDIR(Os.lstat(checkNotNull(root.parentFile).path).st_mode))
+    val directory = Os.lstat(root.path)
+    check(OsConstants.S_ISDIR(directory.st_mode))
+    val children = checkNotNull(root.listFiles()).sortedBy { it.name }
+    val proofs = children.associate { file ->
+        check(OsConstants.S_ISREG(Os.lstat(file.path).st_mode)) { "Non-regular provider entry preserved" }
+        val identity = resolveFileIdentity(file)
+        check(identity.isNotBlank())
+        val digest = MessageDigest.getInstance("SHA-256")
+        val descriptor = Os.open(file.path, OsConstants.O_RDONLY or OsConstants.O_NOFOLLOW or OsConstants.O_NONBLOCK, 0)
+        val stream = try { java.io.FileInputStream(descriptor) } catch (error: Throwable) {
+            try { Os.close(descriptor) } catch (close: Throwable) { error.addSuppressed(close) }
+            throw error
+        }
+        stream.use { input ->
+            check(OsConstants.S_ISREG(Os.fstat(input.fd).st_mode))
+            check(fileDescriptorIdentityMatches(identity, resolveFileDescriptorIdentity(input.fd)))
+            val buffer = ByteArray(32_768)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                check(count > 0); digest.update(buffer, 0, count)
+            }
+            check(fileDescriptorIdentityMatches(identity, resolveFileDescriptorIdentity(input.fd)))
+        }
+        check(resolveFileIdentity(file) == identity)
+        file.name to (identity to digest.digest().joinToString("") { "%02x".format(it.toInt() and 255) })
+    }
+    val after = Os.lstat(root.path)
+    check(OsConstants.S_ISDIR(after.st_mode) && after.st_dev == directory.st_dev && after.st_ino == directory.st_ino)
+    check(checkNotNull(root.listFiles()).map { it.name }.sorted() == children.map { it.name })
+    return (directory.st_dev to directory.st_ino) to proofs
 }

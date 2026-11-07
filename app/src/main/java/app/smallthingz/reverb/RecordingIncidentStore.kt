@@ -624,6 +624,27 @@ internal fun resolvePendingCaptureExitEvidence(
 
 internal enum class CaptureSessionStartDisposition { NEW_SESSION, CONTINUE_SESSION, RESOLVE_INTERRUPTED_SESSION }
 
+/** A Stop token is process-local; its durable marker stays armed until accepted PCM is sealed. */
+internal class KnownCaptureStopToken internal constructor(
+    internal val root: File,
+    internal val marker: ActiveRecordingSessionMarker?,
+    internal val publicationEpoch: Any,
+) {
+    val armed: Boolean get() = marker?.armed == true
+    internal var retirementAttempted = false
+
+    internal fun owns(currentRoot: File, currentEpoch: Any, current: ActiveRecordingSessionMarker?): Boolean {
+        if (root != currentRoot || publicationEpoch !== currentEpoch) return false
+        if (current == marker) return true
+        val original = marker ?: return false
+        // Only this token's attempted retirement may confirm false/absence exposed by a
+        // failed publication barrier. An absent reservation cannot acquire a fresh marker.
+        return retirementAttempted && (current == null || current == original.copy(armed = false))
+    }
+}
+
+internal enum class DeferredKnownCaptureStopResult { DURABLE, FAILED_REARMED, FAILED_UNCERTAIN, SUPERSEDED }
+
 internal enum class KnownCaptureStopResult {
     DURABLE,
     FAILED_REARMED,
@@ -645,6 +666,7 @@ internal fun <Marker : Any> completeKnownCaptureStop(
     disarm: (Marker) -> Unit,
     remove: () -> Unit,
     restore: (Marker) -> Unit,
+    ownsMarker: (Marker?) -> Boolean = { true },
 ): KnownCaptureStopResult {
     val existing = try {
         retryPendingEvidence()
@@ -657,6 +679,9 @@ internal fun <Marker : Any> completeKnownCaptureStop(
     } catch (_: Exception) {
         return KnownCaptureStopResult.FAILED_UNCERTAIN
     }
+    // Evidence retries may change the marker. Check deferred ownership after those callbacks,
+    // before even the absent-marker deletion fallback can obtain mutation authority.
+    if (!ownsMarker(existing)) return KnownCaptureStopResult.FAILED_UNCERTAIN
     if (existing == null) {
         // Confirm durable absence, including an earlier unlink whose directory sync failed.
         return if (runCatching(remove).isSuccess) KnownCaptureStopResult.DURABLE
@@ -785,6 +810,8 @@ internal fun completeRecordingIncidentDowntimes(
 }
 
 internal object RecordingIncidentStore {
+    private var captureSessionPublicationEpoch = Any()
+
     private const val SESSION_MAGIC = 0x52495331 // RIS1
     private const val PROCESS_MAGIC = 0x52495032 // RIP2
     private const val HISTORY_MAGIC = 0x52494831 // RIH1
@@ -992,6 +1019,9 @@ internal object RecordingIncidentStore {
         val resumedAtMillis = System.currentTimeMillis()
         notePendingSessionsResumed(appContext, resumedAtMillis)
         resolvePendingSessions(appContext)
+        // Invalidate old process-local Stop tokens before replacement can become visible,
+        // including a write whose later durability barrier fails. Clock samples may repeat.
+        captureSessionPublicationEpoch = Any()
         writeSession(
             markerFile,
             ActiveRecordingSessionMarker(
@@ -1089,7 +1119,49 @@ internal object RecordingIncidentStore {
     }
 
     @Synchronized
-    fun recordKnownCaptureStop(context: Context): KnownCaptureStopResult {
+    fun beginKnownCaptureStop(context: Context): KnownCaptureStopToken {
+        val appContext = context.applicationContext
+        val file = sessionFile(appContext)
+        var marker = readSession(file)
+        if (marker?.armed == true && !markerBelongsToCurrentProcess(marker)) {
+            recoverPriorSessionIfNeeded(appContext)
+            marker = readSession(file)
+            if (marker?.armed == true && !markerBelongsToCurrentProcess(marker)) {
+                throw IOException("Known Stop cannot reserve an unresolved previous capture session")
+            }
+        }
+        return KnownCaptureStopToken(incidentRoot(appContext).absoluteFile, marker, captureSessionPublicationEpoch)
+    }
+
+    @Synchronized
+    fun completeKnownCaptureStop(context: Context, token: KnownCaptureStopToken): DeferredKnownCaptureStopResult {
+        val appContext = context.applicationContext
+        val root = incidentRoot(appContext).absoluteFile
+        if (root != token.root || token.publicationEpoch !== captureSessionPublicationEpoch) {
+            return DeferredKnownCaptureStopResult.SUPERSEDED
+        }
+        var superseded = false
+        val result = recordKnownCaptureStopOwned(appContext, ownsMarker = { current ->
+            token.owns(root, captureSessionPublicationEpoch, current).also { owned ->
+                superseded = !owned
+                if (owned) token.retirementAttempted = true
+            }
+        })
+        if (superseded) return DeferredKnownCaptureStopResult.SUPERSEDED
+        return when (result) {
+            KnownCaptureStopResult.DURABLE -> DeferredKnownCaptureStopResult.DURABLE
+            KnownCaptureStopResult.FAILED_REARMED -> DeferredKnownCaptureStopResult.FAILED_REARMED
+            KnownCaptureStopResult.FAILED_UNCERTAIN -> DeferredKnownCaptureStopResult.FAILED_UNCERTAIN
+        }
+    }
+
+    @Synchronized
+    fun recordKnownCaptureStop(context: Context): KnownCaptureStopResult = recordKnownCaptureStopOwned(context)
+
+    private fun recordKnownCaptureStopOwned(
+        context: Context,
+        ownsMarker: (ActiveRecordingSessionMarker?) -> Boolean = { true },
+    ): KnownCaptureStopResult {
         val appContext = context.applicationContext
         val file = sessionFile(appContext)
         return completeKnownCaptureStop(
@@ -1126,6 +1198,7 @@ internal object RecordingIncidentStore {
             disarm = { marker -> writeSession(file, marker.copy(armed = false)) },
             remove = { deleteAtomicDurablyIfPresent(file) },
             restore = { marker -> writeSession(file, marker) },
+            ownsMarker = ownsMarker,
         )
     }
 
@@ -1158,7 +1231,7 @@ internal object RecordingIncidentStore {
                 mutation = { deleteIncident(appContext, incident) },
                 onFailure = {
                     AppFeedbackCenter.post(
-                        appContext.getString(R.string.incident_update_failed),
+                        actionableErrorMessage(appContext, appContext.getString(R.string.incident_update_failed), it),
                         FeedbackTone.ERROR,
                     )
                 },
@@ -1196,7 +1269,7 @@ internal object RecordingIncidentStore {
                 mutation = { toggleIncidentAcknowledged(appContext, incident) },
                 onFailure = {
                     AppFeedbackCenter.post(
-                        appContext.getString(R.string.incident_update_failed),
+                        actionableErrorMessage(appContext, appContext.getString(R.string.incident_update_failed), it),
                         FeedbackTone.ERROR,
                     )
                 },

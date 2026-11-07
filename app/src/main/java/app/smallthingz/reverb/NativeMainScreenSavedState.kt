@@ -5,7 +5,7 @@ import app.smallthingz.reverb.nativeui.NativeLibrarySavedScrollPosition
 import app.smallthingz.reverb.nativeui.NativeListSavedPosition
 import app.smallthingz.reverb.nativeui.SettingsListSavedPosition
 
-/** Only released rememberSaveable payloads. Library snapshots, selection, Undo and motion are absent. */
+/** Numeric scroll savers remain compatible; a pending Library reveal is separate UI-only metadata. */
 internal data class NativeMainScreenSavedState(
     val navigation: NativeMainSavedNavigation = NativeMainSavedNavigation(),
     val selectedBufferCode: Int? = null,
@@ -38,6 +38,8 @@ internal data class NativeMainScreenSavedState(
                     putIntArray("list", intArrayOf(it.firstVisibleItemIndex, it.firstVisibleItemScrollOffset))
                 }
                 position.emptyScrollPosition?.let { putInt("empty", it) }
+                position.pendingRecordingRevealId?.let { putString("pending_reveal", it) }
+                position.cancelledPlaybackRevealToken?.let { putString("cancelled_reveal_token", it) }
             })
         }
         incidentsPosition?.let {
@@ -67,7 +69,9 @@ internal data class NativeMainScreenSavedState(
                 values("settings_draft"), values("directory_picker"), values("tile_editor"),
                 position?.takeIf { it.size == 2 }?.let { SettingsListSavedPosition(it[0], it[1]) },
                 library?.let { NativeLibrarySavedScrollPosition(listPosition(it.getIntArray("list")),
-                    if (it.containsKey("empty")) it.getInt("empty") else null) },
+                    if (it.containsKey("empty")) it.getInt("empty") else null,
+                    it.getString("pending_reveal")?.takeIf { id -> id.isNotBlank() && id.length <= 16384 },
+                    it.getString("cancelled_reveal_token")?.takeIf { token -> token.isNotBlank() && token.length <= 128 }) },
                 listPosition(bundle.getIntArray("incidents_position")),
                 if (bundle.containsKey("about_scroll")) bundle.getInt("about_scroll") else null,
             )

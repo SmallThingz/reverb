@@ -51,6 +51,7 @@ internal class ReverbIncidentsContentView(
 ) : ViewGroup(context) {
     private var appearance = initialAppearance
     private val backgroundNoise = ReverbNoiseDrawable(resources, initialAppearance.card.palette.surface)
+    private val backgroundColorMotion = backgroundNoise.colorTransition(this, initialAppearance.card.palette.surface)
     private val header = IncidentsHeader(context, initialAppearance, onBack, inputRoot)
     private val empty = IncidentsEmptyContent(context, initialAppearance, frames, scope, durationScale)
     private val adapter = IncidentsAdapter(context, initialAppearance.card, menuHost, actions, inputRoot)
@@ -157,7 +158,7 @@ internal class ReverbIncidentsContentView(
     fun setAppearance(value: IncidentsContentAppearance, onBack: () -> Unit, actions: IncidentCardActions) {
         appearance = value
         this.actions = actions
-        backgroundNoise.setBackgroundColor(value.card.palette.surface)
+        backgroundColorMotion.retarget(value.card.palette.surface)
         header.bind(value, onBack)
         empty.setAppearance(value)
         adapter.setAppearance(value.card, actions)
@@ -230,6 +231,7 @@ private class IncidentsHeader(
         setText(context.getString(R.string.incidents_title))
     }
     private val noise = ReverbNoiseDrawable(resources, appearance.card.palette.surface, ReverbNoiseDrawable.SEED_TOP_BAR)
+    private val noiseColor = noise.colorTransition(this, appearance.card.palette.surface)
     private var insets = Insets.NONE
     private var sourceAccessibilityNode: ((View) -> NativeSourceAccessibilityNode)? = null
 
@@ -258,8 +260,8 @@ private class IncidentsHeader(
         appearance = value
         back.bind(value.card.palette, onBack)
         title.setTypography(value.titleLarge, value.card.density, value.card.fontResolver)
-        title.setTextColor(value.card.palette.ink)
-        noise.setBackgroundColor(value.card.palette.surface)
+        title.animateTextColor(value.card.palette.ink)
+        noiseColor.retarget(value.card.palette.surface)
         requestLayout()
     }
     private fun dp(value: Float) = (value * appearance.card.density.density).roundToInt()
@@ -345,9 +347,9 @@ private class IncidentsEmptyContent(
         loading.setColor(value.card.palette.primary)
         icon.setColor(value.card.palette.muted)
         title.setTypography(value.titleMedium, value.card.density, value.card.fontResolver)
-        title.setTextColor(value.card.palette.ink)
+        title.animateTextColor(value.card.palette.ink)
         detail.setTypography(value.card.bodyMedium, value.card.density, value.card.fontResolver)
-        detail.setTextColor(value.card.palette.muted)
+        detail.animateTextColor(value.card.palette.muted)
         requestLayout()
     }
 
@@ -448,8 +450,9 @@ private class IncidentsLoadingView(
 
 private class IncidentStatusIcon(context: Context, color: Int) : View(context) {
     private val icon = ReverbIconDrawable(ReverbIcon.Incidents, resources.displayMetrics.density, color)
+    private val colorMotion=colorTransition(color) {icon.setTint(it);invalidate()}
     init { importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO }
-    fun setColor(color: Int) { icon.setTint(color); invalidate() }
+    fun setColor(color: Int) {colorMotion.retarget(color)}
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) { icon.setBounds(0, 0, w, h) }
     override fun onDraw(canvas: Canvas) { icon.draw(canvas) }
 }
@@ -462,7 +465,7 @@ private class IncidentStaleView(context: Context, private var appearance: Incide
     fun bind(value: IncidentCardAppearance) {
         appearance = value
         text.setTypography(value.bodyMedium, value.density, value.fontResolver)
-        text.setTextColor(value.palette.muted)
+        text.animateTextColor(value.palette.muted)
         requestLayout()
     }
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {

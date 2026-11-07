@@ -877,6 +877,10 @@ fun FilesScreen(
                     ) {
                         itemsIndexed(listItems, key = { _, item -> libraryListItemKey(item) }) { index, item ->
                             when (item) {
+                                // This reference uses only buildLibraryListItems(recordings), never pending-job rows.
+                                is LibraryListItem.Pending,
+                                LibraryListItem.RetryFailedSaves,
+                                is LibraryListItem.SaveRecoveryStatus -> error("Unexpected durable-save row in the released Library reference")
                                 is LibraryListItem.Header -> HeaderItem(item.dateLabel, compactTop = index == 0)
                                 is LibraryListItem.Recording -> {
                                     val recording = item.recording

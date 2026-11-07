@@ -122,7 +122,7 @@ private class LibraryTextActionSurface(context: Context, private var environment
         action = callback
         label.setText(text)
         label.setTypography(reverbButtonTextStyle(), value.textDensity, value.sharedFontResolver)
-        label.setTextColor(color)
+        label.animateTextColor(color)
         // An explicit Text color in FeedbackCard does not replace Button's LocalContentColor.
         indication.updateColor(value.palette.primary)
         bindInput()

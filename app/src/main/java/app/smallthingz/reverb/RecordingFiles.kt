@@ -5,6 +5,8 @@ import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.content.IntentSender
+import android.app.RecoverableSecurityException
 import android.media.MediaMetadataRetriever
 import android.media.MediaScannerConnection
 import android.net.Uri
@@ -769,6 +771,7 @@ internal fun createOutputTargetInDirectory(
     mimeType: String,
     startedAtMillis: Long,
     stagingKind: StagingOutputKind = StagingOutputKind.COPY,
+    beforeCreate: (String) -> Unit = {},
 ): RecordingOutputTarget {
     val canonicalTree = targetTreeUri?.let {
         canonicalDocumentTreeId(it.toString())?.toUri()
@@ -776,19 +779,60 @@ internal fun createOutputTargetInDirectory(
     }
     return if (canonicalTree == null) {
         if (usesMediaStoreDefaultStorage()) {
-            createMediaStoreOutputTarget(context, requestedDisplayName, mimeType, startedAtMillis, stagingKind)
+            createMediaStoreOutputTarget(context, requestedDisplayName, mimeType, startedAtMillis, stagingKind, beforeCreate)
         } else {
             createLocalOutputTarget(
                 context, requestedDisplayName, mimeType, startedAtMillis,
                 storageDir = getSharedMusicRecordingsDirectory(),
                 stagingKind = stagingKind,
+                beforeCreate = beforeCreate,
             )
         }
     } else {
         createDocumentOutputTarget(
-            context, canonicalTree, requestedDisplayName, mimeType, startedAtMillis, stagingKind,
+            context, canonicalTree, requestedDisplayName, mimeType, startedAtMillis, stagingKind, beforeCreate,
         )
     }
+}
+
+internal fun emptyMediaStoreRecoveryIdentityMatches(target: RecordingOutputTarget, currentIdentity: String): Boolean =
+    target.staging && target.storageType == RecordingStorageType.MEDIASTORE &&
+        target.stagingIdentity.isNotBlank() && providerRecordingIdentityMatches(target.stagingIdentity, currentIdentity)
+
+/** MediaStore can persist a newly inserted pending row before creating its empty backing file. */
+internal fun recoverEmptyMediaStoreOutputFingerprint(
+    context: Context,
+    target: RecordingOutputTarget,
+): StableOutputFingerprint? {
+    if (!target.staging || target.storageType != RecordingStorageType.MEDIASTORE || target.stagingIdentity.isBlank()) return null
+    fun requireCreationRevision() {
+        val current = resolveProviderRecordingIdentity(context, target.storageType, requireNotNull(target.uri))
+        if (!emptyMediaStoreRecoveryIdentityMatches(target, current)) {
+            throw IOException("Interrupted empty MediaStore row changed; staging is preserved")
+        }
+    }
+    requireWritableStagingTargetStillEmpty(context, target)
+    requireCreationRevision()
+    val admittedObject = openWritableParcelFileDescriptor(context, target).use { descriptor ->
+        // The ordinary writer's guard allows its own metadata revisions. Recovery admission
+        // additionally requires the exact durable creation revision on both sides of open.
+        requireCreationRevision()
+        val before = nativeProviderPayloadRevision(descriptor.fileDescriptor)
+            ?.takeIf { it.sizeBytes == 0L } ?: throw IOException("Interrupted empty output descriptor is unproven")
+        descriptor.fileDescriptor.sync()
+        if (nativeProviderPayloadRevision(descriptor.fileDescriptor) != before) {
+            throw IOException("Interrupted empty output changed during recovery barrier")
+        }
+        requireCreationRevision()
+        before
+    }
+    // Closing a MediaStore write descriptor may legitimately advance its row generation.
+    // Retain exact pending/name/size checks and bind the new full read to the admitted inode.
+    requireWritableStagingTargetStillEmpty(context, target)
+    return readStableOutputFingerprint(context, target.storageType, target.id,
+        target.stagingIdentity, requiredProviderObject = admittedObject)
+        ?.takeIf { it.digest.byteCount == 0L }
+        ?: throw IOException("Recovered empty output identity is unavailable; staging is preserved")
 }
 
 fun openWritableParcelFileDescriptor(
@@ -867,13 +911,79 @@ internal fun finalizeOutputTarget(
     context: Context,
     target: RecordingOutputTarget,
     expectedFingerprint: StableOutputFingerprint,
+    beforePublish: (RecordingOutputTarget) -> Unit = {},
 ): RecordingOutputTarget {
     require(target.staging) { "Output finalization requires a staging target" }
     return when (target.storageType) {
-        RecordingStorageType.MEDIASTORE -> finalizeMediaStoreOutputTarget(context, target, expectedFingerprint)
-        RecordingStorageType.FILE -> finalizeFileOutputTarget(context, target, expectedFingerprint)
-        RecordingStorageType.DOCUMENT -> finalizeDocumentOutputTarget(context, target, expectedFingerprint)
+        RecordingStorageType.MEDIASTORE -> finalizeMediaStoreOutputTarget(context, target, expectedFingerprint, beforePublish)
+        RecordingStorageType.FILE -> finalizeFileOutputTarget(context, target, expectedFingerprint, beforePublish)
+        RecordingStorageType.DOCUMENT -> finalizeDocumentOutputTarget(context, target, expectedFingerprint, beforePublish)
     }
+}
+
+/** Creation recovery probes only the exact staging basename journaled before creation. */
+internal fun durableSaveCreationAttemptIsAbsent(context: Context, directoryId: String, name: String): Boolean =
+    durableSaveCreationAttemptIsAbsent(name) {
+        when {
+            directoryId == MEDIA_STORE_DIRECTORY_ID -> !mediaStoreNameExists(context, name)
+            canonicalDocumentTreeId(directoryId) == directoryId -> {
+                val entries = queryDocumentTreeEntries(context, directoryId.toUri())
+                if (entries.any { it.name.isNullOrBlank() }) throw IOException("Output tree membership is uncertain")
+                entries.none { it.name == name }
+            }
+            directoryId == getSharedMusicRecordingsDirectory().absolutePath -> {
+                val directory = File(directoryId)
+                if (resolveDirectoryIdentity(directory).isBlank()) throw IOException("Save output directory unavailable")
+                confirmMissingFileRecordingDurable(File(directory, name))
+            }
+            else -> throw IOException("Save output destination is not managed")
+        }
+    }
+
+internal fun durableSaveCreationAttemptIsAbsent(name: String, probeAbsence: () -> Boolean): Boolean {
+    if (!isStagingOutputName(name) || !isDirectChildBasename(name)) throw IOException("Invalid save creation attempt")
+    return probeAbsence()
+}
+
+internal fun recoverDurableSavePublication(
+    context: Context,
+    target: RecordingOutputTarget,
+    expected: StableOutputFingerprint,
+): RecordingOutputTarget? {
+    when (target.storageType) {
+        RecordingStorageType.FILE -> {
+            val source = requireNotNull(target.file)
+            if (storagePathState(source) == StoragePathState.MISSING) {
+                val destination = File(source.parentFile, target.displayName)
+                val observed = readStableFileOutputFingerprint(destination)
+                    ?: throw IOException("Published save output is unavailable")
+                if (!verifiedFilePublishMatches(expected, observed)) throw IOException("Published save output changed")
+                forceRecordingDirectoryDurable(requireNotNull(source.parentFile))
+                return target.copy(id = destination.absolutePath, file = destination, staging = false,
+                    publishedIdentity = requireNotNull(observed.fileKey))
+            }
+        }
+        RecordingStorageType.MEDIASTORE -> {
+            val observed = readStableMediaStorePublicationObservation(context, requireNotNull(target.uri))
+            if (mediaStorePublicationMatchesExpected(target.displayName, expected, observed)) {
+                return target.copy(staging = false, publishedIdentity = requireNotNull(observed?.fingerprint?.providerIdentity))
+            }
+            if (observed?.pending != true) throw IOException("Save publication is uncertain")
+        }
+        RecordingStorageType.DOCUMENT -> {
+            val observed = readStableDocumentPublicationObservation(context, target.directoryId.toUri(),
+                requireNotNull(target.uri), target.displayName, expected.providerIdentity)
+            if (documentPublicationMatchesExpected(target.displayName, expected, observed?.state)) {
+                return target.copy(id = requireNotNull(observed).uri.toString(), uri = observed.uri, staging = false,
+                    publishedIdentity = requireNotNull(observed.state.fingerprint.providerIdentity))
+            }
+            // A copy-like or unobservable rename must never manufacture another visible copy.
+            throw IOException("Document save publication needs recovery; the original and any result are preserved")
+        }
+    }
+    // A still-current staging object permits another publication attempt. Anything else pauses.
+    requireCurrentOutputFingerprint(context, target, expected)
+    return null
 }
 
 @Throws(IOException::class)
@@ -956,6 +1066,7 @@ private fun finalizeMediaStoreOutputTarget(
     context: Context,
     target: RecordingOutputTarget,
     expectedFingerprint: StableOutputFingerprint,
+    beforePublish: (RecordingOutputTarget) -> Unit,
 ): RecordingOutputTarget {
     val uri = requireNotNull(target.uri)
     requireCurrentOutputFingerprint(context, target, expectedFingerprint)
@@ -966,6 +1077,7 @@ private fun finalizeMediaStoreOutputTarget(
         put(MediaStore.MediaColumns.DISPLAY_NAME, finalName)
         put(MediaStore.MediaColumns.IS_PENDING, 0)
     }
+    beforePublish(target.copy(displayName = finalName))
     val updateFailure = try {
         if (context.contentResolver.update(uri, values, null, null) > 0) null
         else IOException("Unable to publish MediaStore recording: $uri")
@@ -1017,6 +1129,7 @@ private fun finalizeFileOutputTarget(
     context: Context,
     target: RecordingOutputTarget,
     expectedFingerprint: StableOutputFingerprint,
+    beforePublish: (RecordingOutputTarget) -> Unit,
 ): RecordingOutputTarget {
     val source = requireNotNull(target.file)
     val current = readCurrentVerifiedFileFingerprint(source)
@@ -1028,6 +1141,7 @@ private fun finalizeFileOutputTarget(
         source = source,
         finalDisplayName = target.displayName,
         expectedFingerprint = expectedFingerprint,
+        beforeMove = { destination -> beforePublish(target.copy(displayName = destination.name)) },
         onUnexpectedPublishedFile = { unexpected, digest ->
             suppressFileOutputWithoutDeletion(
                 context = context,
@@ -1074,6 +1188,7 @@ internal fun publishStagedFile(
     onUnprotectedUnexpectedPublish: ((File) -> Unit)? = null,
     moveFile: (File, File) -> Unit = ::moveFileWithoutOverwrite,
     readFingerprint: (File) -> StableOutputFingerprint? = ::readStableFileOutputFingerprint,
+    beforeMove: (File) -> Unit = {},
 ): PublishedStagedFile {
     if (!isDiscoverableFileRecordingName(finalDisplayName)) {
         throw IOException("Output publication requires a discoverable recording basename")
@@ -1093,6 +1208,7 @@ internal fun publishStagedFile(
             }
         }
         val destination = File(parent, finalName)
+        beforeMove(destination)
         try {
             // Same-directory move is the publish boundary. Do not use ATOMIC_MOVE here:
             // when a racing destination exists its replacement semantics are provider-specific.
@@ -1360,6 +1476,7 @@ private fun finalizeDocumentOutputTarget(
     context: Context,
     target: RecordingOutputTarget,
     expectedFingerprint: StableOutputFingerprint,
+    beforePublish: (RecordingOutputTarget) -> Unit,
 ): RecordingOutputTarget {
     val sourceUri = requireNotNull(target.uri)
     requireCurrentOutputFingerprint(context, target, expectedFingerprint)
@@ -1373,6 +1490,7 @@ private fun finalizeDocumentOutputTarget(
     if (!documentSupportsRename(context, sourceUri)) {
         throw IOException("Output provider cannot safely publish verified staging without rename support")
     }
+    beforePublish(target.copy(displayName = finalName))
     var renameFailure: IOException? = null
     val directRenamedUri = try {
         DocumentsContract.renameDocument(context.contentResolver, sourceUri, finalName)
@@ -1757,6 +1875,18 @@ internal fun providerRecordingIdentityMatches(stored: String, current: String): 
     return storedIdentity == currentIdentity
 }
 
+internal fun providerRecordingIdentitiesRejectCompatibility(stored: String, current: String): Boolean {
+    fun valid(value: String): Boolean {
+        if (parseDocumentNativeIdentity(value) != null) return true
+        val parsed = parseProviderRecordingIdentity(value) ?: return false
+        return runCatching {
+            val decoded = Base64.getUrlDecoder().decode(parsed.encodedId)
+            decoded.isNotEmpty() && Base64.getUrlEncoder().withoutPadding().encodeToString(decoded) == parsed.encodedId
+        }.getOrDefault(false)
+    }
+    return valid(stored) && valid(current) && !providerRecordingIdentityMatches(stored, current)
+}
+
 internal fun sameProviderObjectAcrossMutation(before: String?, after: String?): Boolean {
     val beforeNative = before?.let(::parseDocumentNativeIdentity)
     val afterNative = after?.let(::parseDocumentNativeIdentity)
@@ -2068,6 +2198,8 @@ internal fun selectedRecordingAssetState(
 internal fun deleteVerifiedRecordingAsset(
     context: Context,
     recording: RecordingEntity,
+    consentRequired: ((IntentSender?) -> Unit)? = null,
+    deleteFailureObserved: ((Throwable) -> Unit)? = null,
     sourceRetirementStillAllowed: () -> Boolean = { true },
 ): Boolean {
     // Callers must have content-fingerprinted this exact provider asset immediately before
@@ -2087,7 +2219,7 @@ internal fun deleteVerifiedRecordingAsset(
         }
 
         RecordingStorageType.DOCUMENT -> {
-            deleteVerifiedDocumentAndConfirm(context, recording.id) {
+            deleteVerifiedDocumentAndConfirm(context, recording.id, deleteFailureObserved) {
                 recordingDeletionIdentityMatches(context, recording) && sourceRetirementStillAllowed()
             }
         }
@@ -2098,7 +2230,19 @@ internal fun deleteVerifiedRecordingAsset(
             }.exceptionOrNull()
             val observedState = recordingAssetState(context, recording)
             deleteFailure?.let {
+                deleteFailureObserved?.invoke(it)
                 Log.w(TAG, "MediaStore delete result was uncertain; observed $observedState for ${recording.id}", it)
+            }
+            if (consentRequired != null && observedState == RecordingAssetState.PRESENT &&
+                deleteFailure is SecurityException && recordingDeletionIdentityMatches(context, recording)
+            ) {
+                when {
+                    // API30 requests share a platform PendingIntent identity. Creating one here
+                    // per row cancels earlier rows; only the active batch may create its request.
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.R -> consentRequired(null)
+                    Build.VERSION.SDK_INT == Build.VERSION_CODES.Q && deleteFailure is RecoverableSecurityException ->
+                        consentRequired(deleteFailure.userAction.actionIntent.intentSender)
+                }
             }
             providerDeletionCompleted(observedState)
         }
@@ -2108,6 +2252,7 @@ internal fun deleteVerifiedRecordingAsset(
 internal fun deleteVerifiedDocumentAndConfirm(
     context: Context,
     id: String,
+    deleteFailureObserved: ((Throwable) -> Unit)? = null,
     beforeDelete: () -> Boolean,
 ): Boolean {
     val scope = parseDocumentStorageScope(id)?.takeIf { it.documentId != null } ?: return false
@@ -2122,7 +2267,10 @@ internal fun deleteVerifiedDocumentAndConfirm(
     // after it, at the destructive boundary, rather than retaining an earlier authorization.
     if (!beforeDelete()) return false
     runCatching { DocumentsContract.deleteDocument(context.contentResolver, uri) }
-        .onFailure { Log.w(TAG, "Document deletion result is uncertain for $id", it) }
+        .onFailure {
+            deleteFailureObserved?.invoke(it)
+            Log.w(TAG, "Document deletion result is uncertain for $id", it)
+        }
     val direct = queryUriAssetState(
         context, uri, arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID), id,
     )
@@ -2174,6 +2322,7 @@ fun renameRecordingAsset(
     context: Context,
     recording: RecordingEntity,
     requestedBaseName: String,
+    allowWriteConsent: Boolean = false,
 ): RecordingEntity? {
     if (!recordingDestructiveIdentityMatches(context, recording)) return null
     val sanitized = recordingRenameDisplayName(recording.displayName, requestedBaseName, recording.storageType)
@@ -2182,8 +2331,21 @@ fun renameRecordingAsset(
     return when (recording.storageType) {
         RecordingStorageType.FILE -> renameFileRecording(context, recording, sanitized)
         RecordingStorageType.DOCUMENT -> renameDocumentRecording(context, recording, sanitized)
-        RecordingStorageType.MEDIASTORE -> renameMediaStoreRecording(context, recording, sanitized)
+        RecordingStorageType.MEDIASTORE -> renameMediaStoreRecording(context, recording, sanitized, allowWriteConsent, null)
     }
+}
+
+internal fun renameRecordingAssetAfterConsent(
+    context: Context,
+    recording: RecordingEntity,
+    consent: RecordingRenameConsentRequired,
+): RecordingEntity? {
+    if (recording.storageType != RecordingStorageType.MEDIASTORE ||
+        !sameRecordingActionTarget(consent.recording, recording) ||
+        !recordingDestructiveIdentityMatches(context, recording)) {
+        throw IOException("Recording changed before approved rename")
+    }
+    return renameMediaStoreRecording(context, recording, consent.displayName, false, consent)
 }
 
 fun copyRecordingToDirectory(
@@ -3562,11 +3724,13 @@ internal fun isSupportedRecordingName(name: String): Boolean {
     return false
 }
 
-internal fun isDirectChildRecordingName(name: String): Boolean =
+private fun isDirectChildBasename(name: String): Boolean =
     name.isNotBlank() && name != "." && name != ".." &&
         name.none { it == '/' || it == '\\' || it == '\u0000' } &&
-        name.toByteArray(Charsets.UTF_8).toString(Charsets.UTF_8) == name &&
-        isSupportedRecordingName(name)
+        name.toByteArray(Charsets.UTF_8).toString(Charsets.UTF_8) == name
+
+internal fun isDirectChildRecordingName(name: String): Boolean =
+    isDirectChildBasename(name) && isSupportedRecordingName(name)
 
 private fun isReservedFileRecordingArtifactName(name: String): Boolean =
     name.startsWith(STAGING_OUTPUT_PREFIX, ignoreCase = true) ||
@@ -3776,6 +3940,7 @@ private fun createLocalOutputTarget(
     startedAtMillis: Long,
     storageDir: File = getSavedRecordingsDirectory(context),
     stagingKind: StagingOutputKind = StagingOutputKind.COPY,
+    beforeCreate: (String) -> Unit = {},
 ): RecordingOutputTarget {
     ensureRecordingDirectoryDurable(storageDir)
 
@@ -3789,6 +3954,7 @@ private fun createLocalOutputTarget(
         storageDir = storageDir,
         finalDisplayName = safeDisplayName,
         stagingKind = stagingKind,
+        beforeCreate = beforeCreate,
     )
     val file = created.file
     val stagingIdentity = created.identity
@@ -3856,9 +4022,11 @@ internal fun createLocalStagingFile(
     stagingKind: StagingOutputKind,
     token: () -> String = { UUID.randomUUID().toString() },
     io: LocalStagingCreationIo = DefaultLocalStagingCreationIo,
+    beforeCreate: (String) -> Unit = {},
 ): CreatedLocalStagingFile {
     while (true) {
         val file = File(storageDir, stagingOutputName(finalDisplayName, token(), kind = stagingKind))
+        beforeCreate(file.name)
         val handle = io.openExclusive(file) ?: continue
         var failure: Throwable? = null
         var created: CreatedLocalStagingFile? = null
@@ -3974,9 +4142,9 @@ private fun renameFileRecording(
                     error,
                 )
             }
-            return null
-        } catch (_: SecurityException) {
-            return null
+            throw error
+        } catch (error: SecurityException) {
+            throw error
         }
     }
     return null
@@ -4084,6 +4252,28 @@ internal inline fun <T> verifyProviderRenamePostcondition(
     )
 }
 
+// Every rejected returned document candidate has one terminal suppression attempt.
+// The source URI is never hidden, and suppression carries no deletion authority.
+internal inline fun <T> verifyDocumentRenamePostcondition(
+    recordingId: String,
+    sourceUriUnchanged: Boolean,
+    suppressReturned: () -> Boolean,
+    verify: () -> T,
+): T = try {
+    verifyProviderRenamePostcondition(recordingId, verify)
+} catch (uncertain: RecordingRenameStateUncertainException) {
+    if (rejectedDocumentRenameShouldSuppressReturnedUri(sourceUriUnchanged)) {
+        try {
+            if (!suppressReturned()) {
+                uncertain.addSuppressed(IOException("Unable to persist rejected document rename suppression"))
+            }
+        } catch (suppressionFailure: Exception) {
+            if (suppressionFailure !== uncertain) uncertain.addSuppressed(suppressionFailure)
+        }
+    }
+    throw uncertain
+}
+
 internal fun providerRenameStateIsUncertain(
     mutationAccepted: Boolean,
     contentContinuityVerified: Boolean,
@@ -4112,7 +4302,7 @@ internal fun mediaStoreRenameObservationMatchesExpected(
     ) && copyDigestMatches(beforeDigest, current.fingerprint.digest)
 }
 
-private fun readStableMediaStoreRenameObservation(
+internal fun readStableMediaStoreRenameObservation(
     context: Context,
     uri: Uri,
 ): MediaStoreRenameObservation? {
@@ -4131,14 +4321,29 @@ private fun renameMediaStoreRecording(
     context: Context,
     recording: RecordingEntity,
     displayName: String,
+    allowWriteConsent: Boolean,
+    consent: RecordingRenameConsentRequired?,
 ): RecordingEntity? {
     val uri = recording.id.toUri()
     return try {
-        val uniqueName = findAvailableDisplayName(displayName) { candidate ->
+        val admittedDisplayName = consent?.displayName
+        val uniqueName = findAvailableDisplayName(admittedDisplayName ?: displayName) { candidate ->
             candidate != recording.displayName && mediaStoreNameExists(context, candidate)
         }
+        if (admittedDisplayName != null && uniqueName != admittedDisplayName) {
+            throw IOException("Rename destination changed while requesting permission")
+        }
         if (uniqueName == recording.displayName) return recording
-        val beforeDigest = sha256StableRecording(context, recording) ?: return null
+        val before = readStableMediaStoreRenameObservation(context, uri)
+            ?: throw IOException("Unable to verify recording before rename")
+        if (before.displayName != recording.displayName || !providerRecordingIdentityMatches(
+                recording.fileIdentity, before.fingerprint.providerIdentity.orEmpty())) {
+            throw IOException("Recording changed before rename")
+        }
+        if (consent != null && !renameConsentObservationMatches(consent.before, before)) {
+            throw IOException("Recording changed before approved rename")
+        }
+        val beforeDigest = before.fingerprint.digest
         val values = ContentValues().apply { put(MediaStore.MediaColumns.DISPLAY_NAME, uniqueName) }
         var updateFailure: Throwable? = null
         val updated = try {
@@ -4151,7 +4356,9 @@ private fun renameMediaStoreRecording(
             // A remote provider may commit metadata before binder/transport failure, and a buggy
             // provider may even report zero rows after doing so. Re-observe the exact selected
             // object and accept only a byte-identical same-object result under the requested name.
-            val observed = readStableMediaStoreRenameObservation(context, uri)
+            val observed = verifyProviderRenamePostcondition(recording.id) {
+                readStableMediaStoreRenameObservation(context, uri)
+            }
             if (mediaStoreRenameObservationMatchesExpected(
                     expectedDisplayName = uniqueName,
                     beforeIdentity = recording.fileIdentity,
@@ -4172,9 +4379,22 @@ private fun renameMediaStoreRecording(
                     observation = observed,
                 )
             ) {
-                // The selected object is positively unchanged. This was a definite no-op, not an
-                // uncertain mutation, even if the transport itself threw.
-                return null
+                // A changed revision still needs catalog reconciliation even if the name is unchanged.
+                if (!renameConsentObservationMatches(before, observed)) {
+                    throw RecordingRenameStateUncertainException(
+                        "Recording revision changed during rejected rename: ${recording.id}", updateFailure)
+                }
+                // Only a proved unchanged target can request permission; uncertain writes never retry.
+                if (updateFailure is SecurityException && allowWriteConsent &&
+                    (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R ||
+                     (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q && updateFailure is RecoverableSecurityException))) {
+                    val legacySender = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        (updateFailure as? RecoverableSecurityException)?.userAction?.actionIntent?.intentSender
+                    } else null
+                    throw RecordingRenameConsentRequired(recording, uniqueName, before, updateFailure, legacySender)
+                }
+                throw RecordingRenameDefiniteFailure("The provider did not rename the recording",
+                    updateFailure ?: IOException("MediaStore did not rename the recording"))
             }
             throw RecordingRenameStateUncertainException(
                 "MediaStore rename result is uncertain: ${recording.id}",
@@ -4204,12 +4424,14 @@ private fun renameMediaStoreRecording(
             }
             rebindRecordingWaveformCache(recording, renamed)
         }
+    } catch (consent: RecordingRenameConsentRequired) {
+        throw consent
     } catch (uncertain: RecordingRenameStateUncertainException) {
         Log.w(TAG, uncertain.message.orEmpty(), uncertain)
         throw uncertain
     } catch (error: Exception) {
         Log.w(TAG, "Unable to rename MediaStore recording ${recording.id}", error)
-        null
+        throw error
     }
 }
 
@@ -4325,7 +4547,20 @@ private fun renameDocumentRecording(
                 renameFailure,
             )
         }
-        verifyProviderRenamePostcondition(recording.id) {
+        verifyDocumentRenamePostcondition(
+            recordingId = recording.id,
+            sourceUriUnchanged = renamedUri == sourceUri,
+            suppressReturned = {
+                // Content-bound suppression survives transient verification failures but can
+                // never authorize deletion or hide a returned URI after its bytes change.
+                suppressProviderOutputWithoutDeletion(
+                    context = context,
+                    storageType = RecordingStorageType.DOCUMENT,
+                    id = renamedUri.toString(),
+                    digest = beforeDigest,
+                )
+            },
+        ) {
             val renamedIdentity = resolveProviderRecordingIdentity(
                 context, RecordingStorageType.DOCUMENT, renamedUri, recording.fileIdentity,
             )
@@ -4355,19 +4590,6 @@ private fun renameDocumentRecording(
                     displayNameVerified = renamedDisplayName == uniqueName,
                 )
             ) {
-                if (!continuityVerified && rejectedDocumentRenameShouldSuppressReturnedUri(sourceUriUnchanged) &&
-                    !suppressProviderOutputWithoutDeletion(
-                        context = context,
-                        storageType = RecordingStorageType.DOCUMENT,
-                        id = renamedUri.toString(),
-                        // Suppress only while the returned URI still contains the bytes the user
-                        // selected. If it is unrelated/different content, cleanup replay drops the
-                        // suppression without ever granting deletion authority.
-                        digest = beforeDigest,
-                    )
-                ) {
-                    Log.w(TAG, "Unable to suppress rejected document rename result $renamedUri")
-                }
                 throw RecordingRenameStateUncertainException(
                     "Document recording changed during rename: ${recording.id} -> $renamedUri",
                 )
@@ -4378,8 +4600,7 @@ private fun renameDocumentRecording(
         onSuccess = { it },
         onFailure = { error ->
             Log.w(TAG, "Unable to rename recording ${recording.id}", error)
-            if (error is RecordingRenameStateUncertainException) throw error
-            null
+            throw error
         },
     )
 }
@@ -4551,10 +4772,12 @@ private fun createMediaStoreOutputTarget(
     mimeType: String,
     startedAtMillis: Long,
     stagingKind: StagingOutputKind,
+    beforeCreate: (String) -> Unit = {},
 ): RecordingOutputTarget {
     check(usesMediaStoreDefaultStorage()) { "MediaStore output requires Android 10+" }
     val safeDisplayName = sanitizeBaseName(requestedDisplayName)
     val stagingName = stagingOutputName(safeDisplayName, UUID.randomUUID().toString(), kind = stagingKind)
+    beforeCreate(stagingName)
     val values = ContentValues().apply {
         put(MediaStore.MediaColumns.DISPLAY_NAME, stagingName)
         put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
@@ -4595,9 +4818,11 @@ private fun createDocumentOutputTarget(
     mimeType: String,
     startedAtMillis: Long,
     stagingKind: StagingOutputKind,
+    beforeCreate: (String) -> Unit = {},
 ): RecordingOutputTarget {
     val safeDisplayName = sanitizeBaseName(requestedDisplayName)
     val stagingName = stagingOutputName(safeDisplayName, UUID.randomUUID().toString(), kind = stagingKind)
+    beforeCreate(stagingName)
     val documentUri = DocumentsContract.createDocument(
         context.contentResolver,
         DocumentsContract.buildDocumentUriUsingTree(treeUri, DocumentsContract.getTreeDocumentId(treeUri)),

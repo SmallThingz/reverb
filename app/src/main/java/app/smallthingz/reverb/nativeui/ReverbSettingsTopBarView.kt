@@ -60,6 +60,7 @@ internal class ReverbSettingsTopBarView(
     private var insets = NativeSettingsTopBarInsets(0, 0, 0)
     private val noise = ReverbNoiseDrawable(resources, initialEnvironment.palette.surface,
         ReverbNoiseDrawable.SEED_TOP_BAR)
+    private val noiseColor = noise.colorTransition(this, initialEnvironment.palette.surface)
     private val content = TopBarContent(context, initialEnvironment, inputRoot)
     private var hint: Any? = null
     private var hintJob: Job? = null
@@ -67,6 +68,7 @@ internal class ReverbSettingsTopBarView(
     private val navigationHint = ColorDrawable()
     private val doneHint = ColorDrawable()
     private var hintColor = initialEnvironment.palette.onSurface
+    private val hintColorMotion=colorTransition(hintColor) {hintColor=it;paintHint(hintStrength)}
     private var hintStrength = 0f
     val title: ReverbParagraphView get() = content.title
     val navigation: ReverbStandardIconButtonView get() = content.navigation
@@ -89,9 +91,9 @@ internal class ReverbSettingsTopBarView(
     }
 
     fun bind(value: ReverbViewEnvironment, binding: SettingsTopBarBinding) {
-        noise.setBackgroundColor(value.palette.surface)
+        noiseColor.retarget(value.palette.surface)
         content.bind(value, binding)
-        hintColor = value.palette.onSurface
+        hintColorMotion.retarget(value.palette.onSurface)
         paintHint(hintStrength)
         if (hint !== binding.backHint) {
             hint = binding.backHint

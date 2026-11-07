@@ -14,6 +14,7 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.View
 import kotlin.math.roundToInt
+import smallthingz.ui.animation.view.ViewColorTransition
 
 internal data class SilenceCurveTextLabel(val text: String, val bounds: RectF, val baseline: Float, val textSize: Float)
 internal data class SilenceCurveLabelGeometry(
@@ -48,6 +49,8 @@ internal class SilenceCurveView(context: Context) : View(context) {
     private var accent = android.graphics.Color.TRANSPARENT
     private var ink = android.graphics.Color.TRANSPARENT
     private var muted = android.graphics.Color.TRANSPARENT
+    private var pointColor = android.graphics.Color.TRANSPARENT
+    private var colorMotion:ViewColorTransition?=null
     private var sampled: List<Float>? = null
     private var maximumHz = 20_000
 
@@ -76,16 +79,24 @@ internal class SilenceCurveView(context: Context) : View(context) {
             changed = true
         }
         val nextMaximumHz = maxHz.coerceIn(20, 20_000)
-        if (maximumHz != nextMaximumHz || accent != accentColor || ink != inkColor || muted != mutedColor) {
+        if (maximumHz != nextMaximumHz) {
             maximumHz = nextMaximumHz
-            accent = accentColor; ink = inkColor; muted = mutedColor
             changed = true
         }
         if (isEnabled != editable) {
             isEnabled = editable
             changed = true
         }
+        val point=if(editable)accentColor else mutedColor
+        val motion=colorMotion ?: ViewColorTransition(this,intArrayOf(accentColor,inkColor,mutedColor,point),{
+            colorMotion?.let {applyColors(it.color(0),it.color(1),it.color(2),it.color(3))}
+        }).also {colorMotion=it;applyColors(accentColor,inkColor,mutedColor,point)}
+        motion.retarget(accentColor,inkColor,mutedColor,point)
         if (changed) invalidate()
+    }
+
+    private fun applyColors(accent:Int,ink:Int,muted:Int,point:Int) {
+        this.accent=accent;this.ink=ink;this.muted=muted;pointColor=point;invalidate()
     }
 
     private fun x(hz: Int) = plot.left + silenceFrequencyFraction(hz.toDouble()).toFloat() * plot.width()
@@ -243,7 +254,7 @@ internal class SilenceCurveView(context: Context) : View(context) {
         points.forEachIndexed { i, p ->
             val px = x(p.hz); val py = y(p.db.toFloat())
             if (i == selected) { paint.color = alpha(accent, 55); canvas.drawCircle(px, py, 14 * density, paint) }
-            paint.color = if (isEnabled) accent else muted
+            paint.color = pointColor
             canvas.drawCircle(px, py, (if (i == selected) 7f else 5f) * density, paint)
         }
     }

@@ -247,9 +247,10 @@ internal class SettingsQuickTilesView(
 private class TileRowsColumn(context: Context) : ViewGroup(context) {
     private var ordered = emptyList<View>()
     private val divider = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
+    private val colorMotion=colorTransition(divider.color) {divider.color=it;invalidate()}
     var dividerColor: Int
         get() = divider.color
-        set(value) { divider.color = value; invalidate() }
+        set(value) {colorMotion.retarget(value)}
     init { importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO }
     fun bind(next: List<View>) {
         for (old in ordered) if (old !in next) removeView(old)

@@ -27,6 +27,7 @@ import app.smallthingz.reverb.NativeViewPointerHitLayout
 import app.smallthingz.reverb.NativeWindowPointerCoordinates
 import kotlin.math.ceil
 import kotlin.math.min
+import smallthingz.ui.animation.view.ViewColorTransition
 
 /**
  * Exact released two-lobe fill and pinned generic-path border. Fill/border are outside the child
@@ -60,6 +61,8 @@ internal abstract class ReverbHomeControlSurface(context: Context) : ViewGroup(c
     private val hitIntersection = Path()
     private var bitmap: Bitmap? = null
     private var palette: ReverbPalette? = null
+    private var colors:ViewColorTransition?=null
+    private var displayedBorder=0
     private var density = resources.displayMetrics.density
     private var fullBorder = false
     private var borderDirty = true
@@ -75,13 +78,21 @@ internal abstract class ReverbHomeControlSurface(context: Context) : ViewGroup(c
     }
 
     protected fun setSurfaceEnvironment(environment: ReverbViewEnvironment) {
-        val previous = palette
         palette = environment.palette
-        fill.color = environment.palette.field
-        if (previous?.border != environment.palette.border || density != environment.textDensity.density) {
+        val motion=colors ?: ViewColorTransition(this,intArrayOf(environment.palette.field,environment.palette.border),{
+            colors?.let {applyColors(it.color(0),it.color(1))}
+        }).also {colors=it;applyColors(environment.palette.field,environment.palette.border)}
+        motion.retarget(environment.palette.field,environment.palette.border)
+        if (density != environment.textDensity.density) {
             borderDirty = true
         }
         density = environment.textDensity.density
+        invalidate()
+    }
+
+    private fun applyColors(background:Int,border:Int) {
+        fill.color=background
+        if(displayedBorder!=border){displayedBorder=border;borderDirty=true}
         invalidate()
     }
 
@@ -98,7 +109,8 @@ internal abstract class ReverbHomeControlSurface(context: Context) : ViewGroup(c
 
     override fun draw(canvas: Canvas) {
         super.draw(canvas)
-        val color = palette?.border ?: return
+        if(palette==null)return
+        val color = displayedBorder
         if (width <= 0 || height <= 0) return
         if (borderDirty) updateBorder(color)
         if (fullBorder) {

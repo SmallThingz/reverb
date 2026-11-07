@@ -28,6 +28,8 @@ import android.widget.TextView
 import smallthingz.ui.geometry.Offset
 import smallthingz.ui.geometry.Rect
 import smallthingz.ui.graphics.Color
+import smallthingz.ui.graphics.toArgb
+import smallthingz.ui.animation.view.ViewColorTransition
 import smallthingz.ui.text.Paragraph
 import smallthingz.ui.text.ParagraphIntrinsics
 import smallthingz.ui.text.AnnotatedString
@@ -79,6 +81,7 @@ internal class ReverbParagraphView(
     private var density = initialDensity
     private var fontResolver = initialFontResolver
     private var textColor = Color(initialTextColor)
+    private var colorTransition: ViewColorTransition? = null
     private var label = ""
     private var softWrap = true
     private var maximumLines = Int.MAX_VALUE
@@ -272,6 +275,20 @@ internal class ReverbParagraphView(
     }
 
     fun setTextColor(argb: Int) {
+        colorTransition?.close()
+        colorTransition = null
+        applyTextColor(argb)
+    }
+
+    /** Palette/semantic target admission; frame owners use setTextColor for immediate paint. */
+    fun animateTextColor(argb: Int) {
+        val motion = colorTransition ?: ViewColorTransition(this, intArrayOf(textColor.toArgb()), {
+            colorTransition?.let { applyTextColor(it.color(0)) }
+        }).also { colorTransition = it }
+        motion.retarget(argb)
+    }
+
+    private fun applyTextColor(argb: Int) {
         val color = Color(argb)
         if (textColor == color) return
         textColor = color

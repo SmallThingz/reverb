@@ -238,7 +238,7 @@ internal object QuickSaveTileOptions {
             mutableOptions.value = current
             current
         } catch (error: Exception) {
-            mutableError.value = error.message ?: context.getString(R.string.tile_save_failed)
+            mutableError.value = actionableErrorMessage(context, context.getString(R.string.tile_save_failed), error)
             throw error
         }
     }

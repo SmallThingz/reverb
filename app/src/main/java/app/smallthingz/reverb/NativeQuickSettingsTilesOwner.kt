@@ -156,7 +156,7 @@ internal class NativeQuickSettingsTilesOwner(
                     }
                     AppFeedbackCenter.post(context.getString(R.string.tiles_ui_deleted))
                 } catch (error: Exception) {
-                    AppFeedbackCenter.post(error.message ?: context.getString(R.string.tile_save_failed),
+                    AppFeedbackCenter.post(actionableErrorMessage(context, context.getString(R.string.tile_save_failed), error),
                         FeedbackTone.ERROR)
                 } finally {
                     editorState.deletingBusy = false
@@ -265,7 +265,7 @@ internal class NativeQuickTileInlineOwner(
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) {
                 if (currentCoroutineContext().isActive && capacityLoad.isCurrent(request, draftAdmission())) {
-                    message = error.message ?: context.getString(R.string.tile_save_failed)
+                    message = actionableErrorMessage(context, context.getString(R.string.tile_save_failed), error)
                     changed()
                 }
             }
@@ -354,7 +354,7 @@ internal class NativeQuickTileInlineOwner(
                         }
                     }
                 } catch (error: Exception) {
-                    val text = error.message ?: context.getString(R.string.tile_save_failed)
+                    val text = actionableErrorMessage(context, context.getString(R.string.tile_save_failed), error)
                     if (attached) message = text else AppFeedbackCenter.post(text, FeedbackTone.ERROR)
                 } finally {
                     target.busy = false

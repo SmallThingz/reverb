@@ -143,7 +143,9 @@ private class CapturePreviewSession(private val context: Context, private val ev
         initialChunkCount = checkNotNull(store.peekSnapshot()).chunkCount
         val initialBytes = store.countFilledBytes()
         check(initialBytes == 20L * 96_000 * 8)
-        input = PacedPreviewCaptureInput(initialBytes, store)
+        input = PacedPreviewCaptureInput(initialBytes) {
+            (recorder.frameField("captureIo") as CaptureIoCoordinator).currentInput()?.processedFrames ?: 0L
+        }
         onAudio {
             recorder.frameSet("sampleRate", 96_000)
             recorder.frameSet("channelMode", ChannelMode.STEREO)
@@ -177,7 +179,7 @@ private class CapturePreviewSession(private val context: Context, private val ev
             field.set(store, observe)
             startNanos = SystemClock.elapsedRealtimeNanos()
             started = true
-            check(handler.post(recorder.frameField("audioReader") as Runnable))
+            recorder.frameInvoke("startQueuedCapture")
         }
         check(input.firstAppendObserved.await(5, TimeUnit.SECONDS)) { "Actual capture append did not begin before preview" }
     }
@@ -198,9 +200,9 @@ private class CapturePreviewSession(private val context: Context, private val ev
             try {
                 val actual = recorder.frameField("audioRecord")
                 check(actual === input || actual == null) { "Synthetic input owner changed; cleanup outcome unknown" }
-                handler.removeCallbacks(recorder.frameField("audioReader") as Runnable)
                 recorder.frameSet("durableListeningIntentEnabled", false)
                 recorder.frameSet("state", ReverbService.STATE_READY)
+                recorder.frameInvoke("publishCaptureIngress")
                 (recorder.frameField("appUiForegroundOwners") as UiForegroundOwnerTracker).update(foregroundOwner, false)
                 if (actual === input) recorder.frameInvoke("releaseAudioRecord")
                 else if (!inputInstallationAttempted && input.releases.get() == 0) {
@@ -219,7 +221,9 @@ private class CapturePreviewSession(private val context: Context, private val ev
         }.also {
             drainTask = it
             // Queue the sole drain before waking a blocked read; later hooks only await this same task.
-            check(handler.post(it))
+            check((recorder.frameField("captureIo") as CaptureIoCoordinator).post(
+                pauseInput = true, allowTerminal = true, rejected = { it.cancel(false) },
+            ) { it.run() } == CaptureControlMailbox.Admission.ACCEPTED)
             input.wakeForDrain.countDown()
         }
         var failure: Throwable? = null
@@ -320,8 +324,8 @@ private class CapturePreviewSession(private val context: Context, private val ev
         check(startNanos <= first && drainNanos >= last) { "Capture workload did not span actual sampled preview" }
         val during = (0 until input.reads.get()).count { input.deliveredAt[it] in first..last }
         check(during >= 100) { "Insufficient actual capture reads overlapped playback" }
-        val committedChecksDuring = (0 until input.reads.get()).count { input.startedAt[it] in first..last && input.committedAtEntry[it] > 0 }
-        check(committedChecksDuring >= 100)
+        val processedChecksDuring = (0 until input.reads.get()).count { input.startedAt[it] in first..last && input.processedAtEntry[it] > 0 }
+        check(processedChecksDuring >= 100)
         check(finalChunkCount - initialChunkCount >= 3) { "Capture did not exercise at least two boundaries between new chunks" }
         val successfulSyncsDuring = synchronized(syncLock) {
             check(!syncOverflow)
@@ -332,7 +336,7 @@ private class CapturePreviewSession(private val context: Context, private val ev
         val deliveredRate = input.deliveredFrames / elapsed
         check(deliveredRate >= 96_000 * 0.9 && deliveredRate <= 96_000 * 1.1) { "Synthetic workload did not sustain the requested capture rate" }
         result.put("preview_first_native_ns", first).put("preview_last_native_ns", last)
-            .put("capture_reads_during_preview", during).put("append_checks_during_preview", committedChecksDuring)
+            .put("capture_reads_during_preview", during).put("writer_progress_observations_during_preview", processedChecksDuring)
             .put("successful_directory_syncs_during_preview", successfulSyncsDuring)
             .put("delivered_frames_per_second", deliveredRate).put("rate_tolerance_fraction", 0.1)
             .put("original_source_pcm_sha256", reopenedOriginalSha256)
@@ -357,13 +361,13 @@ private class CapturePreviewSession(private val context: Context, private val ev
             .put("reopened_tail_bytes", reopenedTailBytes).put("reopened_original_sha256", reopenedOriginalSha256 ?: JSONObject.NULL)
             .put("native_factory_calls", if (::admission.isInitialized) admission.factoryCalls.get() else JSONObject.NULL)
             .put("pacing", "Fixed 40ms availability deadlines; generated frames never drop. This is not a bounded native microphone ring.")
-            .put("observer_overhead", "Generated float bytes and SHA per read; constant-time committed-byte observations; successful real directory-sync timestamps. No per-read evidence-file writes.")
+            .put("observer_overhead", "Generated float bytes and SHA per read; memory-only writer-progress observations (no store monitor on native reader); successful real directory-sync timestamps. No per-read evidence-file writes.")
         if (::input.isInitialized) {
             result.put("delivered_frames", input.deliveredFrames).put("input_releases", input.releases.get()).put("input_starts", input.starts.get())
             val reads = JSONArray()
             for (index in 0 until minOf(input.reads.get(), input.startedAt.size)) reads.put(JSONObject()
                 .put("start_ns", input.startedAt[index]).put("delivered_ns", input.deliveredAt[index])
-                .put("availability_ns", input.availabilityAt[index]).put("committed_frames_at_entry", input.committedAtEntry[index]))
+                .put("availability_ns", input.availabilityAt[index]).put("processed_frames_at_entry", input.processedAtEntry[index]))
             result.put("reads", reads)
         }
         val successfulSyncTimes = JSONArray()
@@ -392,7 +396,7 @@ private class CapturePreviewSession(private val context: Context, private val ev
     }
 }
 
-private class PacedPreviewCaptureInput(val initialBytes: Long, private val store: PersistentAudioChunkStore) : CaptureAudioInput {
+private class PacedPreviewCaptureInput(val initialBytes: Long, private val processedFrames: () -> Long) : CaptureAudioInput {
     val reads = AtomicInteger()
     val starts = AtomicInteger()
     val releases = AtomicInteger()
@@ -401,7 +405,7 @@ private class PacedPreviewCaptureInput(val initialBytes: Long, private val store
     val startedAt = LongArray(1024)
     val deliveredAt = LongArray(1024)
     val availabilityAt = LongArray(1024)
-    val committedAtEntry = LongArray(1024)
+    val processedAtEntry = LongArray(1024)
     var deliveredFrames = 0L
         private set
     private val bytes = ByteArray(30_720)
@@ -416,9 +420,9 @@ private class PacedPreviewCaptureInput(val initialBytes: Long, private val store
         check(sizeInBytes == bytes.size && readMode == AudioRecord.READ_BLOCKING)
         startedAt[index] = now
         if (index > 0) check(now - startedAt[0] < 20_000_000_000L) { "Synthetic capture exceeded its finite 20-second budget" }
-        committedAtEntry[index] = (store.countFilledBytes() - initialBytes) / 8
-        check(committedAtEntry[index] == deliveredFrames) { "Previous delivered frames did not commit before next read" }
-        if (deliveredFrames > 0) firstAppendObserved.countDown()
+        processedAtEntry[index] = processedFrames()
+        check(processedAtEntry[index] <= deliveredFrames)
+        if (processedAtEntry[index] > 0) firstAppendObserved.countDown()
         encoded.clear()
         val frames = bytes.size / 8
         check(deliveredFrames + frames <= 96_000L * 20) { "Synthetic capture frame budget exhausted" }

@@ -9,7 +9,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
 import app.smallthingz.reverb.R
 
-internal enum class OnboardingPermission { MICROPHONE, STORAGE, RECOVERY, NOTIFICATIONS, BATTERY }
+internal enum class OnboardingPermission { MICROPHONE, STORAGE, RECOVERY, NOTIFICATIONS, BATTERY, ALL_FILES }
 
 internal data class OnboardingPermissionStatus(
     val microphoneAllowed: Boolean,
@@ -22,12 +22,14 @@ internal data class OnboardingPermissionStatus(
     val batteryOptimizationAllowed: Boolean,
     /** False for Finish/predictive preview, not ordinary pager movement. */
     val interactionEnabled: Boolean,
+    val allFilesAvailable: Boolean = false,
+    val allFilesAllowed: Boolean = false,
 )
 
-/** Battery exemption does not gate the released footer highlight. */
+/** All-files access and battery exemption do not gate the released footer highlight. */
 internal fun OnboardingPermissionStatus.isReadyForHighlightedContinue(): Boolean =
     microphoneAllowed && storageAllowed &&
-        (!recoveryRequired || recoveryAllowed) &&
+        (!recoveryRequired || recoveryAllowed || allFilesAllowed) &&
         (!notificationPermissionRequired || notificationsAllowed)
 
 private data class PermissionRowState(
@@ -79,6 +81,9 @@ internal class OnboardingPermissionGroup(
             if (status.storageRequired) add(PermissionRowState(OnboardingPermission.STORAGE, "S",
                 context.getString(R.string.storage_settings_title), context.getString(R.string.onboarding_storage_body),
                 status.storageAllowed, status.interactionEnabled))
+            if (status.allFilesAvailable) add(PermissionRowState(OnboardingPermission.ALL_FILES, "F",
+                context.getString(R.string.all_files_access_title), context.getString(R.string.all_files_access_body),
+                status.allFilesAllowed, status.interactionEnabled))
             if (status.recoveryRequired) add(PermissionRowState(OnboardingPermission.RECOVERY, "R",
                 context.getString(R.string.recording_recovery_title), context.getString(R.string.onboarding_recovery_body),
                 status.recoveryAllowed, status.interactionEnabled))

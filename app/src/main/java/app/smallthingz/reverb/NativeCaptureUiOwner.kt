@@ -16,6 +16,7 @@ import app.smallthingz.reverb.nativeui.ReverbHomeBodyState
 import java.io.Closeable
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -25,6 +26,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Immutable presentation snapshot. TimelineSnapshot ownership stays in NativeCaptureUiOwner:
@@ -41,6 +43,7 @@ internal data class NativeCaptureUiState(
     val rangeSnapshotBuffer: BufferSlot?,
     val saveStatus: CaptureSaveStatus?,
     val errorMessage: String?,
+    val rangeSavePending: Boolean = false,
 )
 
 /**
@@ -99,6 +102,7 @@ internal class NativeCaptureUiOwner(
     private var resolvedRetentionMode: RetentionMode? = null
     private var selectedBuffer = restoredSelection
     private var visualizerVisible = visualizerVisible
+    private var skipSilenceEnabled = false
     private val oneShotBlobController = AudioBlobController()
     private val loopingBlobController = AudioBlobController()
     private val latestBlobActivity = FloatArray(2)
@@ -110,6 +114,7 @@ internal class NativeCaptureUiOwner(
     private var pendingExportRange: ExportRange? = null
     private var rangeSnapshot: ReverbService.TimelineSnapshot? = null
     private var rangeSnapshotBuffer: BufferSlot? = null
+    private var rangeSavePending = false
     private var pendingExportSnapshot: ReverbService.TimelineSnapshot? = null
     private var isPreparingRange = false
     private var errorMessage: String? = null
@@ -183,6 +188,17 @@ internal class NativeCaptureUiOwner(
         refreshPresentationVisibility()
         scope.launch {
             lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                SilenceGatePreferences.revision.collectLatest {
+                    val enabled = withContext(Dispatchers.IO) {
+                        // Unavailable settings omit this cosmetic treatment; they grant no capture authority.
+                        runCatching { SilenceGatePreferences.read(context).config.enabled }.getOrDefault(false)
+                    }
+                    if (skipSilenceEnabled != enabled) { skipSilenceEnabled = enabled; publish() }
+                }
+            }
+        }
+        scope.launch {
+            lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
                 while (true) {
                     service?.let { recorder ->
                         requestRecorderState(recorder)
@@ -214,10 +230,11 @@ internal class NativeCaptureUiOwner(
             BufferMetrics(loopingDurationSeconds, loopingPayloadBytes), oneShotEnabled, oneShotFull,
             loopingEnabled, resolvedRetentionMode, isListening, isSaving, service != null,
             serviceStateHydrated, isPreparingRange, oneShotBlobController, loopingBlobController,
-            visualizerVisible),
+            visualizerVisible, skipSilenceEnabled),
         selectedBuffer, pendingClearBuffer,
         bufferClearStatus?.takeIf { activeClearOperationId == it.operationId },
         showExportClampDialog, clampWarningSeconds, rangeSnapshot, rangeSnapshotBuffer, saveStatus, errorMessage,
+        rangeSavePending,
     )
 
     private fun publish() {
@@ -260,7 +277,7 @@ internal class NativeCaptureUiOwner(
         }
     }
     private val visualizationCallback = ReverbService.VisualizationCallback { frame ->
-        when (activeBuffer) {
+        when (frame.bufferSlot) {
             BufferSlot.ONE_SHOT -> {
                 latestBlobActivity[0] = frame.activity.coerceIn(0f, 1f)
                 oneShotBlobController.submit(frame)
@@ -290,6 +307,7 @@ internal class NativeCaptureUiOwner(
     private fun clearConnectedServiceState(markSavingAsCancelRequested: Boolean) {
         closeCaptureSnapshotsBestEffort(rangeSnapshot, pendingExportSnapshot)
         rangeSnapshot = null; rangeSnapshotBuffer = null
+        rangeSavePending = false
         pendingExportSnapshot = null; pendingExportRange = null
         showExportClampDialog = false; pendingClearBuffer = null
         activeClearOperationId = null; bufferClearStatus = null
@@ -320,7 +338,8 @@ internal class NativeCaptureUiOwner(
                 oneShotEnabled = resolved.oneShotEnabled; oneShotFull = resolved.oneShotFull
                 loopingEnabled = resolved.loopingEnabled; resolvedRetentionMode = retentionMode
                 val receiverAttached = bookkeeping.activeSaveReceiver != null
-                saveStatus = reconcileCaptureExportStatus(exporting, receiverAttached, saveStatus)
+                saveStatus = reconcileCaptureExportStatus(exporting, receiverAttached, saveStatus,
+                    cancellable = recorder.currentExportCancellable())
                 isSaving = captureExportUiBusy(exporting, receiverAttached, saveStatus)
                 serviceStateHydrated = true
                 if (!bookkeeping.startupBufferChosen) {
@@ -457,7 +476,14 @@ internal class NativeCaptureUiOwner(
         val exportBookkeeping = bookkeeping
         startExport(context, recorder, range, snapshot,
             setSaving = { isSaving = it; publish() },
-            onStatus = { saveStatus = it; publish() },
+            onStatus = {
+                saveStatus = it
+                if (it !is CaptureSaveStatus.Saving && rangeSavePending) {
+                    rangeSavePending = false
+                    rangeSnapshotBuffer = null
+                }
+                publish()
+            },
             onError = { errorMessage = it; publish() },
             onSaved = { callbacks.onRecordingSaved() }, canDisplay = ::canDisplaySaveFeedback,
             onReceiverCreated = { exportBookkeeping.activeSaveReceiver = it },
@@ -487,9 +513,11 @@ internal class NativeCaptureUiOwner(
     fun dismissExportClamp() {
         showExportClampDialog = false; pendingExportRange = null
         closeCaptureSnapshotsBestEffort(pendingExportSnapshot); pendingExportSnapshot = null
+        if (rangeSavePending) { rangeSavePending = false; rangeSnapshotBuffer = null }
         publish()
     }
     fun dismissRangeExport() {
+        if (rangeSavePending) return
         closeCaptureSnapshotsBestEffort(rangeSnapshot)
         rangeSnapshot = null; rangeSnapshotBuffer = null
         invalidateTimelineSnapshotPreparation()
@@ -502,12 +530,16 @@ internal class NativeCaptureUiOwner(
             config.channelCount, config.sampleFormat)
     }
     fun submitRangeExport(startSeconds: Float, endSeconds: Float, renderedConfig: ExportUiConfig) {
+        if (rangeSavePending || isSaving) return
         val snapshot = rangeSnapshot ?: return
         val slot = rangeSnapshotBuffer ?: return
         val range = buildCustomExportRange(snapshot.durationSeconds, startSeconds, endSeconds,
             renderedConfig).copy(rememberOnSave = ExportRangeMemory(slot, snapshot.durationSeconds))
-        rangeSnapshot = null; rangeSnapshotBuffer = null
+        // Transfer the lease immediately, retaining only presentation until durable admission.
+        rangeSnapshot = null
         invalidateTimelineSnapshotPreparation()
+        rangeSnapshotBuffer = slot
+        rangeSavePending = true
         queueOrStartExport(service, range, snapshot)
     }
 

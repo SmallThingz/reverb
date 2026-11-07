@@ -11,6 +11,8 @@
  */
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.animation.view.ViewColorTransition
+
 import android.content.Context
 import android.view.accessibility.AccessibilityNodeInfo
 import android.graphics.Canvas
@@ -105,6 +107,8 @@ internal class SettingsRetentionInputView private constructor(
     }
 
     private var environment = initialEnvironment
+    private val colorMotion:ViewColorTransition by lazy {ViewColorTransition(this,
+        intArrayOf(initialEnvironment.palette.ink,initialEnvironment.palette.primary),::applyColors)}
     private val cursorDrawable = legacyCursor?.cursor ?: NativeEditableCursorDrawable(
         2f * initialEnvironment.textDensity.density, initialEnvironment.palette.primary)
     private var initialized = false
@@ -498,6 +502,14 @@ internal class SettingsRetentionInputView private constructor(
     private fun direction(): LayoutDirection =
         if (layoutDirection == LAYOUT_DIRECTION_RTL) LayoutDirection.Rtl else LayoutDirection.Ltr
 
+    private fun applyColors() {
+        setTextColor(colorMotion.color(0))
+        val primary=colorMotion.color(1)
+        highlightColor=(primary and 0x00ffffff) or (0x66 shl 24)
+        if(Build.VERSION.SDK_INT>=29)cursorDrawable.bind(2f*environment.textDensity.density,primary)
+        else legacyCursor?.bind(2f*environment.textDensity.density,primary)
+    }
+
     private fun applyTypography() {
         val style = currentStyle()
         val resolved = resolveDefaults(style, direction())
@@ -518,15 +530,12 @@ internal class SettingsRetentionInputView private constructor(
         setTextSize(TypedValue.COMPLEX_UNIT_PX, metrics.fontSizePx)
         letterSpacing = metrics.letterSpacingEm
         setLineSpacing(0f, 1f)
-        setTextColor(environment.palette.ink)
-        highlightColor = (environment.palette.primary and 0x00ffffff) or (0x66 shl 24)
         lineHeightSpan = RetentionLineHeightSpan(metrics.lineHeightPx)
         if (Build.VERSION.SDK_INT >= 29) {
-            cursorDrawable.bind(2f * environment.textDensity.density, environment.palette.primary)
             textCursorDrawable = cursorDrawable
-        } else {
-            legacyCursor?.bind(2f * environment.textDensity.density, environment.palette.primary)
         }
+        colorMotion.retarget(environment.palette.ink,environment.palette.primary)
+        applyColors()
         minimumParagraph = Paragraph(
             text = "HHHHHHHHHH", style = resolved, spanStyles = emptyList(),
             maxLines = 1, overflow = TextOverflow.Clip,

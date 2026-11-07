@@ -5,7 +5,34 @@ import kotlinx.coroutines.CancellationException
 internal data class RecordingDeletionBatchResult(
     val outcomes: List<Boolean>,
     val cleanupFailed: Boolean,
+    val consentIndices: Set<Int> = emptySet(),
+    val failures: Map<Int, RecordingDeletionFailure> = emptyMap(),
+    val cleanupFailure: Throwable? = null,
 )
+
+/** Keep the journal stage attached to its original exception without changing transaction control flow. */
+internal fun <T> recordingDeletionJournalStage(
+    reportFailure: (RecordingDeletionFailure) -> Unit,
+    block: () -> T,
+): T = try {
+    block()
+} catch (cancelled: CancellationException) {
+    throw cancelled
+} catch (error: Exception) {
+    reportFailure(RecordingDeletionFailure(RecordingDeletionFailureReason.JOURNAL_FAILED, error))
+    throw error
+}
+
+/** A surviving asset must be visible and have no durable replay intent before a prompt owns it. */
+internal fun handOffRecordingDeletionConsent(
+    stillSelectedAsset: () -> Boolean,
+    retireUncommittedIntent: () -> Boolean,
+    handOff: () -> Unit,
+): Boolean {
+    if (!stillSelectedAsset() || !retireUncommittedIntent()) return false
+    handOff()
+    return true
+}
 
 internal class RecordingDeletionJournalBatch(
     private val chunkSize: Int = 16,
@@ -14,6 +41,7 @@ internal class RecordingDeletionJournalBatch(
 ) {
     private val pending = linkedSetOf<String>()
     private var metadataCleanupFailed = false
+    private var metadataFailure: Exception? = null
     val failedEntries = mutableSetOf<String>()
 
     init { require(chunkSize > 0) }
@@ -27,8 +55,9 @@ internal class RecordingDeletionJournalBatch(
         if (pending.size >= chunkSize) flush()
     }
 
-    fun markCleanupFailed() {
+    fun markCleanupFailed(error: Exception? = null) {
         metadataCleanupFailed = true
+        if (metadataFailure == null) metadataFailure = error
     }
 
     fun flush() {
@@ -46,13 +75,15 @@ internal class RecordingDeletionJournalBatch(
             false
         }
         if (!retired) {
+            if (metadataFailure == null) metadataFailure = failure
             failedEntries += entries
             reportDeletionCleanupFailure(failure, onCleanupFailure)
         }
     }
 
     fun result(outcomes: List<Boolean>): RecordingDeletionBatchResult =
-        RecordingDeletionBatchResult(outcomes, cleanupFailed = metadataCleanupFailed || failedEntries.isNotEmpty())
+        RecordingDeletionBatchResult(outcomes, cleanupFailed = metadataCleanupFailed || failedEntries.isNotEmpty(),
+            cleanupFailure = metadataFailure)
 }
 
 private fun reportDeletionCleanupFailure(error: Exception?, report: (Exception?) -> Unit) {
@@ -94,7 +125,7 @@ internal suspend fun completeRecordingDeletionMetadata(
         false
     }
     if (!completed) {
-        journalBatch?.markCleanupFailed()
+        journalBatch?.markCleanupFailed(failure)
         reportDeletionCleanupFailure(failure, onCleanupFailure)
     }
     return true
@@ -103,6 +134,7 @@ internal suspend fun completeRecordingDeletionMetadata(
 internal suspend fun <T> runRecordingDeletionBatch(
     recordings: List<T>,
     replayPending: suspend () -> Unit,
+    onReplayFailure: (Exception) -> Unit = {},
     delete: suspend (T) -> Boolean,
 ): List<Boolean> {
     if (recordings.isEmpty()) return emptyList()
@@ -112,7 +144,8 @@ internal suspend fun <T> runRecordingDeletionBatch(
         replayPending()
     } catch (cancelled: CancellationException) {
         throw cancelled
-    } catch (_: Exception) {
+    } catch (error: Exception) {
+        onReplayFailure(error)
         return List(recordings.size) { false }
     }
     return recordings.map { recording ->

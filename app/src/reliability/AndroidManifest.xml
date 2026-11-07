@@ -26,7 +26,18 @@
             android:theme="@style/Theme.Reverb" />
         <service
             android:name="app.smallthingz.reverb.CaptureFrameIdentityService"
-            android:exported="false" />
+            android:exported="false"
+            android:foregroundServiceType="microphone|dataSync" />
+        <provider
+            android:name="app.smallthingz.reverb.DurableDocumentFixtureProvider"
+            android:authorities="${applicationId}.durable.documents"
+            android:exported="true"
+            android:grantUriPermissions="true"
+            android:permission="android.permission.MANAGE_DOCUMENTS">
+            <intent-filter>
+                <action android:name="android.content.action.DOCUMENTS_PROVIDER" />
+            </intent-filter>
+        </provider>
         <provider
             android:name="app.smallthingz.reverb.ReliabilityDocumentsProvider"
             android:authorities="${applicationId}.reliability.documents"

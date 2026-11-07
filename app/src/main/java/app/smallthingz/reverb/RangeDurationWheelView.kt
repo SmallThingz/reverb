@@ -18,6 +18,7 @@ import kotlin.math.floor
 import kotlin.math.min
 import kotlin.math.round
 import kotlin.math.sin
+import smallthingz.ui.animation.view.ViewColorTransition
 
 internal fun rangeDurationWheelInputAllowed(
     enabled: Boolean,
@@ -77,6 +78,7 @@ internal class RangeDurationWheelView @JvmOverloads constructor(
     @ColorInt private var mutedColor = Color.GRAY
     @ColorInt private var borderColor = Color.DKGRAY
     @ColorInt private var errorColor = Color.RED
+    private var paletteMotion:ViewColorTransition?=null
 
     private var maximumDurationSecondsExact = 0.0
     private var maximumWholeSeconds = 0
@@ -152,9 +154,13 @@ internal class RangeDurationWheelView @JvmOverloads constructor(
         @ColorInt border: Int,
         @ColorInt error: Int,
     ) {
-        if (
-            inkColor == ink && mutedColor == muted && borderColor == border && errorColor == error
-        ) return
+        val motion=paletteMotion ?: ViewColorTransition(this,intArrayOf(ink,muted,border,error),{
+            paletteMotion?.let {applyPalette(it.color(0),it.color(1),it.color(2),it.color(3))}
+        }).also {paletteMotion=it;applyPalette(ink,muted,border,error)}
+        motion.retarget(ink,muted,border,error)
+    }
+
+    private fun applyPalette(ink:Int,muted:Int,border:Int,error:Int) {
         inkColor = ink
         mutedColor = muted
         borderColor = border

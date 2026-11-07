@@ -9,6 +9,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class OnboardingRuntimeCommitTest {
+    @Test fun runtimeFailureRetainsOriginalCauseForPresentation() {
+        val failure = SecurityException("Runtime service denied")
+        var observed: Exception? = null
+        assertTrue(commitOnboardingAndReloadRuntime({ true }, { throw failure }, { observed = it }))
+        assertSame(failure, observed)
+    }
+
     @Test
     fun successfulCommitCompletesBeforeOneRuntimeReload() {
         val events = mutableListOf<String>()

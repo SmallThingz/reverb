@@ -11,6 +11,8 @@ import androidx.recyclerview.widget.RecyclerView
 import app.smallthingz.reverb.InlinePlaybackRowOwner
 import app.smallthingz.reverb.LibraryListItem
 import app.smallthingz.reverb.RecordingEntity
+import app.smallthingz.reverb.PendingSave
+import app.smallthingz.reverb.R
 import app.smallthingz.reverb.formatRecordingStartTimestamp
 import app.smallthingz.reverb.formatSavedRecordingDuration
 import app.smallthingz.reverb.formatShortFileSize
@@ -65,7 +67,30 @@ internal class ReverbLibraryListView(
     private val nativeInputRoot: View,
     actions: LibraryRecordingRowActions,
     private val inlineHost: LibraryInlineExpansionHost,
+    private val onRetryFailedSaves: () -> Unit,
+    private val onRowNodesChanged: () -> Unit = {},
 ) : FrameLayout(context) {
+    private var disposed = false
+    var onPendingRecordingRevealCancelled: (() -> Unit)? = null
+    private var rowNodesDirty = false
+    private var rowNodesPosted = false
+    private val publishRowNodes = Runnable {
+        rowNodesPosted = false
+        if (!disposed && isAttachedToWindow && rowNodesDirty) {
+            rowNodesDirty = false
+            onRowNodesChanged()
+        }
+    }
+    private fun rowNodesChanged() {
+        if (disposed) return
+        rowNodesDirty = true
+        // Holders are born during RecyclerView layout, after the controller's publication.
+        // Coalesce that traversal and bind the actual descendants outside recycler callbacks.
+        if (isAttachedToWindow && !rowNodesPosted) {
+            rowNodesPosted = true
+            post(publishRowNodes)
+        }
+    }
     private var environment = initialEnvironment
     private val currentActions = actions
     private val rowUpdates = NativeLibraryListUpdates<InlinePlaybackRowOwner>()
@@ -74,7 +99,7 @@ internal class ReverbLibraryListView(
     private var pendingPosition = NativePendingListPosition(NativeListSavedPosition(0, 0))
     private val layout = object : LinearLayoutManager(context, RecyclerView.VERTICAL, false) {
         override fun onLayoutChildren(recycler: RecyclerView.Recycler, state: RecyclerView.State) {
-            if (!state.isPreLayout) pendingPosition.pendingForPlacement(state.itemCount)?.let { target ->
+            if (!state.isPreLayout) pendingPosition.pendingForPlacement(state.itemCount, recordingIndexForPlacement)?.let { target ->
                 scrollToPositionWithOffset(target.firstVisibleItemIndex, -target.firstVisibleItemScrollOffset)
             }
             super.onLayoutChildren(recycler, state)
@@ -85,9 +110,11 @@ internal class ReverbLibraryListView(
         }
     }
     private val rowAdapter = LibraryRowsAdapter()
+    private val recordingIndexForPlacement: (String) -> Int = rowAdapter::recordingIndex
     private val list = ReverbLibraryRecyclerView(context).apply {
         layoutManager = layout
         adapter = rowAdapter
+        sourceOnUserScroll = ::cancelPendingRecordingReveal
         // Released populated LazyColumn does not apply animateItem. Default RV fades/moves differ.
         itemAnimator = null
         isVerticalScrollBarEnabled = false
@@ -129,6 +156,7 @@ internal class ReverbLibraryListView(
 
     /** One main-thread immutable presentation update; no operation, playback or Undo side effects. */
     fun submit(value: LibraryNativeListState) {
+        val preserveTop = !pendingPosition.hasKeyedRequest && savePosition() == NativeListSavedPosition(0, 0)
         val update = rowUpdates.submit(value.items, NativeLibraryRowState(
             selectedIds = value.selectedIds,
             selectionActive = value.selectionActive,
@@ -140,14 +168,44 @@ internal class ReverbLibraryListView(
         )) ?: return
         blockedRecordingIds = checkNotNull(rowUpdates.current).blockedIds
         rowAdapter.submit(value.items, update)
+        // DiffUtil otherwise preserves the old first row as its stable-ID anchor when a fresh
+        // save/header arrives after Home's open-at-top request was already laid out.
+        if (update.catalogChanged && preserveTop) {
+            pendingPosition.request(NativeListSavedPosition(0, 0))
+            list.requestLayout()
+        }
     }
 
     /** Called once when this source branch consumes its restored rememberLazyListState slot. */
-    fun restorePosition(position: NativeListSavedPosition) {
+    fun restorePosition(position: NativeListSavedPosition, cancelRecordingReveal: Boolean = true) {
+        if (cancelRecordingReveal) cancelPendingRecordingReveal()
         pendingPosition.request(position)
         // Catalog membership can change again before measurement. Normalize against the actual
         // layout count there, keeping this exact saved request until placement publishes its result.
         list.requestLayout()
+    }
+
+    fun openAtTop() {
+        list.sourceStopScroll?.invoke()
+        list.stopScroll()
+        restorePosition(NativeListSavedPosition(0, 0))
+    }
+
+    fun revealRecording(recordingId: String): Boolean {
+        val index = rowAdapter.recordingIndex(recordingId)
+        if (index < 0) return false
+        list.sourceStopScroll?.invoke()
+        list.stopScroll()
+        pendingPosition.request(NativeListSavedPosition(index, 0), key = recordingId)
+        list.requestLayout()
+        return true
+    }
+
+    val pendingRecordingRevealId: String? get() = pendingPosition.requestedKey
+
+    fun cancelPendingRecordingReveal() {
+        pendingPosition.cancelKeyedRequest()
+        onPendingRecordingRevealCancelled?.invoke()
     }
 
     fun savePosition(): NativeListSavedPosition = pendingPosition.save(placedPosition())
@@ -171,6 +229,7 @@ internal class ReverbLibraryListView(
     /** Mirrors removal of the source LazyColumn branch; a temporary inactive screen does not call this. */
     fun clearListComposition() {
         forEachRecordingHolder { it.retire() }
+        forEachPendingHolder { it.presentation.close() }
         rowAdapter.clear()
         rowUpdates.clear()
         currentRecordingIds = emptySet()
@@ -182,8 +241,25 @@ internal class ReverbLibraryListView(
     }
 
     fun dispose() {
+        disposed = true
+        removeCallbacks(publishRowNodes)
+        rowNodesPosted = false
+        rowNodesDirty = false
         clearListComposition()
+        list.sourceOnUserScroll = null
+        onPendingRecordingRevealCancelled = null
         list.adapter = null
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        rowNodesChanged()
+    }
+
+    override fun onDetachedFromWindow() {
+        removeCallbacks(publishRowNodes)
+        rowNodesPosted = false
+        super.onDetachedFromWindow()
     }
 
     private fun admit(id: String) = id in currentRecordingIds && id !in blockedRecordingIds
@@ -198,12 +274,20 @@ internal class ReverbLibraryListView(
         }
     }
 
+    private inline fun forEachPendingHolder(block: (PendingSaveHolder) -> Unit) {
+        for (index in 0 until list.childCount) {
+            (list.getChildViewHolder(list.getChildAt(index)) as? PendingSaveHolder)?.let(block)
+        }
+    }
+
     private data class Entry(
         val key: String,
         val stableId: Long,
         val header: String? = null,
         val compactHeader: Boolean = false,
         val recording: RecordingEntity? = null,
+        val pendingSave: PendingSave? = null,
+        val retryFailedSaves: Boolean = false,
         val edges: ReverbRecordingGroupEdges? = null,
         val row: LibraryRecordingRow? = null,
         val expandedOwner: InlinePlaybackRowOwner? = null,
@@ -218,8 +302,11 @@ internal class ReverbLibraryListView(
         private var nextStableId = 0L
         init { setHasStableIds(true) }
 
+        fun recordingIndex(id: String): Int = entries.indexOfFirst { it.recording?.id == id }
+
         fun submit(items: List<LibraryListItem>, update: NativeLibraryListUpdate) {
             if (update.catalogChanged) submitCatalog(items)
+            forEachPendingHolder { it.presentation.setPresentationActive(rowUpdates.current?.screenActive == true) }
             // Only bound visible rows need a transient update. Cached/prefetched holders sample the
             // latest state when attached, so selection-mode changes never invalidate the full catalog.
             forEachRecordingHolder { holder ->
@@ -239,6 +326,12 @@ internal class ReverbLibraryListView(
                 val id = ids[key] ?: nextStableId++
                 next.add(when (item) {
                     is LibraryListItem.Header -> Entry(key, id, header = item.dateLabel, compactHeader = index == 0)
+                    is LibraryListItem.Pending -> Entry(key, id, pendingSave = item.save,
+                        edges = ReverbRecordingGroupEdges(
+                            first = items.getOrNull(index - 1) !is LibraryListItem.Pending,
+                            last = items.getOrNull(index + 1) !is LibraryListItem.Pending))
+                    is LibraryListItem.SaveRecoveryStatus -> Entry(key, id, header = item.message, compactHeader = true)
+                    LibraryListItem.RetryFailedSaves -> Entry(key, id, retryFailedSaves = true)
                     is LibraryListItem.Recording -> {
                         recordingCount++
                         Entry(key, id, recording = item.recording,
@@ -305,12 +398,16 @@ internal class ReverbLibraryListView(
         override fun getItemViewType(position: Int) = when {
             entries[position].footer -> 2
             entries[position].header != null -> 0
+            entries[position].pendingSave != null -> 3
+            entries[position].retryFailedSaves -> 4
             else -> 1
         }
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
             val holder = when (viewType) {
                 0 -> object : RecyclerView.ViewHolder(ReverbLibraryHeaderView(context, environment)) {}
                 1 -> RecordingHolder(ReverbLibraryRecordingRow(context, environment, animationScope, nativeInputRoot))
+                3 -> PendingSaveHolder(LibraryPendingSaveRowPresentation(context, environment, animationScope, nativeInputRoot))
+                4 -> object : RecyclerView.ViewHolder(ReverbLibraryTextAction(context, environment, nativeInputRoot)) {}
                 else -> object : RecyclerView.ViewHolder(View(context).apply {
                     importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
                 }) {}
@@ -323,29 +420,47 @@ internal class ReverbLibraryListView(
             if (entry.footer) {
                 holder.itemView.layoutParams = RecyclerView.LayoutParams(LayoutParams.MATCH_PARENT,
                     (84f * environment.textDensity.density).roundToInt())
+            } else if (entry.retryFailedSaves) {
+                (holder.itemView as ReverbLibraryTextAction).bind(environment, context.getString(R.string.library_retry)) {
+                    if (rowUpdates.current?.screenActive == true) onRetryFailedSaves()
+                }
+            } else if (entry.pendingSave != null) {
+                (holder as PendingSaveHolder).presentation.apply {
+                    setPresentationActive(rowUpdates.current?.screenActive == true)
+                    bind(entry.pendingSave, environment, entry.edges)
+                }
             } else if (holder is RecordingHolder) holder.bind(presentation(entry)) else {
                 (holder.itemView as ReverbLibraryHeaderView).apply {
                     setEnvironment(environment)
                     bind(checkNotNull(entry.header), entry.compactHeader)
                 }
             }
+            rowNodesChanged()
         }
         override fun onViewAttachedToWindow(holder: RecyclerView.ViewHolder) {
+            (holder as? PendingSaveHolder)?.presentation?.setPresentationActive(rowUpdates.current?.screenActive == true)
             (holder as? RecordingHolder)?.let {
                 // RecyclerView can attach a cached holder without another onBindViewHolder call.
                 // Refresh before restoring preview admission, including an outgoing collapse lease.
                 refresh(it)
                 it.presentationAttached(true)
             }
+            rowNodesChanged()
         }
         override fun onViewDetachedFromWindow(holder: RecyclerView.ViewHolder) {
+            (holder as? PendingSaveHolder)?.presentation?.setPresentationActive(false)
             (holder as? RecordingHolder)?.presentationAttached(false)
+            rowNodesChanged()
         }
         override fun onViewRecycled(holder: RecyclerView.ViewHolder) {
             (holder as? RecordingHolder)?.retire()
+            (holder as? PendingSaveHolder)?.presentation?.close()
             super.onViewRecycled(holder)
         }
     }
+
+    private class PendingSaveHolder(val presentation: LibraryPendingSaveRowPresentation) :
+        RecyclerView.ViewHolder(presentation.row)
 
     private inner class RecordingHolder(val row: ReverbLibraryRecordingRow) : RecyclerView.ViewHolder(row) {
         var binding: Entry? = null

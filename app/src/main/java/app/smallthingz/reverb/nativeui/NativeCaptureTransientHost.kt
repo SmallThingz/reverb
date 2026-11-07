@@ -94,7 +94,10 @@ private class CaptureSaveStatusView(
         delivery?.let(::removeCallbacks)
         delivery = null
         motion.setVisible(status != null)
-        if (status != null) {
+        if (status is CaptureSaveStatus.Saving) {
+            // Admission may finish before a posted render; publish its pending cue immediately.
+            render(status)
+        } else if (status != null) {
             val expected = generation
             // The released remembered renderedStatus changes in LaunchedEffect(status), not in
             // the synchronous composition. Keep replacement deferred and cancel superseded work.

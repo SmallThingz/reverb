@@ -289,6 +289,14 @@
 
 # Reverb durability invariants
 
+- Home may finish its save animation only after the accepted save intent and all selected PCM references are durable.
+  Materialization is a separate resumable operation; capture-buffer clearing, overlapping saves and process death must
+  not retire any source still referenced by an accepted job.
+- New save references may be batched per job and store to avoid per-chunk durability barriers. Preserve legacy reference
+  compatibility, fail closed on unknown/pending/corrupt batch authority, and bind cached membership to the exact native
+  file revision. A failed unlink directory barrier remains retryable ownership, not successful reference retirement.
+- Materialization progress covers writing, verification and publication. Encoding completion alone is not save
+  completion; keep the normal Library row pending until the durable publication and reference-retirement work ends.
 - Large-history qualification uses the isolated QA package and synthetic files; never stop, replace, clear, or migrate the
   installed user's history merely to obtain a benchmark. Version 0.1.2 preparation does not authorize a tag or release.
 - Startup chunk-header caching is process-local, bounded, FINALIZED-only and keyed by exact native device/inode/size/ctime.
@@ -496,8 +504,8 @@
   successful decode the Service reads only its verified in-memory intent/slot cache under the same lifetime lock, and
   updates that cache only after an accepted durable command; explicit Start/Stop may repair invalid authority with a
   canonical pair, while destination-only selection fails closed until authority is valid. A successful canonical Stop
-  repair clears only the persistence block caused by invalid capture authority after the known-Stop marker is also
-  durable; unrelated storage/persistence failures remain blocked. If a capture intent/destination write fails and its
+  repair clears only the persistence block caused by invalid capture authority after durable armed-session evidence
+  is reserved for the Stop drain; unrelated storage/persistence failures remain blocked. If a capture intent/destination write fails and its
   rollback is not durably proven, or a fatal recorder Stop cannot persist its intent, revoke capture-authority validity
   immediately so destination-only commands cannot act on unproven state; only a later canonical Start/Stop may
   re-establish authority. User/QS destination selection and audio-thread automatic fallback resolve, persist, mutate the
@@ -512,14 +520,16 @@
   deliberately wrong-type fail-closed surrogate rather than absence/default; otherwise Android's process-local map can
   make an undurable repair look authoritative to a later Service instance in the same process. Fatal audio-stop failure
   still invalidates the dying Service's in-memory recorder authority even when that exact raw rollback succeeds.
-- Automatic capture stop because no writable buffer remains is a known stop only after both `listening=false` and the
-  known-Stop incident transition commit durably under the Service lifetime lock. It must not begin after Service
-  teardown owns that lock, because generic teardown is not a user/automatic Stop and must preserve retryable capture
-  intent. If either commit fails, preserve/restore prior intent when capture can continue; otherwise classify the forced
-  stop as a persistence interruption and fail closed. Explicit Stop whose incident transition fails may reject and
-  continue only after both the exact prior armed marker and prior enabled capture intent are durably restored; if either
-  rollback remains uncertain, pause/stop capture as a persistence interruption rather than continue with unprovable
-  restart or incident state.
+- Explicit and automatic Stop persist `listening=false` and revoke new/in-flight capture admission immediately, but
+  keep the existing session marker armed until the entire already-completed PCM prefix and gate tail are durably
+  sealed. Reserve the exact marker/root and a process-local publication epoch under the incident monitor; no persisted
+  schema change is needed. Completion must revalidate ownership after evidence retries and before any disarm/delete,
+  including the absent-marker fallback. A newer session publication invalidates old tokens even if clock samples match.
+  Stop reservation failure may reject only after prior intent is durably restored; uncertain rollback fails capture
+  closed. Once Stop was accepted, seal/disarm failure cannot resume capture or silently become a clean Stop: preserve
+  armed evidence or durably publish the exact interruption. A newer Start must settle the old pending Stop after its
+  prefix seal before arming its own session. Automatic full-buffer Stop still cannot begin after Service teardown owns
+  the lifetime lock and cannot mutate a newer command on behalf of an old queued packet.
 - Capture-stop sealing errors are never diagnostic-only: audio-input failure and foreground-service timeout paths must
   report active-store seal failure instead of swallowing it. When another terminal cause already exists, preserve that
   cause in the user-facing message and append the seal/persistence failure rather than overwriting either one.
@@ -538,9 +548,20 @@
   teardown begins, seals/releases that batch, then records the provisional service-stop boundary. Slow initialization
   and its main-thread continuation must treat `serviceDestroying` as terminal and may never resurrect capture/foreground
   work after teardown begins; teardown-induced `AudioRecord` failures must never be classified as recorder failures or
-  persist the user capture intent off. Once audio-thread teardown has been queued, request `quitSafely()` before
-  unrelated main-thread teardown so later work cannot queue behind the terminal close; that task exclusively owns
-  persistent-store close even if the main-thread wait times out; inactive/no-microphone teardown does not synchronously
+  persist the user capture intent off. Close capture-control admission before queuing the reserved terminal fence.
+  Keep the writer alive until every accepted PCM prefix and the admitted native read have acknowledged completion;
+  then the terminal owner closes persistent stores and requests `quitSafely()`. Native reads use their separate owner
+  and never wait on a disk-held store or listening-intent lock. Explicit Stop invalidates an in-flight read; generic
+  teardown preserves it. A writer-dispatch failure poisons later PCM, waits off-thread for the writer to exit, and
+  settles accepted receivers in admission order before terminal store close; it must not close stores under an active
+  writer or recycle native scratch before read return. Fully returned, queued PCM survives explicit Stop; only the
+  still-in-flight read loses admission. Completed One-shot overflow may drain into its enabled Looping fallback without
+  changing a newer durable Stop/Start/destination command. That data-only authority requires the same input/configuration,
+  valid durable authority, and an epoch not poisoned by persistence failure; it never authorizes a stale intent mutation
+  or automatic Stop of a newer Start. A forced native release still leaves already-completed packets with their own
+  data-drain authority while revoking the native read that has not yet returned.
+  The terminal task exclusively owns persistent-store close
+  even if the main-thread wait times out; inactive/no-microphone teardown does not synchronously
   wait for slow store initialization/recovery, and an active-capture timeout path may release `AudioRecord` to unblock
   its queued owner then waits once more for that owner before publishing the stop boundary, but must never close stores
   underneath earlier queued work. Recorder commands that mutate durable capture intent/destination, clear retained
@@ -556,9 +577,11 @@
   execution and main-thread delivery, releasing any sampled lease if Service teardown wins before delivery; a live
   snapshot handoff keeps Service ownership until the callback returns successfully, so a throwing callback must close
   the sampled lease before propagating the same failure; teardown must not consume suspended-capture retry flags because
-  the next live Service owns that recovery; a durable known Stop disarms its capture-session marker under the same
-  lifetime lock that `onDestroy()` uses before classifying an armed session, so Stop cannot race into a false
-  interruption incident. Explicit Stop/failure/timeout paths still invalidate capture continuity immediately. Snapshot
+  the next live Service owns that recovery. A known Stop disarms its exact marker only after its completed-prefix seal,
+  under the same lifetime lock used by `onDestroy()`. A planned Stop still draining does not create a provisional
+  service-stop incident merely because the main-thread wait expired; its armed marker remains crash evidence, and the
+  drain owner publishes actual failures. Generic teardown with no pending known Stop still records its interruption.
+  Explicit Stop/failure/timeout paths invalidate capture continuity immediately. Snapshot
   release failures at main-handler rejection/teardown/callback-failure boundaries are reported as persistent-store
   failures without replacing the required terminal callback; if the callback itself throws it remains primary and the
   release failure is suppressed on it.
@@ -583,9 +606,9 @@
   acquiring the upstream descriptor before returning that pinned descriptor. Provider rows without a stable identity
   fail closed for external delegation and direct byte-reading playback/waveform/trim work until reconciliation
   establishes one; legacy/bootstrap metadata may remain visible, but a blank provider identity is never read authority.
-  The saved-recording notification trampoline has no feedback host; if identity verification/open delegation fails or no
-  compatible viewer exists, queue the error and return to MainActivity so the failure is immediately visible instead of
-  finishing to an empty screen.
+  Saved-recording notifications open Library and play only the requested exact recording revision; stale requests never
+  retarget replacement bytes. Explicit external-open fallback retains identity verification, and unavailable viewers
+  queue feedback and return to MainActivity instead of finishing to an empty screen.
 - Direct saved-recording WAV readers use a complete RIFF structural boundary before playback/waveform/trim: declared
   RIFF size must equal the physical file, every chunk/padding byte must stay inside that container, `fmt`/`data` are
   unique, byte-rate/block-align must match the decoded PCM format, and `data` must contain an exact whole number of
@@ -1033,7 +1056,11 @@
 - Inline playback serializes asynchronous MediaPlayer seeks and resumes only after the newest queued target completes;
   the trim-end monitor must not inspect a stale pre-seek position. Resuming after editing the End boundary auditions its
   lead-in rather than starting exactly at the stop boundary. Pause and teardown revoke pending seek resume intent.
-- Library and range-preview pause/hidden/disposal boundaries revoke both pending-seek and scrub-resume intent. Cancelled
+- Ordinary saved-recording playback belongs to one mediaPlayback foreground Service, independent of row recycling,
+  Library visibility and Activity lifetime. Its descriptor, audio focus, media session and notification controls share
+  the same exact recording generation; teardown releases every owner once and never changes microphone capture intent.
+  Playback pause, focus loss and noisy-output transitions revoke pending resume; old callbacks cannot resume a newer
+  owner. Library trim/shuttle and range-preview pause/hidden/disposal boundaries revoke pending-seek and scrub-resume intent. Cancelled
   fine-seek and boundary gestures must not execute normal-release playback or audition; range preview admission requires
   a visible resumed host, including delayed gesture cleanup. Inline trim Save stops preview before accepting the
   transaction.

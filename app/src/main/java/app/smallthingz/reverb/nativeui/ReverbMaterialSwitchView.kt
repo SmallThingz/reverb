@@ -58,6 +58,7 @@ internal class ReverbMaterialSwitchView(
     private var offsetMotion: SwitchFloatMotion? = null
     private var framePosted = false
     private val choreographer = Choreographer.getInstance()
+    private var colorMotion:smallthingz.ui.animation.view.ViewColorTransition?=null
 
     init {
         minimumWidth = 0
@@ -67,19 +68,25 @@ internal class ReverbMaterialSwitchView(
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         isEnabled = initialEnabled
         if (Build.VERSION.SDK_INT >= 29) isForceDarkAllowed = false
+        colorMotion=smallthingz.ui.animation.view.ViewColorTransition(this,intArrayOf(
+            colors.track(initialEnabled,initialChecked),colors.thumb(initialEnabled,initialChecked),
+            colors.border(initialEnabled,initialChecked)),{invalidate()})
     }
 
     fun setPalette(palette: ReverbPalette) {
         if (boundPalette === palette) return
         colors = MaterialSwitchColors.from(palette)
         boundPalette = palette
+        retargetColors()
         invalidate()
     }
 
     fun setState(checked: Boolean, enabled: Boolean) {
+        val changed=this.checked!=checked
+        this.checked=checked
         isEnabled = enabled
-        if (this.checked == checked) return
-        this.checked = checked
+        retargetColors()
+        if(!changed)return
         requestLayout()
         invalidate()
     }
@@ -94,8 +101,11 @@ internal class ReverbMaterialSwitchView(
     override fun setEnabled(enabled: Boolean) {
         val changed = isEnabled != enabled
         super.setEnabled(enabled)
-        if (changed) invalidate()
+        if (changed) {retargetColors();invalidate()}
     }
+
+    private fun retargetColors() {colorMotion?.retarget(colors.track(isEnabled,checked),
+        colors.thumb(isEnabled,checked),colors.border(isEnabled,checked))}
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
@@ -149,9 +159,9 @@ internal class ReverbMaterialSwitchView(
         val originX = ((width - trackWidth) / 2f).roundToInt().toFloat()
         val originY = ((height - trackHeight) / 2f).roundToInt().toFloat()
         val radius = min(trackWidth, trackHeight) / 2f
-        trackPaint.color = colors.track(isEnabled, checked)
-        thumbPaint.color = colors.thumb(isEnabled, checked)
-        borderPaint.color = colors.border(isEnabled, checked)
+        trackPaint.color = colorMotion?.color(0) ?: colors.track(isEnabled, checked)
+        thumbPaint.color = colorMotion?.color(1) ?: colors.thumb(isEnabled, checked)
+        borderPaint.color = colorMotion?.color(2) ?: colors.border(isEnabled, checked)
         borderPaint.strokeWidth = borderWidth
         canvas.drawRoundRect(
             originX, originY, originX + trackWidth, originY + trackHeight,
@@ -219,7 +229,7 @@ internal class ReverbMaterialSwitchView(
     }
 }
 
-/** Immediate color selection from SwitchDefaults; the released M3 switch does not animate colors. */
+/** Endpoint color selection from SwitchDefaults; presentation uses the shared color timeline. */
 private class MaterialSwitchColors(
     private val checkedThumb: Int,
     private val checkedTrack: Int,

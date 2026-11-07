@@ -218,16 +218,31 @@ class NativeSpringFineSeekStateTest {
         }
     }
 
-    @Test fun fractionalDensityKeepsOddCenteredPositionAndOnlyMirrorsInnerOffset() {
+    @Test fun fractionalDensityKeepsOddCenteredPositionAndPhysicalPullDirection() {
         val g = SpringFineSeekGeometry(421, 316, 421f / 160f)
         assertEquals(168, g.hitWidth)
-        assertEquals(127, g.puckLeft(0f, false))
-        assertEquals(127, g.puckLeft(0f, true))
-        assertEquals(248, g.puckLeft(1f, false))
-        assertEquals(6, g.puckLeft(1f, true))
+        assertEquals(127, g.puckLeft(0f))
+        assertEquals(248, g.puckLeft(1f))
+        assertEquals(6, g.puckLeft(-1f))
         val tiny = SpringFineSeekGeometry(60, 60, 2.5f)
         assertEquals(1f, tiny.inputHorizontalTravel, 0f)
         assertEquals(2.5f, tiny.drawHorizontalTravel, 0f)
+    }
+
+    @Test fun puckTracksPhysicalFieldCenterAcrossPullsAndDensities() {
+        for (density in listOf(1f, 1.25f, 2.625f)) {
+            for (width in listOf(300, 421)) {
+                val g = SpringFineSeekGeometry(width, 316, density)
+                for (pull in listOf(-1f, -.4f, 0f, .4f, 1f)) {
+                    val fieldCenter = width * .5f + pull * g.drawHorizontalTravel
+                    val puckCenter = g.puckLeft(pull) + g.hitWidth * .5f
+                    // Independent rounding of centered placement and offset costs at most one pixel.
+                    assertEquals(fieldCenter, puckCenter, 1f)
+                    if (pull > 0f) assertTrue(g.puckLeft(pull) > g.puckLeft(0f))
+                    if (pull < 0f) assertTrue(g.puckLeft(pull) < g.puckLeft(0f))
+                }
+            }
+        }
     }
 
     private inner class Harness(slop: Float = 10f, initialEnabled: Boolean = true) {

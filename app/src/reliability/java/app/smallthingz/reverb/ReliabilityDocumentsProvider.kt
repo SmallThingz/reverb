@@ -104,13 +104,13 @@ class ReliabilityDocumentsProvider : DocumentsProvider() {
     }
 
     @Synchronized
-    fun restoreExistingDocument(documentId: String) {
+    fun restoreExistingDocument(documentId: String, mimeType: String = "audio/wav") {
         check(documentId.startsWith("$ROOT_ID/"))
         val name = documentId.removePrefix("$ROOT_ID/")
         check(File(name).name == name)
         val file = File(root, name)
         check(file.isFile)
-        entries[documentId] = Entry(file, "audio/wav")
+        entries[documentId] = Entry(file, mimeType)
     }
 
     @Synchronized

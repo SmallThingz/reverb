@@ -27,12 +27,21 @@ internal class ReverbLibraryStatusView(
     private val durationScale: () -> Float,
 ) : ViewGroup(context) {
     private var mode: LibraryBodyMode? = null
+    private var presentationActive = true
     private var retry: () -> Unit = {}
     private var body: LibraryStatusColumn? = null
     private var viewport: NativeVerticalViewport? = null
     private var emptyScrollState: NativeVerticalScrollState? = null
     val emptyViewport: NativeVerticalViewport? get() = viewport
     val emptyScrollPosition: Int? get() = emptyScrollState?.save()
+
+    fun openAtTop() {
+        // Rebuild the empty viewport so an old fling cannot overwrite the new opening position.
+        if (mode == LibraryBodyMode.EMPTY) {
+            mode = null
+            bind(LibraryBodyMode.EMPTY, 0, retry)
+        }
+    }
 
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -49,6 +58,7 @@ internal class ReverbLibraryStatusView(
             emptyScrollState = null
             mode = next
             val column = LibraryStatusColumn(context, environment, next, nativeInputRoot, frames, parentScope, durationScale) { retry() }
+            column.setPresentationActive(presentationActive)
             body = column
             if (next == LibraryBodyMode.EMPTY) {
                 val scroll = NativeVerticalScrollState(restoredScrollPosition ?: 0)
@@ -60,6 +70,11 @@ internal class ReverbLibraryStatusView(
             } else addView(column)
         } else body?.bind(environment) { retry() }
         requestLayout()
+    }
+
+    fun setPresentationActive(active: Boolean) {
+        presentationActive = active
+        body?.setPresentationActive(active)
     }
 
     fun setEnvironment(next: ReverbViewEnvironment) {
@@ -140,6 +155,10 @@ private class LibraryStatusColumn(
         requestLayout()
     }
 
+    fun setPresentationActive(active: Boolean) {
+        loading?.setPresentationActive(active)
+    }
+
     override fun addChildrenForAccessibility(children: ArrayList<View>) {
         val first = children.size
         super.addChildrenForAccessibility(children)
@@ -200,6 +219,9 @@ private class LibraryEmptySymbol(context: Context, private var environment: Reve
         }
         override fun onRtlPropertiesChanged(layoutDirection: Int) { super.onRtlPropertiesChanged(layoutDirection); icon.layoutDirection = layoutDirection }
     }
+    private val colorMotion=colorTransition(reverbColorWithAlpha(environment.palette.muted,.72f)) {
+        glyph.icon.setTint(it);glyph.invalidate()
+    }
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         glyph.importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -214,7 +236,8 @@ private class LibraryEmptySymbol(context: Context, private var environment: Reve
         }
         environment = value
         surface.setPalette(value.palette.surfaceContainerHigh, android.graphics.Color.TRANSPARENT)
-        glyph.icon.setTint(reverbColorWithAlpha(value.palette.muted, .72f))
+        colorMotion.retarget(reverbColorWithAlpha(value.palette.muted, .72f))
+        glyph.icon.setTint(colorMotion.color(0))
         glyph.updateBounds(glyph.width, glyph.height)
         glyph.invalidate()
     }

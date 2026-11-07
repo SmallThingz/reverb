@@ -400,10 +400,10 @@ private class IncidentBody(
     }
 
     fun setColors(ink: Int, muted: Int, line: Int, icon: Int) {
-        date.setTextColor(ink)
-        summary.setTextColor(muted)
-        cause.setTextColor(ink)
-        runtime.setTextColor(muted); age.setTextColor(muted); description.setTextColor(muted)
+        date.animateTextColor(ink)
+        summary.animateTextColor(muted)
+        cause.animateTextColor(ink)
+        runtime.animateTextColor(muted); age.animateTextColor(muted); description.animateTextColor(muted)
         divider.setColor(line)
         checkTarget.setTint(icon)
     }
@@ -630,8 +630,9 @@ private class IncidentCheckTarget(
 
 private class IncidentDivider(context: Context) : View(context) {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
+    private val colorMotion=colorTransition(paint.color) {paint.color=it;invalidate()}
     init { importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO }
-    fun setColor(color: Int) { if (paint.color != color) { paint.color = color; invalidate() } }
+    fun setColor(color: Int) {colorMotion.retarget(color)}
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         setMeasuredDimension(MeasureSpec.getSize(widthMeasureSpec), resources.displayMetrics.density.roundToInt())
     }

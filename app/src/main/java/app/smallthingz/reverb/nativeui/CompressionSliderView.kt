@@ -5,6 +5,8 @@
  */
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.animation.view.ViewColorTransition
+
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
@@ -84,6 +86,7 @@ private class SliderBody(
     private var changed:((Int)->Unit)?,
 ):View(context),AutoCloseable {
     private val model=CompressionSliderModel(initialLevel)
+    private val colorMotion by lazy {ViewColorTransition(this,targetColors(isEnabled),{invalidate()})}
     private val configuration=ViewConfiguration.get(context)
     private var dragging=false
     private val paint=Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
@@ -116,7 +119,15 @@ private class SliderBody(
         drag.enabled=enabled
         if(!enabled)tap.cancel()
         isEnabled=enabled;isFocusable=enabled
+        colorMotion.retarget(*targetColors(enabled))
         requestLayout();invalidate()
+    }
+    private fun targetColors(enabled:Boolean):IntArray {
+        val palette=environment.palette
+        return intArrayOf(
+            if(enabled)palette.primary else Color(palette.onSurface).copy(alpha=.38f).toArgb(),
+            if(enabled)palette.secondaryContainer else Color(palette.onSurface).copy(alpha=.12f).toArgb(),
+            if(enabled)palette.primary else Color(palette.onSurface).copy(alpha=.38f).compositeOver(Color(palette.surface)).toArgb())
     }
     private fun requestLevel(value:Float) {
         val next=value.roundToInt().coerceIn(0,8)
@@ -140,11 +151,9 @@ private class SliderBody(
     }
     override fun onDraw(canvas:Canvas) {
         val g=geometry
-        val palette=environment.palette
-        val primary=if(isEnabled)palette.primary else Color(palette.onSurface).copy(alpha=.38f).toArgb()
-        val secondary=if(isEnabled)palette.secondaryContainer else Color(palette.onSurface).copy(alpha=.12f).toArgb()
-        val thumbColor=if(isEnabled)palette.primary else
-            Color(palette.onSurface).copy(alpha=.38f).compositeOver(Color(palette.surface)).toArgb()
+        val primary=colorMotion.color(0)
+        val secondary=colorMotion.color(1)
+        val thumbColor=colorMotion.color(2)
         val save=canvas.save()
         try {
             canvas.translate(g.trackX.toFloat(),(g.trackY-g.visualTop).toFloat())

@@ -3,6 +3,13 @@
     tools:ignore="MissingTranslation">
     <string name="app_name" translatable="false">Reverb</string>
     <string name="recording_saved">Saved</string>
+    <string name="recording_playback_channel">Recording playback</string>
+    <string name="recording_playback_preparing">Preparing audio</string>
+    <string name="recording_playback_playing">Playing recording</string>
+    <string name="recording_playback_paused">Playback paused</string>
+    <string name="recording_playback_stop">Stop playback</string>
+    <string name="recording_playback_failed">Could not play recording.</string>
+    <string name="recording_playback_focus_denied">Audio is in use. Try playing again.</string>
     <string name="loading_audio_history">Loading audio history</string>
     <string name="preparing_audio_selection">Preparing audio selection</string>
     <string name="error_during_writing_history_into">Error writing audio history: </string>
@@ -215,4 +222,20 @@
     <string name="volume_documents">Documents</string>
     <string name="volume_storage_template">Storage %s</string>
     <string name="app_storage_label">App storage</string>
+    <string name="save_job_queued">Queued</string>
+    <string name="save_job_materializing">Materializing</string>
+    <string name="save_job_recovering">Recovering</string>
+    <string name="save_job_failed">Save paused</string>
+    <string name="save_job_progress">%1$s · %2$d%%</string>
+    <string name="save_jobs_recovering">Recovering saved audio…</string>
+    <string name="save_jobs_recovery_failed">Saved audio recovery is unavailable.</string>
+    <string name="all_files_access_title">All files access</string>
+    <string name="all_files_access_body">Optional: allow Reverb to find, rename and delete recordings in shared storage without asking for each file. Android grants broad access to shared files. You can continue without it and approve individual changes instead.</string>
+    <string name="all_files_access_allowed">All files access: allowed</string>
+    <string name="all_files_access_not_allowed">All files access: not allowed</string>
+    <string name="all_files_access_settings">Manage all files access</string>
+    <string name="audio_read_access_allowed">Audio access: allowed</string>
+    <string name="audio_read_access_not_allowed">Audio access: not allowed</string>
+    <string name="audio_read_access_settings">Review audio access</string>
+    <string name="audio_read_access_body">Without all files access, open Permissions and allow audio or storage access to let Reverb find recordings. Renaming or deleting files may still need your approval.</string>
 </resources>

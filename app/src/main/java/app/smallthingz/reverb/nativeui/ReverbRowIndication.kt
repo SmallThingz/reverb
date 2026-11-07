@@ -8,6 +8,8 @@
  */
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.animation.view.ViewColorTransition
+
 import android.content.res.ColorStateList
 import android.graphics.Canvas
 import android.graphics.Paint
@@ -41,6 +43,7 @@ internal class ReverbRowIndication private constructor(
     private val states = ArrayList<StateToken>()
     private val pendingPresses = ArrayList<PressCommand>()
     private var contentColor = android.graphics.Color.BLACK
+    private var colorMotion:ViewColorTransition?=null
     private var widthPx = 0
     private var heightPx = 0
     private var radiusPx = 0f
@@ -76,9 +79,14 @@ internal class ReverbRowIndication private constructor(
 
     /** Actual inherited LocalContentColor, supplied by the caller; never a selected-row tint guess. */
     fun updateColor(color: Int) {
-        if (contentColor == color) return
-        contentColor = color
-        invalidateSelf()
+        val motion=colorMotion ?: ViewColorTransition(owner,intArrayOf(color),{
+            colorMotion?.let {applyColor(it.color(0))}
+        },durationScale).also {colorMotion=it;applyColor(color)}
+        motion.retarget(color)
+    }
+
+    private fun applyColor(color:Int) {
+        contentColor=color;ripple?.updateColor(color);invalidateSelf()
     }
 
     fun press(x: Float, y: Float) = deliverPress(PressCommand.Press(x, y))

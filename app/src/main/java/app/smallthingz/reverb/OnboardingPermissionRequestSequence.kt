@@ -25,7 +25,7 @@ internal class OnboardingPermissionRequestSequence(
 
     fun claimNext(status: OnboardingPermissionStatus, resumed: Boolean): OnboardingPermission? {
         if (!resumed || !status.interactionEnabled || pending != null) return null
-        val permission = OnboardingPermission.entries.firstOrNull {
+        val permission = requestOrder.firstOrNull {
             attemptedMask and bit(it) == 0 && missing(status, it)
         } ?: return null
         claim(permission)
@@ -50,10 +50,16 @@ internal class OnboardingPermissionRequestSequence(
 
     /** A denied runtime request with no rationale cannot show another system prompt. */
     fun beginSettingsReview(previouslyRequested: Boolean, showsRationale: Boolean): Boolean {
-        if (pending == null || pending == OnboardingPermission.BATTERY ||
+        if (pending == null || pending == OnboardingPermission.BATTERY || pending == OnboardingPermission.ALL_FILES ||
             !previouslyRequested || showsRationale) return false
         settingsReview = true
         return true
+    }
+
+    /** Special access uses the same persisted departure/return boundary as runtime Settings reviews. */
+    fun beginAllFilesReview() {
+        check(pending == OnboardingPermission.ALL_FILES)
+        settingsReview = true
     }
 
     fun leftForeground() {
@@ -78,12 +84,17 @@ internal class OnboardingPermissionRequestSequence(
     private fun missing(status: OnboardingPermissionStatus, permission: OnboardingPermission): Boolean = when (permission) {
         OnboardingPermission.MICROPHONE -> !status.microphoneAllowed
         OnboardingPermission.STORAGE -> status.storageRequired && !status.storageAllowed
-        OnboardingPermission.RECOVERY -> status.recoveryRequired && !status.recoveryAllowed
+        OnboardingPermission.RECOVERY -> status.recoveryRequired && !status.recoveryAllowed && !status.allFilesAllowed
         OnboardingPermission.NOTIFICATIONS -> status.notificationPermissionRequired && !status.notificationsAllowed
         OnboardingPermission.BATTERY -> !status.batteryOptimizationAllowed
+        OnboardingPermission.ALL_FILES -> status.allFilesAvailable && !status.allFilesAllowed
     }
 
     companion object {
+        // Enum ordinals are saved in attemptedMask; append new values and order requests separately.
+        private val requestOrder = listOf(OnboardingPermission.MICROPHONE, OnboardingPermission.STORAGE,
+            OnboardingPermission.ALL_FILES, OnboardingPermission.RECOVERY,
+            OnboardingPermission.NOTIFICATIONS, OnboardingPermission.BATTERY)
         private fun bit(permission: OnboardingPermission): Int = 1 shl permission.ordinal
         fun attemptedFromMask(mask: Int): Set<OnboardingPermission> =
             OnboardingPermission.entries.filterTo(mutableSetOf()) { mask and bit(it) != 0 }

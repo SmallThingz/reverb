@@ -34,7 +34,7 @@ internal class ReverbLibraryHeaderView(
     private fun bindTypography() {
         label.setTypography(libraryHeaderTextStyle,
             environment.textDensity, environment.sharedFontResolver)
-        label.setTextColor(environment.palette.muted)
+        label.animateTextColor(environment.palette.muted)
         requestLayout()
     }
     private fun dp(value: Int) = (value * environment.textDensity.density).roundToInt()

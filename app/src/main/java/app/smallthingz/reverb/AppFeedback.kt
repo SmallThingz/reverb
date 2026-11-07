@@ -93,7 +93,8 @@ internal suspend fun deliverFeedbackEvent(
     try {
         awaitVisibleFrame()
         if (!canDisplay()) return
-        val originalTimeoutMillis = if (event.tone == FeedbackTone.ERROR) 4_500L else 2_800L
+        val originalTimeoutMillis = if (event.tone == FeedbackTone.ERROR)
+            (event.message.length.toLong() * 50L).coerceIn(4_500L, 20_000L) else 2_800L
         // The queued host renders text-only cards, without icons or action buttons.
         val timeoutMillis = recommendedFeedbackTimeoutMillis(
             accessibilityManager = accessibilityManager,

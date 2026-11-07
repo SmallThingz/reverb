@@ -25,7 +25,7 @@ internal typealias LibraryTransitionValue<T, V> = smallthingz.ui.animation.Trans
 // Reverb owns the selected-row and content-size durations; the samplers are generic.
 internal fun libraryColorTween(initial: Color) = LibraryTweenValue(initial,
     (Color.VectorConverter)(initial.colorSpace),
-    tween<Color>(180, easing = FastOutSlowInEasing),
+    tween<Color>((smallthingz.ui.animation.ColorTransition.DURATION_NANOS / 1_000_000).toInt(), easing = FastOutSlowInEasing),
     { AnimationVector4D(0f, 0f, 0f, 0f) })
 internal fun libraryAlphaTween(initial: Float) = LibraryTweenValue(initial, Float.VectorConverter,
     tween<Float>(180, easing = FastOutSlowInEasing), { AnimationVector1D(0f) })

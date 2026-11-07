@@ -29,16 +29,20 @@ internal class RecordingOpenResultDelivery<T : Any>(
     private val deliver: (T?) -> Unit,
     private val reportUndeliveredFailure: () -> Unit,
     private val finish: () -> Unit,
+    private val deliverFailure: ((Throwable?) -> Unit)? = null,
+    private val reportUndeliveredFailureWithCause: ((Throwable?) -> Unit)? = null,
 ) {
     private var retired = false
     private var completed = false
     private var terminal = false
     private var result: T? = null
+    private var failure: Throwable? = null
 
-    fun complete(value: T?) {
+    fun complete(value: T?, failure: Throwable? = null) {
         if (completed || terminal) return
         completed = true
         result = value
+        this.failure = failure.takeIf { value == null }
         drain()
     }
 
@@ -53,15 +57,31 @@ internal class RecordingOpenResultDelivery<T : Any>(
         if (!completed || terminal || (!retired && !navigationAllowed())) return
         terminal = true
         val value = result
+        val error = failure
         result = null
-        try {
-            if (retired) {
-                if (value == null) reportUndeliveredFailure()
-            } else {
-                deliver(value)
-            }
-        } finally {
-            finish()
-        }
+        failure = null
+        deliverTerminalResult(
+            deliver = {
+                if (retired) {
+                    if (value == null) reportFailure(error)
+                } else if (value == null) {
+                    deliverVisibleTerminalOrFallback(
+                        deliverVisible = {
+                            if (deliverFailure != null) deliverFailure.invoke(error) else deliver(null)
+                            true
+                        },
+                        fallback = { reportFailure(error) },
+                    )
+                } else {
+                    deliver(value)
+                }
+            },
+            finish = finish,
+        )
+    }
+
+    private fun reportFailure(error: Throwable?) {
+        if (reportUndeliveredFailureWithCause != null) reportUndeliveredFailureWithCause.invoke(error)
+        else reportUndeliveredFailure()
     }
 }

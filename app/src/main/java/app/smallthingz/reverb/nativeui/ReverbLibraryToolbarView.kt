@@ -115,6 +115,7 @@ private class LibrarySelectionBar(context: Context, private var environment: Rev
         setTextLayout(maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
     private val noise = ReverbNoiseDrawable(resources, environment.palette.surface, ReverbNoiseDrawable.SEED_TOP_BAR)
+    private val noiseColor = noise.colorTransition(this, environment.palette.surface)
     init {
         background = noise
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -122,7 +123,7 @@ private class LibrarySelectionBar(context: Context, private var environment: Rev
     }
     fun bind(value: ReverbViewEnvironment, state: LibraryToolbarState, actions: LibraryToolbarActions) {
         environment = value
-        noise.setBackgroundColor(value.palette.surface)
+        noiseColor.retarget(value.palette.surface)
         title.setText(resources.getQuantityString(R.plurals.recordings_selected, state.selectedCount, state.selectedCount))
         value.bindParagraphStyle(title, ReverbTextRole.TITLE_MEDIUM)
         close.bind(value, true, value.palette.ink, value.palette.border, actions.clearSelection)

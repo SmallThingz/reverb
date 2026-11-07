@@ -14,6 +14,23 @@ import kotlin.math.min
 import kotlin.math.pow
 
 class HomeBufferContrastTest {
+    @Test fun enabledHomeAndRangeTextKeepReadableCompositedEndpoints() {
+        for (dark in listOf(false, true)) {
+            val p = ReverbPalette.fallback(dark)
+            assertTrue("Home enabled dark=$dark", contrast(p.muted, p.field) >= 4.5)
+            assertTrue("Timeline dark=$dark", contrast(p.onSurfaceVariant, p.field) >= 4.5)
+            val pill = composite(reverbColorWithAlpha(p.primaryContainer, .32f), p.field)
+            assertTrue("Range metadata dark=$dark", contrast(p.onPrimaryContainer, pill) >= 4.5)
+            // Counterexamples preserve why these enabled-text alpha reductions were removed.
+            assertTrue("Old Home alpha dark=$dark",
+                contrast(composite(reverbColorWithAlpha(p.muted, .52f), p.field), p.field) < 4.5)
+            if (!dark) {
+                assertTrue(contrast(composite(reverbColorWithAlpha(p.onSurfaceVariant, .66f), p.field), p.field) < 4.5)
+                assertTrue(contrast(composite(reverbColorWithAlpha(p.onPrimaryContainer, .58f), pill), pill) < 4.5)
+            }
+        }
+    }
+
     @Test fun productionColorTweenReproducesOldSelectedRecordingContrastCrossing() {
         for (dark in listOf(false, true)) for (reverse in listOf(false, true)) {
             val p = ReverbPalette.fallback(dark)
@@ -146,7 +163,7 @@ class HomeBufferContrastTest {
             State.RECORDING -> Colors(p.primary, p.onPrimary)
             State.FULL -> Colors(p.tertiary, p.onTertiary)
             State.DISABLED -> Colors(reverbColorWithAlpha(p.primaryContainer, .74f), reverbColorWithAlpha(p.onPrimaryContainer, .62f))
-            State.DIMMED -> Colors(0, reverbColorWithAlpha(p.muted, .52f))
+            State.DIMMED -> Colors(0, p.muted)
             State.DIMMED_DISABLED -> Colors(0, reverbColorWithAlpha(p.muted, .30f))
         }
         private fun palettes() = listOf(ReverbPalette.fallback(false), ReverbPalette.fallback(true),

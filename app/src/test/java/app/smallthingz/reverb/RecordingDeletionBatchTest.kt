@@ -9,6 +9,57 @@ import org.junit.Test
 
 class RecordingDeletionBatchTest {
     @Test
+    fun failedReplayRetainsItsCauseWithoutAttemptingAnySelectedAsset() = runBlocking {
+        val failure = IOException("journal unreadable")
+        var reported: Exception? = null
+        val results = runRecordingDeletionBatch(listOf(1, 2),
+            replayPending = { throw failure }, onReplayFailure = { reported = it },
+            delete = { error("no destructive work after unreadable journal") })
+        assertEquals(listOf(false, false), results)
+        assertTrue(reported === failure)
+    }
+
+    @Test
+    fun metadataFailureCauseSurvivesBatchResult() = runBlocking {
+        val failure = IOException("catalog unavailable")
+        val batch = RecordingDeletionJournalBatch { true }
+        val deleted = completeRecordingDeletionMetadata("entry", persistDeleted = { true },
+            retireCatalog = { throw failure }, retireJournal = { true }, journalBatch = batch)
+        val result = batch.result(listOf(deleted))
+        assertEquals(listOf(true), result.outcomes)
+        assertTrue(result.cleanupFailed)
+        assertTrue(result.cleanupFailure === failure)
+    }
+
+    @Test
+    fun consentHandoffRequiresCurrentAssetAndDurableJournalRetirement() {
+        for (present in listOf(false, true)) for (retired in listOf(false, true)) {
+            val events = mutableListOf<String>()
+            val offered = handOffRecordingDeletionConsent(
+                stillSelectedAsset = { events += "verify"; present },
+                retireUncommittedIntent = { events += "retire"; retired },
+                handOff = { events += "prompt" },
+            )
+            assertEquals(present && retired, offered)
+            assertEquals(if (!present) listOf("verify") else if (!retired) listOf("verify", "retire")
+                else listOf("verify", "retire", "prompt"), events)
+        }
+    }
+
+    @Test
+    fun thrownJournalRetirementCannotOfferConsent() {
+        var offered = false
+        val failure = IOException("durability failure")
+        try {
+            handOffRecordingDeletionConsent({ true }, { throw failure }, { offered = true })
+            error("expected failure")
+        } catch (error: IOException) {
+            assertTrue(error === failure)
+        }
+        assertEquals(false, offered)
+    }
+
+    @Test
     fun failedSingleJournalRetirementKeepsPhysicalSuccessAndReportsFailure() = runBlocking {
         val events = mutableListOf<String>()
         val reports = mutableListOf<Exception?>()

@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.animation.view.ViewColorTransition
+
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.LinearGradient
@@ -60,6 +62,17 @@ internal class ReverbSpringFineSeekView(
     private val environment: SpringFineSeekEnvironment,
 ) : ViewGroup(context) {
     private var palette = environment.palette
+    private var paletteTarget = palette
+    private val paletteMotion:ViewColorTransition by lazy {ViewColorTransition(this,
+        intArrayOf(palette.primary,palette.secondary,palette.tertiary,palette.onSurfaceVariant,palette.onSurface,palette.surface),{
+            palette=paletteTarget.copy(primary=paletteMotion.color(0),secondary=paletteMotion.color(1),
+                tertiary=paletteMotion.color(2),onSurfaceVariant=paletteMotion.color(3),
+                onSurface=paletteMotion.color(4),surface=paletteMotion.color(5))
+            colors.update(palette.primary,palette.secondary,palette.tertiary)
+            binding?.let {puck.glyph.bindImmediately(if(it.isPlaying) ReverbIcon.Pause else ReverbIcon.Play,
+                transitionInk(paletteMotion,palette.onSurface,palette.surface))}
+            puck.invalidate();invalidate()
+        })}
     private val colors = FineSeekColorPalette(palette.primary, palette.secondary, palette.tertiary)
     private var binding: SpringFineSeekBinding? = null
     private var inputActive = false
@@ -108,11 +121,9 @@ internal class ReverbSpringFineSeekView(
     }
 
     fun setPalette(value: ReverbPalette) {
-        if (palette == value) return
-        palette = value
-        colors.update(value.primary, value.secondary, value.tertiary)
-        binding?.let(puck::bind)
-        invalidate()
+        if (paletteTarget == value) return
+        paletteTarget = value
+        paletteMotion.retarget(value.primary,value.secondary,value.tertiary,value.onSurfaceVariant,value.onSurface,value.surface)
     }
 
     /** Reuse the screen/window's existing cursor and geometry; never create another cursor. */
@@ -191,7 +202,7 @@ internal class ReverbSpringFineSeekView(
 
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) = placePuck()
     private fun placePuck() {
-        val x = geometry.puckLeft(model.horizontalPull, layoutDirection == LAYOUT_DIRECTION_RTL)
+        val x = geometry.puckLeft(model.horizontalPull)
         val y = geometry.puckTop(model.horizontalPull, model.rawVerticalPull)
         puck.layout(x, y, x + puck.measuredWidth, y + puck.measuredHeight)
     }
@@ -311,7 +322,8 @@ internal class ReverbSpringFineSeekView(
         fun bind(value: SpringFineSeekBinding) {
             isEnabled = value.enabled
             isFocusable = value.enabled
-            glyph.bind(if (value.isPlaying) ReverbIcon.Pause else ReverbIcon.Play, palette.surface)
+            glyph.bindImmediately(if (value.isPlaying) ReverbIcon.Pause else ReverbIcon.Play,
+                transitionInk(paletteMotion,palette.onSurface,palette.surface))
             glyph.contentDescription = context.getString(if (value.isPlaying) R.string.player_pause else R.string.player_play)
             controller.bind(NativeClickBinding(value.interactionKey ?: NULL_KEY, value.enabled, { performClick() }))
             invalidate()

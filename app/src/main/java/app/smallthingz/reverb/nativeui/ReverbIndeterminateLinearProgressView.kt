@@ -4,6 +4,8 @@
  */
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.animation.view.ViewColorTransition
+
 import android.animation.ValueAnimator
 import android.content.Context
 import android.database.ContentObserver
@@ -46,6 +48,8 @@ internal class ReverbIndeterminateLinearProgressView(
 ) : View(context) {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val motion = NativeIndeterminateLinearMotion()
+    private val paletteMotion=ViewColorTransition(this,
+        intArrayOf(environment.palette.primary,environment.palette.secondaryContainer),{invalidate()})
     private var frameJob: Job? = null
     private var scaleChanges: Channel<Unit>? = null
     private var scaleListener: AutoCloseable? = null
@@ -64,6 +68,7 @@ internal class ReverbIndeterminateLinearProgressView(
         if (environment === next) return
         val densityChanged = environment.textDensity.density != next.textDensity.density
         environment = next
+        paletteMotion.retarget(next.palette.primary,next.palette.secondaryContainer)
         if (densityChanged) requestLayout()
         invalidate()
     }
@@ -131,10 +136,9 @@ internal class ReverbIndeterminateLinearProgressView(
     }
 
     override fun onDraw(canvas: Canvas) {
-        val colors = environment.palette
         nativeIndeterminateLinearSegments(width.toFloat(), height.toFloat(), environment.textDensity.density,
             motion.firstHead, motion.firstTail, motion.secondHead, motion.secondTail) { start, end, active ->
-            paint.color = if (active) colors.primary else colors.secondaryContainer
+            paint.color = paletteMotion.color(if(active)0 else 1)
             paint.strokeWidth = height.toFloat()
             paint.style = Paint.Style.STROKE
             nativeLinearProgressLine(width.toFloat(), height.toFloat(),

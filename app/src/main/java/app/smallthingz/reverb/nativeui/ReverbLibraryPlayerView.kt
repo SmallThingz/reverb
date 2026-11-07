@@ -42,6 +42,7 @@ internal data class LibraryPlayerUiState(
     val backGestureActive: Boolean,
     val backProgress: Float,
     val backDirection: Float,
+    val preparing: Boolean = false,
 ) {
     val trimBackProgress: Float get() = if (trimMode && !trimSaving && backGestureActive) backProgress.coerceIn(0f, 1f) else 0f
     val collapseProgress: Float get() = if (!trimMode && !trimSaving && backGestureActive) backProgress.coerceIn(0f, 1f) else 0f
@@ -305,11 +306,12 @@ private class PlayerTimes(context: Context, private var environment: ReverbViewE
     private val startBoundary = PlayerBoundary(start, InlineFineSeekTarget.TRIM_START)
     private val endBoundary = PlayerBoundary(end, InlineFineSeekTarget.TRIM_END)
     private var lastTrimMode: Boolean? = null
+    private var lastPreparing = false
     private var lastStartUnit = Long.MIN_VALUE
     private var lastEndUnit = Long.MIN_VALUE
     init { importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO; addView(start); addView(end) }
     fun bind(value: ReverbViewEnvironment, state: LibraryPlayerUiState, actions: LibraryPlayerActions) {
-        val modeChanged = lastTrimMode != state.trimMode
+        val modeChanged = lastTrimMode != state.trimMode || lastPreparing != state.preparing
         val typographyChanged = lastTrimMode == null || environment !== value
         environment = value
         fun bindText(label: ReverbParagraphView, first: Boolean) {
@@ -319,17 +321,19 @@ private class PlayerTimes(context: Context, private var environment: ReverbViewE
             } else if (first) state.positionMillis else state.durationMillis
             val unit = libraryPlayerTimeDisplayUnit(millis, state.trimMode)
             if (modeChanged || unit != (if (first) lastStartUnit else lastEndUnit)) {
-                label.setText(if (state.trimMode) formatRangeTimeInput(millis / 1000.0) else formatPlaybackTime(millis))
+                label.setText(if (first && state.preparing) context.getString(R.string.recording_playback_preparing)
+                    else if (state.trimMode) formatRangeTimeInput(millis / 1000.0) else formatPlaybackTime(millis))
                 if (first) lastStartUnit = unit else lastEndUnit = unit
             }
             if (typographyChanged) {
                 label.setTypography(playerTimeTypography, value.textDensity, value.sharedFontResolver)
             }
-            label.setTextColor(if (state.trimMode) { if (state.fineSeekTarget == target) value.palette.primary else value.palette.ink }
+            label.animateTextColor(if (state.trimMode) { if (state.fineSeekTarget == target) value.palette.primary else value.palette.ink }
                 else if (first) value.palette.ink else value.palette.muted)
         }
         bindText(start, true); bindText(end, false)
         lastTrimMode = state.trimMode
+        lastPreparing = state.preparing
         startBoundary.bind(state, actions); endBoundary.bind(state, actions)
     }
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
@@ -357,7 +361,7 @@ private class PlayerBoundary(private val label: ReverbParagraphView, private val
         label.setOnKeyListener { _, code, event ->
             val current = state
             val limits = current?.let { inlineTrimBoundaryLimits(it.durationMillis, target) }
-            if (current == null || !current.trimMode || limits == null || event.action != KeyEvent.ACTION_DOWN) false
+            if (current == null || !current.trimMode || !current.boundaryInputEnabled || limits == null) false
             else {
                 val selected = if (target == InlineFineSeekTarget.TRIM_START) current.trimStartMillis else current.trimEndMillis
                 val requested = when (code) {
@@ -367,7 +371,15 @@ private class PlayerBoundary(private val label: ReverbParagraphView, private val
                     KeyEvent.KEYCODE_MOVE_END -> limits.last.toDouble()
                     else -> null
                 }
-                requested?.let { actions?.editBoundary?.invoke(target, it) } ?: false
+                if (requested == null) false else when (event.action) {
+                    KeyEvent.ACTION_DOWN -> {
+                        // A clamped adjustment still belongs to this focused boundary.
+                        actions?.editBoundary?.invoke(target, requested)
+                        true
+                    }
+                    KeyEvent.ACTION_UP -> true
+                    else -> false
+                }
             }
         }
         label.accessibilityDelegate = object : View.AccessibilityDelegate() {

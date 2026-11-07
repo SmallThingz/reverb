@@ -10,7 +10,7 @@ internal fun CoroutineScope.launchRecordingBackgroundDeletion(
     previous: Job?,
     recordings: List<RecordingEntity>,
     deleteBatch: suspend (List<RecordingEntity>) -> RecordingDeletionBatchResult,
-    reportFailure: () -> Unit,
+    reportFailure: (RecordingDeletionBatchResult) -> Unit,
 ): Deferred<RecordingDeletionBatchResult> {
     val targets = recordings.toList()
     return async {
@@ -19,14 +19,19 @@ internal fun CoroutineScope.launchRecordingBackgroundDeletion(
             deleteBatch(targets)
         } catch (error: Exception) {
             try {
-                reportFailure()
+                reportFailure(RecordingDeletionBatchResult(List(targets.size) { false }, false,
+                    failures = targets.indices.associateWith {
+                        RecordingDeletionFailure(RecordingDeletionFailureReason.CATALOG_UNAVAILABLE, error)
+                    }))
             } catch (reportingError: Exception) {
                 if (reportingError !== error) error.addSuppressed(reportingError)
             }
             throw error
         }
-        if (result.cleanupFailed || result.outcomes.size != targets.size || result.outcomes.any { !it }) {
-            reportFailure()
+        if (result.cleanupFailed || result.outcomes.size != targets.size ||
+            result.outcomes.withIndex().any { (index, deleted) -> !deleted && index !in result.consentIndices }
+        ) {
+            reportFailure(result)
         }
         result
     }

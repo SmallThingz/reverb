@@ -4,6 +4,8 @@
  */
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.animation.view.ViewColorTransition
+
 import android.content.Context
 import android.database.ContentObserver
 import android.graphics.Canvas
@@ -42,7 +44,11 @@ internal open class ReverbIncidentLoadingView(
         this.color = color
     }
     private val arc = RectF()
+    private val colorMotion:ViewColorTransition by lazy {ViewColorTransition(this,intArrayOf(paint.color),{
+        paint.color=colorMotion.color(0);invalidate()
+    },durationScale)}
     private var frameJob: Job? = null
+    private var presentationActive = true
     private var origin = Long.MIN_VALUE
     private var lastScale = Float.NaN
     private var rotation = 0f
@@ -57,7 +63,14 @@ internal open class ReverbIncidentLoadingView(
         if (android.os.Build.VERSION.SDK_INT >= 29) isForceDarkAllowed = false
     }
 
-    fun setColor(value: Int) { if (paint.color != value) { paint.color = value; invalidate() } }
+    fun setColor(value: Int) {colorMotion.retarget(value)}
+
+    /** Retained panels can be offscreen without changing View visibility. Keep their last pose. */
+    fun setPresentationActive(active: Boolean) {
+        if (presentationActive == active) return
+        presentationActive = active
+        updateScheduling()
+    }
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
@@ -84,7 +97,7 @@ internal open class ReverbIncidentLoadingView(
     }
 
     private fun updateScheduling() {
-        if (!isAttachedToWindow || !isShown || windowVisibility != VISIBLE) {
+        if (!presentationActive || !isAttachedToWindow || !isShown || windowVisibility != VISIBLE) {
             stopFrames()
             return
         }
@@ -99,7 +112,7 @@ internal open class ReverbIncidentLoadingView(
             invalidate()
         } else if (frameJob?.isActive != true) {
             frameJob = scope.launch {
-                while (isActive && isAttachedToWindow && isShown && windowVisibility == VISIBLE) {
+                while (isActive && presentationActive && isAttachedToWindow && isShown && windowVisibility == VISIBLE) {
                     frames.withFrameNanos(::frame)
                 }
             }
@@ -112,7 +125,7 @@ internal open class ReverbIncidentLoadingView(
     }
 
     private fun frame(frameTimeNanos: Long) {
-        if (!isAttachedToWindow || !isShown || windowVisibility != VISIBLE) return
+        if (!presentationActive || !isAttachedToWindow || !isShown || windowVisibility != VISIBLE) return
         val scale = durationScale()
         if (scale == 0f) { updateScheduling(); return }
         if (origin == Long.MIN_VALUE || lastScale != scale) {

@@ -33,6 +33,7 @@ internal data class ReverbHomeBodyState(
     val oneShotController: AudioBlobController,
     val loopingController: AudioBlobController,
     val visualizerVisible: Boolean,
+    val skipSilenceEnabled: Boolean = false,
 )
 
 /**
@@ -118,7 +119,7 @@ internal class ReverbHomeBodyView(
             if (renderedBuffer == BufferSlot.ONE_SHOT) value.oneShotController else value.loopingController,
             recording, value.saving, captureEnabled, clickable, full,
             disabled || isCaptureBlockedByOtherBuffer(renderedBuffer, value.listening, value.activeBuffer),
-            readout.primary, readout.secondary, value.visualizerVisible,
+            readout.primary, readout.secondary, value.visualizerVisible, value.skipSilenceEnabled,
         ), frame, activateRenderedBuffer)
         controls.bind(ReverbHomeControlsState(renderedBuffer, value.activeBuffer, value.listening,
             value.oneShotEnabled, value.oneShotFull, value.loopingEnabled, serviceReady, value.saving,

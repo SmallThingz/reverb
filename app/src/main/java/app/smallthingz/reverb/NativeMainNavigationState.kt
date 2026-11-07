@@ -61,6 +61,13 @@ internal class NativeMainNavigationState(restored: NativeMainSavedNavigation = N
     fun openSettings(bufferTargetCode: Int = -1) { showSettings = true; settingsBufferTargetCode = bufferTargetCode }
     fun closeSettings() { showSettings = false; settingsBufferTargetCode = -1 }
     fun openLibrary() { showLibrary = true }
+    fun openSavedRecordingLibrary() {
+        closeSettings()
+        closeAbout()
+        closeIncidents()
+        cancelVerticalReveal()
+        openLibrary()
+    }
     fun closeLibrary() { showLibrary = false }
     fun openSettingsFromLibrary() { closeLibrary(); openSettings() }
     fun openIncidents() { showIncidents = true }

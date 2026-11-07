@@ -21,6 +21,9 @@ internal const val SILENCE_MIN_DB = -96
 internal const val SILENCE_MAX_POINTS = 16
 internal const val SILENCE_HOLD_MILLIS = 200
 internal const val SILENCE_GRAPH_BINS = 96
+internal const val SILENCE_DEFAULT_CLEARANCE_DB = 6f
+internal const val SILENCE_MIN_CLEARANCE_DB = -6f
+internal const val SILENCE_MAX_CLEARANCE_DB = 18f
 private val silenceCurveFrequencies = listOf(20, 40, 80, 160, 315, 630, 1_250, 2_500, 5_000, 10_000, 20_000)
 
 /** Display-only placeholder: zero dB must never become an uncalibrated capture threshold. */
@@ -35,8 +38,10 @@ internal data class SilenceGateConfig(
         SilencePoint(20, -50), SilencePoint(200, -50),
         SilencePoint(2_000, -50), SilencePoint(20_000, -50),
     ),
+    val clearanceDb: Float = SILENCE_DEFAULT_CLEARANCE_DB,
 ) {
     fun validate(): SilenceGateConfig {
+        require(clearanceDb.isFinite() && clearanceDb in SILENCE_MIN_CLEARANCE_DB..SILENCE_MAX_CLEARANCE_DB)
         require(points.size in 2..SILENCE_MAX_POINTS)
         require(points.first().hz == SILENCE_MIN_HZ && points.last().hz == SILENCE_MAX_HZ)
         require(points.all { it.hz in SILENCE_MIN_HZ..SILENCE_MAX_HZ && it.db in SILENCE_MIN_DB..0 })
@@ -67,20 +72,22 @@ internal fun silenceFrequencyAt(fraction: Double): Int =
     (20.0 * 10.0.pow(3.0 * fraction.coerceIn(0.0, 1.0))).roundToInt().coerceIn(20, 20_000)
 
 internal fun encodeSilenceGate(config: SilenceGateConfig): String = config.validate().let {
-    "1;${if (it.enabled) 1 else 0};" + it.points.joinToString(",") { p -> "${p.hz}:${p.db}" }
+    "2;${if (it.enabled) 1 else 0};" + it.points.joinToString(",") { p -> "${p.hz}:${p.db}" } + ";${it.clearanceDb}"
 }
 
 internal fun decodeSilenceGate(encoded: String?): SilenceGateConfig {
     if (encoded == null) return SilenceGateConfig()
     require(encoded.length <= 512) { "Silence curve is too large" }
     val fields = encoded.split(';')
-    require(fields.size == 3 && fields[0] == "1" && fields[1] in listOf("0", "1"))
+    require((fields.size == 3 && fields[0] == "1" || fields.size == 4 && fields[0] == "2") &&
+        fields[1] in listOf("0", "1"))
     val points = fields[2].split(',').map {
         val pair = it.split(':')
         require(pair.size == 2)
         SilencePoint(pair[0].toInt(), pair[1].toInt())
     }
-    return SilenceGateConfig(fields[1] == "1", points).validate()
+    return SilenceGateConfig(fields[1] == "1", points,
+        if (fields[0] == "2") fields[3].toFloat() else SILENCE_DEFAULT_CLEARANCE_DB).validate()
 }
 
 /** Full PCM frames, either channel independently. Opposite-phase stereo must not cancel the detector. */
@@ -490,29 +497,37 @@ internal class SilenceSpectrum(val sampleRate: Int, val channels: Int, val forma
         else Double.POSITIVE_INFINITY
     }
 
-    fun exceeds(thresholds: DoubleArray, config: SilenceGateConfig? = null): Boolean {
-        if (invalidSamples) return true // Never silently discard malformed input as silence.
+    fun exceeds(thresholds: DoubleArray, config: SilenceGateConfig? = null): Boolean =
+        classify(thresholds, config, 1.0) == SilenceGateDecision.BASELINE
+
+    fun classify(thresholds: DoubleArray, config: SilenceGateConfig?, continuationScale: Double): SilenceGateDecision {
+        if (invalidSamples) return SilenceGateDecision.BASELINE // Never discard malformed input as silence.
+        var continuation = false
         val flat = config != null && config.points.all { it.db == config.points.first().db }
         // A sub-window cannot resolve every frequency. Only a peak below every
         // possible cutoff proves it quiet; retain unresolved higher content.
         if (config != null && analyzedFrames < hop &&
-            shortBlockPeakPower > 10.0.pow(config.points.minOf { it.db } / 10.0)) return true
+            shortBlockPeakPower > 10.0.pow(config.points.minOf { it.db } / 10.0)) return SilenceGateDecision.BASELINE
         for (channel in 0 until channels) for (bin in 1 until powers.size) {
             val index = channel * powers.size + bin
             val hz = detectedFrequencies[index]
             if (hz !in SILENCE_MIN_HZ.toDouble()..SILENCE_MAX_HZ.toDouble()) continue
             val threshold = if (config != null && (!flat || !thresholds[bin].isFinite()) && hz != frequency(bin))
                 10.0.pow(config.threshold(hz) / 10.0) else thresholds[bin]
-            if (detectedPowers[index] > threshold) return true
+            if (detectedPowers[index] > threshold) return SilenceGateDecision.BASELINE
+            if (!continuation && continuationScale < 1.0 && detectedPowers[index] > threshold * continuationScale)
+                continuation = true
         }
         for (index in fittedPowers.indices) {
             val hz = fittedFrequencies[index]
             if (fittedPowers[index] <= 0.0 || hz !in SILENCE_MIN_HZ.toDouble()..SILENCE_MAX_HZ.toDouble()) continue
             val bin = (hz * size / sampleRate).roundToInt().coerceIn(1, powers.lastIndex)
             val threshold = if (config != null) 10.0.pow(config.threshold(hz) / 10.0) else thresholds[bin]
-            if (fittedPowers[index] > threshold) return true
+            if (fittedPowers[index] > threshold) return SilenceGateDecision.BASELINE
+            if (!continuation && continuationScale < 1.0 && fittedPowers[index] > threshold * continuationScale)
+                continuation = true
         }
-        return false
+        return if (continuation) SilenceGateDecision.CONTINUATION else SilenceGateDecision.QUIET
     }
 
     fun graph(): List<Float> {
@@ -586,6 +601,11 @@ internal interface SilenceGateOutput {
     fun gap()
 }
 
+internal enum class SilenceGateDecision { QUIET, CONTINUATION, BASELINE }
+
+private const val SILENCE_CONTINUATION_MILLIS = 1000
+private const val SILENCE_CONTINUATION_POWER = 0.251188643150958 // -6 dB, evaluated once.
+
 /** One overlapping analysis window of latency, bounded memory, and byte-exact retained PCM. */
 internal class SilenceGateStream(
     val sampleRate: Int,
@@ -603,6 +623,11 @@ internal class SilenceGateStream(
     private var frames = 0
     private var sourceFrame = 0L
     private var holdFrames = 0L
+    private val holdFrameCount = sampleRate.toLong() * SILENCE_HOLD_MILLIS / 1000
+    private val continuationFrameCount = sampleRate.toLong() * SILENCE_CONTINUATION_MILLIS / 1000
+    private val continuationPowerSlope = (1.0 - SILENCE_CONTINUATION_POWER) /
+        (continuationFrameCount - holdFrameCount).coerceAtLeast(1)
+    private var continuationFrames = 0L
     private var lastKept = true // The caller may already have an open pre-gate capture span.
     private var finished = false
     private var failed = false
@@ -610,6 +635,10 @@ internal class SilenceGateStream(
         private set
     var skippedFrames = 0L
         private set
+
+    /** Last completed gate decision, including its hold tail; pending input is not silence proof. */
+    val suppressingSilence: Boolean
+        get() = config.enabled && !finished && !failed && !lastKept
 
     fun accept(bytes: ByteArray, offset: Int, count: Int) {
         check(!finished && !failed)
@@ -650,7 +679,13 @@ internal class SilenceGateStream(
         spectrum.analyze(buffer, frames,
             observeBoundaries = (config.enabled || onSpectrum != null) && (sourceFrame == 0L || finished))
         onSpectrum?.invoke(spectrum, count)
-        var triggered = config.enabled && spectrum.exceeds(thresholds, config)
+        // Only a true baseline crossing arms this clock. Softer continuation cannot reset it,
+        // and a closed gate cannot reopen below baseline. The power ramp is precomputed once.
+        val continuationScale = if (lastKept && holdFrames == 0L && continuationFrames > 0L)
+            (1.0 - continuationFrames * continuationPowerSlope).coerceIn(SILENCE_CONTINUATION_POWER, 1.0) else 1.0
+        val decision = if (config.enabled) spectrum.classify(thresholds, config, continuationScale)
+            else SilenceGateDecision.QUIET
+        var triggered = decision == SilenceGateDecision.BASELINE
         // A localized onset/tail has no overlapping neighbour outside the stream.
         // Move only eligible transient channels to the window centre; stationary
         // channels must not gain artificial extension sidelobes. Require an actual
@@ -665,17 +700,27 @@ internal class SilenceGateStream(
             if (startChannels != 0) triggered = boundaryExceeds(atStart = true, startChannels) || triggered
             if (endChannels != 0) triggered = boundaryExceeds(atStart = false, endChannels) || triggered
         }
-        val keep = !config.enabled || triggered || holdFrames > 0L
-        if (triggered) holdFrames = sampleRate.toLong() * SILENCE_HOLD_MILLIS / 1000
-        else holdFrames = (holdFrames - count).coerceAtLeast(0)
-        if (keep) {
-            output.audio(buffer, 0, count * spectrum.frameBytes, sourceFrame)
-            retainedFrames += count
-        } else {
-            if (lastKept) output.gap()
-            skippedFrames += count
+        val keptCount = when {
+            !config.enabled || triggered || holdFrames > 0L -> count
+            decision == SilenceGateDecision.CONTINUATION -> minOf(count.toLong(), continuationFrames).toInt()
+            else -> 0
         }
-        lastKept = keep
+        if (triggered) {
+            holdFrames = holdFrameCount
+            continuationFrames = continuationFrameCount
+        } else {
+            holdFrames = (holdFrames - count).coerceAtLeast(0)
+            continuationFrames = (continuationFrames - count).coerceAtLeast(0)
+        }
+        if (keptCount > 0) {
+            output.audio(buffer, 0, keptCount * spectrum.frameBytes, sourceFrame)
+            retainedFrames += keptCount
+        }
+        if (keptCount < count) {
+            if (lastKept || keptCount > 0) output.gap()
+            skippedFrames += count - keptCount
+        }
+        lastKept = keptCount == count
         sourceFrame += count
         val bytes = count * spectrum.frameBytes
         buffer.copyInto(buffer, 0, bytes, frames * spectrum.frameBytes)
@@ -691,7 +736,9 @@ internal class SilenceGateStream(
     }
 }
 
-internal fun sampledSilenceCurve(peaks: List<Float>, maxHz: Int): List<SilencePoint> {
+internal fun sampledSilenceCurve(peaks: List<Float>, maxHz: Int,
+    clearanceDb: Float = SILENCE_DEFAULT_CLEARANCE_DB): List<SilencePoint> {
+    require(clearanceDb.isFinite() && clearanceDb in SILENCE_MIN_CLEARANCE_DB..SILENCE_MAX_CLEARANCE_DB)
     require(peaks.size == SILENCE_GRAPH_BINS && peaks.all { it.isFinite() })
     require(maxHz in SILENCE_MIN_HZ..SILENCE_MAX_HZ)
     val frequencies = silenceCurveFrequencies
@@ -704,6 +751,6 @@ internal fun sampledSilenceCurve(peaks: List<Float>, maxHz: Int): List<SilencePo
         // The first knot beyond Nyquist still bounds interpolation inside the measured band.
         // Only knots whose entire adjacent interval is above it use the unmeasured default.
         val measured = if (low > maxHz || first > last) -56f else (first..last).maxOf { peaks[it] }
-        SilencePoint(hz, (measured + 6).roundToInt().coerceIn(SILENCE_MIN_DB, -6))
+        SilencePoint(hz, (measured + clearanceDb).roundToInt().coerceIn(SILENCE_MIN_DB, -6))
     }
 }

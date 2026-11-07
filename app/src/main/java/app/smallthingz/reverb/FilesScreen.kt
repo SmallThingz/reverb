@@ -52,7 +52,7 @@ internal suspend fun runCommittedRecordingRename(
 internal class RenameUiCallbackGate(
     private var onRenamed: ((RecordingEntity) -> Unit)?,
     private var onRejected: (() -> Unit)?,
-    private var onUncertain: (() -> Unit)?,
+    private var onUncertain: ((Throwable) -> Unit)?,
     private var onHiddenTerminal: (() -> Unit)?,
     isVisible: () -> Boolean,
 ) {
@@ -73,7 +73,7 @@ internal class RenameUiCallbackGate(
 
     fun rejected(): Boolean = deliverVisible { onRejected?.invoke() }
 
-    fun uncertain(): Boolean = deliverVisible { onUncertain?.invoke() }
+    fun uncertain(failure: Throwable): Boolean = deliverVisible { onUncertain?.invoke(failure) }
 
     private inline fun deliverVisible(deliver: () -> Unit): Boolean {
         if (!attached) return false
@@ -89,11 +89,11 @@ internal class RenameUiCallbackGate(
 internal class RenameResultReceiver(
     onRenamed: (RecordingEntity) -> Unit,
     onRejected: () -> Unit,
-    onUncertain: () -> Unit,
+    onUncertain: (Throwable) -> Unit,
     onHiddenTerminal: () -> Unit,
     isUiVisible: () -> Boolean,
     private val onDetachedSuccess: (RecordingEntity) -> Unit,
-    private val onDetachedFailure: () -> Unit,
+    private val onDetachedFailure: (Throwable?) -> Unit,
     private val onTerminal: (RenameResultReceiver) -> Unit,
 ) {
     private val uiCallbacks = RenameUiCallbackGate(
@@ -121,14 +121,14 @@ internal class RenameResultReceiver(
                         } else {
                             deliverVisibleTerminalOrFallback(
                                 deliverVisible = uiCallbacks::rejected,
-                                fallback = onDetachedFailure,
+                                fallback = { onDetachedFailure(null) },
                             )
                         }
                     },
-                    onFailure = {
+                    onFailure = { failure ->
                         deliverVisibleTerminalOrFallback(
-                            deliverVisible = uiCallbacks::uncertain,
-                            fallback = onDetachedFailure,
+                            deliverVisible = { uiCallbacks.uncertain(failure) },
+                            fallback = { onDetachedFailure(failure) },
                         )
                     },
                 )

@@ -143,6 +143,70 @@ class RecordingOpenDeliveryTest {
     }
 
     @Test
+    fun verificationCauseSurvivesVisibleAndRetiredHandoffWithoutDuplicateReplacement() {
+        for (retired in listOf(false, true)) {
+            var foreground = false
+            val failure = java.io.IOException("provider unavailable", SecurityException("access denied"))
+            val delivered = mutableListOf<Throwable?>()
+            var finished = 0
+            val delivery = RecordingOpenResultDelivery<String>(
+                navigationAllowed = { foreground },
+                deliver = { error("failure became a successful open") },
+                reportUndeliveredFailure = { error("cause was discarded") },
+                finish = { finished++ },
+                deliverFailure = { check(!retired); delivered += it },
+                reportUndeliveredFailureWithCause = { check(retired); delivered += it },
+            )
+            delivery.complete(null, failure)
+            delivery.complete(null, SecurityException("duplicate must not replace cause"))
+            if (retired) delivery.retire() else {
+                foreground = true
+                delivery.foregroundChanged()
+            }
+            delivery.foregroundChanged()
+            delivery.retire()
+            assertEquals(1, delivered.size)
+            assertSame(failure, delivered.single())
+            assertEquals(1, finished)
+        }
+    }
+
+    @Test
+    fun failedVisibleErrorDeliveryRunsFallbackWithOriginalCauseAndFinishesOnce() {
+        val sourceFailure = SecurityException("provider denied read")
+        val callbackFailure = IllegalStateException("UI delivery failed")
+        val fallbackFailure = IllegalArgumentException("fallback failed")
+        val cleanupFailure = IllegalArgumentException("terminal cleanup failed")
+        val delivered = mutableListOf<Throwable?>()
+        var finished = 0
+        val delivery = RecordingOpenResultDelivery<String>(
+            navigationAllowed = { true }, deliver = {}, reportUndeliveredFailure = {},
+            finish = { finished++; throw cleanupFailure },
+            deliverFailure = { delivered += it; throw callbackFailure },
+            reportUndeliveredFailureWithCause = { delivered += it; throw fallbackFailure },
+        )
+        val thrown = assertThrows(IllegalStateException::class.java) { delivery.complete(null, sourceFailure) }
+        assertSame(callbackFailure, thrown)
+        assertEquals(listOf(fallbackFailure, cleanupFailure), thrown.suppressed.toList())
+        assertEquals(2, delivered.size)
+        delivered.forEach { assertSame(sourceFailure, it) }
+        assertEquals(1, finished)
+        delivery.complete(null, java.io.IOException("duplicate"))
+        assertEquals(2, delivered.size)
+    }
+
+    @Test
+    fun unverifiedNullResultKeepsUnknownCauseInsteadOfInventingMissingOrPermission() {
+        var delivered = false
+        val delivery = RecordingOpenResultDelivery<String>(
+            navigationAllowed = { true }, deliver = {}, reportUndeliveredFailure = {}, finish = {},
+            deliverFailure = { assertEquals(null, it); delivered = true },
+        )
+        delivery.complete(null)
+        assertEquals(true, delivered)
+    }
+
+    @Test
     fun throwingTerminalCallbackStillFinishesAndCannotReplay() {
         val events = mutableListOf<String>()
         val expected = IllegalStateException("delivery failed")

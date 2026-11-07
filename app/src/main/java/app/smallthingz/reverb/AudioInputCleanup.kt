@@ -41,7 +41,7 @@ internal fun reportAudioInputReleaseFailure(context: Context, source: String, er
     Log.e("ReverbAudioInput", "$source failed", error)
     RecordingIncidentStore.recordUnexpectedErrorInBackground(appContext, source, error)
     AppFeedbackCenter.post(
-        appContext.getString(R.string.audio_input_release_failed),
+        actionableErrorMessage(appContext, appContext.getString(R.string.audio_input_release_failed), error),
         FeedbackTone.ERROR,
     )
 }

@@ -113,11 +113,11 @@ internal class ReverbRangeTimelineView(
     private fun bindTextEnvironment() {
         waveform.setPalette(ProgressiveWaveformPalette(environment.palette.primary,
             environment.palette.onSurfaceVariant, environment.palette.tertiary))
-        val color = reverbColorWithAlpha(environment.palette.onSurfaceVariant, .66f)
+        val color = environment.palette.onSurfaceVariant
         first.setTypography(rangeTimelineLabelStyle, environment.textDensity, environment.sharedFontResolver)
-        first.setTextColor(color)
+        first.animateTextColor(color)
         last.setTypography(rangeTimelineLabelStyle, environment.textDensity, environment.sharedFontResolver)
-        last.setTextColor(color)
+        last.animateTextColor(color)
     }
 
     private fun updateMorph() {
@@ -294,7 +294,7 @@ internal class ReverbRangeTimelineView(
                 val textColor = smallthingz.ui.graphics.Color(color)
                 if (renderedStyle.color != textColor) renderedStyle = rangeBubbleTextStyle.copy(color = textColor)
                 text.setTypography(renderedStyle, environment.textDensity, environment.sharedFontResolver)
-                text.setTextColor(color)
+                text.animateTextColor(color)
             }
         }
         override fun onMeasure(w: Int, h: Int) {

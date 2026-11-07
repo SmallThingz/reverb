@@ -17,6 +17,78 @@ import org.junit.Test
 import smallthingz.ui.geometry.Rect
 
 class NativeBringIntoViewRequestQueueTest {
+    @Test fun alreadyCancelledCallerCannotEnterOrInterruptLiveRequests() = runBlocking {
+        for (bounds in listOf(rect(40f, 60f), rect(200f, 300f))) {
+            val queue = NativeBringIntoViewRequestQueue()
+            val live = enqueue(queue, { rect(0f, 100f) })
+            var completions = 0
+            val cancelled = enqueue(queue, { bounds }, beforeEnqueue = { it.cancel() }) { completions++ }
+            cancelled.job.join()
+            assertFalse(cancelled.accepted)
+            assertTrue(cancelled.continuation.isCancelled)
+            assertEquals(1, completions)
+            assertEquals(listOf(rect(0f, 100f)), queue.bounds())
+            assertTrue(live.continuation.isActive)
+            queue.cancelAndRemoveAll(null)
+            live.job.join()
+            assertTrue(queue.isEmpty())
+        }
+    }
+
+    @Test fun cancellationDuringInsertionCannotLeaveAnUnremovableEntry() = runBlocking {
+        for (incoming in listOf(rect(40f, 60f), rect(-10f, 110f), rect(200f, 300f))) {
+            val queue = NativeBringIntoViewRequestQueue()
+            var cancelIncoming: (() -> Unit)? = null
+            val live = enqueue(queue, {
+                cancelIncoming?.invoke()
+                rect(0f, 100f)
+            })
+            val cancelled = enqueue(queue, { incoming }, beforeEnqueue = { continuation ->
+                cancelIncoming = { continuation.cancel() }
+            })
+            cancelled.job.join()
+            cancelIncoming = null
+            assertFalse(cancelled.accepted)
+            assertEquals(listOf(rect(0f, 100f)), queue.bounds())
+            assertTrue(live.continuation.isActive)
+            queue.cancelAndRemoveAll(null)
+            live.job.join()
+            assertTrue(queue.isEmpty())
+        }
+    }
+
+    @Test fun cancelledCallerLeavesAnEmptyQueueSafeForTerminalCleanup() = runBlocking {
+        val queue = NativeBringIntoViewRequestQueue()
+        val cancelled = enqueue(queue, { rect(0f, 100f) }, beforeEnqueue = { it.cancel() })
+        cancelled.job.join()
+        assertFalse(cancelled.accepted)
+        queue.cancelAndRemoveAll(null)
+        assertTrue(queue.isEmpty())
+    }
+
+    @Test fun boundsCallbackCanCancelItsOwnRequestOrAncestorWithoutInvalidatingInsertion() = runBlocking {
+        for (cancelSelf in listOf(false, true)) {
+            val queue = NativeBringIntoViewRequestQueue()
+            val outer = rect(0f, 200f)
+            val small = rect(40f, 60f)
+            val incoming = rect(50f, 55f)
+            val ancestor = enqueue(queue, { outer })
+            var cancelQueued: (() -> Unit)? = null
+            val child = enqueue(queue, {
+                cancelQueued?.invoke()
+                small
+            })
+            cancelQueued = { (if (cancelSelf) child else ancestor).continuation.cancel() }
+            val live = enqueue(queue, { incoming })
+            cancelQueued = null
+            assertTrue(live.accepted)
+            assertEquals(listOf(incoming, if (cancelSelf) outer else small), queue.bounds())
+            queue.cancelAndRemoveAll(null)
+            ancestor.job.join(); child.job.join(); live.job.join()
+            assertTrue(queue.isEmpty())
+        }
+    }
+
     @Test fun partiallyOverlappingParentCancelsItsNestedSuffix() = runBlocking {
         val queue = NativeBringIntoViewRequestQueue()
         val a = rect(0f, 100f)
@@ -129,6 +201,7 @@ class NativeBringIntoViewRequestQueueTest {
     private fun CoroutineScope.enqueue(
         queue: NativeBringIntoViewRequestQueue,
         bounds: () -> Rect?,
+        beforeEnqueue: (CancellableContinuation<Unit>) -> Unit = {},
         onCompletion: () -> Unit = {},
     ): Probe {
         lateinit var continuation: CancellableContinuation<Unit>
@@ -137,6 +210,7 @@ class NativeBringIntoViewRequestQueueTest {
             try {
                 suspendCancellableCoroutine<Unit> {
                     continuation = it
+                    beforeEnqueue(it)
                     accepted = queue.enqueue(NativeContentInViewOwner.Request(bounds, it))
                 }
             } finally {

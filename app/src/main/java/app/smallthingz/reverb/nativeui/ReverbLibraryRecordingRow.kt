@@ -59,7 +59,7 @@ internal data class LibraryRecordingRowFrame(
             if (row.selected) reverbColorWithAlpha(palette.primary, 0.48f) else palette.border,
             if (row.selected) reverbColorWithAlpha(palette.primary, 0.18f) else palette.raised,
             if (row.selected) palette.primary else palette.ink,
-            if (row.selectionActive && !row.selected) 0.75f else 1f,
+            1f,
         )
     }
 }
@@ -86,6 +86,7 @@ internal class ReverbLibraryRecordingRow(
     private var outerSizeMotion: LibraryTweenValue<IntSize, smallthingz.ui.animation.core.AnimationVector2D>? = null
     private var exitPosted = false
     var onExpansionExit: (() -> Unit)? = null
+    var onPresentationVisibilityChanged: (() -> Unit)? = null
     private val expansionViewport = LibraryExpansionViewport(context,
         currentMotion = { expansionMotion },
         needsFrames = { scheduleFrame() })
@@ -193,7 +194,7 @@ internal class ReverbLibraryRecordingRow(
     val summarySurface: ReverbGroupLayout get() = surface
 
     fun setFrame(frame: LibraryRecordingRowFrame) {
-        surface.setPalette(frame.background, frame.border)
+        surface.setPaletteImmediately(frame.background, frame.border)
         surface.setRecordingSeparatorColor(environment.palette.border)
         column.alpha = frame.contentAlpha
         body.leading.setColors(frame.disc, frame.icon)
@@ -297,6 +298,14 @@ internal class ReverbLibraryRecordingRow(
         }, ReverbRowIndicationSink(indication) { x, y, output -> output.set(x, y) })
 
     override fun onAttachedToWindow() { super.onAttachedToWindow(); bindInputs(); scheduleFrame() }
+    override fun onVisibilityChanged(changedView: View, visibility: Int) {
+        super.onVisibilityChanged(changedView, visibility)
+        onPresentationVisibilityChanged?.invoke()
+    }
+    override fun onWindowVisibilityChanged(visibility: Int) {
+        super.onWindowVisibilityChanged(visibility)
+        onPresentationVisibilityChanged?.invoke()
+    }
     override fun onDetachedFromWindow() {
         cancelFrames()
         bodyInput.bind(null)
@@ -313,6 +322,18 @@ private class RecordingCardColumn(context: Context, private val body: View) : Vi
         clipChildren = false
         clipToPadding = false
         addView(body)
+    }
+    override fun addChildrenForAccessibility(outChildren: ArrayList<View>) {
+        val firstAdded = outChildren.size
+        super.addChildrenForAccessibility(outChildren)
+        // This wrapper can be advertised independently when unimportant Views are included.
+        // Its merged body must obey the same source-node admission as the surrounding surface.
+        for (index in outChildren.lastIndex downTo firstAdded) {
+            val child = outChildren[index]
+            if (child is NativeMergedRowAccessibilityHost && !child.mergedRowAccessibility.isNodePresent()) {
+                outChildren.removeAt(index)
+            }
+        }
     }
     fun setExpansionView(view: View?) {
         if (expansion === view) return

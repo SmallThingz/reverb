@@ -38,6 +38,13 @@
     <string name="quick_save_option_8">Quick save 8</string>
     <string name="quick_save_shortened">Saved the latest %1$s of %2$s requested.</string>
     <string name="silence_apply_input_first">Apply audio changes before calibrating.</string>
+    <item name="silence_fit_reset" type="id"/>
+    <string name="silence_calibration_heading">Room calibration</string>
+    <string name="silence_fit_description">Curve fit. Drag clockwise along the dial for a looser fit; counterclockwise for a tighter fit. Press R to reset.</string>
+    <string name="silence_fit_short">%1$+d dB</string>
+    <string name="silence_fit_value">%1$+d dB relative to room noise</string>
+    <string name="silence_fit_endpoints">Tight · Loose</string>
+    <string name="silence_fit_reset">Reset fit to 6 dB</string>
     <string name="silence_calibrate">Calibrate</string>
     <string name="silence_calibration_hint">Hold while quiet · tap for 4 seconds</string>
     <string name="silence_calibration_timeout">Could not finish listening. Try again.</string>
@@ -54,10 +61,10 @@
     <string name="silence_input_changed">Input has changed. Reopen Settings to calibrate.</string>
     <string name="onboarding_silence_input_changed">Input changed. Try calibrating again.</string>
     <string name="silence_invalid_settings">Silence settings could not be read. All audio is being kept.</string>
-    <string name="silence_needs_calibration">Needs calibration</string>
     <string name="silence_release_to_finish">Release to finish</string>
     <string name="silence_sample_busy">The audio input changed. Sample the room again.</string>
     <string name="silence_sample_failed">Could not sample the microphone. Try again while Reverb is open.</string>
+    <string name="silence_microphone_blocked">Microphone access is blocked or silenced by Android. Allow microphone access and try again.</string>
     <string name="silence_sampling">Listening…</string>
     <string name="silence_save_failed">Could not save the silence curve.</string>
     <string name="silence_settings_changed">The silence settings changed. Reopen this editor before saving.</string>

@@ -22,6 +22,8 @@ internal data class SilenceCalibrationResult(
 internal class SilenceCalibrationTooLoud : IOException()
 internal class SilenceCalibrationTooShort : IOException()
 internal class SilenceCalibrationTimedOut : IOException()
+/** A modeled, already-localized sampling condition, not a caught platform exception. */
+internal class SilenceCalibrationUnavailable(message: String) : IOException(message)
 
 /** A review draft only. No preference writes or capture-intent changes belong to calibration. */
 internal fun silenceCalibrationResult(sample: SilenceSampleState): SilenceCalibrationResult {
@@ -56,7 +58,7 @@ internal suspend fun calibrateSilence(
         fun timeoutOrTerminal(): SilenceSampleState {
             val terminal = request.state.value
             if (terminal.complete || terminal.cancelled || terminal.error != null) return terminal
-            if (request.captureTimingUnavailable()) throw IOException(SILENCE_SAMPLE_TIMING_UNAVAILABLE_MESSAGE)
+            if (request.captureTimingUnavailable()) throw SilenceCalibrationUnavailable(SILENCE_SAMPLE_TIMING_UNAVAILABLE_MESSAGE)
             throw SilenceCalibrationTimedOut()
         }
         var result: SilenceSampleState
@@ -69,7 +71,7 @@ internal suspend fun calibrateSilence(
             }
             val observedDeadline = request.deadlineNanos.value
             val remaining = silenceSampleRemainingMillis(
-                fixedDeadline ?: (observedDeadline + 2_000_000_000L), System.nanoTime())
+                fixedDeadline ?: (observedDeadline + 250_000_000L), System.nanoTime())
             if (remaining == 0L) {
                 result = timeoutOrTerminal()
                 break
@@ -91,7 +93,7 @@ internal suspend fun calibrateSilence(
         }
         if (result.cancelled) throw CancellationException("Calibration cancelled")
         if (result.tooShort) throw SilenceCalibrationTooShort()
-        result.error?.let { throw IOException(it) }
+        result.error?.let { throw (result.errorCause ?: SilenceCalibrationUnavailable(it)) }
         return silenceCalibrationResult(result)
     } catch (failure: Throwable) {
         primaryFailure = failure

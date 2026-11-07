@@ -77,7 +77,8 @@ internal class NativeSettingsPointerBinding(
         return parentInterested(change)
     }
     private fun isAndroidLeaf(view:View)=view is RangeDurationWheelView||view is SilenceCurveView||
-        view is SettingsRetentionInputView
+        view is SettingsRetentionInputView || view is smallthingz.ui.components.NativeSegmentedChoice ||
+        view is SettingsCalibrationFitDial
     private inner class Layout(private val view:View):NativeViewPointerHitLayout,AutoCloseable {
         private val click=(view as?NativeClickPhaseHost)?.let {
             NativeClickPhaseNode(view,it.nativeClickEndpoint){change->interested(view,change)}

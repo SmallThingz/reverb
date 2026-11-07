@@ -406,6 +406,7 @@ private class NativePlainTooltipWindow(
         private val fill=Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
             color=env.palette.inverseSurface
         }
+        private val fillMotion=colorTransition(fill.color) {fill.color=it;invalidate()}
         val label=env.paragraph(context,text,ReverbTextRole.BODY_SMALL,env.palette.inverseOnSurface)
         val clip=NativeSheetSurface.SheetClip(context)
         private val content=object:NativeSheetFrame(context) {
@@ -420,7 +421,7 @@ private class NativePlainTooltipWindow(
         }
         fun bindEnvironment(next:ReverbViewEnvironment) {
             val densityChanged=env.textDensity!=next.textDensity
-            env=next;fill.color=next.palette.inverseSurface
+            env=next;fillMotion.retarget(next.palette.inverseSurface)
             next.bindParagraphStyle(label,ReverbTextRole.BODY_SMALL,next.palette.inverseOnSurface)
             if(densityChanged) {onSizeChanged(width,height,width,height);requestLayout()}
             invalidate()

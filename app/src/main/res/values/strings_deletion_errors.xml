@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Untranslated feature text uses the English fallback, as in strings.xml. -->
+<resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="MissingTranslation">
+    <string name="delete_error_target">Deletion of %1$s could not be confirmed. %2$s</string>
+    <string name="delete_error_busy">Another operation is using this recording. Wait for it to finish, then retry.</string>
+    <string name="delete_error_catalog">The recording metadata is unavailable. Refresh Library, then retry.</string>
+    <string name="delete_error_changed">The recording no longer matches the selection. Refresh Library and select it again.</string>
+    <string name="delete_error_identity_unverified">Selected recording identity could not be verified. Refresh Library and retry.</string>
+    <string name="delete_error_verification">The audio could not be verified safely. Check storage access, refresh Library, then retry.</string>
+    <string name="delete_error_journal">The deletion could not be saved safely. Check available app storage, then retry.</string>
+    <string name="delete_error_storage">Storage is unavailable or could not remove the file. Reconnect the storage and check access, then retry.</string>
+    <string name="delete_error_permission">Android did not allow removal. Retry Delete and approve the access request if shown.</string>
+    <string name="delete_error_consent">Android could not open the access request. Return to Reverb and retry Delete.</string>
+    <string name="delete_error_provider">The storage provider did not confirm removal. Check storage access and refresh Library before retrying.</string>
+    <string name="delete_error_metadata">The audio was removed, but Library cleanup is pending. Refresh Library to finish updating the list.</string>
+    <string name="delete_error_unexpected">Android or the storage provider did not identify the deletion problem. Refresh Library and retry.</string>
+    <string name="delete_batch_counts">%1$d deleted; %2$d need retry; %3$d awaiting approval.</string>
+    <string name="delete_batch_more">, and %1$d more</string>
+    <string name="delete_short_busy">Busy: wait, then retry</string>
+    <string name="delete_short_catalog">Metadata unavailable: refresh Library</string>
+    <string name="delete_short_changed">Selection no longer matches: reselect</string>
+    <string name="delete_short_identity_unverified">Identity not verified: refresh Library and retry</string>
+    <string name="delete_short_verification">Cannot verify audio: check storage access</string>
+    <string name="delete_short_journal">Cannot save deletion: check free space</string>
+    <string name="delete_short_storage">Storage unavailable: reconnect it</string>
+    <string name="delete_short_permission">Access denied: retry and approve access</string>
+    <string name="delete_short_consent">Access prompt unavailable: reopen Reverb</string>
+    <string name="delete_short_provider">Provider did not confirm removal: refresh</string>
+    <string name="delete_short_metadata">Audio removed, list cleanup pending: refresh</string>
+    <string name="delete_short_unknown">Cause unspecified: refresh and retry</string>
+    <string name="delete_short_space">Storage full: free space</string>
+    <string name="delete_short_readonly">Storage is read-only: restore write access</string>
+</resources>

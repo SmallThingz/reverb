@@ -1,0 +1,7 @@
+- Save in the background with restart recovery and protected source audio.
+- Show save progress in the Library and notifications.
+- Add All files access to setup and Settings.
+- Fix rename failures, batch deletion, and playback completion.
+- Improve silence detection, calibration controls, theme contrast, and animations.
+- Restore the blob's active color and smooth its silence response.
+- Fix Library scrolling, keyboard input, and gestures.

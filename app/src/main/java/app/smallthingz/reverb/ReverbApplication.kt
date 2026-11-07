@@ -10,6 +10,11 @@ class ReverbApplication : Application() {
         super.onCreate()
         installUnexpectedErrorHandler()
         QuickSaveTileOptions.refresh(this)
+        Thread({
+            runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND) }
+            runCatching { DurableSaveCoordinator.get(this).recover() }
+                .onFailure { Log.e("ReverbApplication", "Unable to recover pending saves", it) }
+        }, "reverb-save-recovery").apply { isDaemon = true }.start()
         Thread(
             {
                 runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND) }

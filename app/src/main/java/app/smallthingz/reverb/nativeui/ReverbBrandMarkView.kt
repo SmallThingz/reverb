@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.animation.view.ViewColorTransition
+
 import android.content.Context
 import android.content.res.Configuration
 import android.graphics.Bitmap
@@ -34,6 +36,12 @@ internal class ReverbBrandMarkView(
     description: CharSequence? = null,
 ) : View(context) {
     private var palette = readReverbBrandPalette(context)
+    private var paletteTarget = palette
+    private val paletteMotion:ViewColorTransition by lazy {ViewColorTransition(this,
+        intArrayOf(palette.background,palette.accent,palette.main),{
+            palette=ReverbBrandPalette(paletteMotion.color(0),paletteMotion.color(1),paletteMotion.color(2))
+            cacheDirty=true;invalidate()
+        })}
     private val backgroundPaint = Paint(BRAND_PAINT_FLAGS)
     private val strokePaint = Paint(BRAND_PAINT_FLAGS).apply {
         style = Paint.Style.STROKE
@@ -97,10 +105,9 @@ internal class ReverbBrandMarkView(
     /** Re-resolves the same three released resources, without selecting a new palette locally. */
     fun refreshResourcePalette() {
         val next = readReverbBrandPalette(context)
-        if (next != palette) {
-            palette = next
-            cacheDirty = true
-            invalidate()
+        if (next != paletteTarget) {
+            paletteTarget=next
+            paletteMotion.retarget(next.background,next.accent,next.main)
         }
     }
 

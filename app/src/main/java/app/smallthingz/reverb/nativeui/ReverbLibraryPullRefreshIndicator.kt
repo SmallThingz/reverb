@@ -43,7 +43,7 @@ internal class ReverbLibraryPullRefreshIndicator(
     private val durationScale: () -> Float,
 ) : ViewGroup(context) {
     private val density = environment.textDensity.density
-    private val surface = IndicatorSurface(context, density)
+    private val surface = IndicatorSurface(context, density,environment.palette.surfaceContainerHigh)
     private var scope: CoroutineScope? = null
     private var observation: AutoCloseable? = null
     private var transition: Job? = null
@@ -179,13 +179,14 @@ internal class ReverbLibraryPullRefreshIndicator(
     }
 }
 
-private class IndicatorSurface(context: Context, private val density: Float) : ViewGroup(context) {
-    private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
+private class IndicatorSurface(context: Context, private val density: Float,initialColor:Int) : ViewGroup(context) {
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG).apply {color=initialColor}
+    private val colorMotion=colorTransition(paint.color) {paint.color=it;invalidate()}
     private val bounds = RectF()
     private val clip = Path()
     var color: Int
         get() = paint.color
-        set(value) { paint.color = value; invalidate() }
+        set(value) {colorMotion.retarget(value)}
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         clipChildren = false; clipToPadding = false
@@ -258,7 +259,8 @@ private class PullArrowView(
         ViewCompat.setScreenReaderFocusable(this, true)
     }
 
-    fun setColor(value: Int) { color = value; invalidate() }
+    private val colorMotion=colorTransition(color) {color=it;invalidate()}
+    fun setColor(value: Int) {colorMotion.retarget(value)}
 
     fun bindProgress(value: Float) {
         if (progress == value) return

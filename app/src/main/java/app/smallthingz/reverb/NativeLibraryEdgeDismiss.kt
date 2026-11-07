@@ -10,8 +10,18 @@ internal class NativeLibraryEdgeDismiss(
     private val width: () -> Float,
     private val touchSlop: () -> Float,
     private val requiredDistance: () -> Float,
+    private val onEdgeDown: () -> Unit = {},
     private val dismiss: () -> Unit,
 ) {
+    /** Original body-local DOWN owns the whole stream, including reversals and pointer changes. */
+    var reservesScroll: Boolean = false
+        private set
+
+    fun dispatchScroll(event: NativeDragPointerEvent, pass: NativePointerPass,
+                       dispatch: (NativeDragPointerEvent, NativePointerPass) -> Unit) {
+        if (!reservesScroll) dispatch(event, pass)
+    }
+
     private enum class State { DOWN, SLOP, DRAG, WAIT_UP }
     private var state = State.DOWN
     private var pointer = Long.MIN_VALUE
@@ -31,6 +41,8 @@ internal class NativeLibraryEdgeDismiss(
                 event.changes.any { !it.changedToDown }) return
             val down = event.changes.first()
             if (!isLibraryDismissEdge(down.position.x, width())) { state = State.WAIT_UP; return }
+            reservesScroll = true
+            onEdgeDown()
             pointer = down.id
             accumulated = 0f
             downward = 0f
@@ -67,6 +79,9 @@ internal class NativeLibraryEdgeDismiss(
                         change.consume()
                         state = State.DRAG
                     } else {
+                        // This reserved stream cannot scroll the child. Cancel descendant clicks
+                        // once it becomes a drag, even when its direction cannot dismiss.
+                        change.consume()
                         // awaitVerticalTouchSlopOrCancellation restarts accumulation when the
                         // callback declines the crossing; upward motion is not accepted.
                         accumulated = 0f
@@ -91,6 +106,7 @@ internal class NativeLibraryEdgeDismiss(
     }
     /** Source pointer-key replacement and stream cancellation never commit dismissal. */
     fun restart() {
+        reservesScroll = false
         state = State.DOWN
         pointer = Long.MIN_VALUE
         accumulated = 0f

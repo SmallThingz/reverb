@@ -2,6 +2,7 @@ package app.smallthingz.reverb
 
 import app.smallthingz.reverb.nativeui.OnboardingPermission
 import app.smallthingz.reverb.nativeui.OnboardingPermissionStatus
+import app.smallthingz.reverb.nativeui.isReadyForHighlightedContinue
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -19,11 +20,14 @@ class OnboardingPermissionRequestSequenceTest {
         notificationsAllowed = false,
         batteryOptimizationAllowed = false,
         interactionEnabled = true,
+        allFilesAvailable = true,
     )
 
     @Test fun automaticallyRequestsEveryApplicablePermissionOnceEvenWhenDenied() {
         val sequence = OnboardingPermissionRequestSequence()
-        for (permission in OnboardingPermission.entries) {
+        for (permission in listOf(OnboardingPermission.MICROPHONE, OnboardingPermission.STORAGE,
+            OnboardingPermission.ALL_FILES, OnboardingPermission.RECOVERY,
+            OnboardingPermission.NOTIFICATIONS, OnboardingPermission.BATTERY)) {
             assertEquals(permission, sequence.claimNext(missing, true))
             assertNull(sequence.claimNext(missing, true))
             sequence.completed(permission)
@@ -37,7 +41,7 @@ class OnboardingPermissionRequestSequenceTest {
     @Test fun automaticRequestsSkipGrantedAndInapplicablePermissions() {
         val sequence = OnboardingPermissionRequestSequence()
         val status = missing.copy(microphoneAllowed = true, storageRequired = false,
-            recoveryRequired = false, notificationPermissionRequired = false)
+            recoveryRequired = false, notificationPermissionRequired = false, allFilesAvailable = false)
         assertEquals(OnboardingPermission.BATTERY, sequence.claimNext(status, true))
         sequence.leftForeground()
         sequence.returnedToForeground()
@@ -177,7 +181,7 @@ class OnboardingPermissionRequestSequenceTest {
     }
 
     @Test fun settingsReviewWorksForEveryRuntimePermissionAndBlocksOverlapUntilReturn() {
-        for (permission in OnboardingPermission.entries.filter { it != OnboardingPermission.BATTERY }) {
+        for (permission in OnboardingPermission.entries.filter { it != OnboardingPermission.BATTERY && it != OnboardingPermission.ALL_FILES }) {
             val sequence = OnboardingPermissionRequestSequence()
             assertTrue(sequence.claimManual(permission, missing, true))
             assertTrue(sequence.beginSettingsReview(previouslyRequested = true, showsRationale = false))
@@ -253,4 +257,83 @@ class OnboardingPermissionRequestSequenceTest {
         assertEquals(OnboardingPermission.MICROPHONE, sequence.pending)
         assertFalse(sequence.settingsLeftForeground)
     }
+
+    @Test fun oldAttemptMaskKeepsItsMeaningAndNewAccessRunsBeforeAudioRecovery() {
+        assertEquals(setOf(OnboardingPermission.MICROPHONE, OnboardingPermission.STORAGE,
+            OnboardingPermission.RECOVERY, OnboardingPermission.NOTIFICATIONS, OnboardingPermission.BATTERY),
+            OnboardingPermissionRequestSequence.attemptedFromMask(31))
+        val sequence = OnboardingPermissionRequestSequence()
+        val status = missing.copy(microphoneAllowed = true, storageRequired = false)
+        assertEquals(OnboardingPermission.ALL_FILES, sequence.claimNext(status, true))
+        sequence.beginAllFilesReview()
+        sequence.returnedToForeground()
+        assertEquals(OnboardingPermission.ALL_FILES, sequence.pending)
+        sequence.leftForeground()
+        sequence.returnedToForeground()
+        assertEquals(OnboardingPermission.RECOVERY, sequence.claimNext(status, true))
+    }
+
+    @Test fun allFilesGrantSkipsRedundantAudioReadAndRevocationAllowsItsFallback() {
+        val sequence = OnboardingPermissionRequestSequence()
+        val status = missing.copy(microphoneAllowed = true, storageRequired = false,
+            notificationsAllowed = true, batteryOptimizationAllowed = true)
+        assertEquals(OnboardingPermission.ALL_FILES, sequence.claimNext(status, true))
+        sequence.beginAllFilesReview()
+        sequence.leftForeground(); sequence.returnedToForeground()
+        assertNull(sequence.claimNext(status.copy(allFilesAllowed = true), true))
+        assertFalse(sequence.claimManual(OnboardingPermission.RECOVERY, status.copy(allFilesAllowed = true), true))
+        assertEquals(OnboardingPermission.RECOVERY, sequence.claimNext(status, true))
+    }
+
+    @Test fun allFilesDenialAfterRecreationDoesNotLoopAndCanBeRetriedManually() {
+        val original = OnboardingPermissionRequestSequence(OnboardingPermission.entries.toSet())
+        assertTrue(original.claimManual(OnboardingPermission.ALL_FILES, missing, true))
+        original.beginAllFilesReview()
+        original.leftForeground()
+        val restored = OnboardingPermissionRequestSequence(
+            OnboardingPermissionRequestSequence.attemptedFromMask(original.attemptedMask),
+            original.pending, original.batteryLeftForeground, original.settingsReview, original.settingsLeftForeground)
+        assertNull(restored.claimNext(missing, true))
+        restored.returnedToForeground()
+        assertNull(restored.pending)
+        repeat(3) {
+            restored.leftForeground(); restored.returnedToForeground()
+            assertNull(restored.claimNext(missing, true))
+        }
+        assertTrue(restored.claimManual(OnboardingPermission.ALL_FILES, missing, true))
+        assertFalse(restored.beginSettingsReview(true, false))
+    }
+
+    @Test fun unavailableAllFilesPageReleasesRequestAndContinuesWithReadPermission() {
+        val sequence = OnboardingPermissionRequestSequence()
+        val status = missing.copy(microphoneAllowed = true, storageRequired = false)
+        assertEquals(OnboardingPermission.ALL_FILES, sequence.claimNext(status, true))
+        sequence.beginAllFilesReview()
+        sequence.completed(OnboardingPermission.ALL_FILES)
+        assertFalse(sequence.settingsReview)
+        assertFalse(sequence.settingsLeftForeground)
+        assertEquals(OnboardingPermission.RECOVERY, sequence.claimNext(status, true))
+    }
+
+    @Test fun olderAndroidSkipsAllFilesWithoutChangingLegacyPermissionOrder() {
+        val sequence = OnboardingPermissionRequestSequence()
+        val status = missing.copy(allFilesAvailable = false)
+        assertFalse(sequence.claimManual(OnboardingPermission.ALL_FILES, status, true))
+        for (permission in listOf(OnboardingPermission.MICROPHONE, OnboardingPermission.STORAGE,
+                OnboardingPermission.RECOVERY, OnboardingPermission.NOTIFICATIONS, OnboardingPermission.BATTERY)) {
+            assertEquals(permission, sequence.claimNext(status, true))
+            sequence.completed(permission)
+        }
+        assertNull(sequence.claimNext(status, true))
+    }
+
+
+    @Test fun allFilesIsOptionalForContinueAndGrantSatisfiesAudioRecovery() {
+        val ready = missing.copy(microphoneAllowed = true, storageAllowed = true,
+            recoveryAllowed = true, notificationsAllowed = true)
+        assertTrue(ready.isReadyForHighlightedContinue())
+        assertTrue(ready.copy(recoveryAllowed = false, allFilesAllowed = true).isReadyForHighlightedContinue())
+        assertFalse(ready.copy(recoveryAllowed = false).isReadyForHighlightedContinue())
+    }
+
 }

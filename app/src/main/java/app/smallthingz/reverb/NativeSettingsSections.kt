@@ -217,7 +217,8 @@ internal class NativeSettingsSections(
             return SettingsSilenceState(
                 config = silence,
                 enabled = state.interactionReady && !state.persisting,
-                maximumHz = minOf(SILENCE_MAX_HZ, value.sampleRate / 2),
+                maximumHz = minOf(SILENCE_MAX_HZ,
+                    (histogram?.takeIf { it.peaksFor(input) != null }?.measuredSampleRate ?: value.sampleRate) / 2),
                 sampledPeaks = histogram?.peaksFor(input),
                 calibrationAllowed = state.baseline.silenceCalibrationInput() == input,
                 calibrating = owner.calibration.running,
@@ -284,10 +285,13 @@ internal class NativeSettingsSections(
         var activation = initial.activation
         fun state(current: SettingsDraftPresentation) = SettingsStorageState(
             owner.exportPathText, current.displayed.snapshot.exportDirectoryUri != null,
-            owner.canMove && !owner.settingsCommitBlocked, current.persisting)
+            owner.canMove && !owner.settingsCommitBlocked, current.persisting,
+            supportsAllFilesAccess(), owner.allFilesAllowed,
+            recordingAudioReadPermission() != null && !owner.allFilesAllowed, owner.audioReadAllowed)
         val body = SettingsStorageSection(context, state(initial), environment(), inputRoot,
             { owner.useDefaultDirectory(activation) }, { owner.chooseDirectory(activation) },
-            { owner.moveExistingRecordings(activation) })
+            { owner.moveExistingRecordings(activation) }, { owner.reviewAllFilesAccess(activation) },
+            { owner.reviewAudioReadAccess(activation) })
         return object : NativeSettingsSection {
             override val view = body
             override fun bind() {

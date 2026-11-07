@@ -8,10 +8,13 @@ import java.nio.ByteBuffer
 internal interface CaptureAudioInput {
     val state: Int
     val recordingState: Int
+    val nativeBufferFrames: Int? get() = null
     fun startRecording()
     fun read(buffer: ByteBuffer, sizeInBytes: Int, readMode: Int): Int
     /** Optional capture-clock proof, queried only by calibration, never inferred from delivery time. */
     fun lastReadStartedAtNanos(readEndedAtNanos: Long): Long? = null
+    /** Framework policy, not PCM amplitude. Queried only by calibration. */
+    fun isClientSilenced(): Boolean = false
     fun stop()
     fun release()
 }
@@ -24,6 +27,7 @@ internal class AndroidCaptureAudioInput(private val record: AudioRecord, private
     init { require(frameBytes > 0) }
     override val state: Int get() = record.state
     override val recordingState: Int get() = record.recordingState
+    override val nativeBufferFrames: Int get() = record.bufferSizeInFrames
     override fun startRecording() {
         record.startRecording()
         framesRead = 0L
@@ -48,6 +52,8 @@ internal class AndroidCaptureAudioInput(private val record: AudioRecord, private
         } catch (_: Exception) { null }
     }
     override fun stop() = record.stop()
+    override fun isClientSilenced(): Boolean = android.os.Build.VERSION.SDK_INT >= 29 &&
+        record.activeRecordingConfiguration?.isClientSilenced == true
     override fun release() = record.release()
 }
 

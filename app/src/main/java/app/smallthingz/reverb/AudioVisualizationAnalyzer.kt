@@ -75,31 +75,48 @@ internal class AudioVisualizationAnalyzer {
         val firstFftFrame = availableFrames - fftFrameCount
         val destinationOffset = (FFT_SIZE - fftFrameCount) / 2
         var sumSquares = 0.0
+        var rightSumSquares = 0.0
+        val stereo = channels == 2
 
         for (frameIndex in 0 until availableFrames) {
             val byteIndex = offset + frameIndex * bytesPerFrame
-            var monoSample = 0f
-            for (channel in 0 until channels) {
-                monoSample += readSample(
-                    array = array,
-                    index = byteIndex + channel * sampleFormat.bytesPerSample,
-                    sampleFormat = sampleFormat,
-                )
+            val leftSample: Float
+            var rightSample = 0f
+            val envelope: Float
+            if (stereo) {
+                leftSample = readSample(array, byteIndex, sampleFormat)
+                rightSample = readSample(array, byteIndex + sampleFormat.bytesPerSample, sampleFormat)
+                sumSquares += leftSample * leftSample
+                rightSumSquares += rightSample * rightSample
+                envelope = max(kotlin.math.abs(leftSample), kotlin.math.abs(rightSample))
+            } else {
+                // Preserve mono and the legacy fallback for unsupported channel counts.
+                var monoSample = 0f
+                for (channel in 0 until channels) {
+                    monoSample += readSample(
+                        array = array,
+                        index = byteIndex + channel * sampleFormat.bytesPerSample,
+                        sampleFormat = sampleFormat,
+                    )
+                }
+                leftSample = (monoSample / channels).coerceIn(-1f, 1f)
+                sumSquares += leftSample * leftSample
+                envelope = kotlin.math.abs(leftSample)
             }
-            monoSample = (monoSample / channels).coerceIn(-1f, 1f)
-            sumSquares += monoSample * monoSample
             val envelopeBin = (frameIndex * OUTPUT_BINS / availableFrames).coerceIn(0, OUTPUT_BINS - 1)
-            waveformSums[envelopeBin] += kotlin.math.abs(monoSample)
+            waveformSums[envelopeBin] += envelope
             waveformCounts[envelopeBin]++
             if (frameIndex >= firstFftFrame) {
                 val fftIndex = destinationOffset + frameIndex - firstFftFrame
-                real[fftIndex] = monoSample * window[fftIndex]
+                // Two real channels share one complex FFT without cancelling each other.
+                real[fftIndex] = leftSample * window[fftIndex]
+                imaginary[fftIndex] = rightSample * window[fftIndex]
             }
         }
 
         runFft()
 
-        val rms = sqrt(sumSquares / availableFrames).toFloat()
+        val rms = sqrt(max(sumSquares, rightSumSquares) / availableFrames).toFloat()
         updateNoiseFloor(rms)
         val activityGate = noiseFloor * ACTIVITY_NOISE_MULTIPLIER + ABSOLUTE_ACTIVITY_GATE
         // Human loudness is roughly logarithmic in acoustic amplitude. Drive the blob in
@@ -130,9 +147,7 @@ internal class AudioVisualizationAnalyzer {
             var magnitudeSquaredSum = 0f
             var magnitudeCount = 0
             for (sourceIndex in sourceStart until sourceEndExclusive) {
-                val re = real[sourceIndex]
-                val im = imaginary[sourceIndex]
-                magnitudeSquaredSum += re * re + im * im
+                magnitudeSquaredSum += spectrumPower(sourceIndex, stereo)
                 magnitudeCount++
             }
             val normalized = if (magnitudeCount > 0) {
@@ -168,6 +183,21 @@ internal class AudioVisualizationAnalyzer {
         )
     }
 
+
+    private fun spectrumPower(bin: Int, stereo: Boolean): Float {
+        val re = real[bin]
+        val im = imaginary[bin]
+        if (!stereo) return re * re + im * im
+        // Conjugate pairs separate the packed transforms. Either channel may drive
+        // a visual band, matching capture's either-channel policy rather than a mix.
+        val mirror = (FFT_SIZE - bin) % FFT_SIZE
+        val leftReal = (re + real[mirror]) * 0.5f
+        val leftImaginary = (im - imaginary[mirror]) * 0.5f
+        val rightReal = (im + imaginary[mirror]) * 0.5f
+        val rightImaginary = (real[mirror] - re) * 0.5f
+        return max(leftReal * leftReal + leftImaginary * leftImaginary,
+            rightReal * rightReal + rightImaginary * rightImaginary)
+    }
 
     private fun ensureSpectrumLayout(sampleRate: Int, maxSourceBin: Int) {
         if (spectrumLayoutSampleRate == sampleRate && spectrumLayoutMaxSourceBin == maxSourceBin) return

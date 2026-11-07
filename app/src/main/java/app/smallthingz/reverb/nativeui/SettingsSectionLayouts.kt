@@ -32,7 +32,7 @@ internal class SettingsThemeSection(
 ):ViewGroup(context),AutoCloseable {
     private val title=settingsSectionTitle(context,R.string.theme_title,environment)
     private val segments=SettingsSegmentedControlView(context,AppThemeMode.entries.map {
-        SettingsSegment(it,context.getString(it.labelRes),when(it) {
+        SettingsSegment(it.name,it,context.getString(it.labelRes),when(it) {
             AppThemeMode.SYSTEM->ReverbIcon.ThemeSystem
             AppThemeMode.LIGHT->ReverbIcon.ThemeLight
             AppThemeMode.DARK->ReverbIcon.ThemeDark
@@ -76,8 +76,8 @@ internal class SettingsRetentionSection(
 ):ViewGroup(context),AutoCloseable {
     private val title=settingsSectionTitle(context,R.string.retention_mode_title,environment)
     private val modes=SettingsSegmentedControlView(context,listOf(
-        SettingsSegment(RetentionMode.TIME,context.getString(R.string.retention_time_label)),
-        SettingsSegment(RetentionMode.SIZE,context.getString(R.string.retention_size_mode_label)),
+        SettingsSegment("time",RetentionMode.TIME,context.getString(R.string.retention_time_label)),
+        SettingsSegment("size",RetentionMode.SIZE,context.getString(R.string.retention_size_mode_label)),
     ),mode,environment,inputRoot,onMode)
     private val surface=ReverbGroupLayout(context,23f)
     private val body=RetentionBody(context,oneShotValue,loopingValue)
@@ -211,7 +211,7 @@ internal fun settingsSectionTitle(context:Context,stringRes:Int,environment:Reve
 internal fun bindSectionTitle(view:ReverbParagraphView,environment:ReverbViewEnvironment) {
     view.setTypography(settingsSectionTitleStyle,
         environment.textDensity,environment.sharedFontResolver)
-    view.setTextColor(environment.palette.onSurface)
+    view.animateTextColor(environment.palette.onSurface)
 }
 private fun ViewGroup.placeLogical(child:View,start:Int,top:Int) {
     val x=if(layoutDirection==View.LAYOUT_DIRECTION_RTL)width-start-child.measuredWidth else start

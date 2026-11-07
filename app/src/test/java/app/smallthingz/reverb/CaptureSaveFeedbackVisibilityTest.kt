@@ -132,6 +132,65 @@ class CaptureSaveFeedbackVisibilityTest {
     }
 
     @Test
+    fun durableAdmissionReleasesUiBeforeMaterializationAndOldTerminalCannotTouchNewSave() {
+        val host = Host { true }
+        // No queued callback exists until the durable source pins and manifest are committed.
+        assertTrue(host.saving)
+        assertTrue(host.status is CaptureSaveStatus.Saving)
+        assertTrue(host.gate.attached)
+        host.receiver.saveQueued("job-one")
+        host.receiver.saveQueued("job-one")
+        assertFalse(host.saving)
+        assertNull(host.status)
+        assertFalse(host.gate.attached)
+        assertEquals(1, host.refreshes)
+        assertEquals(1, host.terminals)
+        assertTrue(host.savedFallback.isEmpty())
+
+        val newer = CaptureSaveStatus.Saving(cancellable = true)
+        host.saving = true
+        host.status = newer
+        val completed = recording("job-one-output")
+        host.receiver.fileReady(completed)
+        host.receiver.fileFailed("late failure", null)
+        assertSame(newer, host.status)
+        assertTrue(host.saving)
+        assertEquals(listOf(completed), host.savedFallback)
+        assertTrue(host.failedFallback.isEmpty())
+        assertEquals(1, host.refreshes)
+        assertEquals(1, host.terminals)
+    }
+
+    @Test
+    fun recoveredDurableAdmissionDoesNotOfferUnsupportedCancellation() {
+        val admission = reconcileCaptureExportStatus(true, false, null, cancellable = false)
+        assertEquals(CaptureSaveStatus.Saving(cancellable = false), admission)
+        assertEquals(CaptureSaveStatus.Saving(cancellable = false),
+            reconcileCaptureExportStatus(true, false, CaptureSaveStatus.Saving(cancellable = true), cancellable = false))
+        assertEquals(CaptureSaveStatus.Saving(cancellable = true),
+            reconcileCaptureExportStatus(true, false, null, cancellable = true))
+    }
+
+    @Test
+    fun throwingAdmissionUiStillDetachesAndPreservesTerminalFallback() {
+        val primary = IllegalStateException("admission callback failed")
+        val fallback = mutableListOf<RecordingEntity>()
+        val gate = SaveUiCallbackGate({}, { throw primary }, {}, {})
+        var retired = 0
+        val receiver = SaveResultReceiver(gate,
+            object : ReverbService.AudioFileReceiver {
+                override fun fileReady(recording: RecordingEntity) { fallback += recording }
+                override fun fileFailed(message: String, error: Throwable?) = Unit
+            }, { "Save failed" }, onTerminal = { retired++ })
+        assertSame(primary, runCatching { receiver.saveQueued("job") }.exceptionOrNull())
+        assertFalse(gate.attached)
+        val completed = recording("output")
+        receiver.fileReady(completed)
+        assertEquals(listOf(completed), fallback)
+        assertEquals(1, retired)
+    }
+
+    @Test
     fun retiredReceiverCannotOverwriteANewerExportOnReveal() {
         var visible = false
         var status: CaptureSaveStatus? = CaptureSaveStatus.Saving(cancellable = true)

@@ -155,4 +155,34 @@ class OnboardingFinishCoordinatorTest {
         assertTrue(onboardingPendingForUi(OnboardingFinishState.IDLE) { true })
         assertFalse(onboardingPendingForUi(OnboardingFinishState.IDLE) { false })
     }
+
+    @Test fun caughtFailureReachesDetachedOwnerFeedbackExactlyOnceWithOriginalCause() = runBlocking {
+        withTimeout(5_000) {
+            val primary = SecurityException("preferences denied")
+            val reported = CompletableDeferred<Exception?>()
+            val coordinator = OnboardingFinishCoordinator()
+            assertTrue(coordinator.submit(block = { throw primary }, onFailure = { reported.complete(it) }))
+            org.junit.Assert.assertSame(primary, reported.await())
+            coordinator.state.first { it == OnboardingFinishState.IDLE }
+            val retry = CompletableDeferred<Exception?>()
+            assertTrue(coordinator.submit(block = { false }, onFailure = { retry.complete(it) }))
+            org.junit.Assert.assertNull(retry.await())
+        }
+    }
+
+    @Test fun synchronousSubmissionCauseIsRetainedAndLateTerminalCannotReportAgain() {
+        val primary = IOException("submission failed")
+        var late: ((Boolean) -> Unit)? = null
+        val reports = mutableListOf<Exception?>()
+        val coordinator = OnboardingFinishCoordinator { _, terminal ->
+            late = terminal
+            throw primary
+        }
+        assertFalse(coordinator.submit(block = { true }, onFailure = { reports += it }))
+        requireNotNull(late).invoke(false)
+        requireNotNull(late).invoke(true)
+        assertEquals(1, reports.size)
+        org.junit.Assert.assertSame(primary, reports.single())
+        assertEquals(OnboardingFinishState.IDLE, coordinator.state.value)
+    }
 }

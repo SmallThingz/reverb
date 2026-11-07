@@ -13,6 +13,7 @@ import android.view.ViewOutlineProvider
 import smallthingz.ui.dsl.child
 import smallthingz.ui.dsl.nativeView
 import smallthingz.ui.geometry.Offset
+import smallthingz.ui.animation.view.ViewColorTransition
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -102,12 +103,15 @@ internal class NativeSheetSurface(
             color=env.palette.surfaceContainerLow
         }
         private val shape=Path()
+        private val colorMotion:ViewColorTransition by lazy {ViewColorTransition(this,intArrayOf(fill.color),{
+            fill.color=colorMotion.color(0);invalidate()
+        })}
         val clip=SheetClip(context)
         private var radius=0f
         init {setWillNotDraw(false);addView(clip)}
         fun bindEnvironment(next:ReverbViewEnvironment) {
             val densityChanged=env.textDensity!=next.textDensity
-            env=next;fill.color=next.palette.surfaceContainerLow
+            env=next;colorMotion.retarget(next.palette.surfaceContainerLow)
             if(densityChanged)onSizeChanged(width,height,width,height)
             invalidate()
         }

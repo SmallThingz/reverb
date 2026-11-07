@@ -44,12 +44,11 @@ internal data class SpringFineSeekGeometry(val width: Int, val height: Int, val 
     val drawVerticalTravel = (height / density * .5f - 10f - 24f).coerceAtLeast(1f) * density
     val hitWidth = minOf(width, (64f * density).roundToInt())
     val hitHeight = minOf(height, (64f * density).roundToInt())
-    fun puckLeft(horizontal: Float, rtl: Boolean): Int {
+    fun puckLeft(horizontal: Float): Int {
         val offset = (horizontal * drawHorizontalTravel).roundToInt()
         val centeredLeft = ((width - hitWidth) * .5f).roundToInt()
-        // Box centers with absolute placement; offset places its SAME-sized child relatively.
-        // RTL negates only the inner offset, not the odd-pixel centered outer position.
-        return centeredLeft + if (rtl) -offset else offset
+        // Pull is physical screen X in both input and field drawing, regardless of text direction.
+        return centeredLeft + offset
     }
     fun puckTop(horizontal: Float, rawVertical: Float): Int =
         ((height - hitHeight) * .5f).roundToInt() +

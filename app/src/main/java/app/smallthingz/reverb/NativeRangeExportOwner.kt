@@ -22,6 +22,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
@@ -37,6 +38,7 @@ internal data class NativeRangeExportPresentation(
     val chromeAlpha: Float,
     val waveformData: ProgressiveWaveformData,
     val waveformFrame: ProgressiveWaveformFrame,
+    val admissionPending: Boolean = false,
 )
 
 /**
@@ -71,12 +73,12 @@ internal class NativeRangeExportOwner(
         onPreviewReleaseFailure = { error ->
             RecordingIncidentStore.recordUnexpectedErrorInBackground(appContext,
                 "Range preview resource cleanup", error)
-            AppFeedbackCenter.post(appContext.getString(R.string.audio_preview_release_failed), FeedbackTone.ERROR)
+            AppFeedbackCenter.post(actionableErrorMessage(appContext, appContext.getString(R.string.audio_preview_release_failed), error), FeedbackTone.ERROR)
         },
         onPreviewFailure = { error ->
             Log.e("ReverbRangeAudio", "Range preview playback failed", error)
             RecordingIncidentStore.recordUnexpectedErrorInBackground(appContext, "Range preview playback", error)
-            AppFeedbackCenter.post(appContext.getString(R.string.audio_preview_failed), FeedbackTone.ERROR)
+            AppFeedbackCenter.post(actionableErrorMessage(appContext, appContext.getString(R.string.audio_preview_failed), error), FeedbackTone.ERROR)
         },
         // Nonthrowing queue notification only. Never render halfway through a model mutation.
         notifyNativeUiChanged = { invalidation?.request() },
@@ -120,6 +122,12 @@ internal class NativeRangeExportOwner(
         state.setPlaybackAllowed(visualizerVisible &&
             lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
         lifecycleOwner.lifecycle.addObserver(lifecycleObserver)
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            RecordingPlayback.state.collect { playback ->
+                // Notification/media controls can resume saved playback without navigation.
+                if (!closed && playback.wantsPlayback) state.pausePreview()
+            }
+        }
         invalidation?.request()
     }
 
@@ -159,6 +167,7 @@ internal class NativeRangeExportOwner(
     private fun replaceSnapshot(snapshot: ReverbService.TimelineSnapshot?) {
         currentSnapshot = snapshot
         waveformJob?.cancel()
+        if (snapshot == null) state.detachSnapshotPresentation()
         waveformJob = if (snapshot == null) null else scope.launch {
             state.attachSnapshot(snapshot)
             state.resetWaveformConstruction()
@@ -175,7 +184,7 @@ internal class NativeRangeExportOwner(
                 onFailure = { error ->
                     RecordingIncidentStore.recordUnexpectedErrorInBackground(appContext,
                         "Range waveform construction", error)
-                    AppFeedbackCenter.post(appContext.getString(R.string.waveform_load_failed), FeedbackTone.ERROR)
+                    AppFeedbackCenter.post(actionableErrorMessage(appContext, appContext.getString(R.string.waveform_load_failed), error), FeedbackTone.ERROR)
                 },
                 onFinished = state::finishWaveformConstruction,
             )

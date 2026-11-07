@@ -1,6 +1,7 @@
 package app.smallthingz.reverb
 
 import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** A settled storage failure can be retried only by a new, explicitly owned command. */
 internal fun captureConfigurationRetryMayRun(
@@ -50,6 +51,7 @@ internal class CaptureCommandAdmission {
         retainLifetime: () -> Boolean,
         enqueue: (Runnable) -> Boolean,
         onIdle: () -> Unit,
+        onRejected: () -> Unit = {},
         command: () -> Unit,
     ): Boolean = synchronized(lock) {
         if (closed) return@synchronized false
@@ -60,13 +62,16 @@ internal class CaptureCommandAdmission {
         try {
             retained = retainLifetime()
             if (!retained) return@synchronized false
-            queued = enqueue(Runnable {
+            val completion = CaptureCommandWork(
+                work = { if (finish(ticket)) onIdle() },
+                rejected = { if (finish(ticket)) onIdle() },
+            )
+            queued = enqueue(CaptureCommandWork(work = {
                 try {
                     command()
                 } finally {
                     // Work may have posted a Stop seal/release tail to the same FIFO.
                     // Keep lifetime ownership until that tail has passed, without waiting here.
-                    val completion = Runnable { if (finish(ticket)) onIdle() }
                     val completionQueued = try {
                         enqueue(completion)
                     } catch (_: RuntimeException) {
@@ -74,7 +79,23 @@ internal class CaptureCommandAdmission {
                     }
                     if (!completionQueued) completion.run()
                 }
-            })
+            }, rejected = {
+                var rejectionFailure: Throwable? = null
+                try {
+                    onRejected()
+                } catch (error: Throwable) {
+                    rejectionFailure = error
+                    throw error
+                } finally {
+                    try {
+                        completion.run()
+                    } catch (error: Throwable) {
+                        val primary = rejectionFailure
+                        if (primary == null) throw error
+                        if (primary !== error) primary.addSuppressed(error)
+                    }
+                }
+            }))
             queued
         } finally {
             if (!queued && finish(ticket) && retained) onIdle()
@@ -88,6 +109,27 @@ internal class CaptureCommandAdmission {
 
     private fun finish(ticket: Any): Boolean = synchronized(lock) {
         pending.remove(ticket) && pending.isEmpty()
+    }
+}
+
+/** Async dispatch rejection settles accepted work without executing its capture command. */
+internal fun rejectCaptureCommandWork(work: Runnable) {
+    require(work is CaptureCommandWork)
+    work.reject()
+}
+
+private class CaptureCommandWork(
+    private val work: () -> Unit,
+    private val rejected: () -> Unit,
+) : Runnable {
+    private val claimed = AtomicBoolean()
+
+    override fun run() {
+        if (claimed.compareAndSet(false, true)) work()
+    }
+
+    fun reject() {
+        if (claimed.compareAndSet(false, true)) rejected()
     }
 }
 

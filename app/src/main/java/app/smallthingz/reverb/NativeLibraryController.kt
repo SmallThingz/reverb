@@ -80,7 +80,7 @@ internal class NativeLibraryController(
     private var recordings by observed(librarySnapshotWithoutWaveformTrust(initial.initialRecordings), ::visibleChanged)
     private var isRefreshing by observed(false)
     private var hasLoaded by observed(false)
-    private var loadFailed by observed(false)
+    private var loadFailed by observed(false, ::pendingSaveSectionChanged)
     private val refreshGeneration = LibraryRefreshGeneration { isRefreshing = it }
     private val selectedIds = ObservedRecordingMap(::invalidate)
     private val pendingDeletions = ObservedRecordingMap(::visibleChanged)
@@ -106,12 +106,24 @@ internal class NativeLibraryController(
     private var activeEffect: Job? = null
     private var initialEffect: Job? = null
     private var installedLifecycle: LifecycleEventObserver? = null
+    private val playbackRoute = RecordingPlaybackRoute()
+    private var beforeRequestedPlayback: (() -> Unit)? = null
+    private var playbackRequestFinished: ((RecordingEntity?) -> Unit)? = null
     private val focusObserver = hostView.viewTreeObserver
     private val focusListener = android.view.ViewTreeObserver.OnWindowFocusChangeListener { focused ->
-        if (focused) shareDelivery[0]?.foregroundChanged()
+        if (focused) {
+            shareDelivery[0]?.foregroundChanged()
+            deliverPlaybackRequest()
+        }
     }
     private var lastVisible: List<RecordingEntity>? = null
     private var lastListItems: List<LibraryListItem> = emptyList()
+    private var finishedListItems: List<LibraryListItem> = emptyList()
+    private var visibleRecordingIdentities = emptyMap<String, String>()
+    private var pendingSaves = DurableSaveJobs.state.value
+    private var pendingOutputIdentities = pendingSaveOutputIdentities(pendingSaves)
+    private var pendingItemsDirty = true
+    private var saveJobsReadiness = DurableSaveJobs.readiness.value
     private var visibleEffect: Job? = null
     private var lastSelectionActive: Boolean? = null
     private var selectionEffect: Job? = null
@@ -122,9 +134,35 @@ internal class NativeLibraryController(
     init {
         focusObserver.addOnWindowFocusChangeListener(focusListener)
         installLifecycle(initial.active)
+        scope.launch {
+            RecordingDeletionConsent.completions.collect { revision ->
+                if (revision > 0 && input.active) refresh(showSpinner = false)
+            }
+        }
         // collectAsState is whole-owner collection in the released implementation, not STARTED-only.
         scope.launch {
             recordingMutations.activeIds.collect { activeMutationRecordingIds = it; invalidate() }
+        }
+        scope.launch {
+            DurableSaveJobs.state.collect { jobs ->
+                val completed = durableSaveCompletionNeedsCatalogRefresh(pendingSaves, jobs, visibleRecordingIdentities)
+                pendingSaves = jobs
+                val outputs = pendingSaveOutputIdentities(jobs)
+                if (outputs != pendingOutputIdentities) {
+                    pendingOutputIdentities = outputs
+                    visibleDirty = true
+                }
+                pendingItemsDirty = true
+                invalidate()
+                if (completed && input.active) refresh()
+            }
+        }
+        scope.launch {
+            DurableSaveJobs.readiness.collect {
+                saveJobsReadiness = it
+                pendingItemsDirty = true
+                invalidate()
+            }
         }
         launchInitialEffect(initial.initialRecordings)
         launchActiveEffect(initial.active)
@@ -154,6 +192,7 @@ internal class NativeLibraryController(
         // rememberUpdatedState already exposes the new active/callback values during effect cleanup.
         input = next
         if (previous.active != next.active) {
+            if (!next.active) finishPlaybackRequest(null)
             // Source active-keyed DisposableEffect is disposed before its successor effects.
             removeLifecycle(previous.active, previous.callbacks)
             input.callbacks.onUndoVisibleChange(false)
@@ -249,7 +288,10 @@ internal class NativeLibraryController(
     private fun installLifecycle(active: Boolean) {
         var observerInstalled = false
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_PAUSE) retireShareRequest()
+            if (event == Lifecycle.Event.ON_PAUSE) {
+                retireShareRequest()
+                playbackRoute.invalidateProof()
+            }
             if (event == Lifecycle.Event.ON_RESUME) shareDelivery[0]?.foregroundChanged()
             if (active && observerInstalled && event == Lifecycle.Event.ON_RESUME) refresh(showSpinner = false)
             if (event == Lifecycle.Event.ON_STOP && pendingDeletions.isNotEmpty()) {
@@ -273,16 +315,37 @@ internal class NativeLibraryController(
     }
 
     private fun deliver() {
+        deliverPlaybackRequest()
         val visible = if (visibleDirty || lastVisible == null) {
             visibleDirty = false
-            recordings.filterNot { it.id in pendingDeletions }
+            val catalogRows = recordings.filterNot { it.id in pendingDeletions }
+            // Acknowledgement observes the raw catalog, including rows still hidden by active jobs.
+            visibleRecordingIdentities = catalogRows.associate { it.id to it.fileIdentity }
+            catalogRows.filterNot { recordingOwnedByPendingSave(it, pendingOutputIdentities) }
         } else checkNotNull(lastVisible)
         if (visible != lastVisible) {
+            val previous = lastVisible
             lastVisible = visible
-            lastListItems = buildLibraryListItems(context, visible)
+            finishedListItems = buildLibraryListItems(context, visible)
+            val visibleById = visible.associateBy { it.id }
+            reconcileSelection(visibleById)
+            if (previous != null) reconcileTransientRecordings(previous.associateBy { it.id }, visibleById)
+            pendingItemsDirty = true
             visibleEffect?.cancel()
             val callback = input.callbacks.onVisibleRecordingsChanged
             visibleEffect = scope.launch { callback(visible) }
+        }
+        if (pendingItemsDirty) {
+            pendingItemsDirty = false
+            val recoveryStatus = when {
+                saveJobsReadiness.recoveryFailure != null -> resources.getString(R.string.save_jobs_recovery_failed)
+                !saveJobsReadiness.loaded -> resources.getString(R.string.save_jobs_recovering)
+                else -> null
+            }
+            lastListItems = listOfNotNull(recoveryStatus?.let { LibraryListItem.SaveRecoveryStatus(it) }) +
+                buildPendingSaveSection(pendingSaves, visibleRecordingIdentities, saveJobsReadiness,
+                    if (loadFailed) resources.getString(R.string.recordings_refresh_failed) else null) + finishedListItems
+            DurableSaveJobs.acknowledgePublished(visibleRecordingIdentities)
         }
         val selected = selectedIds.isNotEmpty()
         if (lastSelectionActive != selected) {
@@ -304,7 +367,9 @@ internal class NativeLibraryController(
                 activeMutationRecordingIds, localOperationBusyIds.toSet(), expandedRecordingOwner,
                 trimRequestRecordingId, input.active),
             recordings = visible,
-            hasLoaded = hasLoaded, loadFailed = loadFailed, isRefreshing = isRefreshing,
+            hasLoaded = hasLoaded && saveJobsReadiness.loaded,
+            loadFailed = loadFailed || saveJobsReadiness.recoveryFailure != null,
+            isRefreshing = isRefreshing,
             selectedCount = selectedIds.size,
             selectionHasBusyMutation = selectedIds.keys.any { it in activeMutationRecordingIds },
             acceptsDeletions = deletionState.acceptsDeletions,
@@ -321,35 +386,47 @@ internal class NativeLibraryController(
         if (changed) invalidate()
     }
     fun isCurrentPlaybackOwner(owner: InlinePlaybackRowOwner) = input.active && expandedRecordingOwner === owner
+    private fun pendingSaveOwns(recording: RecordingEntity): Boolean =
+        recordingOwnedByPendingSave(recording, pendingSaveOutputIdentities(DurableSaveJobs.state.value))
+    private fun actionableCatalogRows(rows: List<RecordingEntity>): List<RecordingEntity> {
+        val outputs = pendingSaveOutputIdentities(DurableSaveJobs.state.value)
+        return rows.filterNot { it.id in pendingDeletions || recordingOwnedByPendingSave(it, outputs) }
+    }
     fun fallbackExpandedBack() = finishLibraryExpandedBack(expandedRecordingOwner,
         { input.active && selectedIds.isEmpty() && expandedRecordingOwner === it },
         recordingMutations::isActive, { setExpandedRecording(null) })
 
     fun activate(recording: RecordingEntity) {
+        if (pendingSaveOwns(recording)) return
         contextMenuRecordingId = null
         if (selectedIds.isNotEmpty()) toggleSelection(recording)
         else setExpandedRecording(if (expandedRecordingOwner?.recordingId == recording.id) null else recording.id)
     }
     fun leadingLongClick(recording: RecordingEntity) {
+        if (pendingSaveOwns(recording)) return
         contextMenuRecordingId = null
         setExpandedRecording(null)
         toggleSelection(recording)
     }
     fun longClick(recording: RecordingEntity) {
+        if (pendingSaveOwns(recording)) return
         if (selectedIds.isNotEmpty()) toggleSelection(recording) else contextMenuRecordingId = recording.id
     }
     fun dismissMenu() { contextMenuRecordingId = null }
     fun rename(recording: RecordingEntity) {
+        if (pendingSaveOwns(recording)) return
         contextMenuRecordingId = null; setExpandedRecording(null)
         renameRecording = recording; showRenameDialog = true
     }
     fun info(recording: RecordingEntity) {
+        if (pendingSaveOwns(recording)) return
         contextMenuRecordingId = null; setExpandedRecording(null)
         infoRecording = recording; showInfoDialog = true
     }
     fun share(recording: RecordingEntity) { contextMenuRecordingId = null; shareRecordings(listOf(recording)) }
     fun shareSelection() = shareRecordings(selectedIds.values.toList())
     fun trim(recording: RecordingEntity) {
+        if (pendingSaveOwns(recording)) return
         contextMenuRecordingId = null
         if (!recordingHasStableTrimIdentity(recording)) {
             showPassiveNotice(resources.getString(R.string.recording_unavailable), FeedbackTone.ERROR)
@@ -359,6 +436,7 @@ internal class NativeLibraryController(
         }
     }
     fun multiSelect(recording: RecordingEntity) {
+        if (pendingSaveOwns(recording)) return
         contextMenuRecordingId = null; setExpandedRecording(null)
         selectedIds[recording.id] = recording; syncSelectionActive()
     }
@@ -373,7 +451,7 @@ internal class NativeLibraryController(
             else current
         }
     }
-    fun playbackFailed(recording: RecordingEntity) {
+    fun playbackFailed(recording: RecordingEntity, failure: Throwable? = null) {
         finishInlinePlaybackFailure(
             retireFailedPlayer = {
                 val current = expandedRecordingOwner?.recordingId == recording.id
@@ -383,7 +461,7 @@ internal class NativeLibraryController(
             navigationAllowed = ::navigationAllowed,
             openRecording = { context.startActivity(RecordingOpenActivity.intentFor(context, recording)) },
             reportUnavailable = {
-                showPassiveNotice(resources.getString(R.string.recording_unavailable), FeedbackTone.ERROR)
+                showPassiveNotice(actionableErrorMessage(context, resources.getString(R.string.recording_unavailable), failure), FeedbackTone.ERROR)
                 if (navigationAllowed()) refresh(showSpinner = false)
             })
     }
@@ -391,12 +469,12 @@ internal class NativeLibraryController(
     fun renamed(renamed: RecordingEntity) {
         val updated = recordings.map { if (it.id == (renameRecording?.id ?: renamed.id)) renamed else it }
         recordings = updated
-        input.callbacks.onVisibleRecordingsChanged(updated.filterNot { it.id in pendingDeletions })
+        input.callbacks.onVisibleRecordingsChanged(actionableCatalogRows(updated))
         dismissRename(); clearSelection(); refresh(showSpinner = false)
     }
-    fun renameUncertain() {
+    fun renameUncertain(error: Throwable) {
         dismissRename(); clearSelection()
-        showPassiveNotice(resources.getString(R.string.rename_recording_failed), FeedbackTone.ERROR)
+        showPassiveNotice(actionableErrorMessage(context, resources.getString(R.string.rename_recording_uncertain), error), FeedbackTone.ERROR)
         refresh(showSpinner = false)
     }
     fun dismissInfo() { showInfoDialog = false; infoRecording = null }
@@ -437,6 +515,7 @@ internal class NativeLibraryController(
     }
 
     fun toggleSelection(recording: RecordingEntity) {
+        if (pendingSaveOwns(recording)) return
         if (selectedIds.containsKey(recording.id)) selectedIds.remove(recording.id)
         else selectedIds[recording.id] = recording
         syncSelectionActive()
@@ -481,14 +560,68 @@ internal class NativeLibraryController(
         trimRequestRecordingId = retainId(trimRequestRecordingId)?.takeIf { it == retainedExpandedId }
     }
 
-    fun refresh(showSpinner: Boolean = true) {
+    private fun pendingSaveSectionChanged() {
+        pendingItemsDirty = true
+        invalidate()
+    }
+
+    fun retryFailedSaves() {
+        performLibraryFailedSaveRetry(!closed && navigationAllowed(), DurableSaveJobs.state.value,
+            DurableSaveJobs.readiness.value, catalogFailed = loadFailed) {
+            refresh(showSpinner = true, userInitiated = true)
+        }
+    }
+
+    fun requestPlayback(request: RecordingPlaybackRequest, beforePlayback: () -> Unit,
+                        finished: (RecordingEntity?) -> Unit) {
+        if (closed || !playbackRoute.submit(request)) return
+        beforeRequestedPlayback = beforePlayback
+        playbackRequestFinished = finished
+        refresh(showSpinner = false)
+    }
+
+    private fun deliverPlaybackRequest() {
+        val request = playbackRoute.takeIfReady(navigationAllowed()) ?: return
+        val recording = recordings.firstOrNull(request::matches)?.takeUnless {
+            it.id in pendingDeletions || pendingSaveOwns(it) || recordingMutations.isActive(it.id)
+        }
+        if (recording == null) {
+            showPassiveNotice(resources.getString(R.string.recording_unavailable), FeedbackTone.ERROR)
+            finishPlaybackRequest(null)
+            return
+        }
+        // Consume row auto-start before installing it: this explicit request owns the only start.
+        clearSelection()
+        contextMenuRecordingId = null
+        trimRequestRecordingId = null
+        setExpandedRecording(recording.id)
+        expandedRecordingOwner?.consumeInitialAutoStart()
+        beforeRequestedPlayback?.invoke()
+        RecordingPlayback.play(context, recording)
+        finishPlaybackRequest(recording)
+    }
+
+    private fun finishPlaybackRequest(recording: RecordingEntity?) {
+        playbackRoute.clear()
+        beforeRequestedPlayback = null
+        val finished = playbackRequestFinished
+        playbackRequestFinished = null
+        finished?.invoke(recording)
+    }
+
+    fun refresh(showSpinner: Boolean = true, userInitiated: Boolean = false) {
         if (!input.active) return
+        if (retryDurableSavesForLibraryRefresh(DurableSaveJobs.readiness.value, DurableSaveJobs.state.value, userInitiated)) {
+            DurableSaveJobs.retryRecovery()
+        }
         if (!firstRefreshReady[0]) {
             if (showSpinner) isRefreshing = true
             deferredRefreshSpinner[0] = deferredRefreshSpinner[0] || showSpinner
             return
         }
         val generation = refreshGeneration.request(showSpinner)
+        val playbackRequestToken = playbackRoute.request?.token
+        val playbackProofGeneration = playbackRoute.proofGeneration
         loadFailed = false
         refreshQueue.request {
             if (!refreshGeneration.isCurrent(generation)) return@request
@@ -538,22 +671,25 @@ internal class NativeLibraryController(
                         clearUndoNotice()
                         if (pendingTargetInvalidated) {
                             showPassiveNotice(
-                                resources.getString(R.string.recording_delete_failed),
+                                resources.getString(R.string.delete_error_changed),
                                 FeedbackTone.ERROR,
                             )
                         }
                     }
                 }
+                playbackRoute.verified(playbackRequestToken, playbackProofGeneration)
+                deliverPlaybackRequest()
             } catch (cancelled: CancellationException) {
                 throw cancelled
-            } catch (_: Exception) {
+            } catch (error: Exception) {
                 if (refreshGeneration.isCurrent(generation)) {
                     hasLoaded = false
                     loadFailed = true
                     showPassiveNotice(
-                        resources.getString(R.string.recordings_refresh_failed),
+                        actionableErrorMessage(context, resources.getString(R.string.recordings_refresh_failed), error),
                         FeedbackTone.ERROR,
                     )
+                    finishPlaybackRequest(null)
                 }
             } finally {
                 refreshGeneration.complete(generation)
@@ -566,15 +702,28 @@ internal class NativeLibraryController(
         if (pending.isEmpty()) return
         val generation = refreshGeneration.invalidate()
         var deleted = 0
+        var awaitingConsent = 0
         var failed = false
+        var failureMessage = ""
         val deletedTargets = mutableListOf<RecordingEntity>()
         // Once the undo window has closed, the user's delete is committed. Keep both the physical
         // identity-bound batch and its terminal optimistic-state reconciliation alive through
         // panel/lifecycle disposal. A cancelled owner must not leave a completed attempt hidden in
         // pendingDeletions after the irreversible delete phase has already run.
         withContext(NonCancellable) {
-            val result = RecordingRepository.deleteBatch(context, pending)
+            val result = try {
+                RecordingRepository.deleteBatch(context, pending)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                RecordingDeletionBatchResult(List(pending.size) { false }, false,
+                    failures = pending.indices.associateWith {
+                        RecordingDeletionFailure(RecordingDeletionFailureReason.CATALOG_UNAVAILABLE, error)
+                    })
+            }
             failed = result.cleanupFailed
+            awaitingConsent = result.consentIndices.size
+            failureMessage = recordingDeletionBatchFailureMessage(context, pending, result)
             val targets = pending.iterator()
             val outcomes = result.outcomes.iterator()
             while (targets.hasNext() && outcomes.hasNext()) {
@@ -591,7 +740,7 @@ internal class NativeLibraryController(
             recordings = recordingsAfterForegroundDeletion(recordings, deletedTargets)
             releaseCompletedForegroundDeletionTargets(pendingDeletions, pending)
         }
-        val deletePhaseFailed = deletionBatchFailed(pending.size, deleted, failed)
+        val deletePhaseFailed = deletionBatchFailed(pending.size, deleted + awaitingConsent, failed)
         try {
             val refreshed = if (deletePhaseFailed) {
                 RecordingRepository.refresh(context)
@@ -611,27 +760,30 @@ internal class NativeLibraryController(
             // Local Library UI may already be gone. Preserve failure feedback at process scope.
             if (deletePhaseFailed) {
                 AppFeedbackCenter.post(
-                    resources.getString(R.string.recording_delete_failed),
+                    failureMessage,
                     FeedbackTone.ERROR,
                 )
             }
             throw cancelled
-        } catch (_: Exception) {
+        } catch (error: Exception) {
             if (refreshGeneration.isCurrent(generation)) {
                 failed = true
+                val refreshFailure = actionableErrorMessage(context,
+                    resources.getString(R.string.delete_error_catalog), error)
+                failureMessage = if (deletePhaseFailed) "$failureMessage\n$refreshFailure" else refreshFailure
                 hasLoaded = false
                 loadFailed = true
             }
         }
-        if (deletionBatchFailed(pending.size, deleted, failed)) {
+        if (deletionBatchFailed(pending.size, deleted + awaitingConsent, failed)) {
             if (input.active) {
                 showPassiveNotice(
-                    resources.getString(R.string.recording_delete_failed),
+                    failureMessage,
                     FeedbackTone.ERROR,
                 )
             } else {
                 AppFeedbackCenter.post(
-                    resources.getString(R.string.recording_delete_failed),
+                    failureMessage,
                     FeedbackTone.ERROR,
                 )
             }
@@ -683,13 +835,15 @@ internal class NativeLibraryController(
     }
 
     fun deleteRecordings(targets: Collection<RecordingEntity>) {
+        if (targets.any(::pendingSaveOwns)) return
         if (targets.isEmpty()) return
         val undoWindow = deletionState.extendUndoWindow() ?: return
+        targets.forEach(RecordingPlayback::stop)
         if (targets.any { it.id == expandedRecordingOwner?.recordingId }) {
             setExpandedRecording(null)
         }
         targets.forEach { pendingDeletions[it.id] = it }
-        input.callbacks.onVisibleRecordingsChanged(recordings.filterNot { it.id in pendingDeletions })
+        input.callbacks.onVisibleRecordingsChanged(actionableCatalogRows(recordings))
         clearSelection()
         contextMenuRecordingId = null
         val count = pendingDeletions.size
@@ -726,12 +880,13 @@ internal class NativeLibraryController(
         undoJob.cancel()
         deletionJob[0] = null
         pendingDeletions.clear()
-        input.callbacks.onVisibleRecordingsChanged(recordings)
+        input.callbacks.onVisibleRecordingsChanged(actionableCatalogRows(recordings))
         clearUndoNotice(undoWindow)
         refresh(showSpinner = false)
     }
 
     fun shareRecordings(recordingsToShare: Collection<RecordingEntity>) {
+        if (recordingsToShare.any(::pendingSaveOwns)) return
         if (recordingsToShare.isEmpty()) return
         val targets = recordingsToShare.toList()
         val chooserTitle = resources.getString(
@@ -740,8 +895,8 @@ internal class NativeLibraryController(
         )
         retireShareRequest()
         val generation = shareGeneration[0]
-        fun reportShareFailure() {
-            showPassiveNotice(resources.getString(R.string.share_recording_failed), FeedbackTone.ERROR)
+        fun reportShareFailure(error: Throwable? = null) {
+            showPassiveNotice(actionableErrorMessage(context, resources.getString(R.string.share_recording_failed), error), FeedbackTone.ERROR)
             if (navigationAllowed()) refresh(showSpinner = false)
         }
         lateinit var delivery: RecordingOpenResultDelivery<Intent>
@@ -753,12 +908,14 @@ internal class NativeLibraryController(
                 } else {
                     try {
                         context.startActivity(Intent.createChooser(shareIntent, chooserTitle))
-                    } catch (_: RuntimeException) {
-                        reportShareFailure()
+                    } catch (error: RuntimeException) {
+                        reportShareFailure(error)
                     }
                 }
             },
-            reportUndeliveredFailure = ::reportShareFailure,
+            reportUndeliveredFailure = { reportShareFailure() },
+            deliverFailure = { reportShareFailure(it) },
+            reportUndeliveredFailureWithCause = { reportShareFailure(it) },
             finish = {
                 if (shareDelivery[0] === delivery) shareDelivery[0] = null
             },
@@ -766,16 +923,18 @@ internal class NativeLibraryController(
         shareDelivery[0] = delivery
         shareJob[0] = scope.launch {
             try {
+                var shareFailure: Throwable? = null
                 val shareIntent = try {
                     withContext(Dispatchers.IO) {
                         buildShareRecordingsIntent(context, targets)
                     }
                 } catch (cancelled: CancellationException) {
                     throw cancelled
-                } catch (_: RuntimeException) {
+                } catch (error: RuntimeException) {
+                    shareFailure = error
                     null
                 }
-                delivery.complete(shareIntent)
+                delivery.complete(shareIntent, shareFailure)
             } finally {
                 if (generation == shareGeneration[0]) shareJob[0] = null
             }
@@ -785,6 +944,9 @@ internal class NativeLibraryController(
     override fun close() {
         if (closed) return
         closed = true
+        playbackRoute.clear()
+        beforeRequestedPlayback = null
+        playbackRequestFinished = null
         // Accepted background/foreground deletion owners survive actual UI disposal.
         removeLifecycle(input.active, input.callbacks)
         input.callbacks.onUndoVisibleChange(false)

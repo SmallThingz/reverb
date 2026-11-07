@@ -27,6 +27,22 @@ internal class NativeEditableCursorDrawable(thicknessPx: Float, color: Int) : Dr
     override fun getIntrinsicWidth() = stroke.toInt()
     override fun getIntrinsicHeight() = 1
 
+    // Some platform editors clone their cursor when entering selection/magnification. Keep
+    // styling in the snapshot, but never share bounds or the deferred text-draw bookkeeping.
+    override fun getConstantState(): ConstantState {
+        val snapshotStroke = stroke
+        val snapshotColor = paint.color
+        val snapshotFilter = paint.colorFilter
+        val snapshotConfigurations = changingConfigurations
+        return object : ConstantState() {
+            override fun newDrawable(): Drawable = NativeEditableCursorDrawable(snapshotStroke, snapshotColor).also {
+                it.colorFilter = snapshotFilter
+                it.changingConfigurations = snapshotConfigurations
+            }
+            override fun getChangingConfigurations() = snapshotConfigurations
+        }
+    }
+
     fun bind(thicknessPx: Float, color: Int) {
         val nextStroke = floor(thicknessPx).coerceAtLeast(1f)
         if (stroke == nextStroke && paint.color == color) return
@@ -78,6 +94,8 @@ internal class NativeEditableCursorDrawable(thicknessPx: Float, color: Int) : Dr
     }
 
     override fun setAlpha(alpha: Int) { paint.alpha = alpha; invalidateSelf() }
+    override fun getAlpha() = paint.alpha
     override fun setColorFilter(filter: ColorFilter?) { paint.colorFilter = filter; invalidateSelf() }
+    override fun getColorFilter(): ColorFilter? = paint.colorFilter
     @Suppress("DEPRECATION") override fun getOpacity() = PixelFormat.TRANSLUCENT
 }

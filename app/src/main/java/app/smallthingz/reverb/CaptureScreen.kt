@@ -144,10 +144,12 @@ class NotifyFileReceiver(
     }
 
     override fun fileFailed(message: String, error: Throwable?) {
-        val text = normalizedCaptureSaveFailureMessage(
+        val normalized = normalizedCaptureSaveFailureMessage(
             message = message,
             fallback = appContext.getString(R.string.save_failed),
         )
+        val text = if (normalized == appContext.getString(R.string.save_failed))
+            actionableErrorMessage(appContext, normalized, error) else normalized
         AppFeedbackCenter.post(text, FeedbackTone.ERROR)
         backgroundRecordingResultScope.launch {
             if (
@@ -170,13 +172,7 @@ internal fun normalizedCaptureSaveFailureMessage(message: String, fallback: Stri
 
 fun buildCaptureNotification(context: Context, recording: RecordingEntity): Notification {
     ensureCaptureResultNotificationChannel(context)
-    val intent = RecordingOpenActivity.intentFor(context, recording).apply {
-        action = recordingSavedPendingIntentAction(
-            context.packageName,
-            recording.id,
-            recording.fileIdentity,
-        )
-    }
+    val intent = RecordingPlaybackRequest.intentFor(context, recording)
     val pendingIntent = PendingIntent.getActivity(
         context,
         0,
@@ -254,8 +250,10 @@ internal fun reconcileCaptureExportStatus(
     exporting: Boolean,
     receiverAttached: Boolean,
     status: CaptureSaveStatus?,
+    cancellable: Boolean = true,
 ): CaptureSaveStatus? = when {
-    exporting && status == null -> CaptureSaveStatus.Saving(cancellable = true)
+    exporting && status == null -> CaptureSaveStatus.Saving(cancellable = cancellable)
+    exporting && status is CaptureSaveStatus.Saving && status.cancellable && !cancellable -> status.copy(cancellable = false)
     !exporting && !receiverAttached && status is CaptureSaveStatus.Saving -> null
     else -> status
 }
@@ -337,7 +335,7 @@ internal fun startExport(
         return
     }
     setSaving(true)
-    onStatus(CaptureSaveStatus.Saving(cancellable = true))
+    onStatus(CaptureSaveStatus.Saving(cancellable = false))
     val appContext = context.applicationContext
     val receiver = SaveResultReceiver(
         context = appContext,
@@ -477,6 +475,17 @@ internal class SaveUiCallbackGate(
         savedCallback = null
     }
 
+    fun queued() {
+        if (!attached) return
+        try {
+            setSavingCallback?.invoke(false)
+            statusCallback?.invoke(null)
+            savedCallback?.invoke()
+        } finally {
+            detach()
+        }
+    }
+
     fun saved(recording: RecordingEntity): Boolean {
         if (!attached) return false
         val visible = canDisplayCallback?.invoke() == true
@@ -543,8 +552,16 @@ internal class SaveResultReceiver(
     )
 
     private val terminalDelivered = AtomicBoolean(false)
+    private val queuedDelivered = AtomicBoolean(false)
+    private val uiRetired = AtomicBoolean(false)
 
     fun detachUi() = uiCallbacks.detach()
+
+    override fun saveQueued(jobId: String) {
+        if (terminalDelivered.get() || !queuedDelivered.compareAndSet(false, true)) return
+        // Admission ends this UI lease. Encoding keeps only process-owned terminal delivery.
+        deliverTerminalResult(deliver = { uiCallbacks.queued() }, finish = ::finish)
+    }
 
     override fun fileReady(recording: RecordingEntity) {
         if (!terminalDelivered.compareAndSet(false, true)) return
@@ -586,7 +603,7 @@ internal class SaveResultReceiver(
 
     private fun finish() {
         uiCallbacks.detach()
-        onTerminal(this)
+        if (uiRetired.compareAndSet(false, true)) onTerminal(this)
     }
 }
 

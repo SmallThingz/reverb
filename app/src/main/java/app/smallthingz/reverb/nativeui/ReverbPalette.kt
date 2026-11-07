@@ -18,7 +18,6 @@ package app.smallthingz.reverb.nativeui
 
 import android.content.Context
 import android.os.Build
-import kotlin.math.sqrt
 import androidx.annotation.RequiresApi
 import app.smallthingz.reverb.nativeui.color.Cam
 
@@ -85,8 +84,6 @@ internal data class ReverbPalette(
     val muted: Int get() = onSurfaceVariant
     val border: Int get() = reverbColorWithAlpha(onSurface, 0.14f)
 
-    // Theme and retention selectors need a distinct selected surface, not another elevation tone.
-    // Keep the paired content role so both dynamic Light and Dark palettes remain readable.
     val settingsSelection: Int get() = primary
     val settingsOnSelection: Int get() = onPrimary
 
@@ -409,80 +406,4 @@ private fun dynamic31(darkTheme: Boolean, readColor: (Int) -> Int): ReverbPalett
         onTertiaryFixed = readColor(android.R.color.system_accent3_900),
         onTertiaryFixedVariant = readColor(android.R.color.system_accent3_700),
     )
-}
-
-/** Keeps selection text readable while the fill crosses from a dark to a light surface or back.
- * Interpolating both foreground and fill crosses their luminance and briefly hides the label.
- * Semantic colors own the endpoints; neutral transition ink covers the gap where neither role
- * meets text contrast. This policy is shared by Theme and Time/Size, with no frame allocations.
- */
-internal class SettingsSelectionInk(palette: ReverbPalette) {
-    private val field = palette.field
-    private val selectedFill = palette.settingsSelection
-    private val idleIndication = palette.ink
-    private val selected = palette.settingsOnSelection
-    private val idle = palette.muted
-    private val selectedLuminance = srgbLuminance(selected)
-    private val idleLuminance = srgbLuminance(idle)
-    private val crossover = sqrt((selectedLuminance + 0.05) * (idleLuminance + 0.05)) - 0.05
-    private val lighter = if (selectedLuminance >= idleLuminance) selected else idle
-    private val darker = if (selectedLuminance >= idleLuminance) idle else selected
-
-    var indicationColor: Int = idleIndication
-        private set
-
-    fun foreground(animatedFill: Int): Int {
-        val alpha = animatedFill ushr 24
-        val background = composite(animatedFill, field, alpha)
-        val backgroundLuminance = srgbLuminance(background)
-        val preferred = when {
-            alpha == 0 -> idle
-            animatedFill == selectedFill -> selected
-            backgroundLuminance <= crossover -> lighter
-            else -> darker
-        }
-        fun contrast(foreground: Int): Double {
-            val luminance = if (foreground == selected) selectedLuminance else idleLuminance
-            return if (backgroundLuminance >= luminance)
-                (backgroundLuminance + 0.05) / (luminance + 0.05)
-            else (luminance + 0.05) / (backgroundLuminance + 0.05)
-        }
-        val alternate = if (preferred == selected) idle else selected
-        val ink = when {
-            contrast(preferred) >= 4.5 -> preferred
-            contrast(alternate) >= 4.5 -> alternate
-            backgroundLuminance <= NEUTRAL_CROSSOVER -> LIGHT_TRANSITION_INK
-            else -> DARK_TRANSITION_INK
-        }
-        val inkLuminance = when (ink) {
-            selected -> selectedLuminance
-            idle -> idleLuminance
-            DARK_TRANSITION_INK -> 0.0
-            else -> 1.0
-        }
-        val indication = if (alpha == 0) idleIndication else ink
-        // Focus and press can overlap: each current layer is 10%, rounded to alpha 26/255.
-        // The indication is behind the glyphs, so only the surface receives these overlays.
-        val stateBackground = composite(indication, composite(indication, background, 26), 26)
-        val stateLuminance = srgbLuminance(stateBackground)
-        val stateContrast = if (stateLuminance >= inkLuminance)
-            (stateLuminance + 0.05) / (inkLuminance + 0.05)
-        else (inkLuminance + 0.05) / (stateLuminance + 0.05)
-        indicationColor = if (stateContrast >= 4.5) indication
-            else if (backgroundLuminance < inkLuminance) DARK_TRANSITION_INK else LIGHT_TRANSITION_INK
-        return ink
-    }
-
-    private fun composite(foreground: Int, background: Int, alpha: Int): Int {
-        fun channel(shift: Int): Int =
-            (((foreground ushr shift and 255) * alpha +
-                (background ushr shift and 255) * (255 - alpha) + 127) / 255) shl shift
-        return (0xFF shl 24) or channel(16) or channel(8) or channel(0)
-    }
-
-    private companion object {
-        const val LIGHT_TRANSITION_INK = -1
-        const val DARK_TRANSITION_INK = -0x1000000
-        val NEUTRAL_CROSSOVER = sqrt(1.05 * 0.05) - 0.05
-    }
 }

@@ -373,7 +373,7 @@ internal class HomeBufferSegment(context: Context, currentEnvironment: ReverbVie
             filled && selection -> p.onTertiary
             selection && !bufferEnabled -> reverbColorWithAlpha(p.onPrimaryContainer, .62f)
             selection -> p.onPrimaryContainer
-            else -> reverbColorWithAlpha(p.muted, if (bufferEnabled) .52f else .30f)
+            else -> if (bufferEnabled) p.muted else reverbColorWithAlpha(p.muted, .30f)
         })
         transitionInk.target(p.field, p.ink, background.toArgb(), foreground.toArgb())
         if (!initialized) {
@@ -439,12 +439,14 @@ internal class HomeBufferSegment(context: Context, currentEnvironment: ReverbVie
     override fun addChildrenForAccessibility(children: ArrayList<View>) =
         mergedRowAccessibility.addChildrenForAccessibility(children)
     private fun colorMotion(color: Color) = LibraryTweenValue(color, (Color.VectorConverter)(color.colorSpace),
-        tween<Color>(160), { AnimationVector4D(0f, 0f, 0f, 0f) })
+        tween<Color>((smallthingz.ui.animation.ColorTransition.DURATION_NANOS / 1_000_000).toInt(),
+            easing = smallthingz.ui.animation.core.FastOutSlowInEasing), { AnimationVector4D(0f, 0f, 0f, 0f) })
 }
 
 private class HomeAction(context: Context, currentEnvironment: ReverbViewEnvironment,
     root: () -> View?, icon: ReverbIcon, description: Int) : HomeClickable(context, currentEnvironment, root, null) {
     private val glyph = HomeGlyph(context, currentEnvironment, icon)
+    private val colorMotion=colorTransition(currentEnvironment.palette.ink) {glyph.setTint(it)}
     private var flip = ReverbHomeFlipFrame()
     private var destructive = false
     init {
@@ -467,7 +469,7 @@ private class HomeAction(context: Context, currentEnvironment: ReverbViewEnviron
     }
     private fun apply() {
         val p = currentEnvironment.palette
-        glyph.setTint(if (!isEnabled) reverbColorWithAlpha(p.muted, .28f)
+        colorMotion.retarget(if (!isEnabled) reverbColorWithAlpha(p.muted, .28f)
             else if (destructive) p.error else p.ink)
         // IconButton's inherited LocalContentColor controls the ripple, not the explicit glyph tint.
         indication.updateColor(if (isEnabled) p.ink else reverbColorWithAlpha(p.ink, .38f))

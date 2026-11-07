@@ -35,7 +35,7 @@ internal data class NativeInlinePlayerCallbacks(
     val onTrimStateUncertain: () -> Unit,
     val onWaveformCached: (RecordingEntity) -> Unit,
     val onCollapse: () -> Unit,
-    val onPlaybackFailed: () -> Unit,
+    val onPlaybackFailed: (Throwable?) -> Unit,
     val onBusyChange: (Boolean) -> Unit,
 )
 internal data class NativeInlinePlayerInput(
@@ -76,6 +76,7 @@ internal class NativeRecordingInlinePlayerController(
     private val appContext = context.applicationContext
     private val rowScope = CoroutineScope(parentScope.coroutineContext + Job(parentScope.coroutineContext[Job]))
     private val main = Handler(Looper.getMainLooper())
+    private val positionObservation = Any()
     private var input = initial
     private val recordingId = initial.recording.id
     private var closed = false
@@ -123,6 +124,7 @@ internal class NativeRecordingInlinePlayerController(
         val revisionChanged = !sameNativeInlinePlayerRevision(session.recording, next.recording)
         if (revisionChanged) session.close()
         input = next
+        if (!next.screenActive) RecordingPlayback.observePosition(positionObservation, false)
         // A queued trim terminal may run before the coalesced presentation is delivered.
         activeTrimReceiver.get()?.setUiVisible(input.screenActive && lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
         if (revisionChanged) {
@@ -130,12 +132,12 @@ internal class NativeRecordingInlinePlayerController(
             session.start()
         } else {
             if (previous.playbackOwner !== next.playbackOwner) {
-                session.playbackBookkeeping.retireExpansion(session::pauseInlinePlayback)
+                session.playbackBookkeeping.retireExpansion(session::pauseForLifecycle)
                 session.bindExpansion()
             }
             if (previous.screenActive != next.screenActive) {
                 session.playbackBookkeeping.revokeResume()
-                if (!next.screenActive) session.pauseInlinePlayback()
+                if (!next.screenActive) session.pauseForLifecycle()
             }
         }
         if (previous.playbackOwner !== next.playbackOwner) { backActive = false; backProgress = 0f }
@@ -151,12 +153,18 @@ internal class NativeRecordingInlinePlayerController(
         finishInlineBackForCurrentRow(owner = ownerAtRegistration,
             isCurrentOwner = input.isCurrentPlaybackOwner, trimSaving = trimSaving,
             trimMode = session.trimMode,
-            leaveTrim = { session.trimMode = false; session.trimError = null },
+            leaveTrim = session::leaveTrimMode,
             collapse = input.callbacks.onCollapse)
+    }
+
+    fun exitTrimForOrdinaryPlayback() {
+        if (!closed) session.preemptPreview()
     }
 
     private fun deliver() {
         val current = session
+        RecordingPlayback.observePosition(positionObservation,
+            input.screenActive && lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
         activeTrimReceiver.get()?.setUiVisible(input.screenActive && lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
         if (busyEffectValue != trimSaving) {
             busyEffect?.cancel()
@@ -172,6 +180,7 @@ internal class NativeRecordingInlinePlayerController(
     override fun close() {
         if (closed) return
         closed = true
+        RecordingPlayback.observePosition(positionObservation, false)
         activeTrimReceiver.getAndSet(null)?.detachUi()
         input.callbacks.onBusyChange(false)
         session.close()
@@ -189,9 +198,14 @@ internal class NativeRecordingInlinePlayerController(
         private var mediaPlayer by observed<MediaPlayer?>(null)
         private var prepared by observed(false)
         private var isPlaying by observed(false)
+        private var trimPlaybackStarting by observed(false)
+        private var trimStartJob: Job? = null
+        private var trimStartGeneration = 0L
         private var currentPosition by observed(0)
         private var duration by observed(recording.durationMillis.coerceIn(1L, Int.MAX_VALUE.toLong()).toInt())
         private var isScrubbing by observed(false)
+        private var ordinaryScrubGeneration: Long? = null
+        private var ordinaryScrubTransportIntentRevision = 0L
         private val pinnedMediaSource = AtomicReference<InlinePlayerMediaSource?>(null)
         var trimMode by observed(false)
         private var trimStartMillis by observed(0)
@@ -230,7 +244,7 @@ internal class NativeRecordingInlinePlayerController(
             onTrackReleaseFailure = { error ->
                 Log.e("ReverbInlinePlayer", "Saved recording preview AudioTrack.release failed", error)
                 RecordingIncidentStore.recordUnexpectedErrorInBackground(appContext, "Saved recording preview AudioTrack cleanup", error)
-                AppFeedbackCenter.post(appContext.getString(R.string.audio_preview_release_failed), FeedbackTone.ERROR)
+                AppFeedbackCenter.post(actionableErrorMessage(appContext, appContext.getString(R.string.audio_preview_release_failed), error), FeedbackTone.ERROR)
             },
         )
         private val lifecycleObserver = LifecycleEventObserver { _, event ->
@@ -239,10 +253,10 @@ internal class NativeRecordingInlinePlayerController(
                     activeTrimReceiver.get()?.setUiVisible(input.screenActive)
                     submitInlinePlaybackAutoStart(playbackBookkeeping, input.playbackOwner, prepared, true,
                         trimSaving || input.trimRequested || trimMode || !input.screenActive || !ownsPlaybackRow()) {
-                        seekTo(currentPosition, resume = true)
+                        startOrdinaryPlaybackIfNeeded()
                     }
                 }
-                Lifecycle.Event.ON_PAUSE -> { activeTrimReceiver.get()?.setUiVisible(false); pauseInlinePlayback() }
+                Lifecycle.Event.ON_PAUSE -> { activeTrimReceiver.get()?.setUiVisible(false); pauseForLifecycle() }
                 else -> Unit
             }
         }
@@ -254,12 +268,13 @@ internal class NativeRecordingInlinePlayerController(
                 error,
             )
             AppFeedbackCenter.post(
-                appContext.getString(R.string.recording_read_cleanup_failed),
+                actionableErrorMessage(appContext, appContext.getString(R.string.recording_read_cleanup_failed), error),
                 FeedbackTone.ERROR,
             )
         }
 
         fun releasePlayer() {
+            cancelPendingTrimStart()
             if (playbackBookkeeping.released) return
             playbackBookkeeping.released = true
             playbackBookkeeping.revokeResume()
@@ -284,44 +299,110 @@ internal class NativeRecordingInlinePlayerController(
             isPlaying = false
         }
 
+        // Resume intent may belong to a pending seek while the player is still Prepared.
+        // Only a successful start authorizes pause; keep logical shuttle state at each caller.
+        private fun pauseStartedMediaPlayer(forGesture: Boolean = false) {
+            if (!trimMode) {
+                val generation = ordinaryScrubGeneration
+                if (forGesture && generation != null && ordinaryScrubStillCurrent()) {
+                    RecordingPlayback.suspendForGesture(recording, generation, ordinaryScrubTransportIntentRevision)
+                } else if (!forGesture && (generation == null || ordinaryScrubStillCurrent())) RecordingPlayback.pause(recording)
+            } else if (prepared && isPlaying && !playbackBookkeeping.released) mediaPlayer?.pause()
+        }
+
+        fun pauseForLifecycle() {
+            // Normal playback belongs to the service; only the gesture/editor belongs to this row.
+            if (trimMode || isScrubbing || playbackBookkeeping.fineSeekShuttleActive) pauseInlinePlayback()
+            ordinaryScrubGeneration = null
+        }
+
+        private fun startOrdinaryPlaybackIfNeeded() {
+            if (!trimMode && !RecordingPlayback.state.value.matches(recording)) {
+                RecordingPlayback.play(appContext, recording)
+            }
+        }
+
         fun pauseInlinePlayback() {
+            cancelPendingTrimStart()
             playbackBookkeeping.revokeResume()
             fineSeekPreviewController.stopShuttle()
             playbackBookkeeping.fineSeekShuttleActive = false
             isScrubbing = false
-            runCatching { mediaPlayer?.takeIf { prepared && !playbackBookkeeping.released }?.pause() }
+            runCatching { pauseStartedMediaPlayer() }
             isPlaying = false
         }
 
         fun ownsPlaybackRow(): Boolean = input.playbackOwner?.let(input.isCurrentPlaybackOwner) == true
 
+        private fun cancelPendingTrimStart() {
+            trimStartGeneration++
+            trimStartJob?.cancel()
+            trimStartJob = null
+            trimPlaybackStarting = false
+        }
+
         fun startCurrentRowPlayback(
             player: MediaPlayer,
             owner: InlinePlaybackRowOwner? = input.playbackOwner,
-        ): Boolean = startInlinePlaybackForCurrentRow(
-            owner = owner,
-            isCurrentOwner = input.isCurrentPlaybackOwner,
-            start = { player.start() },
-        )
+        ): Boolean {
+            cancelPendingTrimStart()
+            val generation = trimStartGeneration
+            var started = false
+            trimPlaybackStarting = true
+            trimStartJob = revisionScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                try {
+                    check(previewQuietCoordinator.awaitQuiet()) { "Previous audio preview could not be silenced" }
+                    if (disposed || !trimMode || trimSaving || generation != trimStartGeneration ||
+                        mediaPlayer !== player || playbackBookkeeping.released || playbackBookkeeping.seeks.pending ||
+                        !input.screenActive || !lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return@launch
+                    started = startInlinePlaybackForCurrentRow(owner, input.isCurrentPlaybackOwner) {
+                        RecordingPlayback.pauseCurrent()
+                        player.start()
+                    }
+                    if (started) isPlaying = true
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    if (!disposed && generation == trimStartGeneration && mediaPlayer === player) {
+                        releasePlayer()
+                        input.callbacks.onPlaybackFailed(error)
+                    }
+                } finally {
+                    if (generation == trimStartGeneration) trimPlaybackStarting = false
+                }
+            }
+            return started
+        }
 
         fun seekTo(positionMillis: Int, resume: Boolean = false) {
+            cancelPendingTrimStart()
             playbackBookkeeping.fineSeekPosition.reset()
             val bounded = positionMillis.coerceIn(0, duration.coerceAtLeast(1))
             currentPosition = bounded
+            if (!trimMode) {
+                val mayResume = resume && input.screenActive && ownsPlaybackRow() && !trimSaving &&
+                    lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+                if (RecordingPlayback.state.value.matches(recording)) {
+                    RecordingPlayback.seek(recording, bounded, mayResume)
+                } else if (mayResume) {
+                    RecordingPlayback.play(appContext, recording, bounded)
+                }
+                return
+            }
             if (!prepared || playbackBookkeeping.released) return
             val player = mediaPlayer ?: return
             runCatching {
                 // Never start against the previous position; only the terminal seek callback resumes.
-                if (player.isPlaying) player.pause()
+                if (player.isPlaying) pauseStartedMediaPlayer()
                 isPlaying = false
                 val resumeOwner = input.playbackOwner?.takeIf {
                     resume && input.screenActive && input.isCurrentPlaybackOwner(it) && !trimSaving &&
                         lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
                 }
                 playbackBookkeeping.requestSeek(bounded, resumeOwner)?.let { player.seekTo(it) }
-            }.onFailure {
+            }.onFailure { error ->
                 releasePlayer()
-                input.callbacks.onPlaybackFailed()
+                input.callbacks.onPlaybackFailed(error)
             }
         }
 
@@ -330,6 +411,17 @@ internal class NativeRecordingInlinePlayerController(
         )
 
         fun toggleFineSeekPlayback() {
+            if (!trimMode) {
+                if (trimSaving || !input.screenActive || !ownsPlaybackRow() ||
+                    !lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return
+                val playback = RecordingPlayback.state.value
+                if (playback.matches(recording) &&
+                    recordingPlaybackPhase(playback.playing, playback.wantsPlayback).offersPause) RecordingPlayback.pause(recording)
+                else RecordingPlayback.play(appContext, recording,
+                    if (currentPosition >= duration) 0 else null)
+                return
+            }
+            if (trimPlaybackStarting) { pauseInlinePlayback(); return }
             val player = mediaPlayer ?: return
             if (!prepared || playbackBookkeeping.released || trimSaving || !input.screenActive || !ownsPlaybackRow() ||
                 !lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
@@ -338,7 +430,7 @@ internal class NativeRecordingInlinePlayerController(
                 if (playbackBookkeeping.seeks.pending && playbackBookkeeping.seeks.resume) {
                     playbackBookkeeping.revokeSeekResume()
                 } else if (player.isPlaying) {
-                    player.pause()
+                    pauseStartedMediaPlayer()
                     isPlaying = false
                 } else {
                     val restartAt = when {
@@ -348,9 +440,9 @@ internal class NativeRecordingInlinePlayerController(
                     }
                     seekTo(restartAt, resume = true)
                 }
-            }.onFailure {
+            }.onFailure { error ->
                 releasePlayer()
-                input.callbacks.onPlaybackFailed()
+                input.callbacks.onPlaybackFailed(error)
             }
         }
 
@@ -400,8 +492,11 @@ internal class NativeRecordingInlinePlayerController(
             if (!prepared || playbackBookkeeping.released || trimSaving || playbackBookkeeping.fineSeekShuttleActive ||
                 !input.screenActive || !ownsPlaybackRow() || !lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
             ) return
+            if (!trimMode && !beginOrdinaryScrub()) return
             playbackBookkeeping.fineSeekPosition.reset()
-            playbackBookkeeping.resumeAfterScrub = isPlaying || playbackBookkeeping.seeks.resume
+            val resumeAfterScrub = isPlaying || trimPlaybackStarting || playbackBookkeeping.seeks.resume
+            cancelPendingTrimStart()
+            playbackBookkeeping.resumeAfterScrub = resumeAfterScrub
             playbackBookkeeping.revokeSeekResume()
             val scrubOwner = input.playbackOwner
             // MediaPlayer cannot reverse and repeated seekTo() calls produce silence/stutter.
@@ -415,8 +510,9 @@ internal class NativeRecordingInlinePlayerController(
                 atSeconds = fineSeekTargetMillis().toDouble() / 1_000.0,
                 rate = shuttleRate,
                 onStarted = {
-                    if (playbackBookkeeping.fineSeekShuttleActive && playbackBookkeeping.resumeAfterScrub) {
-                        runCatching { mediaPlayer?.pause() }
+                    if (playbackBookkeeping.fineSeekShuttleActive && playbackBookkeeping.resumeAfterScrub &&
+                        ordinaryScrubStillCurrent()) {
+                        runCatching { pauseStartedMediaPlayer(forGesture = true) }
                     }
                 },
                 onFailureAfterStart = {
@@ -429,12 +525,14 @@ internal class NativeRecordingInlinePlayerController(
                         )
                     ) {
                         val player = mediaPlayer
-                        if (player != null) {
+                        if (!trimMode && ordinaryScrubStillCurrent()) {
+                            RecordingPlayback.seek(recording, currentPosition, true)
+                        } else if (player != null) {
                             runCatching { startCurrentRowPlayback(player, scrubOwner) }
                                 .onSuccess { started -> if (started) isPlaying = true }
-                                .onFailure {
+                                .onFailure { error ->
                                     releasePlayer()
-                                    input.callbacks.onPlaybackFailed()
+                                    input.callbacks.onPlaybackFailed(error)
                                 }
                         }
                     }
@@ -443,7 +541,8 @@ internal class NativeRecordingInlinePlayerController(
         }
 
         fun applyInlineFineSeek(deltaSeconds: Float) {
-            if (!deltaSeconds.isFinite() || duration <= 0) return
+            if (!isScrubbing || !playbackBookkeeping.fineSeekShuttleActive || !ordinaryScrubStillCurrent()) return
+            if (!prepared || !deltaSeconds.isFinite() || duration <= 0) return
             val target = if (trimMode) fineSeekTarget else InlineFineSeekTarget.PLAYHEAD
             val adjusted = adjustInlineFineSeekPosition(
                 position = playbackBookkeeping.fineSeekPosition,
@@ -462,7 +561,7 @@ internal class NativeRecordingInlinePlayerController(
         }
 
         fun updateInlineFineSeekShuttle(shuttleRate: Float, pendingDeltaSeconds: Float) {
-            if (!playbackBookkeeping.fineSeekShuttleActive || duration <= 0) return
+            if (!isScrubbing || !playbackBookkeeping.fineSeekShuttleActive || !ordinaryScrubStillCurrent() || duration <= 0) return
             val target = if (trimMode) fineSeekTarget else InlineFineSeekTarget.PLAYHEAD
             fineSeekPreviewController.updateShuttle(
                 atSeconds = projectInlineFineSeekPosition(
@@ -481,6 +580,12 @@ internal class NativeRecordingInlinePlayerController(
             isScrubbing = false
             val shouldResume = playbackBookkeeping.resumeAfterScrub
             playbackBookkeeping.resumeAfterScrub = false
+            if (!ordinaryScrubStillCurrent()) {
+                ordinaryScrubGeneration = null
+                adoptOrdinaryState()
+                return
+            }
+            ordinaryScrubGeneration = null
             if (trimMode) currentPosition = fineSeekTargetMillis()
             seekTo(
                 if (trimMode && shouldResume) trimPlaybackStartMillis() else currentPosition,
@@ -499,24 +604,82 @@ internal class NativeRecordingInlinePlayerController(
             if (trimSaving || !canEnterInlineTrim(prepared, duration)) return false
             input.playbackOwner?.consumeInitialAutoStart()
             playbackBookkeeping.initialAutoStartPending = false
+            RecordingPlayback.pauseCurrent()
             if (isPlaying) {
-                runCatching { mediaPlayer?.pause() }
+                runCatching { pauseStartedMediaPlayer() }
                 isPlaying = false
             }
             trimStartMillis = 0
             trimEndMillis = duration
             fineSeekTarget = InlineFineSeekTarget.TRIM_START
             currentPosition = 0
-            seekTo(0)
             trimError = null
             trimMode = true
+            prepared = false
+            startTrimPlayer()
             return true
+        }
+
+        fun leaveTrimMode() {
+            if (!trimMode) return
+            pauseInlinePlayback()
+            releasePlayer()
+            trimMode = false
+            trimError = null
+            playbackBookkeeping.released = false
+            adoptOrdinaryState()
+        }
+
+        fun preemptPreview() {
+            // Retire gesture authority before a new transport command can publish playing state.
+            // Accepted trim work and its terminal receiver remain owned by the outer controller.
+            playbackBookkeeping.revokeResume()
+            fineSeekPreviewController.stopShuttle()
+            playbackBookkeeping.fineSeekShuttleActive = false
+            isScrubbing = false
+            ordinaryScrubGeneration = null
+            if (trimMode) leaveTrimMode() else adoptOrdinaryState()
+        }
+
+        private fun adoptOrdinaryState() {
+            if (trimMode || disposed) return
+            val playback = RecordingPlayback.state.value
+            val matching = playback.matches(recording)
+            prepared = !matching || playback.prepared
+            isPlaying = matching && recordingPlaybackPhase(playback.playing, playback.wantsPlayback).offersPause
+            if (matching && !isScrubbing && !playbackBookkeeping.fineSeekShuttleActive) {
+                currentPosition = playback.positionMillis
+                duration = playback.durationMillis.coerceAtLeast(1)
+            }
         }
 
 
         fun start() {
             playbackBookkeeping.released = false
             playbackBookkeeping.initialAutoStartPending = true
+            adoptOrdinaryState()
+            lifecycleOwner.lifecycle.addObserver(lifecycleObserver)
+            bindExpansion()
+            revisionScope.launch {
+                RecordingPlayback.state.collect { playback ->
+                    if (trimMode && (playback.playing || playback.wantsPlayback)) {
+                        if (trimSaving) pauseInlinePlayback() else leaveTrimMode()
+                    }
+                    if (!trimMode && ordinaryScrubGeneration != null && !ordinaryScrubStillCurrent()) {
+                        playbackBookkeeping.revokeResume()
+                        fineSeekPreviewController.stopShuttle()
+                        playbackBookkeeping.fineSeekShuttleActive = false
+                        isScrubbing = false
+                        ordinaryScrubGeneration = null
+                    }
+                    adoptOrdinaryState()
+                }
+            }
+            buildWaveform()
+        }
+
+        private fun startTrimPlayer() {
+            playbackBookkeeping.released = false
             val player = configureOwnedResourceOrRelease(
                 owner = MediaPlayer(),
                 release = { it.release() },
@@ -568,9 +731,9 @@ internal class NativeRecordingInlinePlayerController(
                                     }
                                 }
                             }
-                        }.onFailure {
+                        }.onFailure { error ->
                             releasePlayer()
-                            input.callbacks.onPlaybackFailed()
+                            input.callbacks.onPlaybackFailed(error)
                         }
                     }
                 }
@@ -585,7 +748,7 @@ internal class NativeRecordingInlinePlayerController(
                         currentPosition = duration
                     }
                 }
-                configuredPlayer.setOnErrorListener { errorPlayer, _, _ ->
+                configuredPlayer.setOnErrorListener { errorPlayer, what, extra ->
                     val samePlayer = mediaPlayer === errorPlayer
                     val ownsPlaybackResources = !playbackBookkeeping.released && samePlayer
                     val shouldReportFailure = inlinePlaybackCallbackIsCurrent(
@@ -597,22 +760,19 @@ internal class NativeRecordingInlinePlayerController(
                         ownsPlaybackResources = ownsPlaybackResources,
                         shouldReportFailure = shouldReportFailure,
                         releaseResources = ::releasePlayer,
-                        reportFailure = input.callbacks.onPlaybackFailed,
+                        reportFailure = { input.callbacks.onPlaybackFailed(IllegalStateException("Android media error: what=$what, extra=$extra")) },
                     )
                     true
                 }
             }
             mediaPlayer = player
-            lifecycleOwner.lifecycle.addObserver(lifecycleObserver)
-            bindExpansion()
             if (!input.screenActive) pauseInlinePlayback()
             prepare(player)
-            buildWaveform()
         }
 
         fun bindExpansion() {
             if (!input.screenActive || !ownsPlaybackRow()) {
-                playbackBookkeeping.retireExpansion(::pauseInlinePlayback)
+                playbackBookkeeping.retireExpansion(::pauseForLifecycle)
             } else {
                 playbackBookkeeping.initialAutoStartPending = !trimMode && !input.trimRequested && !trimSaving
                 if (!playbackBookkeeping.initialAutoStartPending) input.playbackOwner?.consumeInitialAutoStart()
@@ -641,10 +801,10 @@ internal class NativeRecordingInlinePlayerController(
                 player.prepareAsync()
             } catch (cancelled: CancellationException) {
                 throw cancelled
-            } catch (_: Exception) {
+            } catch (error: Exception) {
                 if (!playbackBookkeeping.released && mediaPlayer === player) {
                     releasePlayer()
-                    input.callbacks.onPlaybackFailed()
+                    input.callbacks.onPlaybackFailed(error)
                 }
             } finally {
                 runCleanupReportingThrowable(
@@ -759,7 +919,7 @@ internal class NativeRecordingInlinePlayerController(
                     submitInlinePlaybackAutoStart(playbackBookkeeping, effectInput.playbackOwner,
                         effectPrepared, lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED),
                         !effectInput.screenActive || !ownsPlaybackRow() || effectInput.trimRequested || trimMode || trimSaving) {
-                        seekTo(currentPosition, resume = true)
+                        startOrdinaryPlaybackIfNeeded()
                     }
                 }
             }
@@ -770,14 +930,14 @@ internal class NativeRecordingInlinePlayerController(
                 progressEffectPlaying = playing
                 progressEffectScrubbing = scrubbing
                 progressEffect?.cancel()
-                progressEffect = if (isPlaying && !isScrubbing) revisionScope.launch {
+                progressEffect = if (trimMode && isPlaying && !isScrubbing) revisionScope.launch {
                     while (true) {
                         delay(48L)
                         if (playbackBookkeeping.released) break
                         if (playbackBookkeeping.seeks.pending) continue
                         val position = runCatching { mediaPlayer?.currentPosition ?: currentPosition }.getOrDefault(currentPosition)
                         if (trimMode && position >= trimEndMillis) {
-                            runCatching { mediaPlayer?.pause() }
+                            runCatching { pauseStartedMediaPlayer() }
                             isPlaying = false
                             currentPosition = trimEndMillis
                             seekTo(trimEndMillis)
@@ -790,11 +950,27 @@ internal class NativeRecordingInlinePlayerController(
         }
 
         private var waveformTarget = InlineFineSeekTarget.PLAYHEAD
+        private fun beginOrdinaryScrub(): Boolean {
+            val playback = RecordingPlayback.state.value
+            if (!playback.matches(recording) || !playback.prepared) return false
+            ordinaryScrubGeneration = playback.generation
+            ordinaryScrubTransportIntentRevision = playback.transportIntentRevision
+            return true
+        }
+        private fun ordinaryScrubStillCurrent(): Boolean = trimMode || run {
+            val playback = RecordingPlayback.state.value
+            inlineOrdinaryGestureIsCurrent(ordinaryScrubGeneration, playback.generation, playback.matches(recording)) &&
+                playback.prepared && ordinaryScrubTransportIntentRevision == playback.transportIntentRevision
+        }
+
         private fun beginWaveform(x: Float, width: Float) {
+            if (!trimMode && !beginOrdinaryScrub()) return
             playbackBookkeeping.fineSeekPosition.reset()
-            playbackBookkeeping.resumeAfterScrub = isPlaying || playbackBookkeeping.seeks.resume
+            val resumeAfterScrub = isPlaying || trimPlaybackStarting || playbackBookkeeping.seeks.resume
+            cancelPendingTrimStart()
+            playbackBookkeeping.resumeAfterScrub = resumeAfterScrub
             playbackBookkeeping.revokeSeekResume()
-            if (isPlaying) { runCatching { mediaPlayer?.pause() }; isPlaying = false }
+            if (isPlaying) { runCatching { pauseStartedMediaPlayer(forGesture = true) }; isPlaying = false }
             isScrubbing = true
             val initialMillis = (duration.toFloat() * (x / width).coerceIn(0f, 1f)).toInt()
             val threshold = if (trimMode) (duration.toFloat() * (24f * hostView.resources.displayMetrics.density) / width)
@@ -805,6 +981,7 @@ internal class NativeRecordingInlinePlayerController(
             moveWaveform(x, width)
         }
         private fun moveWaveform(x: Float, width: Float) {
+            if (!isScrubbing || !ordinaryScrubStillCurrent()) return
             val fraction = (x / width).coerceIn(0f, 1f)
             val millis = (duration.toFloat() * fraction).toInt().coerceIn(0, duration)
             if (!trimMode || waveformTarget == InlineFineSeekTarget.PLAYHEAD) { currentPosition = millis; return }
@@ -819,6 +996,7 @@ internal class NativeRecordingInlinePlayerController(
             trimError = null
         }
         private fun finishWaveform(normal: Boolean) {
+            if (!isScrubbing) return
             if (!normal) playbackBookkeeping.revokeResume()
             finishInlineSeek()
         }
@@ -840,7 +1018,7 @@ internal class NativeRecordingInlinePlayerController(
                     onSaved = { trimmed ->
                         trimSaving = false
                         acceptedInput.callbacks.onBusyChange(false)
-                        trimMode = false
+                        leaveTrimMode()
                         if (
                             input.screenActive &&
                             lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
@@ -897,7 +1075,7 @@ internal class NativeRecordingInlinePlayerController(
         private val presentationActions = LibraryPlayerActions(
             ::beginWaveform, ::moveWaveform, ::finishWaveform,
             { target -> if (trimBoundaryInputReady()) fineSeekTarget = target }, ::editTrimBoundary,
-            { if (!trimSaving) { trimMode = false; trimError = null } }, ::saveTrim,
+            { if (!trimSaving) leaveTrimMode() }, ::saveTrim,
         )
         private val fineSeekTogglePlayback: () -> Unit = ::toggleFineSeekPlayback
         private val fineSeekInteractionStart: () -> Unit = {
@@ -907,7 +1085,7 @@ internal class NativeRecordingInlinePlayerController(
         private val fineSeekAdjust: (Float, Float) -> Unit = { delta, _ -> applyInlineFineSeek(delta) }
         private val fineSeekUpdateShuttle: (Float, Float) -> Unit = ::updateInlineFineSeekShuttle
         private val fineSeekEndAdjust: () -> Unit = ::endInlineFineSeek
-        private val fineSeekCancelAdjust: () -> Unit = ::pauseInlinePlayback
+        private val fineSeekCancelAdjust: () -> Unit = ::pauseForLifecycle
         private var presentationFineSeekTarget = InlineFineSeekTarget.PLAYHEAD
         private var presentationFineSeekKey = "$key:$presentationFineSeekTarget"
 
@@ -925,8 +1103,12 @@ internal class NativeRecordingInlinePlayerController(
                 prepared && trimMode && !trimSaving && !playbackBookkeeping.released && !isScrubbing &&
                 !playbackBookkeeping.fineSeekShuttleActive && !backActive
             val state = LibraryPlayerUiState(key, prepared, isPlaying, duration, currentPosition, trimMode, trimSaving,
-                trimStartMillis, trimEndMillis, fineSeekTarget, trimError, enabled, backActive, backProgress, backDirection)
-            val fineSeek = SpringFineSeekBinding(prepared && !trimSaving, isPlaying, duration.toFloat() / 1000f,
+                trimStartMillis, trimEndMillis, fineSeekTarget, trimError, enabled, backActive, backProgress, backDirection,
+                preparing = trimPlaybackStarting || !trimMode && RecordingPlayback.state.value.let { playback ->
+                    playback.matches(recording) && recordingPlaybackPhase(playback.playing, playback.wantsPlayback) ==
+                        RecordingPlaybackPhase.PREPARING
+                })
+            val fineSeek = SpringFineSeekBinding((prepared || !trimMode) && !trimSaving, isPlaying || trimPlaybackStarting, duration.toFloat() / 1000f,
                 currentFineSeekInteractionKey(), fineSeekTogglePlayback, fineSeekInteractionStart,
                 fineSeekBeginAdjust, fineSeekAdjust, fineSeekUpdateShuttle, fineSeekEndAdjust, fineSeekCancelAdjust)
             if (lastWaveform == null || lastCoarse !== coarseWaveform || lastDetail !== detailWaveform ||
@@ -941,11 +1123,12 @@ internal class NativeRecordingInlinePlayerController(
         override fun close() {
             if (disposed) return
             // Same disposal ordering as the original registered effects.
+            pauseForLifecycle()
             fineSeekPreviewController.close()
             disposed = true
             releasePlayer()
             lifecycleOwner.lifecycle.removeObserver(lifecycleObserver)
-            playbackBookkeeping.retireExpansion(::pauseInlinePlayback)
+            playbackBookkeeping.retireExpansion(::pauseForLifecycle)
             playbackBookkeeping.revokeResume()
             revisionScope.cancel()
         }
@@ -954,3 +1137,9 @@ internal class NativeRecordingInlinePlayerController(
     private fun revisionKey(recording: RecordingEntity) =
         "${recording.id}|${recording.fileIdentity}|${recording.sizeBytes}|${recording.durationMillis}|${recording.lastSeenAtMillis}"
 }
+
+internal fun inlineOrdinaryGestureIsCurrent(
+    gestureGeneration: Long?,
+    playbackGeneration: Long,
+    matchingRecording: Boolean,
+): Boolean = gestureGeneration != null && gestureGeneration == playbackGeneration && matchingRecording

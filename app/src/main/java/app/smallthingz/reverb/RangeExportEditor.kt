@@ -726,6 +726,13 @@ internal class RangeExportEditorState(
         }
     }
 
+    /** Retain the rendered selection while its source lease transfers to the save owner. */
+    fun detachSnapshotPresentation() {
+        setPlaybackAllowed(false)
+        invalidateSelectionDurationCommit()
+        snapshot = null
+    }
+
     fun resetWaveformConstruction() {
         coarseWaveform = FloatArray(RANGE_WAVEFORM_COARSE_BUCKETS)
         coarseWaveformBuiltCount = 0
@@ -882,6 +889,7 @@ internal class RangeExportEditorState(
         beginScrubPlaybackHandoff()
         fineAdjustShuttleActive = true
         snapshot?.let { readySnapshot ->
+            RecordingPlayback.pauseCurrent()
             previewController.startShuttle(
                 snapshot = readySnapshot,
                 atSeconds = targetValue(lastTarget).toDouble(),
@@ -966,6 +974,7 @@ internal class RangeExportEditorState(
         previewStarting = false
         isPlaying = false
         isScrubbing = false
+        RecordingPlayback.pauseCurrent()
         previewStarting = previewController.play(
             snapshot = readySnapshot,
             fromSeconds = window.startSeconds.toDouble(),
@@ -992,6 +1001,7 @@ internal class RangeExportEditorState(
         val now = SystemClock.elapsedRealtime()
         if (!force && now - lastAuditionAtMillis < 55L) return
         lastAuditionAtMillis = now
+        RecordingPlayback.pauseCurrent()
         previewController.audition(readySnapshot, targetValue(lastTarget).toDouble())
     }
 

@@ -109,7 +109,7 @@ private class PermissionContent(context:Context,private val host:NativeMaterialB
         val densityChanged=environment.textDensity!=next.textDensity
         environment=next
         message.setTypography(reverbDefaultTextStyle(),next.textDensity,next.sharedFontResolver)
-        message.setTextColor(next.palette.onSurfaceVariant)
+        message.animateTextColor(next.palette.onSurfaceVariant)
         allow.bindEnvironment(next);libraryAction.bindEnvironment(next)
         if(densityChanged)requestLayout()
     }

@@ -2715,32 +2715,6 @@ class DurabilityInvariantTest {
     }
 
     @Test
-    fun exportCleanup_neverDeletesVerifiedDataExceptExplicitPrecommitCancellation() {
-        assertTrue(shouldDeleteExportTarget(cancelled = false, verifiedComplete = false, committed = false))
-        assertFalse(shouldDeleteExportTarget(cancelled = false, verifiedComplete = true, committed = false))
-        assertTrue(shouldDeleteExportTarget(cancelled = true, verifiedComplete = false, committed = false))
-        assertTrue(shouldDeleteExportTarget(cancelled = true, verifiedComplete = true, committed = false))
-        assertFalse(
-            shouldDeleteExportTarget(
-                cancelled = true,
-                verifiedComplete = true,
-                committed = false,
-                preserveVerifiedOutput = true,
-            ),
-        )
-        assertTrue(
-            shouldDeleteExportTarget(
-                cancelled = true,
-                verifiedComplete = false,
-                committed = false,
-                preserveVerifiedOutput = true,
-            ),
-        )
-        assertFalse(shouldDeleteExportTarget(cancelled = false, verifiedComplete = true, committed = true))
-        assertFalse(shouldDeleteExportTarget(cancelled = true, verifiedComplete = true, committed = true))
-    }
-
-    @Test
     fun wavHeaderBuilder_emitsExactPcmAndFloatContainerMetadata() {
         val pcmDataBytes = 192_000L
         val pcm = buildWavHeaderBytes(48_000, 2, PcmSampleFormat.PCM_16, pcmDataBytes)

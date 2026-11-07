@@ -12,6 +12,9 @@ import android.view.Gravity
 import android.view.View
 import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -68,6 +71,26 @@ class NativeParityActivity : ComponentActivity() {
         private set
     private val parityFocusEvents = ArrayDeque<String>(32)
     private var parityCaptureOrdinal = 0
+    private var consentProbeLauncher: ActivityResultLauncher<IntentSenderRequest>? = null
+
+    /** QA-only OS consent transport. Production MainActivity lifecycle is a separate coverage boundary. */
+    internal fun launchDeletionConsentProbe(request: RecordingDeletionConsentLaunch, result: (Int, Boolean) -> Unit) {
+        check(packageName == "app.smallthingz.reverb.uitheme.reliability")
+        check(application.javaClass == Application::class.java && consentProbeLauncher == null)
+        check(RecordingDeletionConsent.owns(request.token))
+        val launcher = activityResultRegistry.register("qa-media-delete-${request.token}",
+            ActivityResultContracts.StartIntentSenderForResult()) { response ->
+                result(response.resultCode,response.data?.hasExtra(
+                    ActivityResultContracts.StartIntentSenderForResult.EXTRA_SEND_INTENT_EXCEPTION)==true)
+            }
+        consentProbeLauncher = launcher
+        launcher.launch(IntentSenderRequest.Builder(request.sender).build())
+    }
+
+    internal fun closeDeletionConsentProbe() {
+        consentProbeLauncher?.unregister()
+        consentProbeLauncher = null
+    }
 
     private fun recordParityFocusEvent(event: String) {
         if (parityFocusEvents.size == 32) parityFocusEvents.removeFirst()
@@ -85,9 +108,10 @@ class NativeParityActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         recordParityFocusEvent("onCreate")
-        check(packageName == "app.smallthingz.reverb.nativeparity.reliability")
+        check(packageName == "app.smallthingz.reverb.nativeparity.reliability" ||
+            packageName == "app.smallthingz.reverb.uitheme.reliability")
         check(application.javaClass == Application::class.java) {
-            "Build with -PreverbNativeParity=true; production Application initialization is forbidden here"
+            "Use isolated native-parity or current-UI-smoke mode; production Application initialization is forbidden here"
         }
         fixtureRoot = FrameLayout(this)
         if (android.os.Build.VERSION.SDK_INT >= 29) {
@@ -119,6 +143,7 @@ class NativeParityActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        closeDeletionConsentProbe()
         super.onDestroy()
         recordParityFocusEvent("onDestroy")
     }

@@ -64,11 +64,16 @@ internal fun verifyNativeMainSettingsReadableSelectionParity(instrumentation: In
 
 /** Bounded Library structural-parent regression using the existing isolated native Main host. */
 internal fun verifyNativeLibraryAdmissionRegression(instrumentation: Instrumentation, report: StringBuilder) {
-    check(instrumentation.targetContext.packageName == "app.smallthingz.reverb.nativeparity.reliability")
+    val currentUi = instrumentation.targetContext.packageName == "app.smallthingz.reverb.uitheme.reliability"
+    check(currentUi || instrumentation.targetContext.packageName == "app.smallthingz.reverb.nativeparity.reliability")
     check(instrumentation.targetContext.applicationContext.javaClass == Application::class.java)
+    val preferences = getRecorderPreferences(instrumentation.targetContext)
+    val originalPreferences = preferences.all.toMap()
     val directory = File(instrumentation.targetContext.filesDir, "native-library-admission-${System.currentTimeMillis()}")
     check(directory.mkdir())
     val result = JSONObject().put("selector", "native_library_admission").put("passed", false)
+        .put("mode", if (currentUi) "current-ui-smoke" else "isolated-native-library")
+        .put("historical_parity_claim", false).put("microphone_requested", false)
     writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
         output.write(result.toString(2).toByteArray(Charsets.UTF_8))
     }
@@ -76,10 +81,12 @@ internal fun verifyNativeLibraryAdmissionRegression(instrumentation: Instrumenta
     var render: MainSettingsParityRender? = null
     var failure: Throwable? = null
     try {
-        val host = launchNativeParityActivity(instrumentation)
+        val host = if (currentUi) launchCurrentUiSmokeActivity(instrumentation) else launchNativeParityActivity(instrumentation)
         activity = host
         awaitNativeParityDraw(instrumentation, host.fixtureRoot)
-        val automation = nativeParityUiAutomation(instrumentation)
+        val automation = if (currentUi) currentLibraryUiAutomation(instrumentation)
+            else nativeParityUiAutomation(instrumentation)
+        result.put("ui_automation_connection_flags", android.app.UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES)
         requireNativeParityHost(instrumentation, host)
         val current = nativeParityOnMain(instrumentation) {
             WindowCompat.setDecorFitsSystemWindows(host.window, false)
@@ -110,6 +117,8 @@ internal fun verifyNativeLibraryAdmissionRegression(instrumentation: Instrumenta
         }
         try { nativeParityOnMain(instrumentation) { cleanupMainParity(render, activity, finish = true) } }
         catch (cleanup: Throwable) { record(cleanup) }
+        try { check(preferences.all == originalPreferences) { "Library admission changed QA preferences" } }
+        catch (preservation: Throwable) { record(preservation) }
         result.put("passed", result.getBoolean("passed") && failure == null)
             .put("failure", failure?.stackTraceToString() ?: JSONObject.NULL)
         try {
@@ -122,6 +131,14 @@ internal fun verifyNativeLibraryAdmissionRegression(instrumentation: Instrumenta
     }
     failure?.let { throw it }
     report.appendLine("PASS native_library_admission actual Ready/Empty/Error parents; both platform importance paths")
+}
+
+/** Exact current-UI Library entry; historical parity connection admission stays unchanged. */
+private fun currentLibraryUiAutomation(instrumentation: Instrumentation): android.app.UiAutomation {
+    check(instrumentation.targetContext.packageName == "app.smallthingz.reverb.uitheme.reliability")
+    check(instrumentation.targetContext.applicationContext.javaClass == Application::class.java)
+    return checkNotNull(instrumentation.getUiAutomation(
+        android.app.UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES))
 }
 
 private fun verifyNativeMainSettingsParity(

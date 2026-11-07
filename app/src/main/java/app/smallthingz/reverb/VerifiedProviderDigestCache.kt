@@ -19,6 +19,11 @@ internal fun nativeProviderPayloadRevision(descriptor: FileDescriptor): Provider
     ProviderPayloadRevision(stat.st_dev, stat.st_ino, stat.st_size, stat.st_ctim.tv_sec, stat.st_ctim.tv_nsec)
 }.getOrNull()
 
+/** A controlled empty descriptor close may advance ctime, but cannot replace its object or size. */
+internal fun providerPayloadObjectMatches(expected: ProviderPayloadRevision, current: ProviderPayloadRevision?): Boolean =
+    current != null && expected.device == current.device && expected.inode == current.inode &&
+        expected.sizeBytes == current.sizeBytes
+
 /** Optimization for the redundant pre-publication recheck only, never destructive cleanup or final publication proof. */
 internal object VerifiedProviderDigestCache {
     private data class Key(

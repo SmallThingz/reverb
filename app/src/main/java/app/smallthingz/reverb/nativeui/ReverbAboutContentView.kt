@@ -194,6 +194,7 @@ private const val ABOUT_REPOSITORY_LABEL = "SmallThingz/reverb"
 
 private class AboutSurface(context: Context, private var appearance: AboutContentAppearance, runtime: NativeAboutWindowRuntime, initialScrollPosition: Int) : ViewGroup(context) {
     private val fill = Paint(ABOUT_PAINT_FLAGS)
+    private val fillMotion=colorTransition(aboutTonalColor(appearance.palette.surfaceContainerHigh,appearance.palette,6f)) {fill.color=it;invalidate()}
     private val path = Path()
     private val bounds = RectF()
     private val radii = FloatArray(8)
@@ -228,7 +229,10 @@ private class AboutSurface(context: Context, private var appearance: AboutConten
     fun setContent(view: View) { viewport.setContent(view) }
     fun setStatusInsets(value: Insets) { clipped.setPadding(value.left, value.top, value.right, value.bottom); requestLayout() }
     fun setAppearance(value: AboutContentAppearance) { appearance = value; updateColor(); rebuildShape(); requestLayout() }
-    private fun updateColor() { fill.color = aboutTonalColor(appearance.palette.surfaceContainerHigh, appearance.palette, 6f); invalidate() }
+    private fun updateColor() {
+        fillMotion.retarget(aboutTonalColor(appearance.palette.surfaceContainerHigh,appearance.palette,6f))
+        fill.color=fillMotion.color(0);invalidate()
+    }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         clipped.measure(widthMeasureSpec, heightMeasureSpec)
@@ -315,9 +319,9 @@ private class AboutColumn(
         appearance = value
         header.bind(value, requestDismiss)
         name.setTypography(value.headlineSmall, value.density, value.fontResolver)
-        name.setTextColor(value.palette.ink)
+        name.animateTextColor(value.palette.ink)
         version.setTypography(value.bodyMedium, value.density, value.fontResolver)
-        version.setTextColor(value.palette.muted)
+        version.animateTextColor(value.palette.muted)
         repository.setAppearance(value)
         error.setAppearance(value)
         updateLabels(versionName)
@@ -515,8 +519,9 @@ private class AboutCloseVisual(context: Context, color: Int) : ViewGroup(context
 
 private class AboutCloseGlyph(context: Context, color: Int) : View(context) {
     private val icon = ReverbIconDrawable(ReverbIcon.Close, resources.displayMetrics.density, color)
+    private val colorMotion=colorTransition(color) {icon.setTint(it);invalidate()}
     init { importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES; isScreenReaderFocusable = false }
-    fun setColor(value: Int) { icon.setTint(value); invalidate() }
+    fun setColor(value: Int) {colorMotion.retarget(value)}
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) { icon.setBounds(0, 0, w, h) }
     override fun onDraw(canvas: Canvas) = icon.draw(canvas)
     override fun getAccessibilityClassName(): CharSequence = "android.view.View"
@@ -573,8 +578,8 @@ private class AboutRepositoryRow(context: Context, private var appearance: About
         appearance = value
         icon.setColor(value.palette.ink)
         title.setTypography(value.titleSmall, value.density, value.fontResolver)
-        title.setTextColor(reverbAboutRepositoryTitleColor(value.palette, value.titleSmall))
-        label.setTypography(value.bodySmall, value.density, value.fontResolver); label.setTextColor(value.palette.muted)
+        title.animateTextColor(reverbAboutRepositoryTitleColor(value.palette, value.titleSmall))
+        label.setTypography(value.bodySmall, value.density, value.fontResolver); label.animateTextColor(value.palette.muted)
         title.setText(context.resources.getString(R.string.github_repo))
         indication.updateColor(reverbAboutRepositoryContentColor(value.palette)); requestLayout()
     }
@@ -625,8 +630,9 @@ private class AboutRepositoryRow(context: Context, private var appearance: About
 private class AboutGithubGlyph(context: Context, color: Int) : View(context) {
     // Exact released ic_github.xml path, using the shared mask renderer.
     private val icon = ReverbIconDrawable(ReverbIcon.GitHub, resources.displayMetrics.density, color)
+    private val colorMotion=colorTransition(color) {icon.setTint(it);invalidate()}
     init { importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO }
-    fun setColor(value: Int) { icon.setTint(value); invalidate() }
+    fun setColor(value: Int) {colorMotion.retarget(value)}
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) { icon.setBounds(0, 0, w, h) }
     override fun onDraw(canvas: Canvas) { icon.draw(canvas) }
 }
@@ -662,7 +668,7 @@ private class AboutErrorCard(context: Context, private var appearance: AboutCont
         appearance = value
         group.setPalette(aboutTonalColor(value.palette.errorContainer, value.palette, 8f), 0)
         text.setTypography(value.bodyMedium, value.density, value.fontResolver)
-        text.setTextColor(value.palette.onErrorContainer); requestLayout()
+        text.animateTextColor(value.palette.onErrorContainer); requestLayout()
     }
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         group.measure(widthMeasureSpec, heightMeasureSpec); setMeasuredDimension(group.measuredWidth, group.measuredHeight)

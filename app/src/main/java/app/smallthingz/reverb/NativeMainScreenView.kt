@@ -95,6 +95,7 @@ internal class NativeMainScreenView private constructor(
     private var measuredFeedbackBottom = Int.MIN_VALUE
     private var captureRestorationAvailable = true
     private var pendingAboutScrollPosition = restored?.aboutScrollPosition
+    private var playbackRequestToken: String? = null
 
     // Registration order is the released Settings, Incidents, Library sequence.
     private val settingsMotion = NativeMainPanelMotion(navigation.showSettings, scope, dispatcher,
@@ -213,6 +214,21 @@ internal class NativeMainScreenView private constructor(
         incidents.savePosition(),
         about?.scrollPosition() ?: pendingAboutScrollPosition,
     )
+
+    fun openSavedRecording(request: RecordingPlaybackRequest, finished: () -> Unit) {
+        if (closed || playbackRequestToken == request.token) return
+        playbackRequestToken = request.token
+        navigate { openSavedRecordingLibrary() }
+        val target = library
+        if (target == null) {
+            playbackRequestToken = null
+            return
+        }
+        target.openSavedRecording(request) {
+            if (playbackRequestToken == request.token) playbackRequestToken = null
+            finished()
+        }
+    }
 
     private fun navigate(action: NativeMainNavigationState.() -> Unit) {
         if (closed) return

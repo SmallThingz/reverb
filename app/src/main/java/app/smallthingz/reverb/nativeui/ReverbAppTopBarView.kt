@@ -46,6 +46,7 @@ internal class ReverbAppTopBarView(
     private val settings = ReverbTopBarIconAction(context, environment, nativeInputRoot, ReverbIcon.Settings, R.string.open_settings, false)
     private val brand = ReverbTopBarBrandAction(context, environment, nativeInputRoot)
     private val noise = ReverbNoiseDrawable(resources, environment.palette.surface, ReverbNoiseDrawable.SEED_TOP_BAR)
+    private val noiseColor = noise.colorTransition(this, environment.palette.surface)
     private var statusInset = 0
     private var barHeight = 66f
     private var accessibilityLease: AutoCloseable? = null
@@ -65,7 +66,7 @@ internal class ReverbAppTopBarView(
         environment = value
         statusInset = nextInset
         barHeight = barHeightDp
-        noise.setBackgroundColor(value.palette.surface)
+        noiseColor.retarget(value.palette.surface)
         val onBack = actions.back
         if (onBack == null) { back?.let(::removeView); back = null }
         else {
@@ -312,6 +313,7 @@ private class ReverbTopBarActionLeaf(
     private val identity = Any()
     private var click: (() -> Unit)? = null
     private var icon = ReverbIconDrawable(glyph, environment.textDensity.density, environment.palette.ink)
+    private val colorMotion=colorTransition(environment.palette.ink) {icon.setTint(it);invalidate()}
     private val descriptionView = ReverbTopBarDescriptionView(context, description)
     private val accessibilityChildren = listOf(descriptionView)
     override val mergedRowAccessibility = ReverbMergedRowAccessibility(
@@ -352,7 +354,8 @@ private class ReverbTopBarActionLeaf(
         click = callback
         isEnabled = enabled
         isFocusable = enabled
-        icon.setTint(if (enabled) tint else reverbColorWithAlpha(tint, .38f))
+        colorMotion.retarget(if (enabled) tint else reverbColorWithAlpha(tint, .38f))
+        icon.setTint(colorMotion.color(0))
         indication.updateColor(value.palette.ink)
         controller.bind(NativeClickBinding(identity, enabled, onClick = { performClick() }))
         updateGeometry(width, height)

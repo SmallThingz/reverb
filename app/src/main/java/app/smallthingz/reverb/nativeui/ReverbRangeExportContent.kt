@@ -58,6 +58,7 @@ internal class ReverbRangeExportContent(
     ))
     val controls = ReverbRangeExportControls(context, initialEnvironment, inputRoot, scope)
     private val initialCircle = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
+    private val initialCircleMotion=colorTransition(initialEnvironment.palette.primary) {initialCircle.color=it;invalidate()}
     private data class FineKey(val enabled: Boolean, val playing: Boolean, val duration: Float, val target: RangeEditTarget)
     private data class WheelKey(val environment: ReverbViewEnvironment, val maximum: Double,
         val reachableMaximum: Double, val duration: Double, val enabled: Boolean, val visible: Boolean)
@@ -101,7 +102,7 @@ internal class ReverbRangeExportContent(
         if (changedEnvironment) {
             timeline.setEnvironment(environment)
             fine.setPalette(environment.palette)
-            initialCircle.color = environment.palette.primary
+            initialCircleMotion.retarget(environment.palette.primary)
             requestLayout()
         }
         timeline.bind(state, frame)
@@ -109,7 +110,7 @@ internal class ReverbRangeExportContent(
         controls.alpha = if (!frame.snapshotPresent) 1f else frame.chromeAlpha
         controls.bind(environment, state, !frame.snapshotPresent,
             rangeExportSelectionWithinLimit(state.selectionDurationExactSeconds, frame.maximumDurationSeconds),
-            selectedBuffer, cancelCurrent, exportCurrent)
+            selectedBuffer, cancelCurrent, exportCurrent, canClose = !frame.admissionPending)
         val fineEnabled = interactionEnabled && state.snapshotReady
         val playing = state.isPlaying
         val duration = state.durationSeconds

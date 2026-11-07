@@ -14,6 +14,7 @@ import java.nio.file.NoSuchFileException
 import java.util.Base64
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -187,9 +188,9 @@ object RecordingRepository {
                 previous = previous,
                 recordings = recordings,
                 deleteBatch = { targets -> deleteBatch(appContext, targets) },
-                reportFailure = {
+                reportFailure = { result ->
                     AppFeedbackCenter.post(
-                        appContext.getString(R.string.recording_delete_failed),
+                        recordingDeletionBatchFailureMessage(appContext, recordings, result),
                         FeedbackTone.ERROR,
                     )
                 },
@@ -296,79 +297,214 @@ object RecordingRepository {
         return delete(context, recording, replayPending = true)
     }
 
+    /** Exact fixture cleanup must never replay an unrelated deletion intent. */
+    internal suspend fun deleteExactWithoutPendingReplay(context: Context, recording: RecordingEntity): Boolean =
+        delete(context, recording, replayPending = false, requireEmptyPending = true)
+
     internal suspend fun deleteBatch(context: Context, recordings: List<RecordingEntity>): RecordingDeletionBatchResult =
         withContext(Dispatchers.IO) {
+            val consent = mutableListOf<RecordingDeletionConsentTarget>()
+            val consentIndices = mutableSetOf<Int>()
+            val failures = mutableMapOf<Int, RecordingDeletionFailure>()
             val journalBatch = RecordingDeletionJournalBatch(
                 onCleanupFailure = { error -> reportDeletionMetadataFailure(context, error, detached = false) },
             ) { entries ->
                 writePendingDeletionEntries(context, pendingDeletionEntries(context) - entries)
             }
             val outcomes = runRecordingDeletionBatch(
-                recordings = recordings,
+                recordings = recordings.withIndex().toList(),
                 replayPending = { mutex.withLock { replayPendingDeletionsLocked(context) } },
-                delete = { delete(context, it, replayPending = false, journalBatch = journalBatch) },
+                delete = { (index, recording) ->
+                    when (val attempt = deleteWithConsent(context, recording, journalBatch)) {
+                        RecordingDeletionAttempt.Deleted -> true
+                        is RecordingDeletionAttempt.Failed -> {
+                            failures[index] = attempt.failure
+                            false
+                        }
+                        is RecordingDeletionAttempt.NeedsConsent -> {
+                            consent += attempt.target
+                            consentIndices += index
+                            false
+                        }
+                    }
+                },
+                onReplayFailure = { error ->
+                    recordings.indices.forEach { index ->
+                        failures[index] = RecordingDeletionFailure(RecordingDeletionFailureReason.JOURNAL_FAILED, error)
+                    }
+                },
             )
             mutex.withLock { journalBatch.flush() }
-            journalBatch.result(outcomes)
+            RecordingDeletionConsent.enqueue(consent)
+            journalBatch.result(outcomes).copy(consentIndices = consentIndices, failures = failures)
         }
+
+    private suspend fun deleteWithConsent(
+        context: Context,
+        recording: RecordingEntity,
+        journalBatch: RecordingDeletionJournalBatch? = null,
+        consentFingerprint: PendingDeletionIntent? = null,
+        allowConsent: Boolean = true,
+    ): RecordingDeletionAttempt {
+        var consent: RecordingDeletionConsentTarget? = null
+        var failure = RecordingDeletionFailure(RecordingDeletionFailureReason.PROVIDER_REJECTED)
+        val deleted = try {
+            delete(context, recording, replayPending = false, journalBatch = journalBatch,
+                onConsent = if (allowConsent) ({ consent = it }) else null,
+                consentFingerprint = consentFingerprint, onFailure = { failure = it })
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            Log.w("RecordingRepository", "Recording deletion failed for ${recording.id}", error)
+            failure = recordingDeletionFailureAfterException(failure, error)
+            if (error is SQLiteDatabaseCorruptException) {
+                RecordingIncidentStore.recordUnexpectedErrorInBackground(context, "Recording deletion", error)
+            }
+            false
+        }
+        return if (deleted) RecordingDeletionAttempt.Deleted
+        else consent?.let { RecordingDeletionAttempt.NeedsConsent(it) } ?: RecordingDeletionAttempt.Failed(failure)
+    }
+
+    internal fun consentDeletionJournalBatch(context: Context): RecordingDeletionJournalBatch =
+        RecordingDeletionJournalBatch(
+            onCleanupFailure = { error -> reportDeletionMetadataFailure(context, error, detached = false) },
+        ) { entries -> writePendingDeletionEntries(context, pendingDeletionEntries(context) - entries) }
+
+    internal suspend fun flushConsentDeletionJournal(batch: RecordingDeletionJournalBatch) {
+        mutex.withLock { batch.flush() }
+    }
+
+    internal suspend fun prepareDeletionConsent(context: Context, target: RecordingDeletionConsentTarget,
+        journalBatch: RecordingDeletionJournalBatch): RecordingDeletionAttempt =
+        deleteWithConsent(context, target.recording, journalBatch,
+            consentFingerprint = target.fingerprint, allowConsent = true)
+
+    internal suspend fun deleteAfterConsent(context: Context, target: RecordingDeletionConsentTarget,
+        journalBatch: RecordingDeletionJournalBatch): RecordingDeletionAttempt =
+        deleteWithConsent(context, target.recording, journalBatch,
+            consentFingerprint = target.fingerprint, allowConsent = false)
 
     private suspend fun delete(
         context: Context,
         recording: RecordingEntity,
         replayPending: Boolean,
         journalBatch: RecordingDeletionJournalBatch? = null,
+        requireEmptyPending: Boolean = false,
+        onConsent: ((RecordingDeletionConsentTarget) -> Unit)? = null,
+        consentFingerprint: PendingDeletionIntent? = null,
+        onFailure: ((RecordingDeletionFailure) -> Unit)? = null,
     ): Boolean {
-        val operation = recordingMutations.tryBegin(recording.id) ?: return false
+        fun fail(reason: RecordingDeletionFailureReason, cause: Throwable? = null): Boolean {
+            onFailure?.invoke(RecordingDeletionFailure(reason, cause))
+            return false
+        }
+        val operation = recordingMutations.tryBegin(recording.id) ?: return fail(RecordingDeletionFailureReason.BUSY)
         try {
             return withContext(Dispatchers.IO) {
                 mutex.withLock {
+                    if (requireEmptyPending && pendingDeletionEntries(context).isNotEmpty()) return@withLock false
                     if (replayPending) replayPendingDeletionsLocked(context)
                     val dao = dao(context)
                     // A rebuilt catalog can temporarily omit a still-visible recording while its
                     // provider is unavailable. Missing metadata is not proof that audio was deleted.
-                    val tracked = dao.findById(recording.id) ?: return@withLock when (recording.storageType) {
-                        RecordingStorageType.FILE -> confirmMissingFileRecordingDurable(File(recording.id))
-                        RecordingStorageType.DOCUMENT,
-                        RecordingStorageType.MEDIASTORE,
-                        -> recordingAssetState(context, recording) == RecordingAssetState.MISSING
+                    val tracked = dao.findById(recording.id)
+                    if (tracked == null) {
+                        val missing = when (recording.storageType) {
+                            RecordingStorageType.FILE -> confirmMissingFileRecordingDurable(File(recording.id))
+                            RecordingStorageType.DOCUMENT,
+                            RecordingStorageType.MEDIASTORE,
+                            -> recordingAssetState(context, recording) == RecordingAssetState.MISSING
+                        }
+                        return@withLock if (missing) true else fail(RecordingDeletionFailureReason.CATALOG_UNAVAILABLE)
                     }
-                    if (!sameRecordingActionTarget(recording, tracked)) return@withLock false
+                    if (!sameRecordingActionTarget(recording, tracked)) return@withLock fail(RecordingDeletionFailureReason.IDENTITY_CHANGED)
                     if (tracked.storageType == RecordingStorageType.FILE &&
                         !recordingFileIdentityMatches(tracked)
                     ) {
-                        return@withLock false
+                        return@withLock fail(RecordingDeletionFailureReason.IDENTITY_CHANGED)
                     }
 
-                    val intent = createPendingDeletionIntent(context, tracked) ?: return@withLock false
-                    journalBatch?.prepareForAddition {
-                        val updated = pendingDeletionEntries(context).filterNotTo(mutableSetOf()) { raw ->
-                            pendingDeletionSuppressedId(raw) == intent.id
+                    var verificationFailure: Throwable? = null
+                    var verification = RecordingDeletionProof.UNAVAILABLE
+                    val intent = if (consentFingerprint != null) {
+                        revalidateConsentedDeletionIntent(tracked.id, consentFingerprint) {
+                            verification = pendingDeletionCurrentAssetProof(context, tracked, consentFingerprint) { verificationFailure = it }
+                            verification == RecordingDeletionProof.MATCH
                         }
-                        updated += encodePendingDeletionIntent(intent)
-                        try {
-                            boundedDurableStringSet(updated, PrefKey.PENDING_RECORDING_DELETIONS.name)
-                            true
-                        } catch (_: IllegalStateException) {
-                            false
-                        }
-                    }
-                    if (!putPendingDeletionLocked(context, intent)) return@withLock false
-
-                    val deleted = when (tracked.storageType) {
-                        RecordingStorageType.FILE -> when (deleteClaimedFile(intent)) {
-                            FileDeletionClaimResult.DELETED -> true
-                            FileDeletionClaimResult.MISMATCH_PRESERVED -> {
-                                removePendingDeletionLocked(context, tracked.id)
+                    } else createPendingDeletionIntent(context, tracked) { verificationFailure = it }
+                    if (intent == null) return@withLock fail(recordingDeletionProofFailureReason(verification), verificationFailure)
+                    val admitted = recordingDeletionJournalStage({ onFailure?.invoke(it) }) {
+                        journalBatch?.prepareForAddition {
+                            val updated = pendingDeletionEntries(context).filterNotTo(mutableSetOf()) { raw ->
+                                pendingDeletionSuppressedId(raw) == intent.id
+                            }
+                            updated += encodePendingDeletionIntent(intent)
+                            try {
+                                boundedDurableStringSet(updated, PrefKey.PENDING_RECORDING_DELETIONS.name)
+                                true
+                            } catch (_: IllegalStateException) {
                                 false
                             }
-                            FileDeletionClaimResult.RETRY -> false
+                        }
+                        putPendingDeletionLocked(context, intent)
+                    }
+                    if (!admitted) return@withLock fail(RecordingDeletionFailureReason.JOURNAL_FAILED)
+
+                    var fileFailure: Throwable? = null
+                    val deleted = when (tracked.storageType) {
+                        RecordingStorageType.FILE -> when (deleteClaimedFile(intent, failureObserved = { fileFailure = it })) {
+                            FileDeletionClaimResult.DELETED -> true
+                            FileDeletionClaimResult.MISMATCH_PRESERVED -> {
+                                recordingDeletionJournalStage({ onFailure?.invoke(it) }) {
+                                    removePendingDeletionLocked(context, tracked.id)
+                                }
+                                fail(RecordingDeletionFailureReason.IDENTITY_CHANGED)
+                            }
+                            FileDeletionClaimResult.RETRY -> fail(RecordingDeletionFailureReason.STORAGE_UNAVAILABLE, fileFailure)
                         }
                         else -> {
-                            if (!pendingDeletionMatchesCurrentAsset(context, tracked, intent)) {
-                                removePendingDeletionLocked(context, tracked.id)
-                                false
+                            verification = pendingDeletionCurrentAssetProof(context, tracked, intent) { verificationFailure = it }
+                            if (verification != RecordingDeletionProof.MATCH) {
+                                recordingDeletionJournalStage({ onFailure?.invoke(it) }) {
+                                    removePendingDeletionLocked(context, tracked.id)
+                                }
+                                fail(recordingDeletionProofFailureReason(verification), verificationFailure)
                             } else {
-                                deleteVerifiedRecordingAsset(context, tracked)
+                                var sender: android.content.IntentSender? = null
+                                var needsConsent = false
+                                var providerFailure: Throwable? = null
+                                val completed = deleteVerifiedRecordingAsset(context, tracked,
+                                    consentRequired = if (onConsent != null) ({ needsConsent = true; sender = it }) else null,
+                                    deleteFailureObserved = { providerFailure = it })
+                                if (!completed) fail(
+                                    if (providerFailure is SecurityException) RecordingDeletionFailureReason.PERMISSION_REQUIRED
+                                    else RecordingDeletionFailureReason.PROVIDER_REJECTED, providerFailure)
+                                if (!completed && needsConsent) {
+                                    // A waiting prompt has no journal/replay authority and must not
+                                    // hide the surviving row. Retain the original content proof only
+                                    // in memory for the fully revalidated, post-approval transaction.
+                                    val stillSelected = recordingAssetState(context, tracked) == RecordingAssetState.PRESENT &&
+                                        recordingDeletionIdentityMatches(context, tracked)
+                                    val handedOff = handOffRecordingDeletionConsent(
+                                        stillSelectedAsset = { stillSelected },
+                                        retireUncommittedIntent = {
+                                            recordingDeletionJournalStage({ onFailure?.invoke(it) }) {
+                                                removePendingDeletionLocked(context, tracked.id)
+                                            }
+                                        },
+                                        handOff = {
+                                            // API29 may issue a URI-keyed action while probing. Keep
+                                            // only the action from this active, original-proof retry;
+                                            // queued batches regenerate it immediately before launch.
+                                            onConsent?.invoke(RecordingDeletionConsentTarget(tracked, intent,
+                                                sender.takeIf { consentFingerprint != null }))
+                                        },
+                                    )
+                                    if (!handedOff) fail(if (stillSelected) RecordingDeletionFailureReason.JOURNAL_FAILED
+                                        else RecordingDeletionFailureReason.IDENTITY_CHANGED)
+                                }
+                                completed
                             }
                         }
                     }
@@ -405,7 +541,8 @@ object RecordingRepository {
                 "Recording deletion catalog corruption", error)
         }
         if (detached) {
-            AppFeedbackCenter.post(context.getString(R.string.recording_delete_failed), FeedbackTone.ERROR)
+            AppFeedbackCenter.post(recordingDeletionFailureMessage(context, "",
+                RecordingDeletionFailure(RecordingDeletionFailureReason.METADATA_CLEANUP, error)), FeedbackTone.ERROR)
         }
     }
 
@@ -515,6 +652,7 @@ object RecordingRepository {
     private fun createPendingDeletionIntent(
         context: Context,
         recording: RecordingEntity,
+        failureObserved: ((Throwable) -> Unit)? = null,
     ): PendingDeletionIntent? = runCatching {
         if (!recordingDeletionIdentityMatches(context, recording)) return@runCatching null
         val digest = sha256StableRecording(context, recording) ?: return@runCatching null
@@ -529,7 +667,7 @@ object RecordingRepository {
             claimToken = if (isFile) UUID.randomUUID().toString() else null,
             fileIdentity = recording.fileIdentity.takeIf { isFile && it.isNotBlank() },
         )
-    }.getOrNull()
+    }.onFailure { failureObserved?.invoke(it) }.getOrNull()
 
     private fun createMovePendingDeletionIntent(
         context: Context,
@@ -578,10 +716,23 @@ object RecordingRepository {
         context: Context,
         recording: RecordingEntity,
         intent: PendingDeletionIntent,
-    ): Boolean = runCatching {
-        val digest = sha256StableRecording(context, recording) ?: return@runCatching false
-        pendingDeletionMatchesDigest(intent, digest.byteCount, digest.sha256.toHexString())
-    }.getOrDefault(false)
+        failureObserved: ((Throwable) -> Unit)? = null,
+    ): Boolean = pendingDeletionCurrentAssetProof(context, recording, intent, failureObserved) == RecordingDeletionProof.MATCH
+
+    private fun pendingDeletionCurrentAssetProof(
+        context: Context,
+        recording: RecordingEntity,
+        intent: PendingDeletionIntent,
+        failureObserved: ((Throwable) -> Unit)? = null,
+    ): RecordingDeletionProof {
+        val proof = observeRecordingDeletionProof(intent, failureObserved) {
+            sha256StableRecording(context, recording)
+        }
+        if (recording.storageType == RecordingStorageType.FILE) return proof
+        return diagnoseUnavailableDeletionProof(proof, recording.fileIdentity) {
+            resolveProviderRecordingIdentity(context, recording.storageType, Uri.parse(recording.id), recording.fileIdentity)
+        }
+    }
 
     private fun putPendingDeletionLocked(context: Context, intent: PendingDeletionIntent): Boolean {
         val encoded = encodePendingDeletionIntent(intent).takeIf { it.isNotBlank() } ?: return false
@@ -619,11 +770,13 @@ object RecordingRepository {
         context: Context,
         recording: RecordingEntity,
         requestedBaseName: String,
+        consentLifetime: Long = RecordingDeletionConsent.renameLifetime(),
     ): RecordingEntity? {
         val operation = recordingMutations.tryBegin(recording.id) ?: return null
         try {
             return withContext(Dispatchers.IO) {
-                mutex.withLock {
+                suspend fun attempt(consent: RecordingRenameConsentRequired? = null): RecordingEntity? = mutex.withLock {
+                    if (consent != null) validateRenameConsentLocked(context, consent)
                     val dao = dao(context)
                     val tracked = dao.findById(recording.id) ?: return@withLock null
                     if (!sameRecordingActionTarget(recording, tracked)) {
@@ -632,7 +785,9 @@ object RecordingRepository {
                     if (!recordingContentIdentityMatches(context, tracked)) {
                         throw IOException("Recording changed before rename")
                     }
-                    val renamed = renameRecordingAsset(context, tracked, requestedBaseName) ?: return@withLock null
+                    val renamed = (if (consent == null)
+                        renameRecordingAsset(context, tracked, requestedBaseName, allowWriteConsent = true)
+                    else renameRecordingAssetAfterConsent(context, tracked, consent)) ?: return@withLock null
                     if (renamed == tracked) return@withLock tracked
                     try {
                         // The storage-specific rename verified its result, but external writers are
@@ -679,9 +834,30 @@ object RecordingRepository {
                     }
                     renamed
                 }
+                try {
+                    attempt()
+                } catch (consent: RecordingRenameConsentRequired) {
+                    // Retain the recording reservation, never the repository mutex, across consent.
+                    RecordingDeletionConsent.rename(consent, consentLifetime) { attempt(consent) }
+                }
             }
         } finally {
             recordingMutations.finish(operation)
+        }
+    }
+
+    internal suspend fun validateRenameConsent(context: Context, consent: RecordingRenameConsentRequired) {
+        withContext(Dispatchers.IO) { mutex.withLock { validateRenameConsentLocked(context, consent) } }
+    }
+
+    private suspend fun validateRenameConsentLocked(context: Context, consent: RecordingRenameConsentRequired) {
+        val tracked = dao(context).findById(consent.recording.id)
+            ?: throw IOException("Recording disappeared while requesting rename permission")
+        if (!sameRecordingActionTarget(consent.recording, tracked) ||
+            tracked.displayName != consent.recording.displayName ||
+            !renameConsentObservationMatches(consent.before,
+                readStableMediaStoreRenameObservation(context, Uri.parse(tracked.id)))) {
+            throw IOException("Recording changed while requesting rename permission")
         }
     }
 
@@ -1167,6 +1343,48 @@ internal data class PendingDeletionIntent(
     val moveTargetIdentity: String? = null,
 )
 
+internal enum class RecordingDeletionProof { MATCH, MISMATCH, IDENTITY_UNVERIFIED, UNAVAILABLE }
+
+/** A stable read can prove different bytes; an unavailable read cannot. */
+internal fun observeRecordingDeletionProof(
+    original: PendingDeletionIntent,
+    failureObserved: ((Throwable) -> Unit)? = null,
+    readStableDigest: () -> CopyDigest?,
+): RecordingDeletionProof = runCatching {
+    val digest = readStableDigest() ?: return@runCatching RecordingDeletionProof.UNAVAILABLE
+    if (pendingDeletionMatchesDigest(original, digest.byteCount, digest.sha256.toHexString())) {
+        RecordingDeletionProof.MATCH
+    } else RecordingDeletionProof.MISMATCH
+}.onFailure { failureObserved?.invoke(it) }.getOrDefault(RecordingDeletionProof.UNAVAILABLE)
+
+internal fun recordingDeletionProofFailureReason(proof: RecordingDeletionProof): RecordingDeletionFailureReason = when (proof) {
+    RecordingDeletionProof.MISMATCH -> RecordingDeletionFailureReason.IDENTITY_CHANGED
+    RecordingDeletionProof.IDENTITY_UNVERIFIED -> RecordingDeletionFailureReason.IDENTITY_UNVERIFIED
+    else -> RecordingDeletionFailureReason.VERIFICATION_FAILED
+}
+
+/** Failure-only metadata diagnosis: this observation can never authorize a read or deletion. */
+internal fun diagnoseUnavailableDeletionProof(
+    proof: RecordingDeletionProof,
+    originalIdentity: String,
+    readCurrentIdentity: () -> String,
+): RecordingDeletionProof {
+    if (proof != RecordingDeletionProof.UNAVAILABLE) return proof
+    val incompatible = runCatching {
+        providerRecordingIdentitiesRejectCompatibility(originalIdentity, readCurrentIdentity())
+    }.getOrDefault(false)
+    return if (incompatible) RecordingDeletionProof.IDENTITY_UNVERIFIED else RecordingDeletionProof.UNAVAILABLE
+}
+
+/** Return only the original proof; a post-prompt read must never authorize replacement bytes. */
+internal fun revalidateConsentedDeletionIntent(
+    selectedId: String,
+    original: PendingDeletionIntent,
+    originalContentStillMatches: () -> Boolean,
+): PendingDeletionIntent? = original.takeIf {
+    it.id == selectedId && !it.assetDeleted && originalContentStillMatches()
+}
+
 internal fun encodePendingDeletionIntent(intent: PendingDeletionIntent): String {
     val id = encodePendingDeletionField(intent.id)
     if (pendingDeletionHasAnyMoveTargetField(intent)) {
@@ -1475,6 +1693,7 @@ internal fun deletionClaimFile(intent: PendingDeletionIntent): File? {
 
 internal fun deleteClaimedFile(
     intent: PendingDeletionIntent,
+    failureObserved: ((Throwable) -> Unit)? = null,
     moveTargetStillCurrent: (() -> Boolean)? = null,
 ): FileDeletionClaimResult {
     val source = File(intent.id)
@@ -1483,6 +1702,7 @@ internal fun deleteClaimedFile(
         ClaimedFileReplayAction.REPLAY -> replayClaimedFileDeletion(
             intent = intent,
             claim = claim,
+            failureObserved = failureObserved,
             moveTargetStillCurrent = moveTargetStillCurrent,
         )
         ClaimedFileReplayAction.NO_CLAIM,
@@ -1497,15 +1717,18 @@ internal fun deleteClaimedFile(
     } catch (_: FileAlreadyExistsException) {
         return replayExistingClaim()
     } catch (error: IOException) {
+        failureObserved?.invoke(error)
         Log.w("RecordingRepository", "Unable to atomically claim recording for deletion: ${intent.id}", error)
         return FileDeletionClaimResult.RETRY
     } catch (error: SecurityException) {
+        failureObserved?.invoke(error)
         Log.w("RecordingRepository", "Unable to atomically claim recording for deletion: ${intent.id}", error)
         return FileDeletionClaimResult.RETRY
     }
     return replayClaimedFileDeletion(
         intent = intent,
         claim = claim,
+        failureObserved = failureObserved,
         moveTargetStillCurrent = moveTargetStillCurrent,
     )
 }
@@ -1529,6 +1752,7 @@ internal fun replayClaimedFileDeletion(
     claim: File? = deletionClaimFile(intent),
     readClaimFingerprint: (File, String) -> StableOutputFingerprint? = ::readStableDeletionClaimFingerprint,
     identityBeforeDelete: (File) -> String = ::resolveFileIdentity,
+    failureObserved: ((Throwable) -> Unit)? = null,
     moveTargetStillCurrent: (() -> Boolean)? = null,
 ): FileDeletionClaimResult {
     val resolvedClaim = claim ?: return FileDeletionClaimResult.RETRY
@@ -1567,9 +1791,11 @@ internal fun replayClaimedFileDeletion(
         if (!confirmFileDirectoryStateDurable(resolvedClaim)) return FileDeletionClaimResult.RETRY
         FileDeletionClaimResult.DELETED
     } catch (error: IOException) {
+        failureObserved?.invoke(error)
         Log.w("RecordingRepository", "Unable to delete claimed recording: ${resolvedClaim.absolutePath}", error)
         FileDeletionClaimResult.RETRY
     } catch (error: SecurityException) {
+        failureObserved?.invoke(error)
         Log.w("RecordingRepository", "Unable to delete claimed recording: ${resolvedClaim.absolutePath}", error)
         FileDeletionClaimResult.RETRY
     }

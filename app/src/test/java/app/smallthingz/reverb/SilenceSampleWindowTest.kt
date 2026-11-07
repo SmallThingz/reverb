@@ -374,6 +374,11 @@ class SilenceSampleWindowTest {
         val semanticTap = SilenceSampleRequest(startedAtNanos = press)
         val wakeups = AtomicInteger()
         held.setControlWakeup { wakeups.incrementAndGet() }
+        val firstPcm = ByteArray(16)
+        for (request in listOf(held, semanticTap)) {
+            request.accept(firstPcm, 0, firstPcm.size, 8_000, 1, PcmSampleFormat.PCM_16,
+                readEndedAtNanos = press + 1_000_000L)
+        }
         val originalDeadline = held.deadlineNanos.value
         assertEquals(61_000_000_000L, originalDeadline)
         assertEquals(58_000L, held.remainingTimeoutMillis(nowNanos = 3_000_000_000L))
@@ -383,6 +388,30 @@ class SilenceSampleWindowTest {
         assertEquals(8_000L, held.remainingTimeoutMillis(nowNanos = 3_000_000_000L))
         assertEquals(0L, held.remainingTimeoutMillis(nowNanos = 11_000_000_000L))
         assertEquals(50_000L, silenceSampleRemainingMillis(originalDeadline, 11_000_000_000L))
+    }
+
+    @Test
+    fun noPcmStartupIsBoundedForHoldAndTapWithoutShorteningHealthySampling() {
+        val press = 5_000_000_000L
+        for (held in listOf(false, true)) {
+            val request = SilenceSampleRequest(held = held, startedAtNanos = press)
+            assertEquals(3_000L, request.remainingTimeoutMillis(press))
+            val bytes = ByteArray(16)
+            request.acceptCaptured(bytes, 0, bytes.size, 8_000, 1, PcmSampleFormat.PCM_16,
+                captureStartedAtNanos = null, readEndedAtNanos = press + 2_000_000_000L)
+            assertEquals(1_000L, request.remainingTimeoutMillis(press + 2_000_000_000L))
+            request.acceptCaptured(bytes, 0, bytes.size, 8_000, 1, PcmSampleFormat.PCM_16,
+                captureStartedAtNanos = press + 2_000_000_000L, readEndedAtNanos = press + 2_001_000_000L)
+            assertEquals(if (held) 58_000L else 8_000L,
+                request.remainingTimeoutMillis(press + 2_000_000_000L))
+        }
+        val held = SilenceSampleRequest(held = true, startedAtNanos = press)
+        held.useTimedSample()
+        assertEquals(3_000L, held.remainingTimeoutMillis(press))
+        held.failSamplingTimeout("Microphone did not start")
+        held.accept(ByteArray(16), 0, 16, 8_000, 1, PcmSampleFormat.PCM_16)
+        assertEquals("Microphone did not start", held.state.value.error)
+        assertEquals(0, held.state.value.sampleRate)
     }
 
     @Test

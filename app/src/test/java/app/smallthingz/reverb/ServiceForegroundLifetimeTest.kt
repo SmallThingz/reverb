@@ -10,6 +10,61 @@ import org.junit.Test
 
 class ServiceForegroundLifetimeTest {
     @Test
+    fun durableLifetimePreservesOriginalStartAndPromotionFailures() {
+        for (failDuringStart in listOf(true, false)) {
+            val expected = SecurityException("Android denied foreground work")
+            val events = mutableListOf<String>()
+            val result = attemptDurableSaveLifetimeProtection(null,
+                start = {
+                    events += "start"
+                    if (failDuringStart) throw expected
+                    "component"
+                },
+                promote = {
+                    events += "promote"
+                    throw expected
+                })
+            assertSame(expected, result.failure)
+            assertEquals(if (failDuringStart) listOf("start") else listOf("start", "promote"), events)
+        }
+    }
+
+    @Test
+    fun durableLifecycleRejectionHasFactualReasonAndNoPlatformCause() {
+        for (rejection in DurableSaveLifetimeRejection.entries) {
+            val result = attemptDurableSaveLifetimeProtection(rejection,
+                start = { throw AssertionError("Rejected work must not start a service") },
+                promote = { throw AssertionError("Rejected work must not promote foreground") })
+            val failure = result.failure as DurableSaveLifetimeRejectedException
+            assertSame(rejection, failure.rejection)
+            assertEquals(rejection.explanation, failure.message)
+            assertEquals(null, failure.cause)
+        }
+    }
+
+    @Test
+    fun durableLifetimeRequiresComponentBeforePromotionAndSucceedsInOrder() {
+        var promotions = 0
+        val missing = attemptDurableSaveLifetimeProtection(null, { null }, { promotions++ })
+        assertTrue(missing.failure is IllegalStateException)
+        assertTrue(missing.failure!!.message.orEmpty().contains("no component"))
+        assertEquals(0, promotions)
+        val events = mutableListOf<String>()
+        val accepted = attemptDurableSaveLifetimeProtection(null,
+            { events += "start"; "component" }, { events += "promote" })
+        assertEquals(null, accepted.failure)
+        assertEquals(listOf("start", "promote"), events)
+    }
+
+    @Test
+    fun durableLifetimeDoesNotConvertFatalFailure() {
+        val fatal = AssertionError("fatal")
+        assertSame(fatal, assertThrows(AssertionError::class.java) {
+            attemptDurableSaveLifetimeProtection(null, { throw fatal }, {})
+        })
+    }
+
+    @Test
     fun coldRecompressionTerminalKeepsCaptureUntilInitializationRestoresRuntime() {
         // The export worker can fail before the audio initialization/main restoration handoff.
         // READY is not healthy capture yet, but a valid pending restore still owns the Service.

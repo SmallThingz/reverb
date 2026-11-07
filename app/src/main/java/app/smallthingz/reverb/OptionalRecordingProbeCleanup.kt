@@ -10,7 +10,7 @@ internal fun optionalRecordingProbeCleanup(context: Context, source: String): Re
         Log.e("ReverbRecordingProbe", "$source failed", error)
         RecordingIncidentStore.recordUnexpectedErrorInBackground(appContext, source, error)
         AppFeedbackCenter.post(
-            appContext.getString(R.string.recording_read_cleanup_failed),
+            actionableErrorMessage(appContext, appContext.getString(R.string.recording_read_cleanup_failed), error),
             FeedbackTone.ERROR,
         )
     }

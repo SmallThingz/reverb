@@ -9,6 +9,7 @@ import android.graphics.Canvas
 import android.graphics.Outline
 import android.view.ViewOutlineProvider
 import android.view.MotionEvent
+import android.view.InputDevice
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.accessibility.AccessibilityNodeInfo
@@ -51,6 +52,8 @@ internal class ReverbLibraryRecyclerView(context: Context) : RecyclerView(contex
     var sourceAccessibilityNode: (() -> NativeSourceAccessibilityNode)? = null
     var sourceAccessibilityChildren: (() -> List<View>)? = null
     var sourceSemanticsScrollBy: ((Float) -> Boolean)? = null
+    var sourceStopScroll: (() -> Unit)? = null
+    var sourceOnUserScroll: (() -> Unit)? = null
     var sourceAccessibilityEventsBound=false
     override fun sendAccessibilityEventUnchecked(event:AccessibilityEvent) {
         if(sourceAccessibilityEventsBound && (event.eventType==AccessibilityEvent.TYPE_VIEW_SCROLLED ||
@@ -76,6 +79,21 @@ internal class ReverbLibraryRecyclerView(context: Context) : RecyclerView(contex
             }
         }
     }
+    override fun onGenericMotionEvent(event: MotionEvent): Boolean {
+        val manager = layoutManager
+        if (isEnabled && !isLayoutSuppressed && manager != null &&
+            event.actionMasked == MotionEvent.ACTION_SCROLL && manager.canScrollVertically()) {
+            val axis = when {
+                event.isFromSource(InputDevice.SOURCE_CLASS_POINTER) -> MotionEvent.AXIS_VSCROLL
+                event.isFromSource(InputDevice.SOURCE_ROTARY_ENCODER) -> MotionEvent.AXIS_SCROLL
+                else -> null
+            }
+            // RecyclerView may scroll and still return false; revoke the reveal before delegation.
+            if (axis != null && event.getAxisValue(axis) != 0f) sourceOnUserScroll?.invoke()
+        }
+        return super.onGenericMotionEvent(event)
+    }
+
     override fun draw(canvas: Canvas) {
         val edge = sourceOverscroll
         if (edge == null) super.draw(canvas) else edge.draw(canvas) { super.draw(it) }
@@ -100,7 +118,7 @@ internal class NativeLibraryScrollOwner(
     private val parentInterested: (NativeDragPointerChange) -> Boolean,
 ) : View.OnAttachStateChangeListener, AutoCloseable {
     private val mutex = MutatorMutex()
-    private val fraction = NativeLibraryScrollAccumulator()
+    private var fraction = NativeLibraryScrollAccumulator()
     private val decay = splineBasedDecay<Float>(environment.textDensity)
     private val overscroll = NativeVerticalOverscroll(view.context, environment.textDensity, 0xff666666.toInt(), view::invalidate)
     private var scope: CoroutineScope? = null
@@ -114,9 +132,15 @@ internal class NativeLibraryScrollOwner(
     private val userInputScroll: (Float) -> Float = { dispatch(it, NativeVerticalScrollSource.USER_INPUT) }
     private val sideEffectScroll: (Float) -> Float = { dispatch(it, NativeVerticalScrollSource.SIDE_EFFECT) }
     private var closed = false
+    private val stopScroll: () -> Unit = {
+        // A position reset retires the same custom jobs as detachment, even on a retained View.
+        onViewDetachedFromWindow(view)
+        if (!closed && view.isAttachedToWindow) onViewAttachedToWindow(view)
+    }
     private val semanticsScroll: (Float) -> Boolean = { amount ->
         val current=scope
         if(current==null || closed)false else {
+            view.sourceOnUserScroll?.invoke()
             current.launch { semanticsScrollBy(amount) }
             true
         }
@@ -134,6 +158,7 @@ internal class NativeLibraryScrollOwner(
     }
     private val sink = object : NativeDragSink {
         override fun start(position: Offset) {
+            view.sourceOnUserScroll?.invoke()
             ensureListener()
             channel?.trySend(Event.Start)
         }
@@ -157,6 +182,10 @@ internal class NativeLibraryScrollOwner(
         }
         override fun dispatch(event: NativeDragPointerEvent, pass: NativePointerPass) {
             if (pass != NativePointerPass.INITIAL) return
+            // A pending reveal must not move a row beneath an already pressed pointer.
+            if (view.isEnabled && event.changes.any { it.pressed && !it.previouslyPressed }) {
+                this@NativeLibraryScrollOwner.view.sourceOnUserScroll?.invoke()
+            }
             val local = requireNotNull(this.event).nativePointerSubset(mask)
             try {
                 local.transform(requireNotNull(coordinates).rootToLocal)
@@ -170,6 +199,7 @@ internal class NativeLibraryScrollOwner(
     init {
         view.sourceOverscroll = overscroll
         view.sourceSemanticsScrollBy = semanticsScroll
+        view.sourceStopScroll = stopScroll
         overscroll.measured(view.width, view.height)
         view.addOnScrollListener(scrollListener)
         view.addOnAttachStateChangeListener(this)
@@ -188,6 +218,7 @@ internal class NativeLibraryScrollOwner(
     override fun onViewDetachedFromWindow(view: View) {
         scope?.cancel()
         scope = null
+        fraction = NativeLibraryScrollAccumulator()
         channel?.close()
         channel = null
         listener = null
@@ -251,15 +282,17 @@ internal class NativeLibraryScrollOwner(
         } else dispatch(physical, source)
 
     private suspend fun stopped(physicalVelocity: Float) {
+        val owner = scope ?: return
         val edge = if (view.canScrollVertically(1) || view.canScrollVertically(-1)) overscroll.beginFling(physicalVelocity) else null
         val initial = edge?.remainingVelocity ?: physicalVelocity
         val before = nested.preFling(initial)
+        if (scope !== owner) throw CancellationException("scroll owner retired")
         val available = initial - before
         var logicalLeftover = -available
         mutate(MutatePriority.Default) {
             val fling = NativeVerticalFling(decay,
                 consume = { logical ->
-                    if (logical != 0f && !view.isAttachedToWindow) throw CancellationException("scroll node detached")
+                    if (scope !== owner || logical != 0f && !view.isAttachedToWindow) throw CancellationException("scroll node detached")
                     -scroll(-logical, NativeVerticalScrollSource.SIDE_EFFECT)
                 }, finished = { logicalLeftover = it })
             fling.start(-available)
@@ -276,6 +309,7 @@ internal class NativeLibraryScrollOwner(
 
     /** Same source semantics path as NativeVerticalScrollOwner, using real RV consumption. */
     private suspend fun semanticsScrollBy(logicalDelta:Float) {
+        val owner = scope ?: return
         var consumed=0f
         mutate(MutatePriority.Default) {
             val animation=TargetBasedAnimation(spring<Float>(),Float.VectorConverter,0f,logicalDelta)
@@ -285,6 +319,7 @@ internal class NativeLibraryScrollOwner(
                 val scale=coroutineContext[MotionDurationScale]?.scaleFactor?:1f
                 check(scale>=0f)
                 frames.withFrameNanos { time ->
+                    if (scope !== owner) throw CancellationException("scroll owner retired")
                     val first=start?:time.also{start=it}
                     val play=if(scale==0f)animation.durationNanos else ((time-first)/scale).toLong()
                     consumed+=-dispatch(-(animation.getValueFromNanos(play)-consumed),NativeVerticalScrollSource.USER_INPUT)
@@ -298,6 +333,7 @@ internal class NativeLibraryScrollOwner(
     fun pageKey(pageDown: Boolean, keyDown: Boolean, ctrl: Boolean): Boolean {
         val current = scope ?: return false
         if (!keyDown || ctrl) return false
+        view.sourceOnUserScroll?.invoke()
         val amount = if (pageDown) -view.height.toFloat() else view.height.toFloat()
         current.launch { mutate(MutatePriority.UserInput) { dispatch(amount, NativeVerticalScrollSource.USER_INPUT) } }
         return true
@@ -311,5 +347,6 @@ internal class NativeLibraryScrollOwner(
         view.removeOnScrollListener(scrollListener)
         view.sourceOverscroll = null
         if(view.sourceSemanticsScrollBy===semanticsScroll)view.sourceSemanticsScrollBy=null
+        if(view.sourceStopScroll===stopScroll)view.sourceStopScroll=null
     }
 }

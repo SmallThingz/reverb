@@ -20,6 +20,40 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RecordingBackgroundDeletionTest {
+    @Test
+    fun backgroundFeedbackReceivesExactPerRowFailureWithoutChangingSuccess() = runBlocking {
+        val cause = IOException("provider failure")
+        val expected = RecordingDeletionBatchResult(listOf(true, false), false,
+            failures = mapOf(1 to RecordingDeletionFailure(RecordingDeletionFailureReason.PROVIDER_REJECTED, cause)))
+        var reported: RecordingDeletionBatchResult? = null
+        val result = launchRecordingBackgroundDeletion(null, listOf(recording("/a"), recording("/b")),
+            deleteBatch = { expected }, reportFailure = { reported = it }).await()
+        assertTrue(result === expected)
+        assertTrue(reported === expected)
+        assertTrue(reported?.failures?.get(1)?.cause === cause)
+    }
+
+    @Test
+    fun mixedConsentBatchReportsOnlyRealFailuresAndKeepsPhysicalOutcomes() = runBlocking {
+        val process = CoroutineScope(coroutineContext + SupervisorJob())
+        try {
+            for (hasFailure in listOf(false, true)) {
+                var failures = 0
+                val result = process.launchRecordingBackgroundDeletion(
+                    previous = null,
+                    recordings = listOf(recording("/a"), recording("/b"), recording("/c")),
+                    deleteBatch = { RecordingDeletionBatchResult(listOf(true, false, !hasFailure), false, setOf(1)) },
+                    reportFailure = { failures++ },
+                ).await()
+                assertEquals(listOf(true, false, !hasFailure), result.outcomes)
+                assertEquals(setOf(1), result.consentIndices)
+                assertEquals(if (hasFailure) 1 else 0, failures)
+            }
+        } finally {
+            process.cancel()
+        }
+    }
+
     private fun recording(id: String, identity: String = "stat:$id") = RecordingEntity(
         id = id,
         displayName = File(id).name,

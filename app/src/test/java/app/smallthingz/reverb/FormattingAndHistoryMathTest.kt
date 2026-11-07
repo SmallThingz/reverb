@@ -967,51 +967,19 @@ class FormattingAndHistoryMathTest {
         assertTrue(
             captureIntentRepairClearsPersistenceBlock(
                 authorityWasValid = false,
-                stopDisposition = ExplicitCaptureStopDisposition.KNOWN_STOP,
+                stopReservationAccepted = true,
             ),
         )
         assertFalse(
             captureIntentRepairClearsPersistenceBlock(
                 authorityWasValid = true,
-                stopDisposition = ExplicitCaptureStopDisposition.KNOWN_STOP,
+                stopReservationAccepted = true,
             ),
         )
         assertFalse(
             captureIntentRepairClearsPersistenceBlock(
                 authorityWasValid = false,
-                stopDisposition = ExplicitCaptureStopDisposition.INCIDENT_STATE_FAILURE,
-            ),
-        )
-    }
-
-    @Test
-    fun explicitCaptureStop_rejectsOnlyWhenPriorArmedMarkerWasRestored() {
-        assertEquals(
-            ExplicitCaptureStopDisposition.KNOWN_STOP,
-            explicitCaptureStopDisposition(
-                stopIntentChanged = true,
-                incidentResult = KnownCaptureStopResult.DURABLE,
-            ),
-        )
-        assertEquals(
-            ExplicitCaptureStopDisposition.REJECT_REARMED,
-            explicitCaptureStopDisposition(
-                stopIntentChanged = true,
-                incidentResult = KnownCaptureStopResult.FAILED_REARMED,
-            ),
-        )
-        assertEquals(
-            ExplicitCaptureStopDisposition.INCIDENT_STATE_FAILURE,
-            explicitCaptureStopDisposition(
-                stopIntentChanged = false,
-                incidentResult = KnownCaptureStopResult.FAILED_REARMED,
-            ),
-        )
-        assertEquals(
-            ExplicitCaptureStopDisposition.INCIDENT_STATE_FAILURE,
-            explicitCaptureStopDisposition(
-                stopIntentChanged = true,
-                incidentResult = KnownCaptureStopResult.FAILED_UNCERTAIN,
+                stopReservationAccepted = false,
             ),
         )
     }

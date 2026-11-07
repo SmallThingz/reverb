@@ -1,0 +1,19 @@
+<!-- Untranslated feature text uses the English fallback, as in strings.xml. -->
+<resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="MissingTranslation">
+    <string name="failure_reason_permission">Android or the storage provider denied access. Check the app permissions and selected storage location.</string>
+    <string name="failure_reason_missing">The file or location no longer exists. Refresh the list or choose an available location.</string>
+    <string name="failure_reason_space">Storage reported that it is full. Free some space or choose another location, then retry.</string>
+    <string name="failure_reason_read_only">The storage location is read-only. Choose a writable location.</string>
+    <string name="failure_reason_busy">The resource is busy. Wait for its current operation to finish, then retry.</string>
+    <string name="failure_reason_cancelled">The operation was cancelled.</string>
+    <string name="failure_reason_unknown">The cause could not be determined from the information returned.</string>
+    <string name="failure_type">Error type: %1$s.</string>
+    <string name="failure_code">Error: %1$s (system code %2$d).</string>
+    <string name="failure_reported_detail">Reported detail: %1$s</string>
+    <string name="failure_service_stopped">The recording service stopped before this operation finished. Reopen Reverb and check its current state before retrying.</string>
+    <string name="failure_background_timeout">Android stopped the background operation after its time limit. Reopen Reverb and check its current state before retrying.</string>
+    <string name="failure_audio_read_code">The microphone returned Android read error %1$d.</string>
+    <string name="failure_microphone_unavailable">Android could not provide an initialized microphone input.</string>
+    <string name="failure_sampling_connection">Calibration could not connect to the recording service, or the connection ended. Reopen Reverb and try calibration again.</string>
+    <string name="failure_folder_result">The provider did not return a usable folder. Choose a folder again.</string>
+</resources>

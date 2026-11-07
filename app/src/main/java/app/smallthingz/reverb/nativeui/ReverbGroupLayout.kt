@@ -19,6 +19,7 @@ import android.view.ViewOutlineProvider
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import androidx.annotation.ColorInt
+import smallthingz.ui.animation.view.ViewColorTransition
 import kotlin.math.ceil
 import kotlin.math.min
 
@@ -46,6 +47,15 @@ internal class ReverbGroupLayout(
     private var recordingEdges: ReverbRecordingGroupEdges? = null
     private var recordingShape: ReverbRecordingGroupShape? = null
     @ColorInt private var recordingSeparatorColor = 0
+    private var paletteTransition: ViewColorTransition? = null
+    private val progressPaint = Paint(GROUP_PAINT_FLAGS)
+    private var progressFraction = 0f
+
+    fun setBackgroundProgress(fraction: Float, color: Int) {
+        progressFraction = fraction.takeIf { it.isFinite() }?.coerceIn(0f, 1f) ?: 0f
+        progressPaint.color = color
+        invalidate()
+    }
 
     init {
         require(cornerRadiusDp.isFinite() && cornerRadiusDp >= 0f)
@@ -82,6 +92,19 @@ internal class ReverbGroupLayout(
     val pointerContent: ViewGroup get() = content
 
     fun setPalette(@ColorInt field: Int, @ColorInt border: Int) {
+        val motion=paletteTransition ?: ViewColorTransition(this,intArrayOf(field,border),{
+            paletteTransition?.let { applyPalette(it.color(0),it.color(1)) }
+        }).also { paletteTransition=it;applyPalette(field,border) }
+        motion.retarget(field,border)
+    }
+
+    /** Existing multi-channel frame owners publish already sampled paint through this seam. */
+    fun setPaletteImmediately(@ColorInt field:Int,@ColorInt border:Int) {
+        paletteTransition?.close();paletteTransition=null
+        applyPalette(field,border)
+    }
+
+    private fun applyPalette(field:Int,border:Int) {
         if (fillPaint.color != field || borderPaint.color != border) {
             fillPaint.color = field
             borderPaint.color = border
@@ -133,6 +156,15 @@ internal class ReverbGroupLayout(
     override fun onDraw(canvas: Canvas) {
         if (recordingEdges == null) canvas.drawRoundRect(bounds, geometry.radius, geometry.radius, fillPaint)
         else checkNotNull(recordingShape).drawFill(canvas, fillPaint)
+        if (progressFraction > 0f) {
+            val save = canvas.save()
+            val extent = width * progressFraction
+            if (layoutDirection == LAYOUT_DIRECTION_RTL) canvas.clipRect(width - extent, 0f, width.toFloat(), height.toFloat())
+            else canvas.clipRect(0f, 0f, extent, height.toFloat())
+            if (recordingEdges == null) canvas.drawRoundRect(bounds, geometry.radius, geometry.radius, progressPaint)
+            else checkNotNull(recordingShape).drawFill(canvas, progressPaint)
+            canvas.restoreToCount(save)
+        }
         super.onDraw(canvas)
     }
 

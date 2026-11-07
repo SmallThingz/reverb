@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
+    <instrumentation android:name="app.smallthingz.reverb.ReliabilityInstrumentation"
+        android:targetPackage="${applicationId}" android:functionalTest="true" />
+    <application android:name="android.app.Application" android:label="Reverb current UI smoke"
+        tools:replace="android:name,android:label">
+        <activity android:name="app.smallthingz.reverb.NativeParityActivity" android:exported="false"
+            android:screenOrientation="landscape" android:theme="@style/Theme.Reverb" />
+        <activity android:name="app.smallthingz.reverb.MainActivity" android:enabled="false"
+            android:exported="false" tools:replace="android:exported" />
+        <activity android:name="app.smallthingz.reverb.RecordingOpenActivity" android:enabled="false" />
+        <service android:name="app.smallthingz.reverb.ReverbService" android:enabled="false" tools:replace="android:enabled" />
+        <service android:name="app.smallthingz.reverb.OneShotRecordingTileService" android:enabled="false" />
+        <service android:name="app.smallthingz.reverb.LoopingRecordingTileService" android:enabled="false" />
+        <service android:name="app.smallthingz.reverb.LoopingQuickSaveTileService" android:enabled="false" />
+        <service android:name="app.smallthingz.reverb.OneShotQuickSaveTileService" android:enabled="false" />
+        <service android:name="app.smallthingz.reverb.QuickSaveTile3" android:enabled="false" />
+        <service android:name="app.smallthingz.reverb.QuickSaveTile4" android:enabled="false" />
+        <service android:name="app.smallthingz.reverb.QuickSaveTile5" android:enabled="false" />
+        <service android:name="app.smallthingz.reverb.QuickSaveTile6" android:enabled="false" />
+        <service android:name="app.smallthingz.reverb.QuickSaveTile7" android:enabled="false" />
+        <service android:name="app.smallthingz.reverb.QuickSaveTile8" android:enabled="false" />
+        <provider android:name="app.smallthingz.reverb.VerifiedRecordingProvider" android:enabled="false" />
+        <provider android:name="app.smallthingz.reverb.VerifiedRecordingFileProvider" android:enabled="false" />
+        <!-- Disable dependency startup work only in this isolated current-UI fixture. -->
+        <provider android:name="androidx.startup.InitializationProvider" android:enabled="false" />
+        <receiver android:name="androidx.profileinstaller.ProfileInstallReceiver" android:enabled="false" tools:replace="android:enabled" />
+    </application>
+</manifest>

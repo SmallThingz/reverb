@@ -1,6 +1,7 @@
 package app.smallthingz.reverb
 
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
@@ -20,13 +21,13 @@ internal fun onboardingPendingForUi(
 internal fun commitOnboardingAndReloadRuntime(
     commit: () -> Boolean,
     reloadRuntime: () -> Unit,
-    onRuntimeFailure: () -> Unit,
+    onRuntimeFailure: (Exception) -> Unit,
 ): Boolean {
     if (!commit()) return false
     try {
         reloadRuntime()
-    } catch (_: Exception) {
-        runCatching(onRuntimeFailure)
+    } catch (error: Exception) {
+        runCatching { onRuntimeFailure(error) }
     }
     return true
 }
@@ -40,12 +41,13 @@ internal class OnboardingFinishCoordinator(
 
     fun submit(
         block: suspend () -> Boolean,
-        onFailure: () -> Unit,
+        onFailure: (Exception?) -> Unit,
     ): Boolean {
         if (!mutableState.compareAndSet(OnboardingFinishState.IDLE, OnboardingFinishState.RUNNING)) {
             return false
         }
         val terminal = AtomicBoolean(false)
+        val failure = AtomicReference<Exception?>(null)
         val complete: (Boolean) -> Unit = { succeeded ->
             if (terminal.compareAndSet(false, true)) {
                 if (succeeded) {
@@ -53,7 +55,7 @@ internal class OnboardingFinishCoordinator(
                     mutableState.value = OnboardingFinishState.SUCCEEDED
                 } else {
                     try {
-                        onFailure()
+                        onFailure(failure.get())
                     } finally {
                         mutableState.value = OnboardingFinishState.IDLE
                     }
@@ -61,8 +63,13 @@ internal class OnboardingFinishCoordinator(
             }
         }
         try {
-            submitAttempt(block, complete)
-        } catch (_: Exception) {
+            submitAttempt({
+                val result = runDurableUiAttempt(block)
+                failure.set(result.failure)
+                result.succeeded
+            }, complete)
+        } catch (error: Exception) {
+            failure.compareAndSet(null, error)
             complete(false)
             return false
         }

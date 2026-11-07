@@ -16,6 +16,8 @@ internal class BufferedExportWork internal constructor(
 ) {
     private val queued = AtomicBoolean()
 
+    fun rejectQueuedPreparation(error: Exception) = rejectPreparation(error)
+
     /** Called immediately after worker admission, before Service teardown can queue store close. */
     fun queuePreparation(post: (Runnable) -> Boolean) {
         check(queued.compareAndSet(false, true))

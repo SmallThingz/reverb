@@ -183,6 +183,21 @@ class FeedbackAccessibilityTimeoutTest {
         assertNull(displayed)
     }
 
+    @Test fun longErrorsReceiveReadingTimeBeforeAccessibilityExtension() = runBlocking {
+        val manager = RecordingAccessibilityManager { it.originalTimeoutMillis + 7_000L }
+        val durations = mutableListOf<Long>()
+        for ((index, length) in listOf(20, 300, 1000).withIndex()) {
+            var acknowledged = false
+            deliverFeedbackEvent(FeedbackEvent(index.toLong(), "x".repeat(length), FeedbackTone.ERROR),
+                canDisplay = { true }, display = {}, awaitVisibleFrame = {},
+                acknowledge = { acknowledged = true }, accessibilityManager = manager,
+                waitForDuration = { durations += it; assertTrue(!acknowledged) })
+            assertTrue(acknowledged)
+        }
+        assertEquals(listOf(4_500L, 15_000L, 20_000L), manager.requests.map { it.originalTimeoutMillis })
+        assertEquals(listOf(11_500L, 22_000L, 27_000L), durations)
+    }
+
     private data class TimeoutRequest(
         val originalTimeoutMillis: Long,
         val containsIcons: Boolean,

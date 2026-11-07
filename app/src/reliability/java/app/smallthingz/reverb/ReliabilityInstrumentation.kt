@@ -14,20 +14,52 @@ private class ProviderFixtureAbort : RuntimeException(null, null, false, false)
 /** Standalone runner: no production/test framework dependency and a separate installed package. */
 class ReliabilityInstrumentation : Instrumentation() {
     private var requestedTest: String? = null
+    private var consentFixtureManifest: String? = null
+    private var consentFixtureManifestSha256: String? = null
     private var keyboardSessionNonce: String? = null
     private var fixtureSessionNonce: String? = null
     private var fixtureObservationDirectory: String? = null
     private var fixtureObservationSha256: String? = null
     private var fixtureRecoveryLedgerSha256: String? = null
+    private var durableSaveRunId: String? = null
+    private var durableSaveBoundary: String? = null
+    private var durableSaveFormat: String? = null
+    private var durableSaveEvidenceSha256: String? = null
+    private var durableSaveJobId: String? = null
+    private var durableSaveManifestSha256: String? = null
+    private var durableSaveAdmissionChunks: String? = null
+    private var silenceDiagnosticFixture: String? = null
+    private var silenceDiagnosticFixtureSha256: String? = null
+    private var captureStopRunId: String? = null
+    private var captureStopApkSha256: String? = null
+    private var captureStopSourceManifestSha256: String? = null
+    private var captureStopReadySha256: String? = null
+    private var captureStopDeathAction: String? = null
 
     override fun onCreate(arguments: Bundle?) {
         super.onCreate(arguments)
         requestedTest = arguments?.getString("test")
+        consentFixtureManifest = arguments?.getString("fixture_manifest")
+        consentFixtureManifestSha256 = arguments?.getString("fixture_manifest_sha256")
         keyboardSessionNonce = arguments?.getString("keyboard_session_nonce")
         fixtureSessionNonce = arguments?.getString("fixture_session_nonce")
         fixtureObservationDirectory = arguments?.getString("fixture_observation_directory")
         fixtureObservationSha256 = arguments?.getString("fixture_observation_sha256")
         fixtureRecoveryLedgerSha256 = arguments?.getString("fixture_recovery_ledger_sha256")
+        durableSaveRunId = arguments?.getString("durable_save_run_id")
+        durableSaveBoundary = arguments?.getString("durable_save_boundary")
+        durableSaveFormat = arguments?.getString("durable_save_format")
+        durableSaveEvidenceSha256 = arguments?.getString("durable_save_evidence_sha256")
+        durableSaveJobId = arguments?.getString("durable_save_job_id")
+        durableSaveManifestSha256 = arguments?.getString("durable_save_manifest_sha")
+        durableSaveAdmissionChunks = arguments?.getString("durable_save_admission_chunks")
+        silenceDiagnosticFixture = arguments?.getString("silence_diagnostic_fixture")
+        silenceDiagnosticFixtureSha256 = arguments?.getString("silence_diagnostic_fixture_sha256")
+        captureStopRunId = arguments?.getString("capture_stop_run_id")
+        captureStopApkSha256 = arguments?.getString("capture_stop_apk_sha256")
+        captureStopSourceManifestSha256 = arguments?.getString("capture_stop_source_manifest_sha256")
+        captureStopReadySha256 = arguments?.getString("capture_stop_ready_sha256")
+        captureStopDeathAction = arguments?.getString("capture_stop_death_action")
         start()
     }
 
@@ -38,6 +70,15 @@ class ReliabilityInstrumentation : Instrumentation() {
         try {
             check(targetContext.packageName.endsWith(".reliability")) {
                 "Reliability tests must never run against a user's Reverb installation"
+            }
+            val currentUiSmoke = targetContext.packageName == "app.smallthingz.reverb.uitheme.reliability"
+            if (currentUiSmoke) {
+                check(targetContext.applicationContext.javaClass == android.app.Application::class.java &&
+                    requestedTest in setOf("native_settings_library_selectors", "native_theme_matrix", "native_settings_calibration_current", "current_media_delete_consent",
+                        "native_silence_blob_current", "native_silence_diagnostic_current", "native_blob_feel_current", "native_material_progress_current", "native_library_admission")) {
+                    "Current UI smoke accepts only explicit current UI selectors with plain Application"
+                }
+                report.appendLine("MODE current-ui-smoke; isolated current UI only, not released-renderer parity")
             }
             val parityOnly = targetContext.applicationContext.javaClass == android.app.Application::class.java
             check(!parityOnly || requestedTest in setOf(
@@ -52,7 +93,9 @@ class ReliabilityInstrumentation : Instrumentation() {
                 "native_main_incidents_visibility",
                 "native_home_accessibility",
                 "native_onboarding_audio_flow",
-                "native_settings_back_guard", "native_onboarding_controls_current", "native_onboarding_permission_entry", "native_onboarding_responsive",
+                "native_settings_library_selectors", "native_theme_matrix", "current_media_delete_consent", "native_settings_back_guard", "native_settings_calibration_current", "native_settings_calibration_live",
+                "native_silence_blob_current", "native_silence_diagnostic_current", "native_blob_feel_current", "native_material_progress_current",
+                "native_onboarding_controls_current", "native_onboarding_permission_entry", "native_onboarding_responsive",
                 "native_library_parity", "native_library_playback", "native_library_transactions", "native_library_menu", "native_range_parity", "native_content_restoration", "native_legacy_state_parity", "native_icon_clip_parity", "native_retention_keyboard",
                 "native_activity_lifecycle", "native_incidents_parity", "native_onboarding_input_parity", "native_incidents_interaction",
                 "native_settings_compression", "native_settings_duration", "native_settings_calibration", "native_fine_seek_leaf",
@@ -65,7 +108,104 @@ class ReliabilityInstrumentation : Instrumentation() {
             if (requestedTest == "native_text_backend" || requestedTest == "native_motion_spline") {
                 requireNativeMathProbeHost(targetContext.packageName, parityOnly)
             }
-            if (requestedTest == "native_text_backend") {
+            if (requestedTest == "durable_save_overlap_recover") {
+                executed++
+                val tree = DocumentsContract.buildTreeDocumentUri(
+                    "${targetContext.packageName}.reliability.documents", ReliabilityDocumentsProvider.ROOT_ID,
+                )
+                targetContext.contentResolver.acquireContentProviderClient(tree).use { client ->
+                    val provider = requireNotNull(client?.localContentProvider as? ReliabilityDocumentsProvider)
+                    recoverDurableSaveOverlapFailure(targetContext, tree, provider,
+                        requireNotNull(durableSaveRunId) { "durable_save_run_id is required" },
+                        requireNotNull(durableSaveJobId) { "durable_save_job_id is required" },
+                        requireNotNull(durableSaveManifestSha256) { "durable_save_manifest_sha is required" }, report)
+                }
+                report.appendLine("PASS durable_save_overlap_recover")
+            } else if (requestedTest == "durable_save_admission_continuation") {
+                executed++
+                val chunkCount = durableSaveAdmissionChunks?.let { raw ->
+                    requireNotNull(raw.toIntOrNull()) { "durable_save_admission_chunks must be an integer in 1..4096" }
+                } ?: 256
+                require(chunkCount in 1..4096) { "durable_save_admission_chunks must be in 1..4096" }
+                val tree = DocumentsContract.buildTreeDocumentUri(
+                    "${targetContext.packageName}.reliability.documents", ReliabilityDocumentsProvider.ROOT_ID,
+                )
+                targetContext.contentResolver.acquireContentProviderClient(tree).use { client ->
+                    val provider = requireNotNull(client?.localContentProvider as? ReliabilityDocumentsProvider)
+                    verifyDurableSaveAdmissionContinuation(targetContext, tree, provider, report, chunkCount)
+                }
+                report.appendLine("PASS durable_save_admission_continuation")
+            } else if (requestedTest == "durable_save_overlap" || requestedTest == "durable_save_overlap_notifications_denied") {
+                executed++
+                val tree = DocumentsContract.buildTreeDocumentUri(
+                    "${targetContext.packageName}.reliability.documents", ReliabilityDocumentsProvider.ROOT_ID,
+                )
+                targetContext.contentResolver.acquireContentProviderClient(tree).use { client ->
+                    val provider = requireNotNull(client?.localContentProvider as? ReliabilityDocumentsProvider)
+                    verifyDurableSaveOverlap(targetContext, tree, provider, report,
+                        expectNotifications = requestedTest == "durable_save_overlap")
+                }
+                report.appendLine("PASS $requestedTest")
+            } else if (requestedTest == "capture_stop_death_prepare") {
+                check(captureStopDeathAction == "SELF_KILL_QA") { "Explicit isolated QA self-kill action is required" }
+                prepareCaptureStopProcessDeath(targetContext,
+                    requireNotNull(captureStopRunId), requireNotNull(captureStopApkSha256),
+                    requireNotNull(captureStopSourceManifestSha256)) { readyPath, readySha ->
+                    check(targetContext.packageName == "app.smallthingz.reverb.reliability")
+                    sendStatus(0, Bundle().apply {
+                        putString("stream", "PREPARED capture Stop boundary pid=${Process.myPid()} ready=$readyPath sha256=$readySha; terminating isolated QA process\n")
+                    })
+                    Process.killProcess(Process.myPid())
+                    error("Isolated process termination did not occur")
+                }
+            } else if (requestedTest == "capture_stop_death_recover") {
+                executed++
+                recoverCaptureStopProcessDeath(targetContext,
+                    requireNotNull(captureStopRunId), requireNotNull(captureStopApkSha256),
+                    requireNotNull(captureStopSourceManifestSha256), requireNotNull(captureStopReadySha256), report)
+                report.appendLine("PASS capture_stop_death_recover actual process boundary; no volatile PCM recovery claim")
+            } else if (requestedTest == "durable_document_crash_prepare") {
+                val format = when (durableSaveFormat) {
+                    "WAV" -> ExportFormat.WAV
+                    "FLAC" -> ExportFormat.FLAC
+                    else -> error("durable_save_format must be WAV or FLAC")
+                }
+                val runId = prepareDurableDocumentProcessDeath(targetContext, format,
+                    requireNotNull(durableSaveBoundary), report)
+                sendStatus(0, Bundle().apply {
+                    putString("stream", "PREPARED scoped document save run=$runId; terminating isolated QA pid=${Process.myPid()}\n")
+                })
+                Process.killProcess(Process.myPid())
+                error("Isolated process termination did not occur")
+            } else if (requestedTest == "durable_document_crash_resume") {
+                executed++
+                resumeDurableDocumentProcessDeath(targetContext, requireNotNull(durableSaveRunId), report)
+                report.appendLine("PASS durable_document_crash_resume explicit scoped coordinator; no Application discovery claim")
+            } else if (requestedTest == "durable_save_crash_prepare") {
+                val format = when (durableSaveFormat) {
+                    "WAV" -> ExportFormat.WAV
+                    "FLAC" -> ExportFormat.FLAC
+                    else -> error("durable_save_format must be WAV or FLAC")
+                }
+                val runId = prepareDurableSaveProcessDeath(targetContext, format,
+                    requireNotNull(durableSaveBoundary) { "durable_save_boundary is required" }, report)
+                sendStatus(0, Bundle().apply {
+                    putString("stream", "PREPARED durable save run=$runId; terminating isolated QA pid=${Process.myPid()}\n")
+                })
+                Process.killProcess(Process.myPid())
+                error("Isolated process termination did not occur")
+            } else if (requestedTest == "durable_save_crash_resume") {
+                executed++
+                resumeDurableSaveProcessDeath(targetContext,
+                    requireNotNull(durableSaveRunId) { "durable_save_run_id is required" }, report)
+                report.appendLine("PASS durable_save_crash_resume")
+            } else if (requestedTest == "durable_save_crash_cleanup") {
+                executed++
+                cleanupDurableSaveProcessDeath(targetContext,
+                    requireNotNull(durableSaveRunId) { "durable_save_run_id is required" },
+                    requireNotNull(durableSaveEvidenceSha256) { "durable_save_evidence_sha256 is required" }, report)
+                report.appendLine("PASS durable_save_crash_cleanup")
+            } else if (requestedTest == "native_text_backend") {
                 executed++
                 val result = nativeParityOnMain(this) { nativeTextBackendParity(targetContext) }
                 val evidence = File(targetContext.filesDir, "native-text-backend-" + System.currentTimeMillis() + ".json")
@@ -122,6 +262,41 @@ class ReliabilityInstrumentation : Instrumentation() {
             } else if (requestedTest == "native_onboarding_audio_flow") {
                 executed++
                 verifyNativeOnboardingAudioFlow(this, report)
+            } else if (requestedTest == "current_all_files_access") {
+                executed++
+                verifyAllFilesAccessBoundary(this, report, requireNotNull(consentFixtureManifest),
+                    requireNotNull(consentFixtureManifestSha256))
+            } else if (requestedTest == "current_media_delete_consent") {
+                executed++
+                check(currentUiSmoke) { "Media consent requires the isolated current-UI host" }
+                verifyNativeDeletionConsent(this, report, requireNotNull(consentFixtureManifest),
+                    requireNotNull(consentFixtureManifestSha256))
+            } else if (requestedTest == "native_silence_diagnostic_current") {
+                executed++
+                check(currentUiSmoke) { "Ambient silence diagnosis requires the isolated current-UI host" }
+                verifyNativeSilenceDiagnostic(this, report, requireNotNull(silenceDiagnosticFixture),
+                    requireNotNull(silenceDiagnosticFixtureSha256))
+            } else if (requestedTest == "native_blob_feel_current") {
+                executed++
+                check(currentUiSmoke) { "Blob motion requires the isolated current-UI host" }
+                verifyNativeSilenceBlob(this, report, motionOnly = true)
+            } else if (requestedTest == "native_silence_blob_current") {
+                executed++
+                check(currentUiSmoke) { "Silence blob requires the isolated current-UI host" }
+                verifyNativeSilenceBlob(this, report)
+            } else if (requestedTest == "native_material_progress_current") {
+                executed++
+                check(currentUiSmoke) { "Material progress requires the isolated current-UI host" }
+                verifyNativeMaterialProgress(this, report)
+            } else if (requestedTest == "native_theme_matrix") {
+                executed++
+                verifyNativeThemeMatrix(this, report)
+            } else if (requestedTest == "native_settings_library_selectors") {
+                executed++
+                verifyNativeSettingsLibrarySelectors(this, report)
+            } else if (requestedTest == "native_settings_calibration_current" || requestedTest == "native_settings_calibration_live") {
+                executed++
+                verifyNativeSettingsCalibrationCurrent(this, report, requestedTest == "native_settings_calibration_live")
             } else if (requestedTest == "native_settings_back_guard") {
                 executed++
                 verifyNativeSettingsBackGuard(this, report)
@@ -161,6 +336,7 @@ class ReliabilityInstrumentation : Instrumentation() {
             } else if (requestedTest == "native_library_admission") {
                 executed++
                 verifyNativeLibraryAdmissionRegression(this, report)
+                if (currentUiSmoke) verifyNativeLibraryRevealInputCancellation(this, report)
             } else if (requestedTest == "native_main_incidents_visibility") {
                 executed++
                 verifyNativeMainIncidentsVisibility(this, report)
@@ -239,6 +415,16 @@ class ReliabilityInstrumentation : Instrumentation() {
                     } catch (error: Throwable) {
                         failures++
                         report.append("FAIL brand_geometry\n").append(Log.getStackTraceString(error)).append('\n')
+                    }
+                }
+                if (requestedTest == "native_editable_cursor_clone") {
+                    executed++
+                    try {
+                        verifyNativeEditableCursorClone(targetContext)
+                        report.append("PASS native_editable_cursor_clone\n")
+                    } catch (error: Throwable) {
+                        failures++
+                        report.append("FAIL native_editable_cursor_clone\n").append(Log.getStackTraceString(error)).append('\n')
                     }
                 }
                 if (requestedTest == "ui_seed_large_history") {

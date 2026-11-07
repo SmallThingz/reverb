@@ -11,7 +11,7 @@ import app.smallthingz.reverb.NativeViewPhasePointerNode
 import app.smallthingz.reverb.R
 import app.smallthingz.reverb.SilenceCurveView
 import app.smallthingz.reverb.SilenceGateConfig
-import app.smallthingz.reverb.uncalibratedSilenceCurve
+import app.smallthingz.reverb.sampledSilenceCurve
 import kotlinx.coroutines.CoroutineScope
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -118,19 +118,27 @@ private class SilenceBody(
     val curve=SilenceCurveView(context)
     private val configuration=ViewConfiguration.get(context)
     private var closed=false
-    private val calibrate:SettingsCalibrationActionView=SettingsCalibrationActionView(context,environment,inputRoot) {
-        if(!gesture.pointerDown&&canBegin())actions()?.calibrate()
+    private val calibrate:SettingsCalibrationActionView=SettingsCalibrationActionView(context,environment,inputRoot,
+        stableLabels=listOf(context.getString(R.string.silence_calibrate),context.getString(R.string.silence_release_to_finish),
+            context.getString(R.string.cancel)),
+        progressSurface=true) {
+        if(!gesture.pointerDown) {
+            if(canCancel())actions()?.cancel()
+            else if(canBegin())actions()?.calibrate()
+        }
     }
-    private val cancel=SettingsCalibrationActionView(context,environment,inputRoot) {actions()?.cancel()}
-    private val buttonRow=CalibrationButtonRow(context,calibrate,cancel)
-    private val sampling=environment.paragraph(context,context.getString(R.string.silence_sampling),
+    private val fit=SettingsCalibrationFitDial(context,environment) {clearance->
+        if(canEdit()) {
+            val points=state.sampledPeaks?.let {sampledSilenceCurve(it,state.maximumHz,clearance)} ?: state.config.points
+            actions()?.configChanged(state.config.copy(points=points,clearanceDb=clearance))
+        }
+    }
+    private val heading=environment.paragraph(context,context.getString(R.string.silence_calibration_heading),
+        ReverbTextRole.TITLE_SMALL,environment.palette.ink)
+    private val hint=environment.paragraph(context,context.getString(R.string.silence_calibration_hint),
         ReverbTextRole.BODY_SMALL,environment.palette.muted)
+    private val buttonRow=CalibrationButtonRow(context,calibrate,fit)
     private val error=environment.paragraph(context,"",ReverbTextRole.BODY_SMALL,environment.palette.error)
-    private val unavailable=environment.paragraph(context,"",ReverbTextRole.BODY_SMALL,environment.palette.muted)
-    private val needsCalibration=environment.paragraph(context,context.getString(R.string.silence_needs_calibration),
-        ReverbTextRole.BODY_SMALL,environment.palette.muted)
-    private val progress=SettingsCalibrationProgressView(context,environment)
-    private val visibleItems=ArrayList<View>(7)
     private val gesture:SettingsCalibrationGesture=SettingsCalibrationGesture(::canBegin,
         {actions()?.beginHeld()==true},{actions()?.completeTap()},{actions()?.finishHeld()},
         {actions()?.cancel()},{refresh()},
@@ -144,11 +152,9 @@ private class SilenceBody(
 
     init {
         importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO
-        ViewCompat.setAccessibilityLiveRegion(sampling,ViewCompat.ACCESSIBILITY_LIVE_REGION_POLITE)
+        ViewCompat.setAccessibilityHeading(heading,true)
         ViewCompat.setAccessibilityLiveRegion(error,ViewCompat.ACCESSIBILITY_LIVE_REGION_POLITE)
-        ViewCompat.setAccessibilityLiveRegion(needsCalibration,ViewCompat.ACCESSIBILITY_LIVE_REGION_POLITE)
-        addView(curve);addView(buttonRow);addView(sampling);addView(progress);addView(error);addView(unavailable)
-        addView(needsCalibration)
+        addView(heading);addView(hint);addView(curve);addView(buttonRow);addView(error)
         curve.onCommit={points,index->
             if(canEdit()) {
                 select(index.coerceIn(points.indices))
@@ -159,85 +165,73 @@ private class SilenceBody(
         refresh()
     }
     private fun canBegin()=state.enabled&&state.config.enabled&&state.calibrationAllowed&&!state.calibrating
-    private fun canEdit()=state.enabled&&state.config.enabled&&state.sampledPeaks!=null&&!state.calibrating
+    private fun canCancel()=state.calibrating&&!state.holdingCalibration
+    private fun canEdit()=state.enabled&&state.config.enabled&&!state.calibrating
     fun bind(next:SettingsSilenceState,colors:ReverbViewEnvironment) {
         state=next;environment=colors;refresh()
     }
     fun bindProgress(next:SettingsSilenceState) {
         state=next
-        next.calibrationProgress?.let {progress.bind(it,environment)}
+        calibrate.bindProgress(next.calibrationProgress,next.calibrating)
     }
     private fun bindCurve() {
-        val presentation=if(state.sampledPeaks==null)uncalibratedSilenceCurve else state.config
-        curve.contentDescription=context.getString(if(state.sampledPeaks==null)R.string.silence_needs_calibration
-            else R.string.silence_graph_description)
+        val presentation=state.config
+        curve.contentDescription=context.getString(R.string.silence_graph_description)
         curve.bind(presentation,selected().coerceIn(presentation.points.indices),state.sampledPeaks,state.maximumHz,
-            if(state.sampledPeaks==null)environment.palette.muted else environment.palette.primary,
+            environment.palette.primary,
             environment.palette.ink,environment.palette.muted,canEdit())
     }
     private fun refresh() {
         if(closed)return
         bindCurve()
+        fit.bind(state.config.clearanceDb,canEdit(),environment)
+        environment.bindParagraphStyle(heading,ReverbTextRole.TITLE_SMALL,environment.palette.ink)
+        environment.bindParagraphStyle(hint,ReverbTextRole.BODY_SMALL,environment.palette.muted)
         val pointerDown=gesture.pointerDown
-        val buttonEnabled=state.enabled&&state.config.enabled&&
+        val buttonEnabled=canCancel()||state.enabled&&state.config.enabled&&
             (state.calibrationAllowed||pointerDown)&&(!state.calibrating||pointerDown)
         calibrate.bind(context.getString(if(state.holdingCalibration)R.string.silence_release_to_finish
-            else R.string.silence_calibrate),buttonEnabled,environment)
-        cancel.bind(context.getString(R.string.cancel),true,environment)
-        buttonRow.showCancel=state.calibrating&&!state.holdingCalibration&&!pointerDown
-        environment.bindParagraphStyle(sampling,ReverbTextRole.BODY_SMALL,environment.palette.muted)
+            else if(canCancel())R.string.cancel else R.string.silence_calibrate),buttonEnabled,environment)
         environment.bindParagraphStyle(error,ReverbTextRole.BODY_SMALL,environment.palette.error)
-        environment.bindParagraphStyle(unavailable,ReverbTextRole.BODY_SMALL,environment.palette.muted)
-        environment.bindParagraphStyle(needsCalibration,ReverbTextRole.BODY_SMALL,environment.palette.muted)
         error.setText(state.calibrationError.orEmpty())
-        unavailable.setText(state.calibrationUnavailableReason.orEmpty())
-        val showSampling=state.calibrating&&!state.holdingCalibration
-        sampling.visibility=if(showSampling)VISIBLE else GONE
-        progress.visibility=if(showSampling&&state.calibrationProgress!=null)VISIBLE else GONE
-        state.calibrationProgress?.let {progress.bind(it,environment)}
-        error.visibility=if(state.calibrationError!=null)VISIBLE else GONE
-        unavailable.visibility=if(!state.calibrationAllowed&&!state.calibrating&&
-            state.calibrationUnavailableReason!=null)VISIBLE else GONE
-        needsCalibration.visibility=if(state.sampledPeaks==null&&!state.calibrating)VISIBLE else GONE
-        visibleItems.clear()
-        visibleItems.add(curve)
-        if(needsCalibration.visibility==VISIBLE)visibleItems.add(needsCalibration)
-        visibleItems.add(buttonRow)
-        if(sampling.visibility==VISIBLE)visibleItems.add(sampling)
-        if(progress.visibility==VISIBLE)visibleItems.add(progress)
-        if(error.visibility==VISIBLE)visibleItems.add(error)
-        if(unavailable.visibility==VISIBLE)visibleItems.add(unavailable)
+        calibrate.bindProgress(state.calibrationProgress,state.calibrating)
+        error.visibility=if(!state.calibrationError.isNullOrBlank())VISIBLE else GONE
         requestLayout()
     }
     override fun onMeasure(w:Int,h:Int) {
         val width=MeasureSpec.getSize(w)
         val inner=(width-2*dp(16)).coerceAtLeast(0)
-        var height=2*dp(12)
-        visibleItems.forEachIndexed {index,child->
-            // Curve, action row and progress explicitly fill; ordinary Text wraps its constraint.
-            child.measure(if(child===curve||child===buttonRow||child===progress)exact(inner)else atMost(inner),unspecified())
-            if(index>0)height+=dp(8)
-            height+=child.measuredHeight
-        }
+        curve.measure(exact(inner),unspecified())
+        buttonRow.measure(exact(inner),unspecified())
+        heading.measure(atMost(inner),unspecified())
+        hint.measure(atMost(inner),unspecified())
+        val errorHeight=if(error.visibility==VISIBLE) {
+            error.measure(atMost(inner),unspecified())
+            dp(8)+error.measuredHeight
+        } else 0
+        val height=dp(12)+3*dp(8)+heading.measuredHeight+hint.measuredHeight+curve.measuredHeight+buttonRow.measuredHeight+errorHeight
         setMeasuredDimension(resolveSize(width,w),resolveSize(height,h))
     }
     override fun onLayout(changed:Boolean,l:Int,t:Int,r:Int,b:Int) {
         var y=dp(12)
-        visibleItems.forEachIndexed {index,child->
-            if(index>0)y+=dp(8)
+        fun place(child:View) {
             val x=if(layoutDirection==LAYOUT_DIRECTION_RTL)width-dp(16)-child.measuredWidth else dp(16)
             child.layout(x,y,x+child.measuredWidth,y+child.measuredHeight)
-            y+=child.measuredHeight
         }
+        place(heading);y+=heading.measuredHeight+dp(8)
+        place(hint);y+=hint.measuredHeight+dp(8)
+        place(curve);y+=curve.measuredHeight+dp(8)
+        place(buttonRow)
+        if(error.visibility==VISIBLE) {y+=buttonRow.measuredHeight+dp(8);place(error)}
     }
     override fun onDetachedFromWindow() {gesture.cancel();super.onDetachedFromWindow()}
     override fun close() {
         if(closed)return
         closed=true
         try {gesture.cancel()}finally {
-            calibrate.close();cancel.close()
+            calibrate.close();fit.close()
             curve.onCommit=null;curve.onSelect=null
-            val presentation=if(state.sampledPeaks==null)uncalibratedSilenceCurve else state.config
+            val presentation=state.config
             curve.bind(presentation,selected().coerceIn(presentation.points.indices),null,state.maximumHz,
                 environment.palette.primary,environment.palette.ink,environment.palette.muted,false)
         }
@@ -248,26 +242,27 @@ private class SilenceBody(
 private class CalibrationButtonRow(
     context:Context,
     private val calibrate:View,
-    private val cancel:View,
-):ViewGroup(context) {
-    var showCancel=false
-        set(value){field=value;cancel.visibility=if(value)VISIBLE else GONE;requestLayout()}
-    init {importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO;addView(calibrate);addView(cancel)}
+    private val fit:View,
+):ViewGroup(context),app.smallthingz.reverb.NativeAndroidInteropHost {
+    override val nativeInteropRequests=app.smallthingz.reverb.NativeAndroidInteropRequests()
+    override fun requestDisallowInterceptTouchEvent(disallowIntercept:Boolean) {
+        nativeInteropRequests.request(disallowIntercept)
+        super.requestDisallowInterceptTouchEvent(disallowIntercept)
+    }
+    init {importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO;addView(calibrate);addView(fit)}
     override fun onMeasure(w:Int,h:Int) {
         val width=MeasureSpec.getSize(w)
-        if(showCancel)cancel.measure(atMost(width),unspecified())
-        val trailing=if(showCancel)cancel.measuredWidth else 0
+        fit.measure(atMost(width/3),unspecified())
+        val trailing=fit.measuredWidth
         calibrate.measure(exact((width-trailing).coerceAtLeast(0)),unspecified())
-        setMeasuredDimension(resolveSize(width,w),resolveSize(max(calibrate.measuredHeight,
-            if(showCancel)cancel.measuredHeight else 0),h))
+        setMeasuredDimension(resolveSize(width,w),resolveSize(max(calibrate.measuredHeight,fit.measuredHeight),h))
     }
     override fun onLayout(changed:Boolean,l:Int,t:Int,r:Int,b:Int) {
         val rtl=layoutDirection==LAYOUT_DIRECTION_RTL
         val first=if(rtl)width-calibrate.measuredWidth else 0
-        calibrate.layout(first,0,first+calibrate.measuredWidth,calibrate.measuredHeight)
-        if(showCancel) {
-            val x=if(rtl)0 else calibrate.measuredWidth
-            cancel.layout(x,0,x+cancel.measuredWidth,cancel.measuredHeight)
-        }
+        val top=(height-calibrate.measuredHeight)/2
+        calibrate.layout(first,top,first+calibrate.measuredWidth,top+calibrate.measuredHeight)
+        val fx=if(rtl)0 else width-fit.measuredWidth
+        fit.layout(fx,0,fx+fit.measuredWidth,fit.measuredHeight)
     }
 }

@@ -20,6 +20,7 @@ internal open class ReverbHomeScaffoldView(
     private var navigation = initialNavigation
     private var hasIncidents = initialHasIncidents
     private val noise = ReverbNoiseDrawable(resources, environment.palette.surface)
+    private val noiseColor = noise.colorTransition(this, environment.palette.surface)
     private val header = ReverbAppTopBarView(context, environment, nativeInputRoot)
     val topBar: ReverbAppTopBarView get() = header
     private var body: View? = null
@@ -56,7 +57,7 @@ internal open class ReverbHomeScaffoldView(
 
     open fun setEnvironment(value: ReverbViewEnvironment) {
         environment = value
-        noise.setBackgroundColor(value.palette.surface)
+        noiseColor.retarget(value.palette.surface)
         header.bind(value, hasIncidents, navigation, statusInsetPx = insets.statusTop)
         requestLayout()
     }

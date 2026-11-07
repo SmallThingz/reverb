@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.update
 internal const val SILENCE_SAMPLE_TIMED_MILLIS = 4_000L
 internal const val SILENCE_SAMPLE_EDGE_MILLIS = 500L
 internal const val SILENCE_SAMPLE_MINIMUM_HELD_INTERIOR_MILLIS = 500L
+internal const val SILENCE_SAMPLE_STARTUP_TIMEOUT_MILLIS = 3_000L
 internal const val SILENCE_SAMPLE_TIMING_UNAVAILABLE_MESSAGE = "Microphone timing is unavailable. Try again."
 
 internal data class SilenceSampleState(
@@ -22,6 +23,7 @@ internal data class SilenceSampleState(
     val held: Boolean = false,
     val elapsedMillis: Long = 0L,
     val tooShort: Boolean = false,
+    val errorCause: Throwable? = null,
 )
 
 /** UI signals control changes; only the audio owner touches the analyzer and PCM. */
@@ -38,7 +40,7 @@ internal class SilenceSampleRequest(held: Boolean = false, private val startedAt
     private var unclockedPcmObserved = false
     private var clockedPcmObserved = false
     private val control = AtomicReference<Control>(if (held) Control.Held else Control.Timed)
-    private val mutableDeadline = MutableStateFlow(startedAtNanos + (if (held) 60_000L else 10_000L) * 1_000_000L)
+    private val mutableDeadline = MutableStateFlow(startedAtNanos + SILENCE_SAMPLE_STARTUP_TIMEOUT_MILLIS * 1_000_000L)
     val deadlineNanos: StateFlow<Long> = mutableDeadline.asStateFlow()
     @Volatile private var controlWakeup: (() -> Unit)? = null
     private val mutableState = MutableStateFlow(SilenceSampleState(held = held))
@@ -60,8 +62,11 @@ internal class SilenceSampleRequest(held: Boolean = false, private val startedAt
         controlWakeup?.invoke()
     }
 
-    fun fail(message: String) {
-        mutableState.update { if (it.cancelled || cancelled.get()) it else it.copy(complete = false, error = message) }
+    fun fail(message: String, cause: Throwable? = null) {
+        mutableState.update {
+            if (it.cancelled || cancelled.get() || it.error != null) it
+            else it.copy(complete = false, error = message, errorCause = cause)
+        }
     }
 
     fun running(): Boolean = !cancelled.get() && !mutableState.value.complete && mutableState.value.error == null
@@ -104,7 +109,8 @@ internal class SilenceSampleRequest(held: Boolean = false, private val startedAt
         val changed = synchronized(controlLock) {
             if (!running() || !control.compareAndSet(Control.Held, Control.Timed)) false
             else {
-                mutableDeadline.value = startedAtNanos + 10_000_000_000L
+                mutableDeadline.value = startedAtNanos +
+                    (if (audioAdmitted) 10_000L else SILENCE_SAMPLE_STARTUP_TIMEOUT_MILLIS) * 1_000_000L
                 true
             }
         }
@@ -185,7 +191,14 @@ internal class SilenceSampleRequest(held: Boolean = false, private val startedAt
         val accepted = minOf(available, (limit - frames).coerceAtLeast(0L)).toInt()
         if (accepted > 0 && analyzer == null) {
             val admitted = synchronized(controlLock) {
-                if (!running()) false else { audioAdmitted = true; true }
+                if (!running()) false else {
+                    audioAdmitted = true
+                    // Only actual usable PCM earns the longer sampling window. A stalled
+                    // microphone bind/start must fail promptly even while the button is held.
+                    mutableDeadline.value = startedAtNanos +
+                        (if (control.get() is Control.Held) 60_000L else 10_000L) * 1_000_000L
+                    true
+                }
             }
             if (!admitted) return
             initialize(rate, channels, format)

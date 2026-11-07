@@ -16,15 +16,20 @@ private val committedDurableUiScope = CoroutineScope(SupervisorJob() + Dispatche
 internal fun nextDurableUiRetryDelayMillis(currentMillis: Long): Long =
     (currentMillis * 2L).coerceAtMost(DURABLE_UI_RETRY_MAX_MILLIS)
 
-internal suspend fun runDurableUiBooleanAttempt(
-    block: suspend () -> Boolean,
-): Boolean = try {
-    block()
+/** A false-only platform result carries no invented cause. Cancellation keeps coroutine semantics. */
+internal data class DurableUiAttemptResult(val succeeded: Boolean, val failure: Exception? = null)
+
+internal suspend fun runDurableUiAttempt(block: suspend () -> Boolean): DurableUiAttemptResult = try {
+    DurableUiAttemptResult(block())
 } catch (cancelled: CancellationException) {
     throw cancelled
-} catch (_: Exception) {
-    false
+} catch (failure: Exception) {
+    DurableUiAttemptResult(false, failure)
 }
+
+internal suspend fun runDurableUiBooleanAttempt(
+    block: suspend () -> Boolean,
+): Boolean = runDurableUiAttempt(block).succeeded
 
 internal suspend fun runCommittedDurableUiBooleanAttempt(
     block: suspend () -> Boolean,

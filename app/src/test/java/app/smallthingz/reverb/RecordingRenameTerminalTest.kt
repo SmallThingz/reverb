@@ -107,7 +107,7 @@ class RecordingRenameTerminalTest {
                 field.isAccessible = true
                 field.get(gate) is Function<*>
             })
-        assertFalse(gate.uncertain())
+        assertFalse(gate.uncertain(IOException("uncertain")))
         assertFalse(uncertain)
         assertFalse(hidden)
     }
@@ -155,6 +155,85 @@ class RecordingRenameTerminalTest {
         receiver().terminal(Result.failure(IOException("uncertain")))
 
         assertTrue(failures == 2)
+    }
+
+    @Test
+    fun renameReceiver_preservesOriginalFailureAcrossVisibleHiddenAndDetachedDelivery() {
+        for (mode in listOf("visible", "hidden", "detached")) {
+            val failure = IOException("provider failed", SecurityException("access denied"))
+            val delivered = mutableListOf<Throwable?>()
+            var hidden = 0
+            var finished = 0
+            val receiver = RenameResultReceiver(
+                onRenamed = { error("unexpected success") },
+                onRejected = { error("failure became rejection") },
+                onUncertain = { delivered += it },
+                onHiddenTerminal = { hidden++ },
+                isUiVisible = { mode == "visible" },
+                onDetachedSuccess = { error("unexpected success") },
+                onDetachedFailure = { delivered += it },
+                onTerminal = { finished++ },
+            )
+            if (mode == "detached") receiver.detachUi()
+            receiver.terminal(Result.failure(failure))
+            receiver.terminal(Result.failure(IOException("duplicate")))
+            assertEquals(1, delivered.size)
+            assertSame(failure, delivered.single())
+            assertEquals(if (mode == "hidden") 1 else 0, hidden)
+            assertEquals(1, finished)
+        }
+    }
+
+    @Test
+    fun renameReceiver_rejectionHasNoFabricatedCauseAndUncertainFallbackKeepsOperationCause() {
+        val operationFailure = IOException("uncertain storage result")
+        val callbackFailure = IllegalStateException("visible receiver failed")
+        var fallback: Throwable? = null
+        var terminalCount = 0
+        val receiver = RenameResultReceiver(
+            onRenamed = { error("unexpected success") }, onRejected = {},
+            onUncertain = { assertSame(operationFailure, it); throw callbackFailure },
+            onHiddenTerminal = {}, isUiVisible = { true }, onDetachedSuccess = {},
+            onDetachedFailure = { fallback = it }, onTerminal = { terminalCount++ },
+        )
+        val thrown = runCatching { receiver.terminal(Result.failure(operationFailure)) }.exceptionOrNull()
+        assertSame(callbackFailure, thrown)
+        assertSame(operationFailure, fallback)
+        assertEquals(1, terminalCount)
+
+        var rejectedDelivered = false
+        RenameResultReceiver(
+            onRenamed = {}, onRejected = {}, onUncertain = {}, onHiddenTerminal = {},
+            isUiVisible = { false }, onDetachedSuccess = {},
+            onDetachedFailure = { assertEquals(null, it); rejectedDelivered = true }, onTerminal = {},
+        ).terminal(Result.success(null))
+        assertTrue(rejectedDelivered)
+    }
+
+    @Test
+    fun cancelledRenameOwner_stillDeliversOriginalCauseToDetachedReceiver() = runBlocking {
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val failure = IOException("rename failed")
+        val delivered = mutableListOf<Throwable?>()
+        val receiver = RenameResultReceiver(
+            onRenamed = {}, onRejected = {}, onUncertain = { error("retired UI") },
+            onHiddenTerminal = {}, isUiVisible = { true }, onDetachedSuccess = {},
+            onDetachedFailure = { delivered += it }, onTerminal = {},
+        )
+        val owner = launch {
+            runCommittedRecordingRename(
+                rename = { started.complete(Unit); release.await(); throw failure },
+                onTerminal = receiver::terminal,
+            )
+        }
+        started.await()
+        receiver.detachUi()
+        owner.cancel()
+        release.complete(Unit)
+        owner.join()
+        assertEquals(1, delivered.size)
+        assertSame(failure, delivered.single())
     }
 
     @Test

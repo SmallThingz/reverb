@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Untranslated feature text uses the English fallback, as in strings.xml. -->
+<resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="MissingTranslation">
+    <string name="rename_recording_rejected">The rename was not completed. No reason was provided. Refresh the Library and try again.</string>
+    <string name="rename_recording_uncertain">The rename could not be confirmed. Refresh the Library before trying again.</string>
+    <string name="recording_open_failed">The recording could not be opened.</string>
+    <string name="recording_open_unverified">This recording could not be verified. Its saved link may be outdated, or its storage may be unavailable. Open the Library and refresh before trying again.</string>
+    <string name="recording_open_no_handler">No installed app can open this recording. Install an app that supports its audio format, then try again.</string>
+</resources>

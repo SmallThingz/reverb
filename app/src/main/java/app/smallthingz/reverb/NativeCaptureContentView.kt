@@ -76,7 +76,8 @@ internal class NativeCaptureContentView(
         val changedEnvironment = environment !== nextEnvironment
         current = state
         environment = nextEnvironment
-        rangeBack.bind(state.rangeSnapshotBuffer != null && state.body.visualizerVisible, owner::dismissRangeExport)
+        rangeBack.bind(state.rangeSnapshotBuffer != null && state.body.visualizerVisible && !state.rangeSavePending,
+            owner::dismissRangeExport)
         val slot = state.rangeSnapshotBuffer
         if (slot == null) {
             if (rangeView != null) disposeRange()
@@ -91,7 +92,7 @@ internal class NativeCaptureContentView(
             if (changedEnvironment) body.setEnvironment(environment)
             body.bind(state.body, state.selectedBuffer, owner.actions)
         } else {
-            if (sourceKeySlot != slot || sourceKeySnapshot !== state.rangeSnapshot) {
+            if (!state.rangeSavePending && (sourceKeySlot != slot || sourceKeySnapshot !== state.rangeSnapshot)) {
                 sourceKeySlot = slot; sourceKeySnapshot = state.rangeSnapshot
                 val controller = if (slot == BufferSlot.ONE_SHOT) state.body.oneShotController else state.body.loopingController
                 sourceGeometry = rangeMorphSourceGeometry(lastHomeRoot, lastHomeBlob,
@@ -156,14 +157,15 @@ internal class NativeCaptureContentView(
         val range = rangeOwner ?: return
         val config = renderedRangeConfig ?: return
         range.bind(current.rangeSnapshot, sourceGeometry, owner.rangeExportLimitSeconds(config),
-            backProgress, current.body.visualizerVisible, ::rangeRendered)
+            backProgress, current.body.visualizerVisible && !current.rangeSavePending, ::rangeRendered)
     }
 
     private fun rangeRendered(state: RangeExportEditorState, frame: NativeRangeExportPresentation) {
         if (closed) return
         val slot = rangeOwner?.selectedBuffer ?: return
         val config = renderedRangeConfig ?: return
-        rangeView?.bind(environment, frame, slot, owner::dismissRangeExport) {
+        val visibleFrame = if (current.rangeSavePending) frame.copy(interactionReady = false, admissionPending = true) else frame
+        rangeView?.bind(environment, visibleFrame, slot, owner::dismissRangeExport) {
             owner.submitRangeExport(state.startSeconds, state.endSeconds, config)
         }
         // Existing text objects read current paragraphs/geometry lazily. Refresh membership only

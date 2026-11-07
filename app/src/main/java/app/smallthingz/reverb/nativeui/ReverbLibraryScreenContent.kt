@@ -15,6 +15,7 @@ import app.smallthingz.reverb.NativeLibraryPresentation
 import app.smallthingz.reverb.NativeRecordingRenameCallbacks
 import app.smallthingz.reverb.NativeViewPhasePointerNode
 import app.smallthingz.reverb.RecordingEntity
+import app.smallthingz.reverb.RecordingPlaybackRequest
 import app.smallthingz.reverb.R
 import app.smallthingz.reverb.libraryEmptyStateVisible
 import kotlinx.coroutines.CoroutineScope
@@ -63,7 +64,10 @@ internal class ReverbLibraryScreenContent(
     private var input = initial
     private var presentation: NativeLibraryPresentation? = null
     private var closed = false
-    private val scrollRestoration = NativeLibraryScrollRestoration(restoredScrollPosition)
+    private val scrollRestoration = NativeLibraryScrollRestoration(restoredScrollPosition.takeIf { initial.owner.active })
+    private val playbackReveal = NativeRecordingRevealRequest(
+        scrollRestoration.consumeReveal(), scrollRestoration.consumeCancelledReveal())
+    private var pendingRevealNeedsReconciliation = playbackReveal.pendingRecordingId != null
     private class RenameLifetime(val recordingId: String, val sheet: NativeRecordingRenameSheet)
     private class InfoLifetime(val recordingId: String, val sheet: NativeRecordingInfoSheet)
     private var renameSheet: RenameLifetime? = null
@@ -88,7 +92,7 @@ internal class ReverbLibraryScreenContent(
         accessibilityManager, initial.owner, ::publish)
 
     private val pull = NativeLibraryPullRefreshOwner(animationScope, environment.textDensity,
-        initialRefreshing = false, ancestor = nested, onRefresh = { owner.refresh(showSpinner = true) })
+        initialRefreshing = false, ancestor = nested, onRefresh = { owner.refresh(showSpinner = true, userInitiated = true) })
     private val refreshIndicator = ReverbLibraryPullRefreshIndicator(context, environment, pull,
         frames, animationScope, durationScale)
     val nestedScroll: NativeVerticalNestedHost get() = pull.nested
@@ -118,6 +122,8 @@ internal class ReverbLibraryScreenContent(
                     }
                 }
             }
+        }, onRetryFailedSaves = owner::retryFailedSaves, onRowNodesChanged = {
+            if (!closed) changedNodes()
         })
     private val makeStatus = {
         ReverbLibraryStatusView(context, environment, frames, animationScope, pull.nested, inputRoot, durationScale)
@@ -131,12 +137,23 @@ internal class ReverbLibraryScreenContent(
         addView(toolbar)
         addView(body)
         body.addView(refreshIndicator)
+        list.onPendingRecordingRevealCancelled = {
+            playbackReveal.cancel()
+            pendingRevealNeedsReconciliation = false
+        }
     }
 
     fun bind(next: NativeLibraryScreenInput, nextEnvironment: ReverbViewEnvironment = environment) {
         if (closed) return
         val environmentChanged = environment !== nextEnvironment
         val insetsChanged = input.scaffoldInsets != next.scaffoldInsets
+        val opening = !input.owner.active && next.owner.active
+        if (!next.owner.active) list.cancelPendingRecordingReveal()
+        if (opening) {
+            scrollRestoration.openedFromHome()
+            list.openAtTop()
+            status?.openAtTop()
+        }
         input = next
         environment = nextEnvironment
         if (environmentChanged) {
@@ -157,7 +174,27 @@ internal class ReverbLibraryScreenContent(
     fun saveScrollPosition(): NativeLibrarySavedScrollPosition = scrollRestoration.save(
         currentList = if (listVisible) list.savePosition() else null,
         currentEmpty = if (bodyMode == LibraryBodyMode.EMPTY) status?.emptyScrollPosition else null,
+        currentReveal = playbackReveal.pendingRecordingId ?: list.pendingRecordingRevealId,
+        currentCancelledRevealToken = playbackReveal.cancelledRequestToken,
     )
+
+    fun openSavedRecording(request: RecordingPlaybackRequest, finished: () -> Unit) {
+        if (closed || playbackReveal.isPending(request.token)) return
+        list.cancelPendingRecordingReveal()
+        val revealGeneration = playbackReveal.begin(request.token)
+        owner.requestPlayback(request, beforePlayback = {
+            leases.toList().forEach { it.prepareOrdinaryPlayback() }
+        }) { recording ->
+            if (!closed) {
+                if (playbackReveal.complete(revealGeneration, recording?.id)) {
+                    pendingRevealNeedsReconciliation = false
+                    presentation?.let(::publish)
+                }
+                // Input revokes only the visual jump, not the accepted transport completion.
+                finished()
+            }
+        }
+    }
 
     private fun currentRecording(id: String): RecordingEntity? =
         presentation?.recordings?.firstOrNull { it.id == id }
@@ -178,13 +215,18 @@ internal class ReverbLibraryScreenContent(
             next.copy(list = next.list.copy(screenActive = false))
         } else next
         presentation = value
-        pull.bind(value.isRefreshing) { owner.refresh(showSpinner = true) }
+        if (pendingRevealNeedsReconciliation && value.hasLoaded) {
+            // Restoring this UI request must never replay the already-consumed transport command.
+            if (value.recordings.none { it.id == playbackReveal.pendingRecordingId }) playbackReveal.clearPending()
+            pendingRevealNeedsReconciliation = false
+        }
+        pull.bind(value.isRefreshing) { owner.refresh(showSpinner = true, userInitiated = true) }
         fallbackBack.isEnabled = input.owner.active && value.list.expandedOwner != null && value.selectedCount == 0
         selectionBack.bind(input.owner.active && value.selectedCount > 0, owner::clearSelection)
         toolbar.bind(toolbarState(value), toolbarActions())
         val mode = when {
-            value.list.items.isEmpty() && !value.hasLoaded ->
-                if (value.loadFailed) LibraryBodyMode.FAILED else LibraryBodyMode.LOADING
+            value.list.items.isEmpty() && value.loadFailed -> LibraryBodyMode.FAILED
+            value.list.items.isEmpty() && !value.hasLoaded -> LibraryBodyMode.LOADING
             libraryEmptyStateVisible(value.hasLoaded, value.list.items.isEmpty(), value.isRefreshing) ->
                 LibraryBodyMode.EMPTY
             else -> null
@@ -199,7 +241,10 @@ internal class ReverbLibraryScreenContent(
                 listVisible = true
             }
             list.submit(value.list)
-            restoredList?.let(list::restorePosition)
+            restoredList?.let { list.restorePosition(it, cancelRecordingReveal = false) }
+            if (!pendingRevealNeedsReconciliation) playbackReveal.pendingRecordingId?.let { id ->
+                if (list.revealRecording(id)) playbackReveal.clearPending()
+            }
         } else {
             if (listVisible) {
                 // Real source branch disposal, unlike a hidden retained screen.
@@ -211,7 +256,8 @@ internal class ReverbLibraryScreenContent(
             val restoredEmpty = if (mode == LibraryBodyMode.EMPTY && bodyMode != LibraryBodyMode.EMPTY)
                 scrollRestoration.consumeEmpty() else null
             bodyMode = mode
-            current.bind(mode, restoredEmpty) { owner.refresh(showSpinner = true) }
+            current.setPresentationActive(value.list.screenActive)
+            current.bind(mode, restoredEmpty) { owner.refresh(showSpinner = true, userInitiated = true) }
         }
         val notice = value.undo
         if (notice == null) {
@@ -367,6 +413,7 @@ internal class ReverbLibraryScreenContent(
     override fun close() {
         if (closed) return
         closed = true
+        playbackReveal.cancel()
         var failure: Throwable? = null
         fun release(block: () -> Unit) {
             try { block() } catch (error: Throwable) {

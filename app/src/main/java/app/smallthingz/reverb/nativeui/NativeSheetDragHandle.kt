@@ -16,6 +16,7 @@ import app.smallthingz.reverb.NativeClickPhaseHost
 import app.smallthingz.reverb.ReverbClickPhaseEndpoint
 import kotlin.math.max
 import kotlin.math.roundToInt
+import smallthingz.ui.animation.view.ViewColorTransition
 
 /** M3's32dp handle box with22dp vertical padding;48dp is touch expansion, not layout width. */
 internal class NativeSheetDragHandle(
@@ -145,9 +146,12 @@ internal class NativeSheetDragHandle(
         private val paint=Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
             color=reverbColorWithAlpha(environment.palette.onSurfaceVariant,.45f)
         }
+        private val colorMotion:ViewColorTransition by lazy {ViewColorTransition(this,intArrayOf(paint.color),{
+            paint.color=colorMotion.color(0);invalidate()
+        })}
         init {contentDescription=context.getString(app.smallthingz.reverb.R.string.native_sheet_drag_handle_description)
             importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_YES;isScreenReaderFocusable=false}
-        fun bindColor(color:Int) {paint.color=reverbColorWithAlpha(color,.45f);invalidate()}
+        fun bindColor(color:Int) {colorMotion.retarget(reverbColorWithAlpha(color,.45f))}
         override fun onDraw(canvas:Canvas) {
             val r=minOf(width,height)*.5f
             canvas.drawRoundRect(0f,0f,width.toFloat(),height.toFloat(),r,r,paint)

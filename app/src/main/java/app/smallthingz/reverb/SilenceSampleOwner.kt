@@ -19,21 +19,21 @@ internal class SilenceSampleOwner(
         override fun onServiceConnected(name: ComponentName, binder: IBinder) {
             if (released || !request.running()) return
             val service = (binder as? ReverbService.BackgroundRecorderBinder)?.service
-            if (service == null) request.fail(context.getString(R.string.silence_sample_failed))
+            if (service == null) request.fail(context.getString(R.string.failure_sampling_connection))
             // The audio queue owns initialization and requested/operational configuration.
             else service.sampleSilence(request, expectedInput)
         }
-        override fun onServiceDisconnected(name: ComponentName) { request.fail(context.getString(R.string.silence_sample_failed)) }
-        override fun onNullBinding(name: ComponentName) { request.fail(context.getString(R.string.silence_sample_failed)); release() }
-        override fun onBindingDied(name: ComponentName) { request.fail(context.getString(R.string.silence_sample_failed)); release() }
+        override fun onServiceDisconnected(name: ComponentName) { request.fail(context.getString(R.string.failure_sampling_connection)) }
+        override fun onNullBinding(name: ComponentName) { request.fail(context.getString(R.string.failure_sampling_connection)); release() }
+        override fun onBindingDied(name: ComponentName) { request.fail(context.getString(R.string.failure_sampling_connection)); release() }
     }
 
     override fun start() {
         check(!bound && !released)
         try {
             bound = context.bindService(Intent(context, ReverbService::class.java), connection, Context.BIND_AUTO_CREATE)
-            if (!bound) request.fail(context.getString(R.string.silence_sample_failed))
-        } catch (error: RuntimeException) { request.fail(error.message ?: context.getString(R.string.silence_sample_failed)) }
+            if (!bound) request.fail(context.getString(R.string.failure_sampling_connection))
+        } catch (error: RuntimeException) { request.fail(context.getString(R.string.silence_sample_failed), error) }
     }
 
     fun release() {
@@ -43,7 +43,7 @@ internal class SilenceSampleOwner(
             bound = false
             try { context.unbindService(connection) }
             catch (error: RuntimeException) {
-                AppFeedbackCenter.post(context.getString(R.string.silence_sample_failed), FeedbackTone.ERROR)
+                AppFeedbackCenter.post(actionableErrorMessage(context, context.getString(R.string.silence_sample_failed), error), FeedbackTone.ERROR)
                 android.util.Log.w("SilenceSample", "Unable to release sampling binding", error)
             }
         }

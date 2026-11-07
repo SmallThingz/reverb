@@ -114,7 +114,7 @@ internal class NativeSettingsPersistence(
         // Once the recovery/preferences transaction starts, a configuration change or Activity
         // disposal may cancel only the UI tail. A successful durable commit must still reach the
         // surviving recorder (or stopped tile fallback) before this section can terminate.
-        val persisted = runDurableUiBooleanAttempt {
+        val persisted = runDurableUiAttempt {
             processSettingsCommitBarrier.runAcceptedSave {
                 val committed = withContext(Dispatchers.IO) {
                 withRetentionPersistenceLock {
@@ -190,8 +190,8 @@ internal class NativeSettingsPersistence(
                 committed
             }
         }
-        if(!persisted) {
-            AppFeedbackCenter.post(resources.getString(R.string.recorder_state_persist_failed),FeedbackTone.ERROR)
+        if(!persisted.succeeded) {
+            AppFeedbackCenter.post(actionableErrorMessage(context, resources.getString(R.string.recorder_state_persist_failed), persisted.failure),FeedbackTone.ERROR)
             return null
         }
         return committedOutputFormat
@@ -218,7 +218,7 @@ internal class NativeSettingsPersistence(
                 // committed stopped settings on the tile IO worker.
                 refreshStoppedQuickTileFallback()
                 AppFeedbackCenter.post(
-                    resources.getString(R.string.settings_apply_failed),
+                    actionableErrorMessage(appContext, resources.getString(R.string.settings_apply_failed), it),
                     FeedbackTone.ERROR,
                 )
             }

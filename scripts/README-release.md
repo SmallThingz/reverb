@@ -15,8 +15,8 @@ that exact failure for 0.1.1, followed by a separate dependency-metadata rejecti
 
    ```sh
    python3 scripts/test_verify_release.py
-   python3 scripts/verify_release.py v0.1.3-rc2 \
-     .maintenance/release-0.1.3-rc2-20261029/reverb-0.1.3-rc2.apk \
+   python3 scripts/verify_release.py v0.1.3-rc3 \
+     .maintenance/release-0.1.3-rc3-20261107/reverb-0.1.3-rc3.apk \
      --build-tools ../../.android/sdk/build-tools/37.0.0
    ```
 
@@ -37,7 +37,7 @@ that exact failure for 0.1.1, followed by a separate dependency-metadata rejecti
 `0.1.2-rc1` uses Android version code 3. Stable `0.1.2` uses code 4; every later
 public APK must use a higher code. Never reuse a published version code.
 The source-only `0.1.3-rc1` was withdrawn before APK publication; `0.1.3-rc2`
-advances the app version code to 6.
+advances the app version code to 6. `0.1.3-rc3` uses code 7.
 
 Stable releases and release candidates are intended for F-Droid pickup as well as GitHub. Keep
 `versionCode` and `versionName` as literals in `android.defaultConfig`: the current
@@ -45,8 +45,8 @@ F-Droid Gradle parser cannot resolve arbitrary variables. The signing guard read
 that same Android configuration instead of maintaining a second version constant.
 
 Verify the current upstream `check_tags` and Gradle parser against the exact release
-tag and the current central fdroiddata metadata. They must select `0.1.3-rc2` (6),
-and its `Binaries` URL must resolve to `reverb-0.1.3-rc2.apk` on `v0.1.3-rc2`.
+tag and the current central fdroiddata metadata. They must select `0.1.3-rc3` (7),
+and its `Binaries` URL must resolve to `reverb-0.1.3-rc3.apk` on `v0.1.3-rc3`.
 Check the central `UpdateCheckMode` and `AutoUpdateMode` rather than assuming that
 GitHub's prerelease label creates a separate F-Droid beta channel. Future prereleases
 must leave GitHub's latest stable release intact.

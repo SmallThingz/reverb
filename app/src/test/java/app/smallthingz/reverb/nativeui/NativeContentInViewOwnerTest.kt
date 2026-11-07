@@ -12,6 +12,7 @@ import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.job
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
@@ -22,6 +23,29 @@ import org.junit.Test
 
 /** Host continuation tests; these do not qualify View geometry or actual Android frame phases. */
 class NativeContentInViewOwnerTest {
+    @Test(timeout = 5_000) fun cancelledRequesterDoesNotLaunchAnAnimationOrPoisonTheNextRequest() = runBlocking {
+        val fixture = Fixture(this)
+        val cancelled = launch(start = CoroutineStart.UNDISPATCHED) {
+            coroutineContext.job.cancel()
+            fixture.content.bringChildIntoView { fixture.bounds(140f, 170f) }
+        }
+        cancelled.join()
+        assertTrue(cancelled.isCancelled)
+        assertFalse(fixture.content.isAnimationRunning)
+        assertFalse(fixture.state.isScrollInProgress)
+        assertEquals(0, fixture.state.value)
+        assertEquals(0, fixture.frames.delivered)
+
+        val live = launch(start = CoroutineStart.UNDISPATCHED) {
+            fixture.content.bringChildIntoView { fixture.bounds(140f, 170f) }
+        }
+        fixture.frames.advanceUntil { live.isCompleted && !fixture.content.isAnimationRunning }
+        live.join()
+        assertFalse(live.isCancelled)
+        assertEquals(90, fixture.state.value)
+        assertFalse(fixture.state.isScrollInProgress)
+    }
+
     @Test(timeout = 5_000) fun offscreenRequestMovesActualRetainedPositionThenCompletes() = runBlocking {
         val fixture = Fixture(this)
         val request = launch(start = CoroutineStart.UNDISPATCHED) {

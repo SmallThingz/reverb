@@ -49,9 +49,18 @@ Builds:
     prebuild:
       - cd .. && python3 scripts/bootstrap-native-ui.py
 
+  - versionName: 0.1.3-rc3
+    versionCode: 7
+    commit: v0.1.3-rc3
+    subdir: app
+    gradle:
+      - yes
+    prebuild:
+      - cd .. && python3 scripts/bootstrap-native-ui.py
+
 AllowedAPKSigningKeys: 3866bc43d3dd58bc0cfa9c716a93aaa6f34abdfaa7315a3b924079397d1decfe
 
 AutoUpdateMode: Version
 UpdateCheckMode: Tags
-CurrentVersion: 0.1.3-rc2
-CurrentVersionCode: 6
+CurrentVersion: 0.1.3-rc3
+CurrentVersionCode: 7

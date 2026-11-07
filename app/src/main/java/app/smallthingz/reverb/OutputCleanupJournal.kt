@@ -20,6 +20,7 @@ private const val OUTPUT_CLEANUP_RECORD_VERSION = "v3"
 private const val VERIFIED_EXPORT_STAGING_VERSION_V1 = "v1"
 private const val VERIFIED_EXPORT_STAGING_VERSION_V2 = "v2"
 private const val VERIFIED_EXPORT_STAGING_VERSION = "v3"
+private const val VERIFIED_EXPORT_STAGING_JOB_VERSION = "v4"
 private val outputCleanupJournalLock = Any()
 private val verifiedExportStagingLock = Any()
 
@@ -51,6 +52,7 @@ internal data class VerifiedExportStagingRecord(
     val fileKey: String?,
     val providerIdentity: String?,
     val finalDisplayName: String? = null,
+    val jobId: String? = null,
 )
 
 internal data class VerifiedExportStagingRecovery(
@@ -163,14 +165,16 @@ internal fun decodePendingOutputCleanupRecord(raw: String): PendingOutputCleanup
 
 internal fun encodeVerifiedExportStagingRecord(record: VerifiedExportStagingRecord): String =
     encodeCleanupRecord(
-        if (record.finalDisplayName == null) VERIFIED_EXPORT_STAGING_VERSION_V2 else VERIFIED_EXPORT_STAGING_VERSION,
+        if (record.jobId != null) VERIFIED_EXPORT_STAGING_JOB_VERSION
+        else if (record.finalDisplayName == null) VERIFIED_EXPORT_STAGING_VERSION_V2 else VERIFIED_EXPORT_STAGING_VERSION,
         record.storageType,
         record.id,
         record.byteCount,
         record.sha256Hex,
         record.fileKey,
         record.providerIdentity,
-    ) + record.finalDisplayName?.let { "|" + encodeCleanupField(it) }.orEmpty()
+    ) + record.finalDisplayName?.let { "|" + encodeCleanupField(it) }.orEmpty() +
+        record.jobId?.let { "|" + encodeCleanupField(it) }.orEmpty()
 
 internal fun decodeVerifiedExportStagingRecord(raw: String): VerifiedExportStagingRecord? {
     val parts = raw.split('|')
@@ -178,19 +182,25 @@ internal fun decodeVerifiedExportStagingRecord(raw: String): VerifiedExportStagi
     val expectedSize = when (version) {
         VERIFIED_EXPORT_STAGING_VERSION_V1, VERIFIED_EXPORT_STAGING_VERSION_V2 -> 7
         VERIFIED_EXPORT_STAGING_VERSION -> 8
+        VERIFIED_EXPORT_STAGING_JOB_VERSION -> 9
         else -> return null
     }
     if (parts.size != expectedSize) return null
     val storageType = when (parts[0]) {
         VERIFIED_EXPORT_STAGING_VERSION_V1 -> RecordingStorageType.fromLegacyName(parts[1])
-        VERIFIED_EXPORT_STAGING_VERSION_V2, VERIFIED_EXPORT_STAGING_VERSION ->
+        VERIFIED_EXPORT_STAGING_VERSION_V2, VERIFIED_EXPORT_STAGING_VERSION, VERIFIED_EXPORT_STAGING_JOB_VERSION ->
             parts[1].toIntOrNull()?.let(RecordingStorageType::fromStorageCode)
         else -> null
     } ?: return null
-    val finalDisplayName = if (version == VERIFIED_EXPORT_STAGING_VERSION) {
+    val finalDisplayName = if (version == VERIFIED_EXPORT_STAGING_VERSION || version == VERIFIED_EXPORT_STAGING_JOB_VERSION) {
         decodeRecordingBasename(parts[7]) ?: return null
     } else null
     val fields = decodeCleanupRecordFields(parts, storageType, allowZeroBytes = false) ?: return null
+    val jobId = if (version == VERIFIED_EXPORT_STAGING_JOB_VERSION) {
+        val decoded = decodeCleanupField(parts[8]) ?: return null
+        if (runCatching { java.util.UUID.fromString(decoded).toString() }.getOrNull() != decoded) return null
+        decoded
+    } else null
     return VerifiedExportStagingRecord(
         fields.storageType,
         fields.id,
@@ -199,6 +209,7 @@ internal fun decodeVerifiedExportStagingRecord(raw: String): VerifiedExportStagi
         fields.fileKey,
         fields.providerIdentity,
         finalDisplayName,
+        jobId,
     )
 }
 
@@ -411,6 +422,7 @@ internal fun putVerifiedExportStaging(
     context: Context,
     target: RecordingOutputTarget,
     fingerprint: StableOutputFingerprint,
+    jobId: String? = null,
 ): Boolean {
     if (!target.staging || fingerprint.digest.byteCount <= 0L || !isDirectChildRecordingName(target.displayName)) return false
     when (target.storageType) {
@@ -427,6 +439,7 @@ internal fun putVerifiedExportStaging(
         fileKey = fingerprint.fileKey,
         providerIdentity = fingerprint.providerIdentity,
         finalDisplayName = target.displayName,
+        jobId = jobId,
     )
     return synchronized(verifiedExportStagingLock) {
         val current = verifiedExportStagingEntriesLocked(context)
@@ -472,6 +485,50 @@ internal fun removeVerifiedExportStaging(
     writeVerifiedExportStagingEntriesLocked(context, updated)
 }
 
+internal fun verifiedExportStagingEntriesAfterJobCompletion(
+    entries: Set<String>,
+    jobId: String,
+    storageType: RecordingStorageType,
+    completedDigest: CopyDigest,
+): Set<String>? {
+    if (runCatching { java.util.UUID.fromString(jobId).toString() }.getOrNull() != jobId ||
+        completedDigest.byteCount <= 0L || completedDigest.sha256.size != 32) return null
+    val expectedHash = completedDigest.sha256.toHexString()
+    val remaining = LinkedHashSet<String>()
+    for (raw in entries) {
+        val record = decodeVerifiedExportStagingRecord(raw)
+        if (record == null) {
+            val parts = raw.split('|')
+            val recoveredJob = if (parts.firstOrNull() == VERIFIED_EXPORT_STAGING_JOB_VERSION)
+                parts.getOrNull(8)?.let(::decodeCleanupField)?.let { candidate ->
+                    runCatching { java.util.UUID.fromString(candidate).toString() }.getOrNull()
+                } else null
+            if (recoveredJob == jobId) return null
+            remaining += raw
+        } else if (record.jobId != jobId) {
+            remaining += raw
+        } else if (record.storageType != storageType || record.byteCount != completedDigest.byteCount ||
+            record.sha256Hex != expectedHash) {
+            return null
+        }
+    }
+    return remaining
+}
+
+/** The caller has just revalidated the exact durable published output. No source is deleted here. */
+internal fun removeVerifiedExportStagingForJob(
+    context: Context,
+    jobId: String,
+    storageType: RecordingStorageType,
+    completedFingerprint: StableOutputFingerprint,
+): Boolean = synchronized(verifiedExportStagingLock) {
+    val current = verifiedExportStagingEntriesLocked(context)
+    val updated = verifiedExportStagingEntriesAfterJobCompletion(current, jobId, storageType,
+        completedFingerprint.digest) ?: return@synchronized false
+    if (updated == current) return@synchronized true
+    writeVerifiedExportStagingEntriesLocked(context, updated)
+}
+
 private fun writeVerifiedExportStagingEntriesLocked(context: Context, entries: Set<String>): Boolean {
     val preferences = getRecorderPreferences(context)
     val current = preferences.requireDurableStringSet(PrefKey.VERIFIED_EXPORT_STAGING)
@@ -512,6 +569,8 @@ internal fun verifiedExportStagingRecoveryForFingerprint(
         val record = decodeVerifiedExportStagingRecord(raw) ?: continue
         if (record.storageType != storageType || record.id != id ||
             !verifiedExportStagingRecordMatches(record, fingerprint)) continue
+        // Durable jobs own their rename/recovery transaction, including its publication receipt.
+        if (record.jobId != null) return null
         found = true
         val name = record.finalDisplayName ?: continue
         if (finalName == null) finalName = name
@@ -775,6 +834,7 @@ internal fun readStableOutputFingerprint(
     id: String,
     preferredIdentity: String? = null,
     reuseVerifiedProviderRevision: Boolean = false,
+    requiredProviderObject: ProviderPayloadRevision? = null,
 ): StableOutputFingerprint? = runCatching {
     when (storageType) {
         RecordingStorageType.FILE -> readStableFileOutputFingerprint(File(id))
@@ -796,6 +856,8 @@ internal fun readStableOutputFingerprint(
                     !providerDescriptorMatchesIdentity(before, source.fd)
                 ) return@use null
                 val nativeBefore = nativeProviderPayloadRevision(source.fd)
+                if (requiredProviderObject != null &&
+                    !providerPayloadObjectMatches(requiredProviderObject, nativeBefore)) return@use null
                 val cached = if (reuseVerifiedProviderRevision) {
                     VerifiedProviderDigestCache.read(storageType, id, before, nativeBefore)
                 } else null
@@ -843,7 +905,7 @@ internal fun readStableFileOutputFingerprint(file: File): StableOutputFingerprin
     }
 }.getOrNull()
 
-private fun outputCleanupAssetState(
+internal fun outputCleanupAssetState(
     context: Context,
     storageType: RecordingStorageType,
     id: String,

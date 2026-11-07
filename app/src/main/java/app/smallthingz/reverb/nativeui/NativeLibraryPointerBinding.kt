@@ -48,7 +48,8 @@ internal class NativeLibraryPointerBinding(
         { content.bodyPointerView.width.toFloat() },
         { configuration.scaledTouchSlop.toFloat() },
         { 64f * content.pointerEnvironment.textDensity.density },
-        content::dismissFromEdge,
+        onEdgeDown = { listView?.sourceStopScroll?.invoke() },
+        dismiss = content::dismissFromEdge,
     )
     private val edgeNode = object : NativeViewPhasePointerNode {
         override val view get() = content.bodyPointerView
@@ -90,7 +91,7 @@ internal class NativeLibraryPointerBinding(
             listScroll = nextList?.let {
                 NativeLibraryScrollOwner(it, content.pointerEnvironment, frames, scope, content.nestedScroll, parentInterested)
             }
-            listNodes = listScroll?.let { java.util.Collections.unmodifiableList(listOf(it.observerNode, it.dragNode)) }
+            listNodes = listScroll?.let { java.util.Collections.unmodifiableList(listOf(it.observerNode, scrollNode(it.dragNode))) }
                 ?: emptyList()
         }
         val nextEmpty = content.emptyViewport
@@ -101,7 +102,7 @@ internal class NativeLibraryPointerBinding(
                 NativeVerticalPhaseBinding(it, { configuration.scaledTouchSlop.toFloat() },
                     { configuration.scaledMaximumFlingVelocity.toFloat() }, parentInterested)
             }
-            emptyNodes = emptyScroll?.let { java.util.Collections.unmodifiableList(it.nodes) }
+            emptyNodes = emptyScroll?.let { java.util.Collections.unmodifiableList(listOf(it.observerNode, scrollNode(it.dragNode))) }
                 ?: emptyList()
         }
         val obsolete = layouts.keys.filter { !it.isAttachedToWindow }
@@ -129,6 +130,7 @@ internal class NativeLibraryPointerBinding(
         return result
     }
     private fun interested(view: View, change: NativeDragPointerChange): Boolean {
+        if (edge.reservesScroll) return false
         var ancestor: View? = view
         while (ancestor != null && ancestor !== content) {
             if (ancestor === listView) return listScroll?.interested(change) == true || parentInterested(change)
@@ -136,6 +138,14 @@ internal class NativeLibraryPointerBinding(
             ancestor = ancestor.parent as? View
         }
         return parentInterested(change)
+    }
+
+    private fun scrollNode(node: NativeViewPhasePointerNode) = object : NativeViewPhasePointerNode {
+        override val view get() = node.view
+        private val dispatchScroll = node::dispatch
+        override fun dispatch(event: NativeDragPointerEvent, pass: NativePointerPass) =
+            edge.dispatchScroll(event, pass, dispatchScroll)
+        override fun cancel() = node.cancel()
     }
 
     private inner class Layout(private val view: View) : NativeViewPointerHitLayout {

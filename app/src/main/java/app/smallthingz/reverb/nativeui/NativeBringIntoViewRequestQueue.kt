@@ -64,17 +64,20 @@ internal class NativeBringIntoViewRequestQueue {
                     return false
                 }
 
-        // If the request is cancelled for any reason, remove it from the queue.
-        request.continuation.invokeOnCancellation { requests.remove(request) }
+        // A cancelled caller must not interrupt any still-live requests.
+        if (!request.continuation.isActive) return false
 
-        for (i in requests.indices.reversed()) {
-            val r = requests[i]
-            val rBounds = r.currentBounds() ?: continue
+        // Bounds and cancellation callbacks can synchronously remove queued requests.
+        for (r in requests.toList().asReversed()) {
+            if (r !in requests) continue
+            val rBounds = r.currentBounds()
+            if (!request.continuation.isActive) return false
+            val i = requests.indexOf(r)
+            if (i < 0 || rBounds == null) continue
             val intersection = requestBounds.intersect(rBounds)
             if (intersection == requestBounds) {
                 // The current item fully contains the new request, so insert it after.
-                requests.add(i + 1, request)
-                return true
+                return insert(i + 1, request)
             } else if (intersection != rBounds) {
                 // The new request and the current item do not fully overlap, so cancel the
                 // current item and all requests after it, remove them, then continue the
@@ -83,11 +86,9 @@ internal class NativeBringIntoViewRequestQueue {
                     CancellationException(
                         "bringIntoView call interrupted by a newer, non-overlapping call"
                     )
-                for (j in requests.size - 1 downTo i) {
-                    // This mutates the list while iterating, but since we're iterating
-                    // backwards in both cases, it's fine.
-                    // Cancelling the continuation will remove the request from the queue.
-                    requests[j].continuation.cancel(cause)
+                for (interrupted in requests.subList(i, requests.size).toList().asReversed()) {
+                    if (!request.continuation.isActive) return false
+                    interrupted.continuation.cancel(cause)
                 }
             }
             // Otherwise the new request fully contains the current item, so keep searching up
@@ -97,8 +98,14 @@ internal class NativeBringIntoViewRequestQueue {
         // No existing request contained the new one. Either the new requests contains all
         // existing requests and it should be the new head of the queue, or all other requests
         // were removed.
-        requests.add(0, request)
-        return true
+        return insert(0, request)
+    }
+
+    private fun insert(index: Int, request: Request): Boolean {
+        requests.add(index, request)
+        // Register after insertion: an already-cancelled continuation invokes this immediately.
+        request.continuation.invokeOnCancellation { requests.remove(request) }
+        return request.continuation.isActive
     }
 
     inline fun forEachFromSmallest(block: (bounds: Rect?) -> Unit) {

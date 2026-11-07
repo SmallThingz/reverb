@@ -50,4 +50,58 @@ class SettingsPendingScrollPositionTest {
         state.placed(clamped)
         assertEquals(clamped, state.save(clamped))
     }
+
+    @Test fun keyedRevealUsesCatalogAfterInsertionAndReorderBeforeLayout() {
+        val state = NativePendingListPosition(null)
+        state.request(NativeListSavedPosition(1, 0), key = "target")
+        assertEquals("target", state.requestedKey)
+        val actualPosition = NativeListSavedPosition(8, 13)
+        assertEquals(actualPosition, state.save(actualPosition))
+        val inserted = listOf("pending-header", "pending", "header", "target", "other")
+        assertEquals(NativeListSavedPosition(3, 0), state.pendingForPlacement(inserted.size, inserted::indexOf))
+        val reordered = listOf("other", "target", "header")
+        assertEquals(NativeListSavedPosition(1, 0), state.pendingForPlacement(reordered.size, reordered::indexOf))
+        assertEquals(true, state.hasKeyedRequest)
+        state.placed(NativeListSavedPosition(1, 0))
+        assertEquals(false, state.hasKeyedRequest)
+        assertEquals(null, state.pendingForPlacement(reordered.size, reordered::indexOf))
+    }
+
+    @Test fun removedRevealDoesNotFallBackToTheOldNumericRow() {
+        val state = NativePendingListPosition(null)
+        state.request(NativeListSavedPosition(1, 0), key = "removed")
+        val catalog = listOf("header", "unrelated")
+        assertEquals(null, state.pendingForPlacement(catalog.size, catalog::indexOf))
+        assertEquals(false, state.hasKeyedRequest)
+        val placed = NativeListSavedPosition(0, 19)
+        assertEquals(placed, state.save(placed))
+    }
+
+    @Test fun explicitTopRequestSupersedesPendingRecordingIdentity() {
+        val state = NativePendingListPosition(null)
+        state.request(NativeListSavedPosition(3, 0), key = "target")
+        state.request(NativeListSavedPosition(0, 0))
+        assertEquals(false, state.hasKeyedRequest)
+        assertEquals(NativeListSavedPosition(0, 0), state.pendingForPlacement(5) { error("obsolete key resolved") })
+    }
+
+    @Test fun userScrollCancelsOnlyKeyedRevealAndPreservesNumericRestoration() {
+        val state = NativePendingListPosition(null)
+        state.request(NativeListSavedPosition(3, 0), key = "target")
+        state.cancelKeyedRequest()
+        assertEquals(null, state.pendingForPlacement(5) { error("canceled key resolved") })
+        val restored = NativeListSavedPosition(2, 17)
+        state.request(restored)
+        state.cancelKeyedRequest()
+        assertEquals(restored, state.pendingForPlacement(5))
+    }
+
+    @Test fun keyedTargetAtOriginStillOwnsPendingPlacement() {
+        val state = NativePendingListPosition(null)
+        state.request(NativeListSavedPosition(0, 0), key = "target")
+        assertEquals(NativeListSavedPosition(0, 0), state.save(null))
+        assertEquals(true, state.hasKeyedRequest)
+        val catalog = listOf("pending", "target")
+        assertEquals(NativeListSavedPosition(1, 0), state.pendingForPlacement(catalog.size, catalog::indexOf))
+    }
 }

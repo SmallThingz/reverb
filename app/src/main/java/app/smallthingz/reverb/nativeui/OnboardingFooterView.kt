@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.animation.view.ViewColorTransition
+
 import android.content.Context
 import android.content.res.Configuration
 import android.graphics.Canvas
@@ -116,6 +118,7 @@ internal class OnboardingFooterView(
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
     private var state = OnboardingFooterState(0, 0, ready = false, finishing = false)
     private var palette: ReverbPalette? = null
+    private var dotColors:ViewColorTransition?=null
     private var boundConfiguration: Configuration? = null
     private var actions: FooterActions? = null
     private var buttonHeight = 0
@@ -166,6 +169,9 @@ internal class OnboardingFooterView(
         val old = state
         state = value
         palette = colors
+        val targets=IntArray(3) {if(it==value.page)colors.primary else colors.outlineVariant}
+        val dots=dotColors ?: ViewColorTransition(this,targets,{invalidate()}).also {dotColors=it}
+        dots.retarget(*targets)
         back.bind(
             context.getString(R.string.onboarding_back),
             enabled = !value.finishing && value.page > 0,
@@ -267,7 +273,7 @@ internal class OnboardingFooterView(
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        val colors = palette ?: return
+        val colors = dotColors ?: return
         val activeWidth = dp(18)
         val idleWidth = dp(6)
         val gap = dp(8)
@@ -280,7 +286,7 @@ internal class OnboardingFooterView(
             val index = if (rtl) 2 - visualIndex else visualIndex
             val dotWidth = if (state.page == index) activeWidth else idleWidth
             val start = x.roundToInt().toFloat()
-            paint.color = if (state.page == index) colors.primary else colors.outlineVariant
+            paint.color = colors.color(index)
             canvas.drawRoundRect(start, y.toFloat(), start + dotWidth, (y + dotHeight).toFloat(),
                 dotHeight / 2f, dotHeight / 2f, paint)
             x += dotWidth + gap
@@ -313,6 +319,7 @@ private class FooterButton(
 ) : ViewGroup(context), NativeClickPhaseHost, NativeMergedRowAccessibilityHost {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val label = ReverbParagraphView(context, style, density, resolver, android.graphics.Color.TRANSPARENT)
+    private var colorMotion: ViewColorTransition? = null
     var compactPadding = false
     private val accessibilityChildren = listOf(label)
     private val content = object : ViewGroup(context) {
@@ -429,9 +436,14 @@ private class FooterButton(
         isEnabled = enabled
         isFocusable = enabled
         label.setText(text)
-        label.setTextColor(content)
-        paint.color = container
-        invalidate()
+        val motion=colorMotion ?: ViewColorTransition(this,intArrayOf(container,content),{
+            colorMotion?.let {applyColors(it.color(0),it.color(1))}
+        }).also {colorMotion=it;applyColors(container,content)}
+        motion.retarget(container,content)
+    }
+
+    private fun applyColors(container:Int,content:Int) {
+        paint.color=container;label.setTextColor(transitionInk(colorMotion,container,content));invalidate()
     }
 
     fun bindTypography(style: TextStyle, density: Density, resolver: FontFamily.Resolver) {

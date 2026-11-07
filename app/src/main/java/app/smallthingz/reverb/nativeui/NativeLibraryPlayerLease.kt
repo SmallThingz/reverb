@@ -79,7 +79,7 @@ internal class NativeLibraryPlayerLease(
             onWaveformCached = library::waveformCached,
             onCollapse = library::collapse,
             // Source callback captures this bound revision; accepted work never redirects its target.
-            onPlaybackFailed = { library.playbackFailed(recording) },
+            onPlaybackFailed = { library.playbackFailed(recording, it) },
             onBusyChange = { library.localBusy(recordingId, it) })
         val next = NativeInlinePlayerInput(recording, trimRequested,
             screenActive && expanded && attached, owner,
@@ -126,6 +126,10 @@ internal class NativeLibraryPlayerLease(
         controller?.backFrame(active, progress, direction)
     }
     fun finishBack(ownerAtRegistration: InlinePlaybackRowOwner?) = controller?.finishBack(ownerAtRegistration)
+
+    fun prepareOrdinaryPlayback() {
+        controller?.exitTrimForOrdinaryPlayback()
+    }
 
     /** Exact leaves: source fine parent disappears when disabled; its disabled puck remains. */
     fun pointerNodes(view: View): List<NativeViewPhasePointerNode> = when {

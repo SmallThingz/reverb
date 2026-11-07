@@ -18,6 +18,7 @@ import app.smallthingz.reverb.NativeViewPointerHitLayout
 import app.smallthingz.reverb.NativeViewPhasePointerNode
 import app.smallthingz.reverb.NativeDragPointerChange
 import smallthingz.ui.geometry.Offset
+import smallthingz.ui.animation.view.ViewColorTransition
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -128,6 +129,7 @@ private class ButtonSurface(context:Context,private val host:NativeMaterialButto
     private var action=onClick
     private var closed=false
     private val fill=Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
+    private var colorMotion:ViewColorTransition?=null
     private val label=ReverbParagraphView(context,reverbButtonTextStyle(),environment.textDensity,
         environment.sharedFontResolver,environment.palette.primary)
     private val accessibilityChildren=listOf(label)
@@ -211,9 +213,17 @@ private class ButtonSurface(context:Context,private val host:NativeMaterialButto
         val ink=if(enabled){if(errorColors)palette.onErrorContainer else if(filled)palette.onPrimary else palette.primary}else reverbColorWithAlpha(palette.onSurface,.38f)
         interactions.bind(enabled,ink)
         isEnabled=enabled;isFocusable=enabled
-        label.setText(text);label.setTextColor(ink);icon?.setTint(ink);content.invalidate()
-        fill.color=if(!filled)android.graphics.Color.TRANSPARENT else if(enabled){if(errorColors)palette.errorContainer else palette.primary}else reverbColorWithAlpha(palette.onSurface,.12f)
-        invalidate()
+        label.setText(text)
+        val container=if(!filled)android.graphics.Color.TRANSPARENT else if(enabled){if(errorColors)palette.errorContainer else palette.primary}else reverbColorWithAlpha(palette.onSurface,.12f)
+        val motion=colorMotion ?: ViewColorTransition(this,intArrayOf(container,ink),{
+            colorMotion?.let { applyColors(it.color(0),it.color(1)) }
+        }).also {colorMotion=it;applyColors(container,ink)}
+        motion.retarget(container,ink)
+    }
+    private fun applyColors(container:Int,ink:Int) {
+        val readable=transitionInk(colorMotion,container,ink)
+        fill.color=container;label.setTextColor(readable);icon?.setTint(readable)
+        content.invalidate();invalidate()
     }
     fun bindEnvironment(next:ReverbViewEnvironment) {
         if(closed || environment===next)return
@@ -252,6 +262,7 @@ private class ButtonSurface(context:Context,private val host:NativeMaterialButto
         var failure:Throwable?=null
         fun release(block:()->Unit){try{block()}catch(error:Throwable){if(failure==null)failure=error else if(failure!==error)failure!!.addSuppressed(error)}}
         release(interactions::cancel)
+        release {colorMotion?.close();colorMotion=null}
         val clip=restoreClip;restoreClip=null
         release{clip?.invoke()}
         val owned=leases.toList();leases.clear()

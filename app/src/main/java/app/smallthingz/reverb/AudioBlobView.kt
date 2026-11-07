@@ -2,15 +2,19 @@ package app.smallthingz.reverb
 
 import android.content.Context
 import android.graphics.Canvas
+import android.graphics.ComposeShader
 import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.PorterDuff
+import android.graphics.RadialGradient
 import android.graphics.RuntimeShader
 import android.graphics.Shader
 import android.os.Build
 import android.view.Choreographer
 import android.view.View
 import androidx.annotation.RequiresApi
+import smallthingz.ui.animation.view.ViewColorTransition
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.max
@@ -31,6 +35,60 @@ internal class AudioBlobView(context: Context) : View(context) {
     private var active = false
     private var enabledState = true
     private var saving = false
+    private var skipSilenceEnabled = false
+    private var silenceSuppressed = false
+    private var currentSilence = 0f
+    private var currentPresence = 0f
+    private val targetPresence: Float get() = if (active && !saving) 1f else 0f
+    var onReadoutAppearanceChanged: ((Boolean, Boolean, Boolean) -> Unit)? = null
+        set(value) { field = value; lastReadoutAppearance = -1; publishReadoutAppearance() }
+    private var lastReadoutAppearance = -1
+    private var materialTransitionOwnsPalette = false
+    private var materialPrimary = 0
+    private var materialTertiary = 0
+    private var materialPaused = 0
+    private var readoutRadiusPixels = 0f
+    private var readoutBackground = 0
+    private var readoutAgslMin = 0f
+    private var readoutAgslMax = 1f
+    private var readoutFallbackMin = 0f
+    private var readoutFallbackMax = 1f
+
+    fun updateReadoutGeometry(radiusPixels: Float, background: Int, agslMin: Float = 0f, agslMax: Float = 1f,
+        fallbackMin: Float = 0f, fallbackMax: Float = 1f) {
+        if (readoutRadiusPixels == radiusPixels && readoutBackground == background &&
+            readoutAgslMin == agslMin && readoutAgslMax == agslMax &&
+            readoutFallbackMin == fallbackMin && readoutFallbackMax == fallbackMax) return
+        readoutRadiusPixels = radiusPixels
+        readoutBackground = background
+        readoutAgslMin = agslMin
+        readoutAgslMax = agslMax
+        readoutFallbackMin = fallbackMin
+        readoutFallbackMax = fallbackMax
+        publishReadoutAppearance()
+    }
+
+    fun readoutNeedsSupport(darkInk: Boolean): Boolean {
+        val size = minOf(width, height).toFloat()
+        if (size <= 0f || readoutRadiusPixels <= 0f) return true
+        val radius = readoutRadiusPixels / size
+        val base = currentBaseRadiusFraction()
+        val low = currentBands[0] * .34f + currentBands[1] * .30f + currentBands[2] * .21f + currentBands[3] * .15f
+        val high = currentBands[4] * .34f + currentBands[5] * .30f + currentBands[6] * .21f + currentBands[7] * .15f
+        val energy = audioBlobMotionEnergy(currentActivity, low, high, currentSilence) * currentLife * currentPresence
+        val fold = energy * (.043f + .035f * low + .018f * high)
+        val minimumBody = base - fold - .008f * currentLife * currentPresence
+        val covered = radius <= minimumBody - .012f
+        val fallback = renderer is FallbackRenderer
+        return audioBlobInkNeedsSupport(materialPrimary, materialTertiary, materialPaused,
+            currentLife, currentPresence, currentSilence, fallback, darkInk,
+            (radius / base).coerceIn(0f, 1f),
+            covered, readoutBackground, if (fallback) readoutFallbackMin else readoutAgslMin,
+            if (fallback) readoutFallbackMax else readoutAgslMax)
+    }
+    // The frame includes the recorder's applied enabled state. UI preference hydration is not authority.
+    private val targetSilence: Float
+        get() = if (active && !saving && silenceSuppressed) 1f else 0f
     private var renderingVisible = true
     private var framePosted = false
     private var shaderTimeSeconds = 0f
@@ -43,10 +101,56 @@ internal class AudioBlobView(context: Context) : View(context) {
     } else {
         FallbackRenderer()
     }
+    private var paletteMotion: ViewColorTransition? = null
+    private fun publishPalette() {
+        val colors = paletteMotion ?: return
+        setMaterialPalette(colors.color(0), colors.color(1), colors.color(2))
+        invalidate()
+    }
+
+    private fun setMaterialPalette(primary: Int, tertiary: Int, paused: Int) {
+        materialPrimary = audioBlobMaterialColor(primary)
+        materialTertiary = audioBlobMaterialColor(tertiary)
+        materialPaused = paused
+        renderer.setPalette(materialPrimary, materialTertiary, paused)
+        publishReadoutAppearance()
+    }
+
+    fun readoutUsesDarkInk(): Boolean = resolveReadoutInkAndSupport() and 1 != 0
+
+    private fun resolveReadoutInkAndSupport(): Int {
+        var darkInk = audioBlobUsesDarkInk(materialPrimary, materialTertiary, materialPaused, currentLife,
+            currentPresence, currentSilence, renderer is FallbackRenderer)
+        var supportNeeded = readoutNeedsSupport(darkInk)
+        if (supportNeeded && !readoutNeedsSupport(!darkInk)) {
+            darkInk = !darkInk
+            supportNeeded = false
+        }
+        return (if (darkInk) 1 else 0) or (if (supportNeeded) 4 else 0)
+    }
+
+    private fun publishReadoutAppearance() {
+        val listener = onReadoutAppearanceChanged ?: return
+        val resolvedInk = resolveReadoutInkAndSupport()
+        val geometryTransition = currentPresence != targetPresence || currentLife != targetLife
+        if (geometryTransition) materialTransitionOwnsPalette = true
+        // A palette tail may extend an owned capture transition, but idle theme changes
+        // must not create a new readout support field around the small resting body.
+        val transitioning = geometryTransition ||
+            (materialTransitionOwnsPalette && paletteMotion?.isInterpolating == true)
+        if (!transitioning) materialTransitionOwnsPalette = false
+        val appearance = resolvedInk or (if (transitioning) 2 else 0)
+        if (appearance == lastReadoutAppearance) return
+        lastReadoutAppearance = appearance
+        listener(appearance and 1 != 0, transitioning, appearance and 4 != 0)
+    }
 
     private val frameCallback = Choreographer.FrameCallback { frameTimeNanos ->
         framePosted = false
-        if (!shouldAnimate()) return@FrameCallback
+        if (!shouldAnimate()) {
+            lastFrameNanos = 0L
+            return@FrameCallback
+        }
         val dtSeconds = if (lastFrameNanos == 0L) {
             initialFrameDeltaSeconds()
         } else {
@@ -67,6 +171,7 @@ internal class AudioBlobView(context: Context) : View(context) {
 
     fun submitFrame(frame: ReverbService.VisualizationFrame) {
         val hadRecentSignal = hasRecentAudioSignal()
+        silenceSuppressed = frame.silenceSuppressed
         targetActivity = frame.activity.coerceIn(0f, 1f)
         val source = frame.bins
         var hasSignal = targetActivity > SIGNAL_ACTIVITY_THRESHOLD
@@ -97,6 +202,8 @@ internal class AudioBlobView(context: Context) : View(context) {
     }
 
     fun clearFrame() {
+        silenceSuppressed = false
+        currentSilence = 0f
         targetActivity = 0f
         targetBands.fill(0f)
         currentActivity = 0f
@@ -116,20 +223,29 @@ internal class AudioBlobView(context: Context) : View(context) {
         primary: Int,
         tertiary: Int,
         paused: Int,
+        skipSilenceEnabled: Boolean = false,
     ) {
         val stateChanged = this.active != active ||
-            enabledState != enabled || this.saving != saving || renderingVisible != visible
+            enabledState != enabled || this.saving != saving || renderingVisible != visible ||
+            this.skipSilenceEnabled != skipSilenceEnabled
         this.active = active
         enabledState = enabled
         this.saving = saving
+        this.skipSilenceEnabled = skipSilenceEnabled
         renderingVisible = visible
         targetLife = when {
             !enabled -> DISABLED_LIFE
             active && !saving -> 1f
             else -> COLLAPSED_LIFE
         }
-        val paletteChanged = renderer.setPalette(primary, tertiary, paused)
+        val colors = paletteMotion ?: ViewColorTransition(this, intArrayOf(primary, tertiary, paused),
+            { publishPalette() }).also {
+            paletteMotion = it
+            setMaterialPalette(primary, tertiary, paused)
+        }
+        if (visible) colors.retarget(primary, tertiary, paused) else colors.snap(primary, tertiary, paused)
         if (!active || saving) {
+            silenceSuppressed = false
             targetActivity = 0f
             targetBands.fill(0f)
             lastAudioSignalNanos = 0L
@@ -143,7 +259,8 @@ internal class AudioBlobView(context: Context) : View(context) {
             }
             ensureAnimationState()
         }
-        if (stateChanged || paletteChanged) invalidate()
+        if (stateChanged) invalidate()
+        publishReadoutAppearance()
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -156,13 +273,15 @@ internal class AudioBlobView(context: Context) : View(context) {
             activity = currentActivity,
             bands = currentBands,
             life = currentLife,
-            active = active && !saving,
+            active = currentPresence,
+            silence = currentSilence,
         )
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         renderer.resize(w, h)
+        publishReadoutAppearance()
     }
 
     override fun onAttachedToWindow() {
@@ -187,7 +306,10 @@ internal class AudioBlobView(context: Context) : View(context) {
 
     private fun shouldAnimate(): Boolean =
         renderingVisible && isAttachedToWindow && isShown && hasWindowFocus() && enabledState &&
-            (hasRecentAudioSignal() || hasResidualAudio() || kotlin.math.abs(currentLife - targetLife) > LIFE_EPSILON)
+            (hasRecentAudioSignal() || hasResidualAudio() || silenceMoving() || currentPresence != targetPresence ||
+                kotlin.math.abs(currentLife - targetLife) > LIFE_EPSILON)
+
+    private fun silenceMoving(): Boolean = kotlin.math.abs(currentSilence - targetSilence) > SILENCE_EPSILON
 
     private fun ensureAnimationState() {
         if (shouldAnimate()) {
@@ -195,24 +317,33 @@ internal class AudioBlobView(context: Context) : View(context) {
         } else {
             stopFrames()
             if (!renderingVisible) {
+                currentSilence = targetSilence
                 currentActivity = 0f
                 currentBands.fill(0f)
                 currentLife = COLLAPSED_LIFE
+                currentPresence = targetPresence
             } else if (!active || saving) {
+                currentSilence = 0f
                 currentActivity = 0f
                 currentBands.fill(0f)
                 currentLife = targetLife
+                currentPresence = targetPresence
             }
             invalidate()
+            publishReadoutAppearance()
         }
     }
 
     private fun postNextFrame(immediate: Boolean = false) {
-        if (framePosted || !shouldAnimate()) return
+        if (framePosted) return
+        if (!shouldAnimate()) {
+            lastFrameNanos = 0L
+            return
+        }
         framePosted = true
         val audioResponsive = hasHotAudio() || hasRecentAudioSignal()
         val lifeMoving = kotlin.math.abs(currentLife - targetLife) > LIFE_EPSILON
-        if (immediate || lifeMoving || audioResponsive) {
+        if (immediate || lifeMoving || silenceMoving() || currentPresence != targetPresence || audioResponsive) {
             // Choreographer already limits us to the display cadence. Do not add a fixed 16 ms
             // timer on top of vsync: on high-refresh panels that halves the response rate, and on
             // 60 Hz panels it can miss the very next frame depending on phase.
@@ -260,7 +391,7 @@ internal class AudioBlobView(context: Context) : View(context) {
     }
 
     private fun advance(dtSeconds: Float) {
-        val normalized = (dtSeconds * 30f).coerceIn(0.25f, 3f)
+        val normalized = (dtSeconds * 30f).coerceIn(0f, 3f)
         val activityRate = if (targetActivity > currentActivity) 0.72f else 0.16f
         val activityMix = 1f - (1f - activityRate).pow(normalized)
         currentActivity += (targetActivity - currentActivity) * activityMix
@@ -274,6 +405,9 @@ internal class AudioBlobView(context: Context) : View(context) {
         val lifeMix = 1f - (1f - lifeRate).pow(normalized)
         currentLife += (targetLife - currentLife) * lifeMix
         if (kotlin.math.abs(currentLife - targetLife) <= LIFE_EPSILON) currentLife = targetLife
+        currentSilence = advanceSilenceBlob(currentSilence, targetSilence, dtSeconds)
+        currentPresence = advanceBlobPresence(currentPresence, targetPresence, dtSeconds)
+        publishReadoutAppearance()
     }
 
     private interface Renderer {
@@ -288,7 +422,8 @@ internal class AudioBlobView(context: Context) : View(context) {
             activity: Float,
             bands: FloatArray,
             life: Float,
-            active: Boolean,
+            active: Float,
+            silence: Float,
         )
     }
 
@@ -303,6 +438,7 @@ internal class AudioBlobView(context: Context) : View(context) {
         private var lastActivity = Float.NaN
         private var lastLife = Float.NaN
         private var lastActive = Float.NaN
+        private var lastSkipSilence = Float.NaN
         private val lastBands = FloatArray(BAND_COUNT) { Float.NaN }
 
         override fun resize(width: Int, height: Int) {
@@ -328,7 +464,8 @@ internal class AudioBlobView(context: Context) : View(context) {
             activity: Float,
             bands: FloatArray,
             life: Float,
-            active: Boolean,
+            active: Float,
+            silence: Float,
         ) {
             if (width <= 0 || height <= 0) return
             shader.setFloatUniform("time", timeSeconds)
@@ -340,10 +477,15 @@ internal class AudioBlobView(context: Context) : View(context) {
                 shader.setFloatUniform("life", life)
                 lastLife = life
             }
-            val activeValue = if (active) 1f else 0f
+            val activeValue = active
             if (activeValue != lastActive) {
                 shader.setFloatUniform("active", activeValue)
                 lastActive = activeValue
+            }
+            val skipValue = silence
+            if (skipValue != lastSkipSilence) {
+                shader.setFloatUniform("skipSilence", skipValue)
+                lastSkipSilence = skipValue
             }
             if (bands[0] != lastBands[0] || bands[1] != lastBands[1] ||
                 bands[2] != lastBands[2] || bands[3] != lastBands[3]
@@ -369,6 +511,8 @@ internal class AudioBlobView(context: Context) : View(context) {
     private class FallbackRenderer : Renderer {
         override val idleFrameDelayMillis = 33L
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val pausedPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val silencePaint = Paint(Paint.ANTI_ALIAS_FLAG)
         private val path = Path()
         private val x = FloatArray(FALLBACK_POINTS)
         private val y = FloatArray(FALLBACK_POINTS)
@@ -403,21 +547,25 @@ internal class AudioBlobView(context: Context) : View(context) {
             activity: Float,
             bands: FloatArray,
             life: Float,
-            active: Boolean,
+            active: Float,
+            silence: Float,
         ) {
             if (width <= 0 || height <= 0) return
             val minSize = minOf(width, height).toFloat()
             val cx = width * 0.5f
             val cy = height * 0.5f
             val base = minSize * (0.095f + life * (0.235f + activity * 0.018f))
+            val low = bands[0] * .34f + bands[1] * .30f + bands[2] * .21f + bands[3] * .15f
+            val high = bands[4] * .34f + bands[5] * .30f + bands[6] * .21f + bands[7] * .15f
+            val energy = audioBlobMotionEnergy(activity, low, high, silence) * life * active
             for (index in 0 until FALLBACK_POINTS) {
                 val angle = angles[index]
-                val band = bands[index * BAND_COUNT / FALLBACK_POINTS]
-                val idle = if (active) {
-                    sin(angle * 3f + timeSeconds * 0.8f) * minSize * 0.005f +
-                        sin(angle * 5f - timeSeconds * 0.55f) * minSize * 0.0025f
+                val idle = if (active > 0f) {
+                    (sin(angle * 3f + timeSeconds * .78f) * .0056f +
+                        sin(angle * 7f - timeSeconds * .39f + 1.8f) * .0024f) * minSize * life * active
                 } else 0f
-                val radius = base + if (active) band * minSize * 0.105f + idle else 0f
+                val fold = audioBlobFold(angle, timeSeconds, energy, low, high) * minSize
+                val radius = base + fold + idle
                 x[index] = cx + cosines[index] * radius
                 y[index] = cy + sines[index] * radius
             }
@@ -430,17 +578,34 @@ internal class AudioBlobView(context: Context) : View(context) {
             }
             path.close()
 
-            val state = if (active) 1 else 0
+            val state = if (active == 0f) 0 else 1
             if (gradientState != state) {
-                paint.shader = if (active) {
-                    LinearGradient(0f, 0f, width.toFloat(), height.toFloat(), primary, tertiary, Shader.TileMode.CLAMP)
+                paint.shader = if (active > 0f) {
+                    val baseGradient = LinearGradient(0f, 0f, width.toFloat(), height.toFloat(), primary, tertiary, Shader.TileMode.CLAMP)
+                    val mutedGradient = LinearGradient(0f, 0f, width.toFloat(), height.toFloat(),
+                        silenceBlobMutedColor(primary), silenceBlobMutedColor(tertiary), Shader.TileMode.CLAMP)
+                    val drainMask = RadialGradient(cx, cy, minSize * .33f,
+                        intArrayOf(silenceBlobDrainMaskColor(0f), silenceBlobDrainMaskColor(.175f),
+                            silenceBlobDrainMaskColor(.35f), silenceBlobDrainMaskColor(.525f),
+                            silenceBlobDrainMaskColor(.7f), silenceBlobDrainMaskColor(1f)),
+                        floatArrayOf(0f, .175f, .35f, .525f, .7f, 1f), Shader.TileMode.CLAMP)
+                    silencePaint.shader = ComposeShader(mutedGradient, drainMask, PorterDuff.Mode.DST_IN)
+                    baseGradient
                 } else {
                     null
                 }
-                paint.color = if (active) primary else paused
+                paint.color = if (active > 0f) primary else paused
                 gradientState = state
             }
+            pausedPaint.color = paused
+            canvas.drawPath(path, pausedPaint)
+            paint.alpha = (audioBlobColorLife(life, active) * 255f).toInt()
             canvas.drawPath(path, paint)
+            if (active > 0f && silence > 0f) {
+                // Drain the rim around a small color core using cached shaders and the same geometry.
+                silencePaint.alpha = (silence.coerceIn(0f, 1f) * active * 255f).toInt()
+                canvas.drawPath(path, silencePaint)
+            }
         }
     }
 
@@ -457,6 +622,7 @@ internal class AudioBlobView(context: Context) : View(context) {
         private const val COLLAPSED_LIFE = 0.38f
         private const val DISABLED_LIFE = 0.36f
         private const val LIFE_EPSILON = 0.006f
+        private const val SILENCE_EPSILON = 0.002f
 
         private const val SHADER_SOURCE = """
             uniform float2 resolution;
@@ -464,6 +630,7 @@ internal class AudioBlobView(context: Context) : View(context) {
             uniform float activity;
             uniform float life;
             uniform float active;
+            uniform float skipSilence;
             uniform float4 bands0;
             uniform float4 bands1;
             layout(color) uniform half4 primaryColor;
@@ -480,13 +647,14 @@ internal class AudioBlobView(context: Context) : View(context) {
                 float high = dot(bands1, float4(0.34, 0.30, 0.21, 0.15));
                 float h3 = sin(angle * 3.0 + time * 0.78);
                 float h7 = sin(angle * 7.0 - time * 0.39 + 1.8);
-                float audioWave = h3 * low * 0.66 + h7 * high * 0.44;
+                float energy = sqrt(clamp(max(activity, low * 0.9 + high * 0.7), 0.0, 1.0)) *
+                    (1.0 - 0.92 * skipSilence) * active * life;
+                float fold = energy * (h3 * (0.035 + 0.035 * low) + h7 * (0.008 + 0.018 * high));
 
                 float idle = h3 * 0.0056 + h7 * 0.0024;
                 float liveRadius = 0.330 + activity * 0.018;
                 float baseRadius = mix(0.095, liveRadius, life);
-                float blobRadius = baseRadius + active * life *
-                    (idle + audioWave * (0.105 + activity * 0.030));
+                float blobRadius = baseRadius + active * life * idle + fold;
                 float distanceToEdge = radius - blobRadius;
 
                 float body = smoothstep(0.012, -0.006, distanceToEdge);
@@ -496,8 +664,13 @@ internal class AudioBlobView(context: Context) : View(context) {
 
                 float gradientMix = clamp(0.46 + p.x * 0.9 - p.y * 0.55, 0.0, 1.0);
                 half4 activeColor = mix(primaryColor, tertiaryColor, half(gradientMix));
-                float colorLife = smoothstep(0.36, 0.86, life);
+                float colorLife = smoothstep(0.36, 0.86, life) * active;
                 half4 bodyColor = mix(pausedColor, activeColor, half(colorLife));
+                float drain = skipSilence * active * colorLife *
+                    (0.35 + 0.65 * smoothstep(0.0, 0.7, radius / baseRadius));
+                half luminance = dot(bodyColor.rgb, half3(0.2126, 0.7152, 0.0722));
+                half3 mutedColor = mix(bodyColor.rgb, half3(luminance), half(0.42)) * half(0.72);
+                bodyColor.rgb = mix(bodyColor.rgb, mutedColor, half(drain));
                 half4 glowColor = mix(primaryColor, tertiaryColor, half(0.58));
 
                 float alpha = body + glow;

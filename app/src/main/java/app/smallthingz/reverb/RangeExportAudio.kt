@@ -1,6 +1,7 @@
 package app.smallthingz.reverb
 
 import android.content.Context
+import kotlinx.coroutines.runBlocking
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
@@ -488,7 +489,11 @@ internal class TimelineAudioPreviewController(
         Thread(runnable, "Reverb-range-preview-release").apply { isDaemon = true }
     }
     private val trackLock = Any()
-    private val releasedTracks = WeakHashMap<AudioTrack, Boolean>()
+    private val trackQuietOwners = WeakHashMap<AudioTrack, PreviewTrackQuietOwner>()
+
+    private fun quietOwner(track: AudioTrack): PreviewTrackQuietOwner = synchronized(trackQuietOwners) {
+        trackQuietOwners.getOrPut(track) { PreviewTrackQuietOwner(previewQuietCoordinator) }
+    }
 
     private interface ShuttlePcmSource : Closeable {
         val durationSeconds: Double
@@ -661,7 +666,7 @@ internal class TimelineAudioPreviewController(
                 error,
             )
             AppFeedbackCenter.post(
-                appContext.getString(R.string.recording_read_cleanup_failed),
+                actionableErrorMessage(appContext, appContext.getString(R.string.recording_read_cleanup_failed), error),
                 FeedbackTone.ERROR,
             )
         }
@@ -756,7 +761,10 @@ internal class TimelineAudioPreviewController(
         shuttleCommand.set(null)
         executor.queue.clear()
         val track = synchronized(trackLock) {
-            activeTrack.also { activeTrack = null }
+            activeTrack.also { track ->
+                track?.let { quietOwner(it).retire() }
+                activeTrack = null
+            }
         }
         if (track != null) {
             val releaseQueued = !releaseExecutor.isShutdown && executeIfAccepted(
@@ -775,6 +783,7 @@ internal class TimelineAudioPreviewController(
                         ).apply { isDaemon = true }.start()
                     },
                     onFailure = { error ->
+                        quietOwner(track).cleanupRejected()
                         Log.e("ReverbRangeAudio", "Unable to start AudioTrack release fallback", error)
                         onTrackReleaseFailure(error)
                     },
@@ -792,6 +801,7 @@ internal class TimelineAudioPreviewController(
     ) {
         var track: AudioTrack? = null
         var startedCallbackSent = false
+        var resumeAfterFailure = false
         try {
             checkCurrent(token)
             val channelCount = source.channelCount
@@ -820,11 +830,12 @@ internal class TimelineAudioPreviewController(
                 )
             }
             track = shuttleTrack
+            check(runBlocking { previewQuietCoordinator.awaitQuiet() }) { "Previous audio preview could not be silenced" }
             synchronized(trackLock) {
                 checkCurrent(token)
                 activeTrack = shuttleTrack
             }
-            shuttleTrack.play()
+            if (!quietOwner(shuttleTrack).play { shuttleTrack.play() }) throw PreviewCancelled()
             val overlapFrames = (SHUTTLE_CROSSFADE_SECONDS * shuttleSampleRate.toDouble())
                 .roundToInt()
                 .coerceAtLeast(1)
@@ -998,10 +1009,11 @@ internal class TimelineAudioPreviewController(
             // Cancellation/newer gestures stay silent. A real failure after AudioTrack took
             // audible ownership must hand control back to the caller so it can restore its
             // already-open player instead of leaving the gesture silent until finger-up.
-            if (startedCallbackSent && onFailureAfterStart != null && isCurrent(token)) {
-                postIfCurrent(token, onFailureAfterStart)
-            }
+            resumeAfterFailure = startedCallbackSent && onFailureAfterStart != null && isCurrent(token)
         } finally {
+            track?.let { quietOwner(it).retire() }
+            // Register proof ownership before a fallback can request normal playback.
+            if (resumeAfterFailure && onFailureAfterStart != null) postIfCurrent(token, onFailureAfterStart)
             // A retiring worker must not clear a newer gesture published by the UI thread.
             activeShuttleToken.compareAndSet(token, 0L)
             if (track != null) {
@@ -1047,11 +1059,12 @@ internal class TimelineAudioPreviewController(
                 channelCount = channelCount,
                 onConfigurationReleaseFailure = { trackReleaseFailure = it },
             )
+            check(runBlocking { previewQuietCoordinator.awaitQuiet() }) { "Previous audio preview could not be silenced" }
             synchronized(trackLock) {
                 checkCurrent(token)
                 activeTrack = track
             }
-            track.play()
+            if (!quietOwner(track).play { track.play() }) throw PreviewCancelled()
             val playbackHead = PlaybackHeadFrameCounter()
 
             var lastProgressAt = 0L
@@ -1129,6 +1142,7 @@ internal class TimelineAudioPreviewController(
         } finally {
             snapshot.releaseChildRangeBestEffort(child)
             if (track != null) {
+                quietOwner(track).retire()
                 synchronized(trackLock) {
                     if (activeTrack === track) activeTrack = null
                 }
@@ -1203,15 +1217,11 @@ internal class TimelineAudioPreviewController(
         track: AudioTrack,
         onFailure: (Throwable) -> Unit = ::reportTrackReleaseFailure,
     ) {
-        synchronized(releasedTracks) {
-            if (releasedTracks.put(track, true) != null) return
-        }
-        runCatching { track.pause() }
-        runCatching { track.flush() }
-        runCatching { track.stop() }
-        runCleanupReportingThrowable(
-            cleanup = { track.release() },
-            onFailure = onFailure,
+        quietOwner(track).release(
+            pause = { track.pause() },
+            flush = { track.flush() },
+            release = { track.release() },
+            onFailure = { error -> runCleanupReportingThrowable({ onFailure(error) }, {}) },
         )
     }
 

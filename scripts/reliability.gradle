@@ -9,6 +9,11 @@ allprojects {
             .map { it.toBoolean() }.getOrElse(false)
         def nativeEntryLifecycle = providers.gradleProperty('reverbNativeEntryLifecycle')
             .map { it.toBoolean() }.getOrElse(false)
+        def currentUiSmoke = providers.gradleProperty('reverbCurrentUiSmoke')
+            .map { it.toBoolean() }.getOrElse(false)
+        if (currentUiSmoke && (parityOnly || nativeEntryLifecycle)) {
+            throw new GradleException('reverbCurrentUiSmoke is separate from native parity and entry lifecycle modes')
+        }
         if (nativeEntryLifecycle && !parityOnly) {
             throw new GradleException('reverbNativeEntryLifecycle requires reverbNativeParity=true')
         }
@@ -17,18 +22,19 @@ allprojects {
                 def referenceReliability = maybeCreate('reliability')
                 referenceReliability.java.srcDir 'src/reference/java'
                 referenceReliability.kotlin.srcDir 'src/reference/java'
+                if (currentUiSmoke) referenceReliability.manifest.srcFile 'src/currentUiSmoke/AndroidManifest.xml'
             }
             buildTypes {
                 reliability {
                     initWith debug
-                    applicationIdSuffix parityOnly ? '.nativeparity.reliability' : '.reliability'
+                    applicationIdSuffix currentUiSmoke ? '.uitheme.reliability' : (parityOnly ? '.nativeparity.reliability' : '.reliability')
                     matchingFallbacks = ['debug']
                     manifestPlaceholders += [
-                        reliabilityApplicationClass: parityOnly ?
+                        reliabilityApplicationClass: (parityOnly || currentUiSmoke) ?
                             'android.app.Application' : 'app.smallthingz.reverb.ReverbApplication',
-                        reliabilityAppLabel: parityOnly ? 'Reverb native parity' : '@string/app_name',
-                        reliabilityMainEnabled: parityOnly ? nativeEntryLifecycle.toString() : 'true',
-                        reliabilityMainExported: nativeEntryLifecycle ? 'false' : 'true',
+                        reliabilityAppLabel: currentUiSmoke ? 'Reverb current UI smoke' : (parityOnly ? 'Reverb native parity' : '@string/app_name'),
+                        reliabilityMainEnabled: currentUiSmoke ? 'false' : (parityOnly ? nativeEntryLifecycle.toString() : 'true'),
+                        reliabilityMainExported: (nativeEntryLifecycle || currentUiSmoke) ? 'false' : 'true',
                         reliabilityEntryEnabled: nativeEntryLifecycle.toString(),
                     ]
                 }

@@ -70,11 +70,51 @@ class SettingsCalibrationGestureTest {
         assertEquals(listOf("down","begin","cancel","up"),fixture.events)
     }
 
+    @Test fun startReleaseIsConsumedBeforeTimedStatePublishes() {
+        val fixture=Fixture()
+        fixture.initial(fixture.change(0,true,false))
+        val up=fixture.change(100,false,true)
+        fixture.onTap={
+            assertTrue("The newly rendered Cancel button must see an already-consumed UP",up.consumed)
+            fixture.canBegin=false
+        }
+        fixture.initial(up)
+        fixture.dispatchFinal(up)
+        assertFalse(fixture.gesture.pointerDown)
+        assertEquals(listOf("down","begin","tap","up"),fixture.events)
+    }
+
+    @Test fun timedRunningLeavesLaterCancelPressUnconsumedWithoutStartingSample() {
+        val fixture=Fixture().apply {canBegin=false}
+        val down=fixture.change(0,true,false)
+        val up=fixture.change(100,false,true)
+        fixture.initial(down);fixture.dispatchFinal(down)
+        fixture.initial(up);fixture.dispatchFinal(up)
+        assertFalse(down.consumed)
+        assertFalse(up.consumed)
+        assertFalse(fixture.gesture.pointerDown)
+        assertTrue(fixture.events.isEmpty())
+    }
+
+    @Test fun cancelPressCannotBecomeNewSampleWhenAdmissionReturnsBeforeRelease() {
+        val fixture=Fixture().apply {canBegin=false}
+        fixture.initial(fixture.change(0,true,false))
+        fixture.canBegin=true
+        val up=fixture.change(100,false,true)
+        fixture.initial(up)
+        assertFalse(up.consumed)
+        assertTrue(fixture.events.isEmpty())
+        fixture.initial(fixture.change(200,true,false))
+        assertEquals(listOf("down","begin"),fixture.events)
+    }
+
     private class Fixture {
         val events=mutableListOf<String>()
         var accepted=true
-        val gesture=SettingsCalibrationGesture({true},{events.add("begin");accepted},
-            {events.add("tap")},{events.add("finish")},{events.add("cancel")},
+        var canBegin=true
+        var onTap:()->Unit={}
+        val gesture=SettingsCalibrationGesture({canBegin},{events.add("begin");accepted},
+            {events.add("tap");onTap()},{events.add("finish")},{events.add("cancel")},
             {events.add(if(it)"down"else"up")},{100},{48},{8f},{500L})
         fun change(time:Long,pressed:Boolean,previous:Boolean,x:Float=10f,previousX:Float=x,id:Long=1)=
             NativeDragPointerChange(id,time,Offset(x,10f),Offset(previousX,10f),pressed,previous,

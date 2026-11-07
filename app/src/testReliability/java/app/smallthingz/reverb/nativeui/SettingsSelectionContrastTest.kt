@@ -1,5 +1,6 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.controls.SelectionContrast
 import smallthingz.ui.graphics.Color
 import smallthingz.ui.graphics.toArgb
 import kotlin.math.max
@@ -10,7 +11,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** Settings selection is an intentional contrast improvement over released surface-elevation colors. */
+/** Solid selected containers retain paired ink without depending on an outline. */
 class SettingsSelectionContrastTest {
     @Test
     fun lightAndDarkSelectionsRemainDistinctAndTheirLabelsReadable() {
@@ -33,7 +34,7 @@ class SettingsSelectionContrastTest {
                 assertTrue("State label dark=$dark alpha=$alpha",
                     contrast(palette.settingsOnSelection, background) >= 4.5)
                 assertTrue("State selection dark=$dark alpha=$alpha",
-                    contrast(background, palette.field) >= 3.0)
+                    contrast(palette.field, background) >= 3.0)
             }
         }
     }
@@ -44,8 +45,8 @@ class SettingsSelectionContrastTest {
         // valid high-contrast pair to catch accidental static fallback or surface-role coupling.
         for (dark in listOf(false, true)) {
             val fallback = ReverbPalette.fallback(dark)
-            val background = if (dark) 0xFF9FD5B3.toInt() else 0xFF005233.toInt()
-            val foreground = if (dark) 0xFF003822.toInt() else 0xFFFFFFFF.toInt()
+            val background = if (dark) 0xFFC2EED1.toInt() else 0xFF00452C.toInt()
+            val foreground = if (dark) 0xFF002114.toInt() else 0xFFC2EED1.toInt()
             val palette = ReverbPalette.resolve(dark, 34) { resource ->
                 when (resource) {
                     android.R.color.system_primary_dark, android.R.color.system_primary_light -> background
@@ -64,10 +65,10 @@ class SettingsSelectionContrastTest {
     @Test
     fun animatedForwardReverseAndInterruptedSelectionsKeepReadableInk() {
         val palettes = listOf(ReverbPalette.fallback(false), ReverbPalette.fallback(true),
-            ReverbPalette.fallback(true).copy(primary = 0xFF9FD5B3.toInt(), onPrimary = 0xFF003822.toInt()))
+            ReverbPalette.fallback(true).copy(primary = 0xFFC2EED1.toInt(), onPrimary = 0xFF002114.toInt()))
         for (palette in palettes) {
-            val ink = SettingsSelectionInk(palette)
-            assertEquals(palette.muted, ink.foreground(0))
+            val ink = selectionInk(palette)
+            assertEquals(palette.ink, ink.foreground(0))
             assertEquals(palette.settingsOnSelection, ink.foreground(palette.settingsSelection))
             for (startsSelected in listOf(false, true)) {
                 val start = if (startsSelected) palette.settingsSelection else 0
@@ -98,7 +99,7 @@ class SettingsSelectionContrastTest {
         for (dark in listOf(false, true)) {
             val old = ReverbPalette.fallback(!dark)
             val next = ReverbPalette.fallback(dark)
-            val ink = SettingsSelectionInk(next)
+            val ink = selectionInk(next)
             val fill = ReleasedSpringValue.color(Color(old.settingsSelection))
             fill.retarget(Color(next.settingsSelection))
             for (frame in 0..240) {
@@ -108,7 +109,10 @@ class SettingsSelectionContrastTest {
         }
     }
 
-    private fun assertAnimatedInk(palette: ReverbPalette, ink: SettingsSelectionInk, fill: Int) {
+    private fun selectionInk(palette: ReverbPalette) = SelectionContrast(palette.field,
+        palette.settingsSelection, palette.ink, palette.settingsOnSelection, palette.ink)
+
+    private fun assertAnimatedInk(palette: ReverbPalette, ink: SelectionContrast, fill: Int) {
         val background = composite(fill, palette.field, (fill ushr 24) / 255.0)
         val foreground = ink.foreground(fill)
         assertTrue("Animated label fill=${fill.toUInt().toString(16)}",
@@ -125,8 +129,9 @@ class SettingsSelectionContrastTest {
     }
 
     private fun assertSelectionContrast(palette: ReverbPalette, label: String) {
-        assertTrue("$label selected/unselected contrast",
-            contrast(palette.settingsSelection, palette.field) >= 3.0)
+        assertEquals(palette.primary, palette.settingsSelection)
+        assertEquals(palette.onPrimary, palette.settingsOnSelection)
+        assertTrue("$label solid selection against field", contrast(palette.settingsSelection, palette.field) >= 3.0)
         assertTrue("$label selected label contrast",
             contrast(palette.settingsOnSelection, palette.settingsSelection) >= 4.5)
     }

@@ -3,6 +3,7 @@ package app.smallthingz.reverb
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import java.util.concurrent.atomic.AtomicReference
@@ -16,7 +17,7 @@ internal data class NativeRecordingRenameState(val name:String,val error:String?
 internal data class NativeRecordingRenameCallbacks(
     val onDismiss:()->Unit,
     val onRenamed:(RecordingEntity)->Unit,
-    val onStateUncertain:()->Unit,
+    val onStateUncertain:(Throwable)->Unit,
 )
 
 /**
@@ -78,20 +79,41 @@ internal class NativeRecordingRenameOwner(
         val receiverSlot=activeReceiver
         val accepted=RenameResultReceiver(
             onRenamed={renamed->state=state.copy(isRenaming=false);changed();acceptedCallbacks.onRenamed(renamed)},
-            onRejected={state=state.copy(isRenaming=false,error=resources.getString(R.string.rename_recording_failed));changed()},
-            onUncertain={state=state.copy(isRenaming=false);changed();acceptedCallbacks.onStateUncertain()},
+            onRejected={state=state.copy(isRenaming=false,error=resources.getString(R.string.rename_recording_rejected));changed()},
+            onUncertain={failure->
+                state=state.copy(isRenaming=false)
+                routeRecordingRenameFailure(failure,
+                    onDefinite={state=state.copy(error=actionableErrorMessage(renameContext,
+                        resources.getString(R.string.rename_recording_failed),it))},
+                    onReconcile=acceptedCallbacks.onStateUncertain)
+                changed()
+            },
             onHiddenTerminal={state=state.copy(isRenaming=false);changed();acceptedCallbacks.onDismiss()},
             isUiVisible={active&&lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)},
             onDetachedSuccess={renamed->AppFeedbackCenter.post(
                 "${renameContext.getString(R.string.rename_recording)}: ${renamed.displayName}",FeedbackTone.SUCCESS)},
-            onDetachedFailure={AppFeedbackCenter.post(renameContext.getString(R.string.rename_recording_failed),FeedbackTone.ERROR)},
+            onDetachedFailure={failure->AppFeedbackCenter.post(
+                if(failure==null)renameContext.getString(R.string.rename_recording_rejected)
+                else actionableErrorMessage(renameContext,renameContext.getString(
+                    if(failure is RecordingRenameDefiniteFailure)R.string.rename_recording_failed
+                    else R.string.rename_recording_uncertain),failure),
+                FeedbackTone.ERROR)},
             onTerminal={completed->receiverSlot.compareAndSet(completed,null)},
         )
         receiverSlot.set(accepted)
         scope.launch(start=CoroutineStart.UNDISPATCHED) {
             runCommittedRecordingRename(
                 rename={RecordingRepository.rename(renameContext,target,trimmed)},
-                onTerminal=accepted::terminal,
+                onTerminal={result->
+                    result.exceptionOrNull()?.let { Log.w("RecordingRename", "Rename could not be confirmed", it) }
+                    result.getOrNull()?.let { renamed ->
+                        runCleanupReportingThrowable(
+                            cleanup = { RecordingPlayback.renamed(target, renamed) },
+                            onFailure = { reportPlaybackFailure(renameContext, it) },
+                        )
+                    }
+                    accepted.terminal(result)
+                },
             )
         }
     }

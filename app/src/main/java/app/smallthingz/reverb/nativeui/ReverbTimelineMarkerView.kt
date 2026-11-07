@@ -10,6 +10,7 @@ import android.view.ViewOutlineProvider
 import app.smallthingz.reverb.RANGE_WAVEFORM_SETTLED_ENVELOPE_FRACTION
 import kotlin.math.min
 import kotlin.math.roundToInt
+import smallthingz.ui.animation.view.ViewColorTransition
 
 /** Exact released RangeTimelineMarkerVisual leaf; selection/position/animation remain the owner. */
 internal class ReverbTimelineMarkerView(context: Context, private var environment: ReverbViewEnvironment) : ViewGroup(context) {
@@ -71,6 +72,7 @@ internal class ReverbTimelineMarkerView(context: Context, private var environmen
 
     private class MarkerShape(context: Context) : View(context) {
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
+        private var colorMotion:ViewColorTransition?=null
         private var requestedRadius = 0f
         private fun radius() = min(requestedRadius, min(width, height) / 2f)
         init {
@@ -86,7 +88,10 @@ internal class ReverbTimelineMarkerView(context: Context, private var environmen
             val geometryChanged = requestedRadius != radius || elevation != shadow
             val colorChanged = paint.color != color
             if (!geometryChanged && !colorChanged) return
-            paint.color = color
+            val motion=colorMotion ?: ViewColorTransition(this,intArrayOf(color),{
+                colorMotion?.let {paint.color=it.color(0);invalidate()}
+            }).also {colorMotion=it;paint.color=color}
+            motion.retarget(color)
             requestedRadius = radius
             elevation = shadow
             if (geometryChanged) invalidateOutline()

@@ -4,6 +4,7 @@ import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
@@ -26,19 +27,26 @@ class RecordingOpenActivity : ComponentActivity() {
                 if (openIntent != null) {
                     try {
                         startActivity(openIntent)
-                    } catch (_: ActivityNotFoundException) {
-                        returnToReverbWithFailure(getString(R.string.no_app_available))
-                    } catch (_: RuntimeException) {
-                        returnToReverbWithFailure(getString(R.string.recording_unavailable))
+                    } catch (error: ActivityNotFoundException) {
+                        Log.w("RecordingOpen", "No compatible recording viewer", error)
+                        returnToReverbWithFailure(getString(R.string.recording_open_no_handler))
+                    } catch (error: RuntimeException) {
+                        Log.w("RecordingOpen", "Unable to launch recording viewer", error)
+                        returnToReverbWithFailure(actionableErrorMessage(this,
+                            getString(R.string.recording_open_failed), error))
                     }
                 } else {
-                    returnToReverbWithFailure(getString(R.string.recording_unavailable))
+                    returnToReverbWithFailure(verificationFailureMessage(null))
                 }
             },
             reportUndeliveredFailure = {
-                AppFeedbackCenter.post(getString(R.string.recording_unavailable), FeedbackTone.ERROR)
+                AppFeedbackCenter.post(verificationFailureMessage(null), FeedbackTone.ERROR)
             },
             finish = ::finish,
+            deliverFailure = { failure -> returnToReverbWithFailure(verificationFailureMessage(failure)) },
+            reportUndeliveredFailureWithCause = { failure ->
+                AppFeedbackCenter.post(verificationFailureMessage(failure), FeedbackTone.ERROR)
+            },
         )
         lifecycle.addObserver(LifecycleEventObserver { _, event ->
             when (event) {
@@ -48,10 +56,11 @@ class RecordingOpenActivity : ComponentActivity() {
             }
         })
         lifecycleScope.launch {
-            val openIntent = withContext(Dispatchers.IO) {
-                runCatching { buildVerifiedOpenIntent(applicationContext, sourceIntent) }.getOrNull()
+            val result = withContext(Dispatchers.IO) {
+                runCatching { buildVerifiedOpenIntent(applicationContext, sourceIntent) }
             }
-            resultDelivery.complete(openIntent)
+            result.exceptionOrNull()?.let { Log.w("RecordingOpen", "Unable to verify saved recording", it) }
+            resultDelivery.complete(result.getOrNull(), result.exceptionOrNull())
         }
     }
 
@@ -62,6 +71,10 @@ class RecordingOpenActivity : ComponentActivity() {
 
     private fun navigationAllowed(): Boolean = !isFinishing && !isDestroyed &&
         lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) && window.decorView.hasWindowFocus()
+
+    private fun verificationFailureMessage(failure: Throwable?): String =
+        if (failure == null) getString(R.string.recording_open_unverified)
+        else actionableErrorMessage(this, getString(R.string.recording_open_unverified), failure)
 
     private fun returnToReverbWithFailure(message: String) {
         AppFeedbackCenter.post(message, FeedbackTone.ERROR)
@@ -78,7 +91,7 @@ class RecordingOpenActivity : ComponentActivity() {
                     )
                 },
             )
-        }
+        }.onFailure { Log.w("RecordingOpen", "Unable to return to Reverb", it) }
     }
 
     companion object {
@@ -130,19 +143,17 @@ internal fun buildVerifiedOpenIntent(context: Context, source: Intent): Intent? 
             val displayName = source.getStringExtra("recording_display_name")
                 ?.takeIf { it.isNotBlank() } ?: "recording"
             val sizeBytes = source.getLongExtra("recording_size_bytes", 0L).coerceAtLeast(0L)
-            runCatching {
-                buildVerifiedProviderUri(
-                    context,
-                    VerifiedProviderRequest(
-                        storageType = storage,
-                        sourceId = id,
-                        expectedIdentity = expectedIdentity,
-                        mimeType = mimeType,
-                        displayName = displayName,
-                        sizeBytes = sizeBytes,
-                    ),
-                )
-            }.getOrNull() ?: return null
+            buildVerifiedProviderUri(
+                context,
+                VerifiedProviderRequest(
+                    storageType = storage,
+                    sourceId = id,
+                    expectedIdentity = expectedIdentity,
+                    mimeType = mimeType,
+                    displayName = displayName,
+                    sizeBytes = sizeBytes,
+                ),
+            )
         }
     }
     return Intent(Intent.ACTION_VIEW).apply {

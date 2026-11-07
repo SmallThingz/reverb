@@ -13,6 +13,7 @@ import androidx.annotation.ColorInt
 import app.smallthingz.reverb.RangeWaveformPass
 import kotlin.math.round
 import kotlin.math.roundToInt
+import smallthingz.ui.animation.view.ViewColorTransition
 
 internal data class ProgressiveWaveformPalette(
     @ColorInt val primary: Int,
@@ -24,9 +25,10 @@ internal data class ProgressiveWaveformPalette(
  * Native rendering counterpart of ProgressiveWaveformCanvas at v0.1.2.
  *
  * The host supplies the measured bounds and each animation frame. This View owns no sampling,
- * playback, clock, animation, input gesture or accessibility action. The timeline/player host
+ * playback, geometry animation, input gesture or accessibility action. The timeline/player host
  * supplies those, including the source-to-timeline transform for a blob morph. Keeping samples,
  * palette and frame updates separate avoids copying waveform arrays on animation frames.
+ * Palette-only changes use the shared color transition without resampling the waveform.
  *
  * Palette inputs are the same sRGB ARGB values as the released Material color scheme. Drawing
  * covers the full measured bounds, matching Compose Canvas rather than adding View padding.
@@ -42,6 +44,8 @@ internal class ProgressiveWaveformView @JvmOverloads constructor(
     private var waveform: ProgressiveWaveformData? = null
     private var frame: ProgressiveWaveformFrame? = null
     private var palette: ProgressiveWaveformPalette? = null
+    private var paletteTarget: ProgressiveWaveformPalette? = null
+    private var paletteMotion: ViewColorTransition? = null
     private var builtShader: Shader? = null
     private var selectedShader: Shader? = null
     private var selectedLightShader: Shader? = null
@@ -67,10 +71,18 @@ internal class ProgressiveWaveformView @JvmOverloads constructor(
     }
 
     fun setPalette(value: ProgressiveWaveformPalette) {
-        if (palette == value) return
-        palette = value
-        rebuildShaders()
-        invalidate()
+        if (paletteTarget == value) return
+        paletteTarget = value
+        val motion=paletteMotion ?: ViewColorTransition(this,
+            intArrayOf(value.primary,value.onSurfaceVariant,value.tertiary),{
+                paletteMotion?.let { applyPalette(ProgressiveWaveformPalette(it.color(0),it.color(1),it.color(2))) }
+            }).also {paletteMotion=it;applyPalette(value)}
+        motion.retarget(value.primary,value.onSurfaceVariant,value.tertiary)
+    }
+
+    private fun applyPalette(value:ProgressiveWaveformPalette) {
+        if(palette==value)return
+        palette=value;rebuildShaders();invalidate()
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {

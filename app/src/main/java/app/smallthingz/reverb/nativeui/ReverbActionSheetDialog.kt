@@ -4,6 +4,8 @@
  */
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.animation.view.ViewColorTransition
+
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
@@ -384,6 +386,9 @@ internal class SheetRoot(
 internal class SheetScrim(context:Context,color:Int,private val action:()->Unit):View(context) {
     private val paint=Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
     private var sourceColor=reverbColorWithAlpha(color,.32f)
+    private val colorMotion:ViewColorTransition by lazy {ViewColorTransition(this,intArrayOf(sourceColor),{
+        sourceColor=colorMotion.color(0);invalidate()
+    })}
     var opacity=0f
         set(value) {if(field!=value){field=value;invalidate()}}
     init {
@@ -397,7 +402,7 @@ internal class SheetScrim(context:Context,color:Int,private val action:()->Unit)
     }
     fun bindColor(color:Int) {
         val next=reverbColorWithAlpha(color,.32f)
-        if(sourceColor!=next) {sourceColor=next;invalidate()}
+        colorMotion.retarget(next)
     }
     override fun onDraw(canvas:Canvas) {
         // DrawScope.configurePaint(color,alpha) multiplies source alpha before roundToInt.

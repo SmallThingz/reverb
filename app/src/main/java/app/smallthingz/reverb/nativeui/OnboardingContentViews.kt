@@ -15,6 +15,7 @@ import smallthingz.ui.text.TextStyle
 import smallthingz.ui.text.font.FontFamily
 import smallthingz.ui.unit.Density
 import androidx.core.view.ViewCompat
+import smallthingz.ui.animation.view.ViewColorTransition
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -39,15 +40,33 @@ internal class OnboardingIconView(
     private var sourceDescriptionNode: (() -> NativeSourceAccessibilityNode)? = null
     private var currentIcon = icon
     private var glyph = ReverbIconDrawable(icon, resources.displayMetrics.density, color)
+    private var displayedColor=color
+    private var colorTransition:ViewColorTransition?=null
     init { importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO; isFocusable = false }
     fun bind(icon: ReverbIcon, color: Int) {
         if (currentIcon != icon) {
             currentIcon = icon
             glyph = ReverbIconDrawable(icon, resources.displayMetrics.density, color)
             glyph.setBounds(0, 0, width, height)
-        } else glyph.setTint(color)
+        }
         glyph.layoutDirection = layoutDirection
+        val motion=colorTransition ?: ViewColorTransition(this,intArrayOf(displayedColor),{applyTint()})
+            .also {colorTransition=it}
+        motion.retarget(color)
+        applyTint()
         invalidate()
+    }
+    private fun applyTint() {colorTransition?.let {displayedColor=it.color(0)};glyph.setTint(displayedColor);invalidate()}
+    fun setTintImmediately(color:Int) {
+        colorTransition?.close();colorTransition=null;displayedColor=color;applyTint()
+    }
+    fun bindImmediately(icon:ReverbIcon,color:Int) {
+        if(currentIcon!=icon) {
+            currentIcon=icon;glyph=ReverbIconDrawable(icon,resources.displayMetrics.density,color)
+            glyph.setBounds(0,0,width,height)
+        }
+        glyph.layoutDirection=layoutDirection
+        setTintImmediately(color)
     }
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) { glyph.setBounds(0, 0, w, h) }
     override fun onRtlPropertiesChanged(layoutDirection: Int) {
@@ -159,7 +178,7 @@ internal class OnboardingMarker(
     }
     fun bind(palette: ReverbPalette) {
         view.setPalette(palette.primaryContainer, android.graphics.Color.TRANSPARENT)
-        text?.setTextColor(palette.onPrimaryContainer)
+        text?.animateTextColor(palette.onPrimaryContainer)
         originalIcon?.let { glyph?.bind(it, palette.onPrimaryContainer) }
     }
 }
@@ -236,11 +255,11 @@ internal open class OnboardingCardView(
         isEnabled = enabled
         isFocusable = enabled
         title.setText(titleText)
-        title.setTextColor(palette.ink)
+        title.animateTextColor(palette.ink)
         bodyVisible = !bodyText.isNullOrEmpty()
         body.visibility = if (bodyVisible) VISIBLE else GONE
         body.setText(bodyText.orEmpty())
-        body.setTextColor(palette.muted)
+        body.animateTextColor(palette.muted)
         marker.bind(palette)
     }
 
@@ -387,7 +406,7 @@ internal class OnboardingAudioRow(
         isEnabled = canActivate
         isFocusable = canActivate
         title.setText(text)
-        title.setTextColor(if (visuallyEnabled) palette.ink else palette.muted)
+        title.animateTextColor(if (visuallyEnabled) palette.ink else palette.muted)
         toggle.setPalette(palette)
         toggle.setState(checked, visuallyEnabled)
     }

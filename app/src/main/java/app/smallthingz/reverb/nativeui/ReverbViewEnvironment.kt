@@ -48,6 +48,6 @@ internal class ReverbViewEnvironment(
         @ColorInt textColor: Int = palette.ink,
     ) {
         view.setTypography(ReverbParagraphStyles[role], textDensity, sharedFontResolver)
-        view.setTextColor(textColor)
+        view.animateTextColor(textColor)
     }
 }

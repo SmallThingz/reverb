@@ -1,5 +1,7 @@
 package app.smallthingz.reverb
 
+import app.smallthingz.reverb.nativeui.colorTransition
+
 import android.content.Context
 import android.graphics.Rect
 import android.net.Uri
@@ -39,6 +41,8 @@ internal class NativeActivityContentView(
     private var environment = initialEnvironment
     private var snapshot = owner.snapshot
     private var main: NativeMainScreenView? = null
+    private var playbackRequest: RecordingPlaybackRequest? = null
+    private var playbackRequestFinished: (() -> Unit)? = null
     private var onboarding: NativeOnboardingScreenView? = null
     private var loading: ReverbIncidentLoadingView? = null
     private var feedback: NativeAppFeedbackHostView? = null
@@ -51,6 +55,7 @@ internal class NativeActivityContentView(
     private var renderAgain = false
     private var windowInsets = WindowInsetsCompat.Builder().build()
     private val noise = ReverbNoiseDrawable(resources, initialEnvironment.palette.surface)
+    private val noiseColor=noise.colorTransition(this,initialEnvironment.palette.surface)
     private val hostClip = NativeTextSemanticsClipPolicy { view ->
         when {
             view.parent is ReverbGroupLayout -> NativeTextSemanticsClip.Rectangle(
@@ -117,7 +122,7 @@ internal class NativeActivityContentView(
     }
 
     private fun renderBranch() {
-        noise.setBackgroundColor(environment.palette.surface)
+        noiseColor.retarget(environment.palette.surface)
         if (snapshot.showingOnboarding) {
             retireMain()
             retireDenied()
@@ -178,6 +183,7 @@ internal class NativeActivityContentView(
                 it.start()
             }
             current.bind(NativeMainScreenInput(snapshot.requiredPermissionsGranted, snapshot.showPermissionDenied), environment)
+            deliverPlaybackRequest()
             if (snapshot.showPermissionDenied) {
                 val microphoneAllowed = activity.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) ==
                     android.content.pm.PackageManager.PERMISSION_GRANTED
@@ -282,6 +288,24 @@ internal class NativeActivityContentView(
     }
 
     fun saveMain(): NativeMainScreenSavedState? = main?.saveState() ?: remainingMainState
+    fun openSavedRecording(request: RecordingPlaybackRequest, finished: () -> Unit) {
+        if (closed) return
+        playbackRequest = request
+        playbackRequestFinished = finished
+        deliverPlaybackRequest()
+    }
+
+    private fun deliverPlaybackRequest() {
+        val request = playbackRequest ?: return
+        main?.openSavedRecording(request) {
+            if (playbackRequest?.token == request.token) {
+                playbackRequest = null
+                val finished = playbackRequestFinished
+                playbackRequestFinished = null
+                finished?.invoke()
+            }
+        }
+    }
     fun saveOnboarding(): NativeOnboardingViewportSavedState? =
         onboarding?.saveViewportState() ?: remainingOnboardingState
 
@@ -294,6 +318,8 @@ internal class NativeActivityContentView(
     override fun close() {
         if (closed) return
         closed = true
+        playbackRequest = null
+        playbackRequestFinished = null
         var failure: Throwable? = null
         fun release(block: () -> Unit) {
             try { block() } catch (error: Throwable) {

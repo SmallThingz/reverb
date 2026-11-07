@@ -1,6 +1,6 @@
 /*
- * Source-derived specialization of foundation 1.11.2 detectVerticalDragGestures,
- * awaitPointerSlopOrCancellation, verticalDrag and awaitEachGesture.
+ * Source-derived specialization of foundation 1.11.2 horizontal/vertical drag detection,
+ * awaitPointerSlopOrCancellation and awaitEachGesture.
  * Copyright 2020-2025 The Android Open Source Project; Apache License 2.0.
  */
 package app.smallthingz.reverb
@@ -11,11 +11,12 @@ import kotlin.math.abs
 import kotlin.math.sign
 
 /**
- * The released Home uses the simple vertical detector, not draggable's angle/pickup recognizer.
+ * Home uses the simple axis detectors, not draggable's angle/pickup recognizer.
  * MAIN is child-to-parent; FINAL observes cancellation after competing child/parent consumption.
- * The host passes physical Y unchanged: the released panel reveal does not add an RTL sign inversion.
+ * Both axes retain physical coordinates without an RTL sign inversion.
  */
-internal class NativeHomeVerticalDrag(
+internal open class NativeHomeAxisDrag(
+    private val axis: NativeDragAxis,
     private val touchSlop: () -> Float,
     private val onStart: (Offset) -> Unit,
     private val onDelta: (Float) -> Unit,
@@ -72,11 +73,11 @@ internal class NativeHomeVerticalDrag(
             if (next == null) state = State.WAIT_UP else pointerId = next.id
             return
         }
-        accumulated += change.delta.y
+        accumulated += axisDelta(change.delta)
         if (abs(accumulated) >= threshold) {
             val over = accumulated - sign(accumulated) * threshold
-            // The detector consumes threshold crossing even if the panel's onStart chooses no target
-            // in the middle band; do not invent an enabled recognizer shortcut.
+            // Consume threshold crossing even when onStart chooses no action; admission is
+            // independent of whether Home can currently flip or reveal a panel.
             change.consume()
             state = State.DRAG
             onStart(change.position)
@@ -102,17 +103,19 @@ internal class NativeHomeVerticalDrag(
             }
             state = State.WAIT_UP
             if (change.consumed) onCancel() else onEnd()
-        } else if (change.delta.y != 0f) {
+        } else if (axisDelta(change.delta) != 0f) {
             if (change.consumed) {
                 state = State.WAIT_UP
                 onCancel()
             } else {
-                onDelta(change.delta.y)
+                onDelta(axisDelta(change.delta))
                 change.consume()
             }
         }
         // Consumed stationary/cross-axis-only frames are not returned by awaitDragOrUp.
     }
+
+    private fun axisDelta(delta: Offset): Float = if (axis == NativeDragAxis.HORIZONTAL) delta.x else delta.y
 
     /** Pointer-input key replacement cancels its coroutine, without inventing onDragCancel. */
     fun restart() {
@@ -129,3 +132,19 @@ internal class NativeHomeVerticalDrag(
         if (dragging) onCancel()
     }
 }
+
+internal class NativeHomeHorizontalDrag(
+    touchSlop: () -> Float,
+    onStart: (Offset) -> Unit,
+    onDelta: (Float) -> Unit,
+    onEnd: () -> Unit,
+    onCancel: () -> Unit,
+) : NativeHomeAxisDrag(NativeDragAxis.HORIZONTAL, touchSlop, onStart, onDelta, onEnd, onCancel)
+
+internal class NativeHomeVerticalDrag(
+    touchSlop: () -> Float,
+    onStart: (Offset) -> Unit,
+    onDelta: (Float) -> Unit,
+    onEnd: () -> Unit,
+    onCancel: () -> Unit,
+) : NativeHomeAxisDrag(NativeDragAxis.VERTICAL, touchSlop, onStart, onDelta, onEnd, onCancel)

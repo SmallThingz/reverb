@@ -48,7 +48,7 @@ internal class QuickTileDeleteContent(
         if (closed) return
         environment = next
         body.setTypography(reverbDefaultTextStyle(), next.textDensity, next.sharedFontResolver)
-        body.setTextColor(next.palette.onSurface)
+        body.animateTextColor(next.palette.onSurface)
         cancel.bind(body.context.getString(R.string.cancel), !owner.editorState.deletingBusy, next)
         confirm.bind(body.context.getString(R.string.delete_recording),
             owner.canConfirmDelete(target, hasWindowFocus() &&

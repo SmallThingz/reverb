@@ -161,18 +161,15 @@ private class WakeLockRow(
 /** Dp state is retained until layout rounding; all four released animateAsState channels are separate. */
 private class WakeSwitch(context:Context,checked:Boolean,private var environment:ReverbViewEnvironment):ViewGroup(context),AutoCloseable {
     private val paint=Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
-    private val track=ReleasedSpringValue.color(Color(if(checked)environment.palette.primary else environment.palette.raised))
-    private val thumb=ReleasedSpringValue.color(Color(if(checked)environment.palette.onPrimary else
-        reverbColorWithAlpha(environment.palette.onSurfaceVariant,.84f)))
     private val offset=ReleasedSpringValue.dp(if(checked)18.dp else 0.dp)
     private val overlay=ReleasedSpringValue.float(0f)
-    private val thumbView=object:View(context) {
+    private val thumbView:View=object:View(context) {
         override fun onDraw(canvas:Canvas) {
-            paint.color=thumb.value.toArgb()
+            paint.color=colors.color(1)
             canvas.drawRoundRect(0f,0f,width.toFloat(),height.toFloat(),width/2f,height/2f,paint)
         }
     }
-    private val trackView=object:ViewGroup(context) {
+    private val trackView:ViewGroup=object:ViewGroup(context) {
         private val clip=Path()
         init {
             setWillNotDraw(false);clipToOutline=true
@@ -198,8 +195,8 @@ private class WakeSwitch(context:Context,checked:Boolean,private var environment
             updateOffset();invalidateOutline()
         }
         override fun onDraw(canvas:Canvas) {
-            paint.color=track.value.toArgb();canvas.drawRect(0f,0f,width.toFloat(),height.toFloat(),paint)
-            paint.color=Color(environment.palette.onSurface).copy(alpha=this@WakeSwitch.overlay.value).toArgb()
+            paint.color=colors.color(0);canvas.drawRect(0f,0f,width.toFloat(),height.toFloat(),paint)
+            paint.color=Color(colors.color(2)).copy(alpha=this@WakeSwitch.overlay.value).toArgb()
             canvas.drawRect(0f,0f,width.toFloat(),height.toFloat(),paint)
         }
         override fun draw(canvas:Canvas) {
@@ -207,15 +204,17 @@ private class WakeSwitch(context:Context,checked:Boolean,private var environment
             else {val save=canvas.save();try{canvas.clipPath(clip);super.draw(canvas)}finally{canvas.restoreToCount(save)}}
         }
     }
-    private val trackDriver=ViewSpringDriver(this,track,{trackView.invalidate()}, { reverbAnimatorDurationScale(context) })
-    private val thumbDriver=ViewSpringDriver(this,thumb,{thumbView.invalidate()}, { reverbAnimatorDurationScale(context) })
+    private val colors:smallthingz.ui.animation.view.ViewColorTransition=smallthingz.ui.animation.view.ViewColorTransition(this,intArrayOf(
+        if(checked)environment.palette.primary else environment.palette.raised,
+        if(checked)environment.palette.onPrimary else reverbColorWithAlpha(environment.palette.onSurfaceVariant,.84f),
+        environment.palette.onSurface),{trackView.invalidate();thumbView.invalidate()})
     private val offsetDriver=ViewSpringDriver(this,offset,{updateOffset()}, { reverbAnimatorDurationScale(context) })
     private val overlayDriver=ViewSpringDriver(this,overlay,{trackView.invalidate()}, { reverbAnimatorDurationScale(context) })
     init {addView(trackView);importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS}
     fun bind(checked:Boolean,next:ReverbViewEnvironment) {
         environment=next
-        trackDriver.retarget(Color(if(checked)next.palette.primary else next.palette.raised))
-        thumbDriver.retarget(Color(if(checked)next.palette.onPrimary else reverbColorWithAlpha(next.palette.onSurfaceVariant,.84f)))
+        colors.retarget(if(checked)next.palette.primary else next.palette.raised,
+            if(checked)next.palette.onPrimary else reverbColorWithAlpha(next.palette.onSurfaceVariant,.84f),next.palette.onSurface)
         offsetDriver.retarget(if(checked)18.dp else 0.dp)
         trackView.invalidate();requestLayout()
     }
@@ -233,6 +232,6 @@ private class WakeSwitch(context:Context,checked:Boolean,private var environment
         val y=((height-trackView.measuredHeight)/2f).roundToInt()
         trackView.layout(x,y,x+trackView.measuredWidth,y+trackView.measuredHeight)
     }
-    override fun close() {trackDriver.close();thumbDriver.close();offsetDriver.close();overlayDriver.close()}
+    override fun close() {colors.close();offsetDriver.close();overlayDriver.close()}
     private fun dp(v:Int)=(v*environment.textDensity.density).roundToInt()
 }

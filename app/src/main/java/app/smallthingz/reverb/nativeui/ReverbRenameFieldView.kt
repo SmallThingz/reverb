@@ -17,12 +17,9 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityEvent
 import android.view.inputmethod.InputMethodManager
 import androidx.core.view.accessibility.AccessibilityNodeInfoCompat
-import smallthingz.ui.animation.Animatable
 import smallthingz.ui.animation.core.Animatable as ValueAnimatable
 import smallthingz.ui.animation.core.VectorConverter
 import smallthingz.ui.animation.core.spring
-import smallthingz.ui.graphics.Color
-import smallthingz.ui.graphics.toArgb
 import smallthingz.ui.text.PlatformTextStyle
 import smallthingz.ui.text.TextStyle
 import smallthingz.ui.text.style.LineHeightStyle
@@ -74,9 +71,8 @@ internal class ReverbRenameFieldView(
     private var supportTop=0
     private val borderPaint=Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val borderBounds=RectF()
-    private val color=Animatable(Color(if(initialError!=null)environment.palette.error else environment.palette.outline))
+    private val color=colorTransition(if(initialError!=null)environment.palette.error else environment.palette.outline) {invalidate()}
     private val thickness=ValueAnimatable(1.dp,smallthingz.ui.unit.Dp.VectorConverter)
-    private val colorTargets=Channel<Color>(Channel.CONFLATED)
     private val thicknessTargets=Channel<smallthingz.ui.unit.Dp>(Channel.CONFLATED)
     private val ownerJob=Job(host.runtime.scope.coroutineContext[Job])
     private val scope=CoroutineScope(host.runtime.scope.coroutineContext+ownerJob)
@@ -106,14 +102,7 @@ internal class ReverbRenameFieldView(
             retarget()
             bindEditor()
         }
-        // animate*AsState's conflated target delivery plus child animation jobs. The shared actual
-        // Window dispatcher/clock and duration scale remain authoritative; no private Choreographer.
-        scope.launch {
-            for(target in colorTargets) {
-                val next=colorTargets.tryReceive().getOrNull()?:target
-                launch {if(next!=color.targetValue)color.animateTo(next,spring(dampingRatio=1f,stiffness=3800f)){invalidate()}}
-            }
-        }
+        // Thickness keeps the source spring; color shares the same timing as the other controls.
         scope.launch {
             for(target in thicknessTargets) {
                 val next=thicknessTargets.tryReceive().getOrNull()?:target
@@ -138,7 +127,7 @@ internal class ReverbRenameFieldView(
         val densityChanged=environment.textDensity!=next.textDensity
         environment=next
         support.setTypography(renameSupportingStyle,next.textDensity,next.sharedFontResolver)
-        support.setTextColor(next.palette.error)
+        support.animateTextColor(next.palette.error)
         bindEditor()
         retarget()
         if(densityChanged)requestLayout()
@@ -150,11 +139,11 @@ internal class ReverbRenameFieldView(
         selectionBackgroundColor=reverbColorWithAlpha(environment.palette.primary,.4f),
         selectionHandleColor=environment.palette.primary,ime=nativeRenameImeContract())
     private fun retarget() {
-        colorTargets.trySend(Color(when {
+        color.retarget(when {
             error!=null->environment.palette.error
             editor.isFocused->environment.palette.primary
             else->environment.palette.outline
-        }))
+        })
         thicknessTargets.trySend(if(editor.isFocused)2.dp else 1.dp)
     }
 
@@ -198,7 +187,7 @@ internal class ReverbRenameFieldView(
         if(minimum<=0f)return
         val stroke=min(ceil(thickness.value.value*environment.textDensity.density),ceil(minimum*.5f))
         val radius=min(4f*environment.textDensity.density,minimum*.5f)
-        borderPaint.color=color.value.toArgb()
+        borderPaint.color=color.color(0)
         borderBounds.set(0f,0f,width.toFloat(),fieldHeight.toFloat())
         if(stroke*2f>minimum) {
             borderPaint.style=Paint.Style.FILL
@@ -244,7 +233,7 @@ internal class ReverbRenameFieldView(
         info.isEnabled=true;info.isFocusable=true;info.isFocused=editor.isFocused
         info.isClickable=true;info.isLongClickable=true;info.isScreenReaderFocusable=true
         info.isContentInvalid=error!=null
-        info.error=if(error!=null)context.getString(smallthingz.ui.R.string.default_error_message)else null
+        info.error=error
         AccessibilityNodeInfoCompat.wrap(info).stateDescription=
             if(editor.length()==0 && error.isNullOrEmpty())context.getString(smallthingz.ui.R.string.state_empty)else null
         info.addAction(if(editor.isFocused)AccessibilityNodeInfo.ACTION_CLEAR_FOCUS else AccessibilityNodeInfo.ACTION_FOCUS)
@@ -343,7 +332,7 @@ internal class ReverbRenameFieldView(
         fun release(action:()->Unit){try{action()}catch(error:Throwable){if(failure==null)failure=error else if(failure!==error)failure!!.addSuppressed(error)}}
         release(interop::close);release(supportLease::close)
         release(editor::releaseCallbacks)
-        release{colorTargets.close()};release{thicknessTargets.close()};release{ownerJob.cancel()}
+        release(color::close);release{thicknessTargets.close()};release{ownerJob.cancel()}
         failure?.let{throw it}
     }
     private fun dp(value:Float)=(value*environment.textDensity.density).roundToInt()

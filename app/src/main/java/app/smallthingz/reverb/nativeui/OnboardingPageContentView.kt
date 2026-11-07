@@ -202,8 +202,8 @@ internal class OnboardingPageContentView(
             1 -> ReverbIcon.OneShot
             else -> ReverbIcon.Capture
         }, palette.primary)
-        header.setTextColor(palette.onSurface)
-        permissionBody?.setTextColor(palette.onSurfaceVariant)
+        header.animateTextColor(palette.onSurface)
+        permissionBody?.animateTextColor(palette.onSurfaceVariant)
         permissions?.bind(next.permissions.copy(interactionEnabled = next.interactionEnabled), palette)
         bufferGroup?.setPalette(palette.field, palette.border)
         oneShot?.bind(context.getString(R.string.onboarding_one_shot_title),
@@ -212,17 +212,17 @@ internal class OnboardingPageContentView(
         looping?.bind(context.getString(R.string.onboarding_looping_title),
             context.getString(R.string.onboarding_looping_body), next.loopingEnabled,
             next.controlsEnabled && (!next.loopingEnabled || next.oneShotEnabled), next.interactionEnabled, palette)
-        bufferOrder?.setTextColor(palette.onSurfaceVariant)
+        bufferOrder?.animateTextColor(palette.onSurfaceVariant)
         audioGroup?.setPalette(palette.field, palette.border)
         compression?.bind(compressionState(next), environment)
         silence?.bind(silenceState(next), environment, silenceCallbacks)
         compressionWarning?.apply {
             visibility = if (next.compressionAvailable) GONE else VISIBLE
-            setTextColor(palette.onSurfaceVariant)
+            animateTextColor(palette.onSurfaceVariant)
         }
         silenceWarning?.apply {
             visibility = if (next.silenceValid) GONE else VISIBLE
-            setTextColor(palette.error)
+            animateTextColor(palette.error)
         }
         if (!next.interactionEnabled) cancelInputs()
         if (permissionMembershipChanged || page == 2) textAccessibility?.refresh()
@@ -404,7 +404,7 @@ private class OnboardingPaddedLabel(
         clipToPadding = false
         addView(label)
     }
-    fun setTextColor(color: Int) = label.setTextColor(color)
+    fun animateTextColor(color: Int) = label.animateTextColor(color)
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         fun inset(spec: Int, amount: Int): Int =
             if (MeasureSpec.getMode(spec) == MeasureSpec.UNSPECIFIED) unspecified()

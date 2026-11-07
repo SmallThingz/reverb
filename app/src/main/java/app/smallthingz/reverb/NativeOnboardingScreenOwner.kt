@@ -111,6 +111,7 @@ internal class NativeOnboardingScreenOwner(
     private var requiredPermissionsGranted = microphoneAllowed && storageAllowed
     private var notificationAllowed = false
     private var recoveryAllowed = false
+    private var allFilesAllowed = false
     private var batteryAllowed = false
     private var showPermissionDenied = false
     private var showingOnboarding = onboardingPendingForUi(
@@ -333,12 +334,12 @@ internal class NativeOnboardingScreenOwner(
                     commit = { finishOnboarding(application, oneShot, looping, originalAudio, selectedAudio) },
                     reloadRuntime = { startCommittedSettingsRuntimeReload(application) },
                     onRuntimeFailure = {
-                        AppFeedbackCenter.post(application.getString(R.string.settings_apply_failed), FeedbackTone.ERROR)
+                        AppFeedbackCenter.post(actionableErrorMessage(application, application.getString(R.string.settings_apply_failed), it), FeedbackTone.ERROR)
                     },
                 )
             },
-            onFailure = {
-                AppFeedbackCenter.post(application.getString(R.string.recorder_state_persist_failed), FeedbackTone.ERROR)
+            onFailure = { failure ->
+                AppFeedbackCenter.post(actionableErrorMessage(application, application.getString(R.string.recorder_state_persist_failed), failure), FeedbackTone.ERROR)
             },
         )
     }
@@ -362,8 +363,8 @@ internal class NativeOnboardingScreenOwner(
     private fun permissionStatus(enabled: Boolean = finishState == OnboardingFinishState.IDLE) =
         OnboardingPermissionStatus(
             microphoneAllowed, requiresLegacyPublicStoragePermission(), storageAllowed,
-            mediaRecoveryPermission() != null, recoveryAllowed,
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU, notificationAllowed, batteryAllowed, enabled,
+            recordingAudioReadPermission() != null, recoveryAllowed,
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU, notificationAllowed, batteryAllowed, enabled, supportsAllFilesAccess(), allFilesAllowed,
         )
 
     private fun requestPermission(permission: OnboardingPermission) {
@@ -391,16 +392,16 @@ internal class NativeOnboardingScreenOwner(
                 val name = when (permission) {
                     OnboardingPermission.MICROPHONE -> Manifest.permission.RECORD_AUDIO
                     OnboardingPermission.STORAGE -> Manifest.permission.WRITE_EXTERNAL_STORAGE
-                    OnboardingPermission.RECOVERY -> mediaRecoveryPermission()
+                    OnboardingPermission.RECOVERY -> recordingAudioReadPermission()
                     OnboardingPermission.NOTIFICATIONS -> Manifest.permission.POST_NOTIFICATIONS
-                    OnboardingPermission.BATTERY -> null
+                    OnboardingPermission.BATTERY, OnboardingPermission.ALL_FILES -> null
                 }
                 val requested = when (permission) {
                     OnboardingPermission.MICROPHONE -> microphoneRequested
                     OnboardingPermission.STORAGE -> storageRequested
                     OnboardingPermission.RECOVERY -> recoveryRequested
                     OnboardingPermission.NOTIFICATIONS -> notificationsRequested
-                    OnboardingPermission.BATTERY -> false
+                    OnboardingPermission.BATTERY, OnboardingPermission.ALL_FILES -> false
                 }
                 if (name != null && permissionSequence.beginSettingsReview(requested,
                         activity.shouldShowRequestPermissionRationale(name))) {
@@ -421,12 +422,19 @@ internal class NativeOnboardingScreenOwner(
                 }
                 OnboardingPermission.RECOVERY -> {
                     recoveryRequested = true
-                    val name = mediaRecoveryPermission()
+                    val name = recordingAudioReadPermission()
                     if (name == null) permissionSequence.completed(permission) else launchers.recovery.launch(name)
                 }
                 OnboardingPermission.NOTIFICATIONS -> {
                     notificationsRequested = true
                     launchers.notifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
+                OnboardingPermission.ALL_FILES -> {
+                    permissionSequence.beginAllFilesReview()
+                    if (!openAllFilesAccessReview(activity)) {
+                        permissionSequence.completed(permission)
+                        AppFeedbackCenter.post(activity.getString(R.string.no_app_available), FeedbackTone.ERROR)
+                    }
                 }
                 OnboardingPermission.BATTERY -> if (!openBatteryOptimizationReview(activity)) {
                     permissionSequence.completed(permission)
@@ -440,7 +448,7 @@ internal class NativeOnboardingScreenOwner(
                     !activity.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)))
             if (!expected) RecordingIncidentStore.recordUnexpectedErrorInBackground(
                 appContext, "onboarding permission request", failure)
-            AppFeedbackCenter.post(activity.getString(R.string.no_app_available), FeedbackTone.ERROR)
+            AppFeedbackCenter.post(actionableErrorMessage(activity, activity.getString(R.string.no_app_available), failure), FeedbackTone.ERROR)
         }
         if (permissionSequence.pending == null) schedulePermissionPrompt()
     }
@@ -505,9 +513,9 @@ internal class NativeOnboardingScreenOwner(
                         }
                     } catch (cancelled: CancellationException) {
                         throw cancelled
-                    } catch (_: Exception) {
+                    } catch (error: Exception) {
                         if (!closed && showingOnboarding) {
-                            AppFeedbackCenter.post(activity.getString(R.string.recorder_state_persist_failed), FeedbackTone.ERROR)
+                            AppFeedbackCenter.post(actionableErrorMessage(activity, activity.getString(R.string.recorder_state_persist_failed), error), FeedbackTone.ERROR)
                         }
                     }
                 } while (inputRefreshPending && !closed && showingOnboarding)
@@ -531,11 +539,13 @@ internal class NativeOnboardingScreenOwner(
             var retryDelayMillis = DURABLE_UI_RETRY_INITIAL_MILLIS
             var failureReported = false
             while (showingOnboarding && configuration == null) {
+                var loadFailure: Throwable? = null
                 val loaded = try {
                     withContext(Dispatchers.IO) { getOnboardingConfiguration(appContext) }
                 } catch (cancelled: CancellationException) {
                     throw cancelled
-                } catch (_: Exception) {
+                } catch (error: Exception) {
+                    loadFailure = error
                     null
                 }
                 if (loaded != null) {
@@ -548,7 +558,7 @@ internal class NativeOnboardingScreenOwner(
                     return@launch
                 }
                 if (!failureReported) {
-                    AppFeedbackCenter.post(activity.getString(R.string.recorder_state_persist_failed), FeedbackTone.ERROR)
+                    AppFeedbackCenter.post(actionableErrorMessage(activity, activity.getString(R.string.recorder_state_persist_failed), loadFailure), FeedbackTone.ERROR)
                     failureReported = true
                 }
                 delay(retryDelayMillis)
@@ -617,6 +627,7 @@ internal class NativeOnboardingScreenOwner(
 
     private fun refreshOptionalPermissionStatus() {
         notificationAllowed = hasNotificationPermission()
+        allFilesAllowed = hasAllFilesAccess()
         recoveryAllowed = hasMediaRecoveryPermission()
         batteryAllowed = isIgnoringBatteryOptimizations(activity)
     }
@@ -627,13 +638,8 @@ internal class NativeOnboardingScreenOwner(
     private fun hasLegacyStoragePermission(): Boolean =
         !requiresLegacyPublicStoragePermission() ||
             activity.checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
-    private fun mediaRecoveryPermission(): String? = when {
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU -> Manifest.permission.READ_MEDIA_AUDIO
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q -> Manifest.permission.READ_EXTERNAL_STORAGE
-        else -> null
-    }
     private fun hasMediaRecoveryPermission(): Boolean =
-        mediaRecoveryPermission()?.let { activity.checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED } ?: true
+        hasAllFilesAccess() || hasRecordingAudioReadPermission(activity)
     private fun hasNotificationPermission(): Boolean =
         Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
             activity.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED

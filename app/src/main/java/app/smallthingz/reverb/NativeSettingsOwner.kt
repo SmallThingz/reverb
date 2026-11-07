@@ -65,6 +65,10 @@ internal class NativeSettingsOwner(
         private set
     var batteryOptimizationRestricted = !isIgnoringBatteryOptimizations(context)
         private set
+    var allFilesAllowed = hasAllFilesAccess()
+        private set
+    var audioReadAllowed = hasRecordingAudioReadPermission(context)
+        private set
     val notificationDurationInteraction = NotificationDurationInteractionState()
     val quickTileEditorState = savedTileEditor?.let(QuickSettingsTilesEditorState::restore)
         ?: QuickSettingsTilesEditorState()
@@ -139,6 +143,10 @@ internal class NativeSettingsOwner(
 
     fun setActive(active: Boolean) {
         if (closed) return
+        if (active && !state.active) {
+            allFilesAllowed = hasAllFilesAccess()
+            audioReadAllowed = hasRecordingAudioReadPermission(context)
+        }
         draft.setActive(active)
     }
 
@@ -447,9 +455,9 @@ internal class NativeSettingsOwner(
         if (!acceptsInput(owner) || !draft.directoryPicker.beginRequest()) return
         try {
             launchDirectory(snapshot.exportDirectoryUri?.let(Uri::parse))
-        } catch (_: RuntimeException) {
+        } catch (error: RuntimeException) {
             draft.directoryPicker.receiveResult(null)
-            feedback(R.string.cant_access_folder)
+            feedback(R.string.cant_access_folder, error)
         }
     }
 
@@ -463,19 +471,29 @@ internal class NativeSettingsOwner(
         val canonicalTree = canonicalDocumentTreeId(treeUri.toString())?.let(Uri::parse)
         if (canonicalTree == null) {
             draft.receiveDirectoryResult(null)
-            feedback(R.string.cant_access_folder)
+            feedback(R.string.failure_folder_result)
             return
         }
         val permissionTaken = runCatching {
             context.contentResolver.takePersistableUriPermission(treeUri,
                 Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
-        }.isSuccess
-        if (!permissionTaken) {
+        }
+        if (permissionTaken.isFailure) {
             draft.receiveDirectoryResult(null)
-            feedback(R.string.cant_access_folder)
+            feedback(R.string.cant_access_folder, permissionTaken.exceptionOrNull())
             return
         }
         draft.receiveDirectoryResult(canonicalTree.toString())
+    }
+
+    fun reviewAllFilesAccess(owner: Any) {
+        if (!featureInputReady(owner)) return
+        if (!openAllFilesAccessReview(context)) feedback(R.string.no_app_available)
+    }
+
+    fun reviewAudioReadAccess(owner: Any) {
+        if (!featureInputReady(owner) || recordingAudioReadPermission() == null) return
+        if (!openRecordingAudioAccessReview(context)) feedback(R.string.no_app_available)
     }
 
     fun reviewBattery(owner: Any) {
@@ -527,6 +545,7 @@ internal class NativeSettingsOwner(
                                         ),
                                     )
                                 }
+                                if (result.hasFailures) add(appResources.getString(R.string.failure_reason_unknown))
                             }
                             val message = messageParts.joinToString(" ").ifBlank {
                                 appResources.getString(R.string.move_recordings_none)
@@ -536,9 +555,9 @@ internal class NativeSettingsOwner(
                                 if (result.hasFailures) FeedbackTone.ERROR else FeedbackTone.SUCCESS,
                             )
                         },
-                        onFailure = {
+                        onFailure = { error ->
                             AppFeedbackCenter.post(
-                                appResources.getString(R.string.move_recordings_failed),
+                                actionableErrorMessage(context, appResources.getString(R.string.move_recordings_failed), error),
                                 FeedbackTone.ERROR,
                             )
                         },
@@ -552,6 +571,8 @@ internal class NativeSettingsOwner(
 
     private fun refreshBattery() {
         batteryOptimizationRestricted = !isIgnoringBatteryOptimizations(context)
+        allFilesAllowed = hasAllFilesAccess()
+        audioReadAllowed = hasRecordingAudioReadPermission(context)
         notifyChanged()
     }
 
@@ -616,7 +637,7 @@ internal class NativeSettingsOwner(
             var failureReported = false
             while (draft.needsHydration) {
                 val revision = state.editRevision
-                val hydrated = runDurableUiBooleanAttempt {
+                val hydrated = runDurableUiAttempt {
                     val result = draft.hydrate(
                         readDurable = {
                             val stored = persistence.readStoredConfiguration()
@@ -636,7 +657,7 @@ internal class NativeSettingsOwner(
                     if (result == SettingsDraftHydrationResult.APPLIED) refreshBattery()
                     result == SettingsDraftHydrationResult.APPLIED
                 }
-                if (hydrated) break
+                if (hydrated.succeeded) break
                 if (!settingsHydrationMayApply(revision, state.editRevision)) {
                     if (draft.needsHydration) {
                         retryDelayMillis = DURABLE_UI_RETRY_INITIAL_MILLIS
@@ -645,7 +666,7 @@ internal class NativeSettingsOwner(
                     break
                 }
                 if (!failureReported) {
-                    feedback(R.string.recorder_state_persist_failed)
+                    feedback(R.string.recorder_state_persist_failed, hydrated.failure)
                     failureReported = true
                 }
                 delay(retryDelayMillis)
@@ -656,8 +677,10 @@ internal class NativeSettingsOwner(
         next.start()
     }
 
-    private fun feedback(resource: Int) {
-        AppFeedbackCenter.post(context.getString(resource), FeedbackTone.ERROR)
+    private fun feedback(resource: Int, failure: Throwable? = null) {
+        val operation = context.getString(resource)
+        AppFeedbackCenter.post(if (failure != null || resource == R.string.recorder_state_persist_failed)
+            actionableErrorMessage(context, operation, failure) else operation, FeedbackTone.ERROR)
     }
 
     private fun notifyChanged() {

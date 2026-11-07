@@ -79,8 +79,10 @@ internal class SettingsSilenceCalibration(
                 // Both this live admission read and the draft callback execute on Main without
                 // suspension. Undo, input changes and Back revoke ownership before recomposition.
                 if (isCurrent()) {
-                    measured = result
-                    onCalibrated(config.copy(points = result.points),
+                    val fitted = result.copy(points = sampledSilenceCurve(result.peaks,
+                        minOf(SILENCE_MAX_HZ, result.sampleRate / 2), config.clearanceDb))
+                    measured = fitted
+                    onCalibrated(config.copy(points = fitted.points),
                         SilenceCalibrationHistogram(input, result.sampleRate, result.peaks.toList()))
                 }
             } catch (cancelled: CancellationException) {
@@ -90,7 +92,8 @@ internal class SettingsSilenceCalibration(
                     is SilenceCalibrationTooLoud -> context.getString(R.string.silence_calibration_too_loud)
                     is SilenceCalibrationTooShort -> context.getString(R.string.silence_calibration_too_short)
                     is SilenceCalibrationTimedOut -> context.getString(R.string.silence_calibration_timeout)
-                    else -> failure.message ?: context.getString(R.string.silence_sample_failed)
+                    is SilenceCalibrationUnavailable -> failure.message ?: context.getString(R.string.silence_sample_failed)
+                    else -> actionableErrorMessage(context, context.getString(R.string.silence_sample_failed), failure)
                 }
             } finally {
                 if (request == generation) {

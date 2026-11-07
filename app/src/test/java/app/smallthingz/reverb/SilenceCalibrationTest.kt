@@ -14,6 +14,29 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class SilenceCalibrationTest {
+    @Test(timeout = 5_000)
+    fun policyDenialCannotPublishZeroFilledCalibrationOrReplaceTheDraft() = runBlocking {
+        val previous = SilenceGateConfig(enabled = true)
+        var draft = previous
+        val sampler = FakeSampler { request ->
+            if (calibrationMicrophoneBlocked(true, android.app.AppOpsManager.MODE_IGNORED, false)) {
+                request.fail("Microphone access is blocked")
+            }
+            val zeros = ByteArray(16_000 * 4 * 2)
+            request.accept(zeros, 0, zeros.size, 16_000, 1, PcmSampleFormat.PCM_16)
+            request.processPendingControl()
+        }
+        try {
+            val result = calibrateSilence({ sampler }, {})
+            draft = previous.copy(points = result.points)
+            fail("Denied microphone must not publish a fitted curve")
+        } catch (failure: SilenceCalibrationUnavailable) {
+            assertEquals("Microphone access is blocked", failure.message)
+        }
+        assertSame(previous, draft)
+        assertEquals(1, sampler.closes)
+    }
+
     private fun pcm(rate: Int, channels: Int, format: PcmSampleFormat, amplitude: Double, frequencyHz: Int = 1_000): ByteArray {
         val buffer = ByteBuffer.allocate(rate * 4 * channels * format.bytesPerSample).order(ByteOrder.nativeOrder())
         repeat(rate * 4) { frame ->
@@ -247,12 +270,11 @@ class SilenceCalibrationTest {
     }
 
     @Test(timeout = 5_000)
-    fun conversionAfterAcquisitionStartedUsesTheSameDeadlineAsASemanticTap() = runBlocking {
+    fun stalledAcquisitionTimesOutPromptlyForHoldAndSemanticTap() = runBlocking {
         for (initiallyHeld in listOf(true, false)) {
-            // Advance the press clock, not coroutine time: the real production deadline
-            // should now expire shortly, whereas the old captured hold bound had 48s left.
+            // No PCM arrived: neither a hold nor its tap conversion earns a long deadline.
             val request = SilenceSampleRequest(held = initiallyHeld,
-                startedAtNanos = System.nanoTime() - 11_950_000_000L)
+                startedAtNanos = System.nanoTime() - 3_200_000_000L)
             val sampler = FakeSampler(request)
             var failure: Throwable? = null
             val job = launch(start = CoroutineStart.UNDISPATCHED) {
@@ -261,7 +283,7 @@ class SilenceCalibrationTest {
             }
             assertEquals(1, sampler.starts)
             if (initiallyHeld) {
-                assertTrue(request.remainingTimeoutMillis() > 40_000L)
+                assertEquals(0L, request.remainingTimeoutMillis())
                 request.useTimedSample()
             }
             assertEquals(0L, request.remainingTimeoutMillis())
@@ -354,5 +376,40 @@ class SilenceCalibrationTest {
             assertEquals(1, sampler.closes)
             assertTrue(sampler.request.cancelled.get())
         }
+    }
+
+    @Test fun samplingPreservesTypedPermissionCauseAndCleanupFailure() = runBlocking {
+        val primary = SecurityException("microphone permission denied")
+        val cleanup = IOException("release failed")
+        val sampler = FakeSampler { it.fail("Sampling failed", primary) }.apply { closeFailure = cleanup }
+        try {
+            calibrateSilence({ sampler }, {})
+            fail("Failed input must not produce a curve")
+        } catch (actual: SecurityException) {
+            assertSame(primary, actual)
+            assertEquals(listOf(cleanup), actual.suppressed.toList())
+            assertEquals(1, sampler.closes)
+            assertEquals(AppFailureReason.PERMISSION, appFailureDetail(actual).reason)
+        }
+    }
+
+    @Test fun modeledSamplingFailureStaysDistinctFromCaughtPlatformFailure() = runBlocking {
+        val sampler = FakeSampler { it.fail("Input connection unavailable") }
+        try {
+            calibrateSilence({ sampler }, {})
+            fail("Failed input must not produce a curve")
+        } catch (actual: SilenceCalibrationUnavailable) {
+            assertEquals("Input connection unavailable", actual.message)
+            assertNull(actual.cause)
+        }
+    }
+
+    @Test fun lateSamplingFailureCannotEraseOriginalTypedCause() {
+        val primary = SecurityException("input denied")
+        val request = SilenceSampleRequest()
+        request.fail("Sampling failed", primary)
+        request.fail("late disconnect")
+        assertSame(primary, request.state.value.errorCause)
+        assertEquals("Sampling failed", request.state.value.error)
     }
 }

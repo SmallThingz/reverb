@@ -282,11 +282,10 @@ fun CaptureScreen(
         )
     }
 
-    val activeBufferState = androidx.compose.runtime.rememberUpdatedState(activeBuffer)
     val selectedBufferState = androidx.compose.runtime.rememberUpdatedState(selectedBuffer)
     val visualizationCallback = remember {
         ReverbService.VisualizationCallback { frame ->
-            when (activeBufferState.value) {
+            when (frame.bufferSlot) {
                 ReverbService.BufferSlot.ONE_SHOT -> {
                     latestBlobActivity[0] = frame.activity.coerceIn(0f, 1f)
                     oneShotBlobController.submit(frame)

@@ -25,7 +25,7 @@ internal fun recordingTrimFailureMessage(context: Context, failure: Throwable): 
     if (failure is RecordingOutputCapacityException && failure.format == ExportFormat.WAV) {
         context.getString(R.string.trim_wav_limit,
             formatDurationInput(failure.maximumDurationMillis / 1000L))
-    } else context.getString(R.string.trim_failed)
+    } else actionableErrorMessage(context, context.getString(R.string.trim_failed), failure)
 
 internal suspend fun runCommittedInlineTrim(
     save: suspend () -> RecordingEntity,

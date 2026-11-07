@@ -55,6 +55,7 @@ internal class SettingsMenuContent(
     private val radius = 18f * density.density
     private val pad = (8f * density.density).roundToInt()
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
+    private val fillMotion=colorTransition(palette.raised) {fill.color=it;invalidate()}
     private val clip = SettingsMenuClip(context, radius)
     val column = SettingsMenuColumn(context, labelLarge, density, resolver, interestedParent)
     val viewport = NativeVerticalViewport(
@@ -90,7 +91,7 @@ internal class SettingsMenuContent(
     }
 
     fun <T> bind(content: SettingsDropdownContent<T>, palette: ReverbPalette, select: (T) -> Unit) {
-        fill.color = palette.raised
+        fillMotion.retarget(palette.raised)
         column.bind(content, palette, select)
         requestLayout()
         invalidate()
@@ -98,7 +99,7 @@ internal class SettingsMenuContent(
 
     /** Released Incidents/Library use default12dp horizontal/zero vertical item padding. */
     fun bindActions(actions: List<ReverbMenuAction>, palette: ReverbPalette, background: Int = palette.surfaceContainerHigh) {
-        fill.color = background
+        fillMotion.retarget(background)
         column.bindActions(actions, palette)
         requestLayout()
         invalidate()
@@ -284,7 +285,7 @@ internal class SettingsMenuItemView(
         isEnabled = true
         input.bind(NativeClickBinding(this, true, { performClick() }))
         text.setText(label)
-        text.setTextColor(if (selected) palette.ink else palette.muted)
+        text.animateTextColor(if (selected) palette.ink else palette.muted)
         check.bind(ReverbIcon.Check, palette.primary)
         check.visibility = if (selected) VISIBLE else GONE
         indication.updateColor(palette.ink)
@@ -297,7 +298,7 @@ internal class SettingsMenuItemView(
         leading = true
         isEnabled = value.enabled
         text.setText(value.label)
-        text.setTextColor(value.textColor)
+        text.animateTextColor(value.textColor)
         check.bind(value.icon, value.iconColor)
         check.visibility = VISIBLE
         indication.updateColor(palette.ink)

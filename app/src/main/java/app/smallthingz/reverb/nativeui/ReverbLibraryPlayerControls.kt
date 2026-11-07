@@ -33,7 +33,7 @@ internal class PlayerTrimHeading(context: Context, private var environment: Reve
         duration.setText(formatRangeTimeInput((state.trimEndMillis - state.trimStartMillis).coerceAtLeast(0) / 1000.0))
         duration.setTypography(playerTimeTypography,
             value.textDensity, value.sharedFontResolver)
-        duration.setTextColor(value.palette.muted)
+        duration.animateTextColor(value.palette.muted)
     }
     private fun dp(value: Float) = (value * environment.textDensity.density).roundToInt()
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
@@ -220,11 +220,13 @@ private class PlayerTrimActionRow(context: Context, private var environment: Rev
 private class PlayerGlyph(context: Context, private var environment: ReverbViewEnvironment,
                            private val glyph: ReverbIcon) : View(context) {
     private var drawable = ReverbIconDrawable(glyph, environment.textDensity.density, environment.palette.ink)
+    private val colorMotion=colorTransition(environment.palette.ink) {drawable.setTint(it);invalidate()}
     init { importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO; if (android.os.Build.VERSION.SDK_INT >= 29) isForceDarkAllowed = false }
     fun bind(value: ReverbViewEnvironment, color: Int) {
         if (value.textDensity.density != environment.textDensity.density) drawable = ReverbIconDrawable(glyph, value.textDensity.density, color)
         environment = value
-        drawable.setTint(color)
+        colorMotion.retarget(color)
+        drawable.setTint(colorMotion.color(0))
         drawable.layoutDirection = layoutDirection
         drawable.setBounds(0, 0, width, height)
         invalidate()

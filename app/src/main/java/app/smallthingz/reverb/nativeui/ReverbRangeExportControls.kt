@@ -46,7 +46,7 @@ internal class ReverbRangeExportControls(
     private var onExport: () -> Unit = {}
     private var state: RangeExportEditorState? = null
     private data class VisualKey(val environment: ReverbViewEnvironment, val loading: Boolean,
-        val enabled: Boolean, val buffer: ReverbService.BufferSlot)
+        val enabled: Boolean, val buffer: ReverbService.BufferSlot, val canClose: Boolean)
     private var visualKey: VisualKey? = null
 
     init {
@@ -68,17 +68,18 @@ internal class ReverbRangeExportControls(
         selectedBuffer: ReverbService.BufferSlot,
         onCancel: () -> Unit,
         onExport: () -> Unit,
+        canClose: Boolean = true,
     ) {
         environment = value; this.state = state; this.onCancel = onCancel; this.onExport = onExport
         val palette = value.palette
         val enabled = !loading && state.snapshotReady && !state.selectionDurationEditing && canExport
         val previous = visualKey
         if (previous != null && previous.environment === value && previous.loading == loading &&
-            previous.enabled == enabled && previous.buffer == selectedBuffer) return
+            previous.enabled == enabled && previous.buffer == selectedBuffer && previous.canClose == canClose) return
         // Waveform frames keep live callbacks above without allocating or rebinding visual state.
-        visualKey = VisualKey(value, loading, enabled, selectedBuffer)
+        visualKey = VisualKey(value, loading, enabled, selectedBuffer, canClose)
         surface.setPalette(palette.field, palette.border)
-        close.bind(value, ReverbIcon.Close, context.getString(R.string.close), true,
+        close.bind(value, ReverbIcon.Close, context.getString(R.string.close), canClose,
             palette.ink, palette.onSurface, { this.onCancel() })
         pillSurface.setPalette(reverbColorWithAlpha(palette.primaryContainer, .32f), 0)
         pill.bind(value, selectedBuffer)
@@ -154,12 +155,12 @@ private class BufferPill(context: Context, private var environment: ReverbViewEn
     fun bind(value: ReverbViewEnvironment, buffer: ReverbService.BufferSlot) {
         environment = value
         val oneShot = buffer == ReverbService.BufferSlot.ONE_SHOT
-        val color = reverbColorWithAlpha(value.palette.onPrimaryContainer, .58f)
+        val color = value.palette.onPrimaryContainer
         glyph.bind(if (oneShot) ReverbIcon.OneShot else ReverbIcon.Looping, color)
         label.setText(context.getString(if (oneShot) R.string.buffer_one_shot else R.string.buffer_loop))
         label.setTypography(rangeBufferLabelStyle,
             value.textDensity, value.sharedFontResolver)
-        label.setTextColor(color); requestLayout()
+        label.animateTextColor(color); requestLayout()
     }
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val maxW = MeasureSpec.getSize(widthMeasureSpec); val maxH = MeasureSpec.getSize(heightMeasureSpec)

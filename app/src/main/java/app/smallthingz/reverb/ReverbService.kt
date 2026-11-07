@@ -44,6 +44,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
+internal const val MAX_PENDING_DURABLE_SAVE_ADMISSIONS = 4
 
 internal class UiForegroundOwnerTracker {
     private val owners = IdentityHashMap<Any, Unit>()
@@ -102,6 +103,20 @@ internal fun combineRecorderTerminalFailureMessages(
     return "$primary $detail"
 }
 
+internal fun combineRecorderTerminalPersistenceFailures(
+    primary: String,
+    intentPersisted: Boolean,
+    persistenceSummary: String,
+    intentFailureDetails: List<String>,
+    sealFailureDetail: String?,
+): String {
+    if (intentPersisted && sealFailureDetail == null) return primary
+    val details = (intentFailureDetails + listOfNotNull(sealFailureDetail))
+        .map(String::trim).filter(String::isNotEmpty).distinct()
+    val secondary = details.fold(persistenceSummary, ::combineRecorderTerminalFailureMessages)
+    return combineRecorderTerminalFailureMessages(primary, secondary)
+}
+
 internal fun recorderCommandGenerationMayApply(
     expectedGeneration: Long?,
     currentGeneration: Long,
@@ -109,6 +124,34 @@ internal fun recorderCommandGenerationMayApply(
 
 internal inline fun <T : Any> requireServiceStarted(start: () -> T?): T =
     start() ?: throw IllegalStateException("Service start returned no component")
+
+internal enum class DurableSaveLifetimeRejection(val explanation: String) {
+    SERVICE_STOPPING("Saving paused because the recording service is stopping"),
+    FOREGROUND_TIMED_OUT("Saving paused because Android ended the background work lifetime"),
+    SUPERSEDED_GENERATION("Saving paused because this work belongs to an earlier service generation"),
+}
+
+/** A modeled lifecycle refusal, with no fabricated platform cause. */
+internal class DurableSaveLifetimeRejectedException(val rejection: DurableSaveLifetimeRejection) :
+    IllegalStateException(rejection.explanation)
+
+internal data class DurableSaveLifetimeAttempt(val failure: RuntimeException?)
+
+/** Called under the Service's existing lifetime lock; never owns terminal delivery or cleanup. */
+internal fun attemptDurableSaveLifetimeProtection(
+    rejection: DurableSaveLifetimeRejection?,
+    start: () -> Any?,
+    promote: () -> Unit,
+): DurableSaveLifetimeAttempt {
+    if (rejection != null) return DurableSaveLifetimeAttempt(DurableSaveLifetimeRejectedException(rejection))
+    return try {
+        requireServiceStarted(start)
+        promote()
+        DurableSaveLifetimeAttempt(null)
+    } catch (error: RuntimeException) {
+        DurableSaveLifetimeAttempt(error)
+    }
+}
 
 internal inline fun commitRecorderPreferenceMutation(
     commit: () -> Boolean,
@@ -269,6 +312,7 @@ open class ReverbService : Service() {
         val continuityGeneration: Long,
         val releaseGeneration: Long,
         val commandGeneration: Long,
+        val queued: Boolean = false,
     )
 
     private val listeningCommandGeneration = AtomicLong()
@@ -316,6 +360,12 @@ open class ReverbService : Service() {
 
     private val exportStateLock = Any()
     private var exportAdmissionClosed = false // Guarded only by the short exportStateLock.
+    private val durableSaveOwners = linkedMapOf<Long, DurableSaveOwner>()
+    private val exportUiGeneration = AtomicLong()
+    private val durableWorkGeneration = AtomicLong()
+    private var durableRecoveryQueued = false
+    private lateinit var durableSaveAdmissionExecutor: ExecutorService
+    private val durableSaveCoordinator by lazy { DurableSaveCoordinator.get(applicationContext) }
 
     @Volatile
     private var foregroundServiceTypes = 0
@@ -350,15 +400,12 @@ open class ReverbService : Service() {
 
     private val visualizationCallbacks = IdentityFrameMailbox<VisualizationCallback, VisualizationFrame>()
     private val deliverVisualizationFrame: (VisualizationCallback, VisualizationFrame) -> Unit = { callback, frame ->
-        callback.frame(frame)
+        if (visualizationFrameMayDeliver(frame.captureCommandGeneration, frame.captureContinuityGeneration,
+                listeningCommandGeneration.get(), captureContinuityGeneration.get(), serviceDestroying)) {
+            callback.frame(frame)
+        }
     }
 
-    // Audio-owner-only: idle binding and calibration do not allocate capture batches.
-    private var captureReadBuffers: CaptureReadBuffers? = null
-    private class CaptureReadBuffers(capacityBytes: Int) {
-        val scratch = ByteArray(capacityBytes)
-        val buffer = ByteBuffer.allocateDirect(capacityBytes).order(ByteOrder.nativeOrder())
-    }
     // Audio-owner-only; lifetimes without a visualizer never allocate FFT scratch.
     private var visualizationAnalyzer: AudioVisualizationAnalyzer? = null
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -427,12 +474,29 @@ open class ReverbService : Service() {
         audioThread = HandlerThread(THREAD_NAME_AUDIO, Process.THREAD_PRIORITY_AUDIO)
             .also { it.start() }
         audioHandler = Handler(audioThread.looper)
+        captureIo = CaptureIoCoordinator(audioHandler,
+            onPacket = ::consumeQueuedCapture,
+            onInputFailure = ::finishQueuedInputFailure,
+            onWriterFailure = { error -> pauseListeningAfterPersistenceFailure("queued PCM writer",
+                error as? Exception ?: IOException("Queued PCM writer failed", error)) },
+            onDispatchFailure = ::failCaptureWriterDispatch,
+        )
         exportWorkExecutor = Executors.newSingleThreadExecutor { runnable ->
             Thread(runnable, THREAD_NAME_EXPORT_WORK).apply {
                 priority = Thread.NORM_PRIORITY
                 isDaemon = true
             }
         }
+        durableSaveAdmissionExecutor = java.util.concurrent.ThreadPoolExecutor(
+            1, 1, 0L, TimeUnit.MILLISECONDS,
+            java.util.concurrent.ArrayBlockingQueue(MAX_PENDING_DURABLE_SAVE_ADMISSIONS),
+            { runnable -> Thread(runnable, "reverb-save-admission").apply { isDaemon = true } },
+        )
+        durableSaveCoordinator.setRecoveryRequest(this) {
+            mainHandler.post { scheduleDurableSaveRecovery(allowForegroundRetry = true) }
+        }
+        scheduleDurableSaveRecovery()
+        DurableSaveNotifications.start(applicationContext)
         durabilitySyncExecutor = Executors.newSingleThreadExecutor { runnable ->
             Thread({
                 Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
@@ -455,7 +519,7 @@ open class ReverbService : Service() {
             synchronized(listeningIntentLock) { persistenceFailureBlocked = true }
             reportPersistentStoreFailure("load durable capture intent", error)
         }
-        audioHandler.post {
+        postCaptureWork post@ {
             try {
                 // Previous Service teardown and accepted exports may still own these files.
                 // Await the pair before taking either store monitor; main remains responsive.
@@ -506,7 +570,7 @@ open class ReverbService : Service() {
                         // Sticky onStartCommand can queue a start with the pre-initialization
                         // generation. Resolving the configured buffer may advance that generation;
                         // always ensure capture with the current one once initialization settles.
-                        audioHandler.post { startAudioInputOnAudioThread(currentGeneration) }
+                        postCaptureWork(pauseInput = true) post@ { startAudioInputOnAudioThread(currentGeneration) }
                     } else {
                         innerStartListening(currentGeneration)
                     }
@@ -522,7 +586,12 @@ open class ReverbService : Service() {
         synchronized(settingsAdmissionLock) { settingsAdmissionClosed = true }
         // Retire cheap export admission before taking any durability-held intent monitor.
         // Accepted buffered work has already queued both its worker and audio preparation.
-        synchronized(exportStateLock) { exportAdmissionClosed = true }
+        synchronized(exportStateLock) {
+            exportAdmissionClosed = true
+            durableWorkGeneration.incrementAndGet()
+        }
+        durableSaveCoordinator.clearRecoveryRequest(this)
+        if (::durableSaveAdmissionExecutor.isInitialized) durableSaveAdmissionExecutor.shutdown()
         synchronized(bufferClearLock) { bufferClearAdmissionClosed = true }
         // These short owners retire promptly even if a durability step owns the intent lock.
         // The explicit audio-tail/incident shutdown barrier below remains unchanged.
@@ -535,9 +604,11 @@ open class ReverbService : Service() {
         // teardown begins. Explicit Stop/failure paths already invalidate continuity themselves.
         synchronized(listeningIntentLock) {
             serviceDestroying = true
+            publishCaptureIngress()
         }
+        captureIo.closeAdmission()
         if (cancelActiveBufferClearForTeardown()) {
-            AppFeedbackCenter.post(getString(R.string.clear_buffer_failed), FeedbackTone.ERROR)
+            AppFeedbackCenter.post(getString(R.string.clear_buffer_failed) + " " + getString(R.string.failure_service_stopped), FeedbackTone.ERROR)
         }
         retentionMaintenanceState.clear()
         if (::bufferClearExecutor.isInitialized) {
@@ -556,14 +627,16 @@ open class ReverbService : Service() {
         flushAndPersistBeforeShutdown()
         // The terminal store-close task is now queued (or complete). Reject any later audio work
         // before doing main-thread incident/tile bookkeeping so nothing can queue behind close.
-        audioThread.quitSafely()
+        // The reserved terminal control quits the writer after its native-return/drain acknowledgement.
         // Timestamp the outage after microphone teardown so incident duration does not include
         // the final in-flight batch that was still successfully persisted. Keep the marker armed
         // so later process-exit evidence can enrich this provisional same-session incident.
-        RecordingIncidentStore.recordCaptureServiceStopped(
-            this,
-            "Recorder service stopped while capture was running",
-        )
+        // A planned Stop still draining is not yet an outage. Its armed marker preserves
+        // process-death evidence; the drain owner publishes an incident only on actual failure.
+        if (synchronized(listeningIntentLock) { pendingKnownCaptureStop == null }) {
+            RecordingIncidentStore.recordCaptureServiceStopped(
+                this, "Recorder service stopped while capture was running")
+        }
         RecordingQuickTileStateCache.markServiceStopped(this, quickTileStateOwner)
         // markServiceStopped already installs the fail-closed snapshot and asynchronously
         // hydrates persisted stopped state. Dispatch it without republishing/invalidation.
@@ -582,14 +655,14 @@ open class ReverbService : Service() {
 
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-        audioHandler.post {
+        postCaptureWork post@ {
             if (!serviceDestroying && captureStoresAdmitted) checkpointPersistentStore("trim-memory checkpoint")
         }
     }
 
     override fun onLowMemory() {
         super.onLowMemory()
-        audioHandler.post {
+        postCaptureWork post@ {
             if (!serviceDestroying && captureStoresAdmitted) checkpointPersistentStore("low-memory checkpoint")
         }
     }
@@ -612,7 +685,7 @@ open class ReverbService : Service() {
         if (serviceDestroying || !::audioHandler.isInitialized) return
         // Bind, focus and lifecycle callbacks only enqueue. Clear may own the intent lock
         // across durable retirement; sampling and consuming retry flags belongs off main.
-        audioHandler.post {
+        postCaptureWork post@ {
             val retryGeneration = synchronized(listeningIntentLock) {
                 if (
                     shouldRetrySuspendedListeningWithForegroundUi(
@@ -754,9 +827,19 @@ open class ReverbService : Service() {
                     }
                     retained
                 },
-                enqueue = { work -> audioHandler.post(work) },
+                enqueue = { work -> postCaptureWork(
+                    onRejected = { rejectCaptureCommandWork(work) }) { work.run() } },
                 onIdle = {
                     mainHandler.post { releaseCaptureCommandStartedLifetimeIfIdle() }
+                },
+                onRejected = {
+                    val message = getString(R.string.recording_unavailable)
+                    feedback.postIfCurrent(
+                        value = UiCaptureCommandResult(bufferSlot, CaptureBlobTapAction.NONE,
+                            rejectedListeningCommand(), errorMessage = message),
+                        enqueue = { mainHandler.post(it) }, isOwnerCurrent = { !serviceDestroying },
+                        onUndelivered = { AppFeedbackCenter.post(message, FeedbackTone.ERROR) },
+                    )
                 },
             ) {
                 val outcome = recorderErrors.captureCommand {
@@ -968,6 +1051,7 @@ open class ReverbService : Service() {
                 RecordingQuickTiles.beginHandoff(previousActiveBuffer, bufferSlot, resolvedGeneration)
             }
             if (resolvedGeneration != null) captureControlFence.recordAcceptedControl(expectedControl)
+            publishCaptureIngress()
             resolvedGeneration
         }
         if (generation == null) {
@@ -984,9 +1068,9 @@ open class ReverbService : Service() {
         }
         if (targetChanged) {
             if (switchingWhileRecording) {
-                audioHandler.post { adoptCaptureGenerationOnAudioThread(generation) }
+                postCaptureWork post@ { adoptCaptureGenerationOnAudioThread(generation) }
             } else {
-                audioHandler.post { publishQuickTileSnapshotOnAudioThread(refreshTiles = true) }
+                postCaptureWork post@ { publishQuickTileSnapshotOnAudioThread(refreshTiles = true) }
             }
         }
         return ListeningCommandResult(accepted = true, generation = generation)
@@ -995,7 +1079,7 @@ open class ReverbService : Service() {
     private fun adoptCaptureGenerationOnAudioThread(generation: Long) {
         check(audioHandler.looper == Looper.myLooper())
         val record = audioRecord
-        val recordRunning = record != null && runCatching {
+        val recordRunning = record != null && captureIo.currentInput()?.storage?.ring?.status()?.terminal == null && runCatching {
             record.recordingState == AudioRecord.RECORDSTATE_RECORDING
         }.getOrDefault(false)
         when (
@@ -1010,15 +1094,16 @@ open class ReverbService : Service() {
                 publishQuickTileSnapshotOnAudioThread(refreshTiles = true)
                 return
             }
-            CaptureReaderTransition.RESTART -> startAudioInputOnAudioThread(
-                generation = generation,
-                continuousRestart = true,
-            )
+            CaptureReaderTransition.RESTART -> {
+                postCaptureWork(pauseInput = true) post@ {
+                    startAudioInputOnAudioThread(generation = generation, continuousRestart = true)
+                }
+            }
             CaptureReaderTransition.ADOPT -> {
-                audioHandler.removeCallbacks(audioReader)
+
                 audioRecordGeneration = generation
                 publishQuickTileSnapshotOnAudioThread(refreshTiles = true)
-                audioHandler.post(audioReader)
+                startQueuedCapture()
             }
         }
     }
@@ -1062,7 +1147,6 @@ open class ReverbService : Service() {
         expectedControl: Long? = null,
     ): ListeningCommandResult {
         val prefs = getRecorderPreferences(this)
-        var stopIncidentStateFailure = false
         var intentRollbackFailure: IOException? = null
         val generation = synchronized(listeningIntentLock) {
             if (!recorderCommandMayApply(expectedGeneration, expectedControl)) return rejectedListeningCommand()
@@ -1128,60 +1212,36 @@ open class ReverbService : Service() {
                     persistenceFailureBlocked = false
                     listeningCommandGeneration.incrementAndGet()
                 } else {
-                    // Do not invalidate the active reader until the known-Stop marker is durably
-                    // disarmed too. If that second half fails, roll the intent back and keep
-                    // capture continuous rather than accepting a Stop that later looks accidental.
+                    // Reserve the armed session below before revoking input admission. Its
+                    // disarm belongs to the eventual durable completed-prefix seal.
                     listeningCommandGeneration.get()
                 }
             }
             val acceptedGeneration = if (commandGeneration == null || enabled) {
                 commandGeneration
             } else {
-                when (
-                    explicitCaptureStopDisposition(
-                        stopIntentChanged = stopIntentChanged,
-                        incidentResult = RecordingIncidentStore.recordKnownCaptureStop(this),
-                    )
-                ) {
-                    ExplicitCaptureStopDisposition.KNOWN_STOP -> {
-                        durableCaptureIntentAuthorityValid = true
-                        durableListeningIntentEnabled = false
-                        durableCaptureBufferSlot = requestedSlot
-                        if (captureIntentRepairClearsPersistenceBlock(
-                                authorityWasValid = authorityWasValid,
-                                stopDisposition = ExplicitCaptureStopDisposition.KNOWN_STOP,
-                            )
-                        ) {
-                            persistenceFailureBlocked = false
-                        }
-                        captureContinuityGeneration.incrementAndGet()
-                        if (stopIntentChanged) listeningCommandGeneration.incrementAndGet() else commandGeneration
-                    }
-                    ExplicitCaptureStopDisposition.REJECT_REARMED -> {
-                        val rollbackPersisted = restoreCaptureIntentAfterFailedMutation(
-                            prefs = prefs,
-                            snapshot = previousPreferences,
-                            authorityWasValid = authorityWasValid,
-                        )
-                        if (!rollbackPersisted) {
-                            Log.e(TAG, "Unable to durably restore recorder intent after failed known Stop")
-                            intentRollbackFailure = IOException(
-                                "Unable to restore recorder intent after failed known Stop",
-                            )
-                        }
-                        null
-                    }
-                    ExplicitCaptureStopDisposition.INCIDENT_STATE_FAILURE -> {
-                        durableCaptureIntentAuthorityValid = true
-                        durableListeningIntentEnabled = false
-                        durableCaptureBufferSlot = requestedSlot
-                        // Continuing with uncertain or already-disabled incident state can make a
-                        // later process death invisible. Honor the Stop, but classify the
-                        // bookkeeping loss as an interruption instead of pretending it was known.
-                        stopIncidentStateFailure = true
-                        captureContinuityGeneration.incrementAndGet()
-                        if (stopIntentChanged) listeningCommandGeneration.incrementAndGet() else commandGeneration
-                    }
+                val reserved = try {
+                    reserveKnownCaptureStopForDrain()
+                    true
+                } catch (error: Exception) {
+                    Log.e(TAG, "Unable to reserve pending Stop evidence", error)
+                    RecordingIncidentStore.recordUnexpectedErrorInBackground(this, "Prepare pending Stop evidence", error)
+                    false
+                }
+                if (reserved) {
+                    durableCaptureIntentAuthorityValid = true
+                    durableListeningIntentEnabled = false
+                    durableCaptureBufferSlot = requestedSlot
+                    if (captureIntentRepairClearsPersistenceBlock(authorityWasValid,
+                            stopReservationAccepted = true)) persistenceFailureBlocked = false
+                    captureContinuityGeneration.incrementAndGet()
+                    if (stopIntentChanged) listeningCommandGeneration.incrementAndGet() else commandGeneration
+                } else {
+                    val rollbackPersisted = restoreCaptureIntentAfterFailedMutation(
+                        prefs = prefs, snapshot = previousPreferences, authorityWasValid = authorityWasValid)
+                    if (!rollbackPersisted) intentRollbackFailure = IOException(
+                        "Unable to restore recorder intent after rejected Stop reservation")
+                    null
                 }
             }
             if (acceptedGeneration != null) {
@@ -1189,6 +1249,7 @@ open class ReverbService : Service() {
                 foregroundCaptureRetryGate.resetForExplicitIntent()
                 captureControlFence.recordAcceptedControl(expectedControl)
             }
+            publishCaptureIngress()
             acceptedGeneration
         }
         if (generation == null) {
@@ -1204,14 +1265,6 @@ open class ReverbService : Service() {
             return ListeningCommandResult(
                 accepted = false,
                 generation = listeningCommandGeneration.get(),
-            )
-        }
-        if (!enabled && stopIncidentStateFailure) {
-            val error = IOException("Unable to persist known-Stop incident state")
-            reportPersistentStoreFailure("persist known Stop incident state", error)
-            RecordingIncidentStore.recordCaptureInterrupted(
-                this,
-                "Capture stopped because known-Stop incident state could not be persisted",
             )
         }
         if (enabled) {
@@ -1272,6 +1325,9 @@ open class ReverbService : Service() {
         val accepted = synchronized(listeningIntentLock) {
             if (serviceDestroying && drainOwner == null) return@synchronized false
             if (!durableCaptureIntentAuthorityValid) return@synchronized false
+            // Completed PCM owns its data, but cannot replace a newer user's durable command.
+            if (drainOwner?.queued == true &&
+                drainOwner.commandGeneration != listeningCommandGeneration.get()) return@synchronized false
             val resolved = resolveTargetLocked() ?: return@synchronized false
             if (serviceDestroying && !(drainOwner != null &&
                     activeBufferSlot == BufferSlot.ONE_SHOT && resolved == BufferSlot.LOOPING &&
@@ -1279,12 +1335,12 @@ open class ReverbService : Service() {
                     acceptedCaptureDrainIsCurrent(
                         readContinuity = drainOwner.continuityGeneration,
                         currentContinuity = captureContinuityGeneration.get(),
-                        readCommand = drainOwner.commandGeneration,
+                        readCommand = if (drainOwner.queued) listeningCommandGeneration.get() else drainOwner.commandGeneration,
                         currentCommand = listeningCommandGeneration.get(),
                         readRelease = drainOwner.releaseGeneration,
                         currentRelease = audioRecordReleaseGeneration.get(),
                         inputStillOwned = audioRecord === drainOwner.input &&
-                            audioRecordGeneration == drainOwner.commandGeneration,
+                            (drainOwner.queued || audioRecordGeneration == drainOwner.commandGeneration),
                         recorderListening = state == STATE_LISTENING,
                         listeningIntentEnabled = durableListeningIntentEnabled,
                     )
@@ -1337,6 +1393,7 @@ open class ReverbService : Service() {
                 }
             }
             changed = true
+            publishCaptureIngress()
             true
         }
 
@@ -1528,6 +1585,7 @@ open class ReverbService : Service() {
             persistenceFailureBlocked
         ) return
         state = STATE_LISTENING
+        publishCaptureIngress()
         updateWakeLockState()
         val attempt = newForegroundCaptureAttempt(generation)
         try {
@@ -1563,18 +1621,20 @@ open class ReverbService : Service() {
             foregroundStartBlocked = true
             captureContinuityGeneration.incrementAndGet()
             state = STATE_PAUSED
-            listeningCommandGeneration.incrementAndGet()
+            val next = listeningCommandGeneration.incrementAndGet()
+            publishCaptureIngress()
+            next
         }
         RecordingIncidentStore.recordCaptureInterrupted(
             this,
             "Capture stopped after foreground service start restriction",
         )
-        audioHandler.post {
+        postCaptureWork(pauseInput = true) post@ {
             if (serviceDestroying || pausedGeneration != listeningCommandGeneration.get() ||
                 attempt.admissionGeneration != foregroundAdmissionGeneration.get() ||
                 state == STATE_LISTENING
             ) return@post
-            audioHandler.removeCallbacks(audioReader)
+
             try {
                 sealActiveChunks()
             } catch (sealError: Exception) {
@@ -1601,6 +1661,7 @@ open class ReverbService : Service() {
             // A delayed platform start observes intent on main, but cannot overtake a durable
             // Stop or publish LISTENING from the intent value observed before that Stop.
             state = STATE_LISTENING
+            publishCaptureIngress()
             updateWakeLockState()
         }
         startAudioInputOnAudioThread(attempt.commandGeneration)
@@ -1612,8 +1673,23 @@ open class ReverbService : Service() {
     ) {
         check(audioHandler.looper == Looper.myLooper())
         if (serviceDestroying || !captureStoresAdmitted || generation != listeningCommandGeneration.get()) return
-        if (audioRecordGeneration == generation && audioRecord?.recordingState == AudioRecord.RECORDSTATE_RECORDING) return
-        audioHandler.removeCallbacks(audioReader)
+        if (audioRecordGeneration == generation && audioRecord?.recordingState == AudioRecord.RECORDSTATE_RECORDING &&
+            captureIo.currentInput()?.storage?.ring?.status()?.terminal == null && captureIo.currentInput() != null) return
+
+        // A newer Start can be admitted before the old Stop callback was posted. Settle
+        // that exact old session before a new marker can be armed, without changing new intent.
+        try {
+            if (synchronized(listeningIntentLock) { pendingKnownCaptureStop != null }) {
+                sealActiveChunks()
+                check(synchronized(listeningIntentLock) { pendingKnownCaptureStop == null }) {
+                    "Capture restart overtook pending Stop drain"
+                }
+            }
+        } catch (error: Exception) {
+            reportPendingKnownCaptureStopDrainFailure(error)
+            pauseListeningAfterPersistenceFailure("seal pending Stop before capture restart", error)
+            return
+        }
         releaseAudioRecord()
         if (serviceDestroying || generation != listeningCommandGeneration.get() || state != STATE_LISTENING || !isListeningEnabled()) return
         // Binding the paused UI should not probe microphone hardware. Resolve the
@@ -1642,7 +1718,7 @@ open class ReverbService : Service() {
         if (serviceDestroying) return
         if (generation != currentGeneration) {
             if (!serviceDestroying && state == STATE_LISTENING && isListeningEnabled()) {
-                audioHandler.post { startAudioInputOnAudioThread(currentGeneration) }
+                postCaptureWork(pauseInput = true) post@ { startAudioInputOnAudioThread(currentGeneration) }
             }
             return
         }
@@ -1677,7 +1753,7 @@ open class ReverbService : Service() {
         if (serviceDestroying || generation != listeningCommandGeneration.get() || state != STATE_LISTENING || !isListeningEnabled()) return
         lastDurabilitySyncRequestNanos = System.nanoTime()
         publishQuickTileSnapshotOnAudioThread(refreshTiles = true, persistDurations = true)
-        audioHandler.post(audioReader)
+        startQueuedCapture()
     }
 
     private fun armCaptureIncidentTrackingOnAudioThread(continuousRestart: Boolean = false): Boolean {
@@ -1685,6 +1761,7 @@ open class ReverbService : Service() {
         return synchronized(listeningIntentLock) {
             if (serviceDestroying) return@synchronized false
             try {
+                check(pendingKnownCaptureStop == null) { "Capture arm overtook pending Stop durability" }
                 RecordingIncidentStore.recordCaptureStarted(this, continuousRestart = continuousRestart)
                 true
             } catch (error: Exception) {
@@ -1694,24 +1771,80 @@ open class ReverbService : Service() {
         }
     }
 
+    private data class PendingKnownCaptureStop(
+        val token: KnownCaptureStopToken,
+        val input: CaptureIoCoordinator.Input?,
+    )
+    // Protected by listeningIntentLock. It also retains an old input's drain proof through release.
+    private var pendingKnownCaptureStop: PendingKnownCaptureStop? = null
+
+    private fun reserveKnownCaptureStopForDrain() {
+        synchronized(listeningIntentLock) {
+            if (pendingKnownCaptureStop != null) return
+            val token = RecordingIncidentStore.beginKnownCaptureStop(this)
+            val input = if (::captureIo.isInitialized) captureIo.currentInput() else null
+            val status = input?.storage?.ring?.status()
+            val pendingPcm = status != null && (status.terminal == null ||
+                (status.occupiedPackets > 0 && !persistenceFailureBlocked))
+            val pendingGate = silenceGateStream != null &&
+                captureGateOutputMayCommit(silenceGateEpoch, persistenceInterruptedCaptureEpoch)
+            if ((pendingPcm || pendingGate) && !token.armed) {
+                throw IOException("Accepted capture PCM has no armed session evidence")
+            }
+            pendingKnownCaptureStop = PendingKnownCaptureStop(token, input)
+        }
+    }
+
+    private fun completePendingKnownCaptureStopAfterSeal() {
+        synchronized(listeningIntentLock) {
+            val pending = pendingKnownCaptureStop ?: return
+            // A Save or gate seal may precede later accepted packets. Only the entire old
+            // input's completed prefix/native acknowledgement can retire this Stop marker.
+            if (pending.input?.storage?.ring?.isDrained() == false) return
+            when (RecordingIncidentStore.completeKnownCaptureStop(this, pending.token)) {
+                DeferredKnownCaptureStopResult.DURABLE,
+                DeferredKnownCaptureStopResult.SUPERSEDED -> pendingKnownCaptureStop = null
+                DeferredKnownCaptureStopResult.FAILED_REARMED,
+                DeferredKnownCaptureStopResult.FAILED_UNCERTAIN ->
+                    throw IOException("Stopped capture PCM was sealed but session retirement was not durable")
+            }
+        }
+    }
+
+    private fun reportPendingKnownCaptureStopDrainFailure(error: Throwable) {
+        if (synchronized(listeningIntentLock) { pendingKnownCaptureStop == null }) return
+        // Publish outage evidence without disarming the still-pending capture session.
+        runCatching { RecordingIncidentStore.recordCaptureServiceStopped(this,
+            "Capture stopped before buffered audio could be durably sealed") }
+            .onFailure { if (it !== error) error.addSuppressed(it) }
+    }
+
     private fun innerStopListening() {
         // Pending pair admission has no store or microphone work to wait for. Readiness is
         // otherwise unrelated to terminal ownership: even a READY/failed store can own input.
         if (!captureStoresAdmitted && audioRecord == null) {
+            postCaptureWork(pauseInput = true) {
+                try { completePendingKnownCaptureStopAfterSeal() }
+                catch (error: Exception) {
+                    reportPendingKnownCaptureStopDrainFailure(error)
+                    reportTerminalCaptureStoreFailure("retire idle Stop evidence", error)
+                }
+            }
             state = STATE_READY
             updateWakeLockState()
             requestServiceStopWhenExportIdle()
             return
         }
-        audioHandler.post {
+        postCaptureWork(pauseInput = true) post@ {
             // A target switch may legitimately advance the state generation after Stop was
             // requested. Only a newer durable Start intent should cancel teardown.
             if (serviceDestroying || isListeningEnabled()) return@post
-            audioHandler.removeCallbacks(audioReader)
+
             state = STATE_READY
             try {
                 if (captureStoresAdmitted) sealActiveChunks()
             } catch (error: Exception) {
+                reportPendingKnownCaptureStopDrainFailure(error)
                 reportTerminalCaptureStoreFailure("seal while stopping", error)
             } finally {
                 releaseAudioRecord()
@@ -1794,6 +1927,9 @@ open class ReverbService : Service() {
         }
 
     private fun releaseAudioRecordIfOwned(owner: CaptureInputOperationOwner?): Boolean {
+        val sampled = audioRecord
+        if (owner != null && !captureInputOwnerMatches(owner)) return false
+        if (::captureIo.isInitialized && !captureIo.detach(sampled)) return false
         val record = synchronized(listeningIntentLock) {
             if (owner != null && !captureInputOwnerMatches(owner)) return false
             lastDurabilitySyncRequestNanos = 0L
@@ -1805,6 +1941,7 @@ open class ReverbService : Service() {
                 input = null
                 releaseGeneration = releasedGeneration
             }
+            publishCaptureIngress()
             record
         }
         // Native cleanup stays outside the intent lock. The operation retains the exact
@@ -1948,31 +2085,35 @@ open class ReverbService : Service() {
         failureOperation: String,
         selectRange: (totalDuration: Double) -> Pair<Double, Double>,
     ) {
-        val exportToken = beginExport(receiver) ?: run {
+        val owner = beginDurableSave(receiver) ?: run {
             notifyReceiverFailure(
                 receiver,
                 getString(if (serviceDestroying) R.string.save_failed else R.string.export_in_progress),
             )
             return
         }
-        if (!ensureExportForegroundLifetime(exportToken, receiver)) return
+        val lifetimeFailure = protectDurableSaveLifetime(owner.generation).failure
+        if (lifetimeFailure != null) {
+            failDurableSaveOwner(owner, lifetimeFailure)
+            return
+        }
 
         val work = createBufferedExportWork(
-            started = exportToken.started,
-            beforeAcquire = { ensureExportNotCancelled(exportToken) },
+            started = owner.started,
+            beforeAcquire = { ensureDurableSaveActive(owner) },
             acquire = {
                 // Readiness is an expected admission outcome, not a persistent-store incident.
                 if (!captureStoresReady) throw IOException("Audio history is not ready")
                 try {
                     flushAudioRecord()
-                    ensureExportNotCancelled(exportToken)
+                    ensureDurableSaveActive(owner)
                     val store = chunkStore(bufferSlot)
                     val (start, end) = selectRange(availableBufferedDurationSeconds(bufferSlot))
                     acquireExportRange(store, start, end)?.let { lease ->
                         PreparedBufferedExport(lease, getConfigurationSnapshot())
                     }
                 } catch (error: Exception) {
-                    if (!exportToken.cancelled.get()) reportPersistentStoreFailure(failureOperation, error)
+                    if (!serviceDestroying && !foregroundServiceTimedOut) reportPersistentStoreFailure(failureOperation, error)
                     throw error
                 }
             },
@@ -1983,22 +2124,21 @@ open class ReverbService : Service() {
             },
             onReleaseFailure = { error -> reportPersistentStoreFailure("release export range", error) },
             onEmpty = {
-                clearExportState(exportToken)
-                finishExportFailure(exportToken, receiver, getString(R.string.nothing_to_export))
+                finishDurableSaveFailure(owner, getString(R.string.nothing_to_export), null)
             },
             onFailure = { error ->
-                clearExportState(exportToken)
-                if (exportToken.cancelled.get()) finishExportCancellation(exportToken, receiver)
-                else finishExportFailure(exportToken, receiver, getString(R.string.save_failed), error)
+                failDurableSaveOwner(owner, error)
             },
             export = { prepared, closeLeaseOnce ->
-                performBufferedRangeExport(
-                    prepared.lease, receiver, newFileName, exportToken, prepared.configuration, closeLeaseOnce,
-                )
+                admitDurableRange(owner, prepared.lease, prepared.configuration, newFileName, closeLeaseOnce)
             },
         )
-        queueExportTask(work.task, exportToken, receiver) {
-            work.queuePreparation { audioHandler.post(it) }
+        queueDurableSaveAdmission(owner, work.task) {
+            work.queuePreparation { preparation ->
+                postCaptureWork(onRejected = {
+                    work.rejectQueuedPreparation(RejectedExecutionException("Capture export fence was rejected"))
+                }) { preparation.run() }
+            }
         }
     }
 
@@ -2009,6 +2149,232 @@ open class ReverbService : Service() {
         override fun close() = lease.close()
     }
 
+    private fun beginDurableSave(receiver: AudioFileReceiver): DurableSaveOwner? = synchronized(exportStateLock) {
+        allowDurableForegroundRetryLocked()
+        if (exportAdmissionClosed || serviceDestroying || foregroundServiceTimedOut || activeExportToken != null ||
+            durableSaveOwners.size >= DurableSaveJournal.MAX_JOBS ||
+            durableSaveOwners.values.count { it.jobId == null } >= MAX_PENDING_DURABLE_SAVE_ADMISSIONS) {
+            return@synchronized null
+        }
+        DurableSaveOwner(nextExportTokenId.getAndIncrement(), receiver, durableWorkGeneration.get()).also {
+            durableSaveOwners[it.id] = it
+            exportUiGeneration.incrementAndGet()
+        }
+    }
+
+    private fun allowDurableForegroundRetryLocked() {
+        if (foregroundServiceTimedOut && appUiForeground && !serviceDestroying && !exportAdmissionClosed &&
+            durableSaveOwners.isEmpty() && activeExportToken == null && !durableRecoveryQueued) {
+            foregroundServiceTimedOut = false
+        }
+    }
+
+    private fun protectDurableSaveLifetime(generation: Long): DurableSaveLifetimeAttempt = synchronized(listeningIntentLock) {
+        val rejection = when {
+            serviceDestroying -> DurableSaveLifetimeRejection.SERVICE_STOPPING
+            foregroundServiceTimedOut -> DurableSaveLifetimeRejection.FOREGROUND_TIMED_OUT
+            generation != durableWorkGeneration.get() -> DurableSaveLifetimeRejection.SUPERSEDED_GENERATION
+            else -> null
+        }
+        attemptDurableSaveLifetimeProtection(rejection,
+            start = {
+                ContextCompat.startForegroundService(this, Intent(this, javaClass).setAction(ACTION_EXPORT_KEEPALIVE))
+            },
+            promote = {
+                // Refresh Saving even when microphone ownership supplies the foreground lifetime.
+                promoteForeground(
+                    foregroundServiceTypes.takeIf { it != 0 }
+                        ?: foregroundServiceTypesForWork(listening = false, exporting = true),
+                    exporting = true,
+                )
+            },
+        ).also { attempt ->
+            val error = attempt.failure
+            if (error != null && error !is DurableSaveLifetimeRejectedException)
+                Log.w(TAG, "Unable to protect durable save work", error)
+        }
+    }
+
+    private fun ensureDurableSaveActive(owner: DurableSaveOwner) {
+        if (serviceDestroying || foregroundServiceTimedOut || owner.generation != durableWorkGeneration.get()) {
+            throw IOException("Saving paused until Reverb can resume")
+        }
+    }
+
+    private fun finishDurableSaveOwner(owner: DurableSaveOwner) {
+        val removed = synchronized(exportStateLock) {
+            if (durableSaveOwners[owner.id] !== owner) false else {
+                durableSaveOwners.remove(owner.id)
+                exportUiGeneration.incrementAndGet()
+                true
+            }
+        }
+        if (removed) refreshForegroundAfterExport()
+    }
+
+    private fun failDurableSaveOwner(owner: DurableSaveOwner, error: Exception) {
+        finishDurableSaveFailure(owner, userFacingError(getString(R.string.save_failed), error), error)
+    }
+
+    private fun finishDurableSaveFailure(owner: DurableSaveOwner, message: String, error: Exception?) {
+        val publication = owner.failurePublication ?: owner.initialPublication?.let { initial ->
+            DurableSaveJobs.failIfCurrent(initial, message)
+        }
+        val beforeAdmission = owner.jobId == null
+        finishDurableSaveOwner(owner)
+        if (owner.terminalDelivered.compareAndSet(false, true)) {
+            mainHandler.post {
+                // A newer recovery/progress/completion supersedes this attempt's failure.
+                // The claim is the delivery ordering point; receiver code runs outside the lock.
+                if (beforeAdmission || (!serviceDestroying && !foregroundServiceTimedOut &&
+                        owner.generation == durableWorkGeneration.get() && publication != null &&
+                        DurableSaveJobs.claimFailureDelivery(publication))) {
+                    owner.receiver.fileFailed(message, error)
+                } else {
+                    // Even if a lease-close error preceded the original queued callback,
+                    // accepted work must release the UI's admission ownership. This is
+                    // idempotent for SaveResultReceiver and does not announce stale failure.
+                    owner.jobId?.let(owner.receiver::saveQueued)
+                }
+            }
+        }
+    }
+
+    private fun queueDurableSaveAdmission(
+        owner: DurableSaveOwner,
+        task: FutureTask<Unit>,
+        afterSubmission: () -> Unit = {},
+    ) {
+        var failure: Exception? = null
+        synchronized(exportStateLock) {
+            if (exportAdmissionClosed || serviceDestroying || owner.generation != durableWorkGeneration.get() ||
+                durableSaveOwners[owner.id] !== owner) {
+                failure = RejectedExecutionException("Save admission is closed")
+            } else {
+                try {
+                    durableSaveAdmissionExecutor.execute(task)
+                    afterSubmission()
+                } catch (error: RejectedExecutionException) {
+                    failure = error
+                }
+            }
+        }
+        failure?.let { error ->
+            try { task.cancel(false) } finally { failDurableSaveOwner(owner, error) }
+        }
+    }
+
+    private fun admitDurableRange(
+        owner: DurableSaveOwner,
+        lease: PersistentAudioChunkStore.RangeLease,
+        configuration: RecorderConfigurationSnapshot,
+        requestedName: String,
+        closeLeaseOnce: () -> Unit,
+    ) {
+        ensureDurableSaveActive(owner)
+        val request = DurableSaveRequest(requestedName, getConfiguredOutputDirectoryId(applicationContext),
+            configuration.format, configuration.codec, configuration.sampleRate, configuration.channelMode.channelCount,
+            configuration.sampleFormat, configuration.flacCompression)
+        val handle = try {
+            durableSaveCoordinator.admit(lease, request)
+        } catch (error: PersistentAudioChunkStore.SaveSealFailure) {
+            error.dispatchCaptureFailure(
+                loopingStore = if (::loopingAudioChunkStore.isInitialized) loopingAudioChunkStore else null,
+                oneShotStore = if (::oneShotAudioChunkStore.isInitialized) oneShotAudioChunkStore else null,
+                pauseCapture = { pauseListeningAfterPersistenceFailure("seal source for Save", error) },
+                recordIncident = {
+                    // Include IOException: a terminal close failure is an incident even when
+                    // finalized PCM is durable and capture can safely continue.
+                    RecordingIncidentStore.recordUnexpectedErrorInBackground(this, "Seal source for Save", error)
+                },
+            )
+            throw error
+        }
+        synchronized(exportStateLock) {
+            owner.jobId = handle.id
+            owner.initialPublication = handle.publication
+            exportUiGeneration.incrementAndGet()
+        }
+        closeLeaseOnce()
+        // Main observes the new generation before queued delivery, so older busy snapshots resample.
+        mainHandler.post { owner.receiver.saveQueued(handle.id) }
+        queueDurableMaterialization(owner)
+    }
+
+    private fun queueDurableMaterialization(owner: DurableSaveOwner) {
+        val jobId = owner.jobId ?: throw IllegalStateException("Save job was not durably admitted")
+        try {
+            synchronized(exportStateLock) {
+                if (exportAdmissionClosed || serviceDestroying || foregroundServiceTimedOut ||
+                    owner.generation != durableWorkGeneration.get()) {
+                    throw RejectedExecutionException("Saving paused until Reverb can resume")
+                }
+                exportWorkExecutor.execute {
+                    try {
+                        val recording = durableSaveCoordinator.materialize(jobId,
+                            onFailurePublished = { owner.failurePublication = it },
+                        ) { ensureDurableSaveActive(owner) }
+                        if (owner.terminalDelivered.compareAndSet(false, true)) {
+                            mainHandler.post { owner.receiver.fileReady(recording) }
+                        }
+                    } catch (error: Exception) {
+                        failDurableSaveOwner(owner, error)
+                    } finally {
+                        finishDurableSaveOwner(owner)
+                        Thread.interrupted()
+                    }
+                }
+            }
+        } catch (error: RejectedExecutionException) {
+            failDurableSaveOwner(owner, error)
+        }
+    }
+
+    private fun scheduleDurableSaveRecovery(allowForegroundRetry: Boolean = false) {
+        val accepted = synchronized(exportStateLock) {
+            if (allowForegroundRetry) allowDurableForegroundRetryLocked()
+            if (exportAdmissionClosed || serviceDestroying || foregroundServiceTimedOut || durableRecoveryQueued) false
+            else { durableRecoveryQueued = true; true }
+        }
+        if (!accepted) return
+        val generation = durableWorkGeneration.get()
+        fun finishRecovery() {
+            synchronized(exportStateLock) { durableRecoveryQueued = false }
+            refreshForegroundAfterExport()
+        }
+        try {
+            durableSaveAdmissionExecutor.execute {
+                try {
+                    val handles = durableSaveCoordinator.recover()
+                    mainHandler.post {
+                        try {
+                            if (serviceDestroying || foregroundServiceTimedOut || generation != durableWorkGeneration.get()) return@post
+                            val owners = synchronized(exportStateLock) {
+                                handles.filter { handle -> durableSaveOwners.values.none { it.jobId == handle.id } }.map { handle ->
+                                    DurableSaveOwner(nextExportTokenId.getAndIncrement(), NotifyFileReceiver(applicationContext), generation, handle.id, handle.publication)
+                                        .also { durableSaveOwners[it.id] = it }
+                                }
+                            }
+                            if (owners.isEmpty()) return@post
+                            val lifetimeFailure = protectDurableSaveLifetime(generation).failure
+                            if (lifetimeFailure != null) {
+                                owners.forEach { failDurableSaveOwner(it, lifetimeFailure) }
+                            } else owners.forEach(::queueDurableMaterialization)
+                        } finally {
+                            finishRecovery()
+                        }
+                    }
+                } catch (error: Exception) {
+                    Log.w(TAG, "Unable to recover durable saves", error)
+                    mainHandler.post { finishRecovery() }
+                }
+            }
+        } catch (error: RejectedExecutionException) {
+            finishRecovery()
+            Log.w(TAG, "Save recovery admission closed", error)
+        }
+    }
+
     fun acquireTimelineSnapshot(
         bufferSlot: BufferSlot = BufferSlot.LOOPING,
         callback: (TimelineSnapshot?) -> Unit,
@@ -2017,7 +2383,7 @@ open class ReverbService : Service() {
             postTimelineSnapshot(callback, null)
             return
         }
-        if (!audioHandler.post {
+        if (!postCaptureWork(onRejected = { postTimelineSnapshot(callback, null) }) post@ {
             if (serviceDestroying) {
                 postTimelineSnapshot(callback, null)
                 return@post
@@ -2100,8 +2466,8 @@ open class ReverbService : Service() {
         fun releaseRejectedSnapshot(owned: TimelineSnapshot) {
             releaseTimelineSnapshotOffMain(owned, onReleaseFailure)
         }
-        val exportToken = beginExport(receiver)
-        if (exportToken == null) {
+        val owner = beginDurableSave(receiver)
+        if (owner == null) {
             runCleanupReportingException({ releaseRejectedSnapshot(snapshot) }, onReleaseFailure)
             notifyReceiverFailure(
                 receiver,
@@ -2109,8 +2475,10 @@ open class ReverbService : Service() {
             )
             return
         }
-        if (!ensureExportForegroundLifetime(exportToken, receiver)) {
+        val lifetimeFailure = protectDurableSaveLifetime(owner.generation).failure
+        if (lifetimeFailure != null) {
             runCleanupReportingException({ releaseRejectedSnapshot(snapshot) }, onReleaseFailure)
+            failDurableSaveOwner(owner, lifetimeFailure)
             return
         }
 
@@ -2118,13 +2486,13 @@ open class ReverbService : Service() {
         // preparation as well as output work, so executor.shutdown() can drain accepted saves.
         val exportTask = createTimelineSnapshotExportTask(
             snapshot = snapshot,
-            started = exportToken.started,
+            started = owner.started,
             releaseUnstarted = ::releaseRejectedSnapshot,
             onParentReleaseFailure = onReleaseFailure,
             onChildReleaseFailure = { error ->
                 reportPersistentStoreFailure("release export range", error)
             },
-            beforeAcquire = { ensureExportNotCancelled(exportToken) },
+            beforeAcquire = { ensureDurableSaveActive(owner) },
             acquire = { owned ->
                 val totalDuration = owned.durationSeconds
                 val boundedStart = rangeSnapshotStartSeconds(totalDuration, startOffsetSeconds, endOffsetSeconds)
@@ -2140,24 +2508,16 @@ open class ReverbService : Service() {
                 owned.acquireRange(clampedStart, boundedEnd)
             },
             onEmpty = {
-                clearExportState(exportToken)
-                finishExportFailure(exportToken, receiver, getString(R.string.nothing_to_export))
+                finishDurableSaveFailure(owner, getString(R.string.nothing_to_export), null)
             },
             onFailure = { error ->
-                clearExportState(exportToken)
-                if (exportToken.cancelled.get()) {
-                    finishExportCancellation(exportToken, receiver)
-                } else {
-                    finishExportFailure(exportToken, receiver, getString(R.string.save_failed), error)
-                }
+                failDurableSaveOwner(owner, error)
             },
             export = { lease, closeLeaseOnce ->
-                performBufferedRangeExport(
-                    lease, receiver, newFileName, exportToken, exportConfig, closeLeaseOnce,
-                )
+                admitDurableRange(owner, lease, exportConfig, newFileName, closeLeaseOnce)
             },
         )
-        queueExportTask(exportTask, exportToken, receiver)
+        queueDurableSaveAdmission(owner, exportTask)
     }
 
     private fun acquireExportRange(
@@ -2213,7 +2573,11 @@ open class ReverbService : Service() {
     }
 
     private fun hasActiveExport(): Boolean = synchronized(exportStateLock) {
-        activeExportToken != null
+        activeExportToken != null || durableSaveOwners.isNotEmpty() || durableRecoveryQueued
+    }
+
+    private fun hasUiBlockingExport(): Boolean = synchronized(exportStateLock) {
+        activeExportToken != null || durableSaveOwners.values.any { it.jobId == null }
     }
 
     private fun requestServiceStopWhenExportIdle() {
@@ -2298,7 +2662,7 @@ open class ReverbService : Service() {
             Log.e(TAG, "Unable to switch foreground service to buffer-clear mode", error)
             reportError(userFacingError(getString(R.string.clear_buffer_failed), error))
             if (requestBufferClearCancellation(reportFailure = true) && !appUiForeground) {
-                AppFeedbackCenter.post(getString(R.string.clear_buffer_failed), FeedbackTone.ERROR)
+                AppFeedbackCenter.post(actionableErrorMessage(this@ReverbService, getString(R.string.clear_buffer_failed), error), FeedbackTone.ERROR)
             }
         }
     }
@@ -2364,7 +2728,7 @@ open class ReverbService : Service() {
         } catch (error: RuntimeException) {
             Log.e(TAG, "Unable to protect retention maintenance with a foreground service", error)
             AppFeedbackCenter.post(
-                getString(R.string.retention_update_failed),
+                actionableErrorMessage(this@ReverbService, getString(R.string.retention_update_failed), error),
                 FeedbackTone.ERROR,
             )
             false
@@ -2422,6 +2786,12 @@ open class ReverbService : Service() {
         requireOpenAdmission = true,
     )
 
+    fun currentExportCancellable(): Boolean = synchronized(exportStateLock) {
+        val token = activeExportToken
+        !exportAdmissionClosed && !serviceDestroying && token != null && !token.cancelled.get() &&
+            exportCancellationAllowed(token.publicationStarted.get(), token.committed.get())
+    }
+
     private fun requestExportCancellation(
         preserveVerifiedOutput: Boolean,
         reportFailure: Boolean,
@@ -2459,167 +2829,6 @@ open class ReverbService : Service() {
             finishExportCancellation(tokenToNotify ?: return cancelled, receiverToNotify)
         }
         return cancelled
-    }
-
-    private fun performBufferedRangeExport(
-        lease: PersistentAudioChunkStore.RangeLease,
-        receiver: AudioFileReceiver,
-        newFileName: String,
-        exportToken: ExportCancellationToken,
-        exportConfig: RecorderConfigurationSnapshot,
-        closeLeaseOnce: () -> Unit,
-    ) {
-        var outTarget: RecordingOutputTarget? = null
-        var verifiedComplete = false
-        var cleanupFingerprint: StableOutputFingerprint? = null
-        var committed = false
-        try {
-            val startedAtMillis = lease.startedAtMillis
-            val endedAtMillis = lease.endedAtMillis.takeIf { it > 0L }
-                ?: recordingEndTimestampMillis(startedAtMillis, lease.durationSeconds)
-            val exportFormat = exportConfig.format
-            val exportCodec = exportConfig.codec
-            val exportSampleRate = exportConfig.sampleRate
-            val exportChannelMode = exportConfig.channelMode
-            val exportSampleFormat = exportConfig.sampleFormat
-            val exportFillRate = exportSampleRate.toLong() *
-                exportChannelMode.channelCount.toLong() * exportSampleFormat.bytesPerSample.toLong()
-            ensureExportNotCancelled(exportToken)
-            if (exportFormat == ExportFormat.FLAC &&
-                (exportSampleFormat != PcmSampleFormat.PCM_16 ||
-                    !lease.hasExactPcm16Format(exportSampleRate, exportChannelMode.channelCount))) {
-                throw IOException(getString(R.string.flac_history_format_mismatch))
-            }
-            val target =
-                try {
-                    createOutputTarget(
-                        this@ReverbService,
-                        newFileName,
-                        startedAtMillis,
-                        exportFormat,
-                        exportCodec,
-                        defaultNameTimestampMillis = endedAtMillis,
-                    )
-                } catch (e: Exception) {
-                    Log.e(TAG, "Unable to prepare export file", e)
-                    val message = userFacingError(getString(R.string.cant_create_file_generic), e)
-                    finishExportFailure(exportToken, receiver, message, e)
-                    return
-                }
-            outTarget = target
-            var durationMillis = 0L
-            val writer = createRecordingAudioWriter(
-                this@ReverbService,
-                target,
-                exportFormat,
-                exportSampleRate,
-                exportChannelMode.channelCount,
-                exportSampleFormat,
-                exportConfig.flacCompression,
-            )
-            writer.use {
-                lease.readNormalized(
-                    targetSampleRate = exportSampleRate,
-                    targetChannelCount = exportChannelMode.channelCount,
-                    targetSampleFormat = exportSampleFormat,
-                    maximumOutputFrames = exportFrameLimit(exportFormat, exportCodec,
-                        exportSampleRate, exportChannelMode.channelCount, exportSampleFormat),
-                ) { array, offset, count ->
-                    ensureExportNotCancelled(exportToken)
-                    writer.write(array, offset, count)
-                    count
-                }
-                ensureExportNotCancelled(exportToken)
-                if (writer.totalSampleBytesWritten <= 0L) {
-                    throw IOException("Requested timeline range produced no PCM")
-                }
-                durationMillis = (
-                    writer.totalSampleBytesWritten * 1000.0 / maxOf(exportFillRate, 1L).toDouble()
-                ).toLong()
-            }
-            ensureExportNotCancelled(exportToken)
-            val expectedOutputBytes = writer.totalFileBytesWritten
-            val stagingId = target.id
-            val verifiedOutput = writer.verify(this@ReverbService) { ensureExportNotCancelled(exportToken) }
-            cleanupFingerprint = verifiedOutput
-            val recoveryMarkerPersisted =
-                putVerifiedExportStaging(this@ReverbService, target, verifiedOutput)
-            requireVerifiedOutputRecoveryMarker(recoveryMarkerPersisted, target.id)
-            verifiedComplete = true
-            ensureExportNotCancelled(exportToken)
-            if (!claimExportPublication(exportToken)) {
-                throw InterruptedIOException("Export cancelled")
-            }
-            val finalizedTarget = finalizeOutputTarget(this@ReverbService, target, verifiedOutput)
-            outTarget = finalizedTarget
-            cleanupFingerprint = outputCleanupFingerprintForTarget(finalizedTarget, verifiedOutput)
-            if (!removeVerifiedExportStaging(this@ReverbService, target.storageType, stagingId, verifiedOutput)) {
-                Log.w(TAG, "Unable to clear verified export recovery marker: $stagingId")
-            }
-            ensureExportNotCancelled(exportToken)
-            val recording = buildRecordingEntity(
-                this@ReverbService,
-                finalizedTarget,
-                durationMillis,
-                buildCodecSummary(
-                    this@ReverbService,
-                    exportFormat,
-                    exportSampleRate,
-                    exportChannelMode.channelCount,
-                    exportSampleFormat,
-                    exportConfig.flacCompression,
-                ),
-                knownSizeBytes = expectedOutputBytes,
-            )
-            ensureExportNotCancelled(exportToken)
-            committed = markExportCommitted(exportToken)
-            if (!committed) {
-                throw InterruptedIOException("Export cancelled")
-            }
-            // The verified file is now irrevocably committed. Catalog registration
-            // is metadata: retry it, but never delete valid audio if SQLite fails.
-            val cataloguedRecording = try {
-                runBlocking { RecordingRepository.register(this@ReverbService, recording) }
-            } catch (error: Exception) {
-                if (!catalogRegistrationFailureAllowsVerifiedSaveSuccess(error)) {
-                    throw error
-                }
-                Log.e(TAG, "Unable to register committed export ${recording.id}", error)
-                recording
-            }
-            deliverExportTerminal(exportToken, receiver) { fileReady(cataloguedRecording) }
-        } catch (e: Exception) {
-            // InterruptedIOException also covers real provider timeouts. Only the
-            // export token, not an exception's type, proves cancellation was requested.
-            if (exportToken.cancelled.get()) {
-                Log.i(TAG, "Export cancelled for ${outTarget?.displayName ?: newFileName}", e)
-                finishExportCancellation(exportToken, receiver)
-                return
-            }
-            Log.e(TAG, "Error while exporting audio history into ${outTarget?.displayName ?: newFileName}", e)
-            val message = userFacingError(
-                getString(R.string.error_during_writing_history_into).trimEnd() + " " +
-                    (outTarget?.displayName ?: newFileName),
-                e,
-            )
-            finishExportFailure(exportToken, receiver, message, e)
-        } finally {
-            closeLeaseOnce()
-            try {
-                if (shouldDeleteExportTarget(
-                        cancelled = exportToken.cancelled.get(),
-                        verifiedComplete = verifiedComplete,
-                        committed = committed,
-                        preserveVerifiedOutput = exportToken.preserveVerifiedOutput.get(),
-                    )
-                ) {
-                    deleteOutputTarget(outTarget, cleanupFingerprint)
-                }
-            } finally {
-                clearExportState(exportToken)
-                Thread.interrupted()
-            }
-        }
     }
 
     private fun queueExportTask(
@@ -2670,13 +2879,15 @@ open class ReverbService : Service() {
         synchronized(exportStateLock) {
             // This is a provisional token; synchronous task submission below is the admission
             // boundary shared with teardown. Clear's durable intent monitor is never taken here.
-            if (exportAdmissionClosed || !serviceCommandMayQueue(serviceDestroying) || activeExportToken != null) {
+            if (exportAdmissionClosed || !serviceCommandMayQueue(serviceDestroying) ||
+                activeExportToken != null || durableSaveOwners.isNotEmpty() || durableRecoveryQueued) {
                 null
             } else {
                 ExportCancellationToken(nextExportTokenId.getAndIncrement()).also { token ->
                     activeExportToken = token
                     activeExportFuture = null
                     activeExportReceiver = receiver
+                    exportUiGeneration.incrementAndGet()
                 }
             }
         }
@@ -2714,6 +2925,7 @@ open class ReverbService : Service() {
         activeExportToken = null
         activeExportFuture = null
         activeExportReceiver = null
+        exportUiGeneration.incrementAndGet()
         return true
     }
 
@@ -2750,7 +2962,7 @@ open class ReverbService : Service() {
                 }
             }
 
-            val posted = audioHandler.post {
+            val posted = postCaptureWork(pauseInput = true, onRejected = { finishSettingsRuntimeLifetime() }) post@ {
                 try {
                     applyConfiguredPreferencesOnAudioThread()
                 } catch (error: Exception) {
@@ -2776,7 +2988,7 @@ open class ReverbService : Service() {
         val restartInput = state == STATE_LISTENING && isListeningEnabled() && captureConfigChanged
 
         if (restartInput) {
-            audioHandler.removeCallbacks(audioReader)
+
             sealActiveChunks()
             releaseAudioRecord()
             startAudioInputOnAudioThread(continuousRestart = true)
@@ -2818,7 +3030,7 @@ open class ReverbService : Service() {
                 )
             } catch (error: RuntimeException) {
                 Log.w(TAG, "Unable to refresh notification settings", error)
-                AppFeedbackCenter.post(getString(R.string.notification_settings_update_failed), FeedbackTone.ERROR)
+                AppFeedbackCenter.post(actionableErrorMessage(this@ReverbService, getString(R.string.notification_settings_update_failed), error), FeedbackTone.ERROR)
             }
         }
     }
@@ -2873,20 +3085,6 @@ open class ReverbService : Service() {
         }
     }
 
-    private fun deleteOutputTarget(
-        target: RecordingOutputTarget?,
-        expectedFingerprint: StableOutputFingerprint?,
-    ) {
-        if (target == null) return
-        if (expectedFingerprint == null) {
-            Log.w(TAG, "Retaining unverified export staging because cleanup identity is uncertain: ${target.id}")
-            return
-        }
-        if (!suppressAndDeleteOutputTarget(this, target, expectedFingerprint = expectedFingerprint)) {
-            Log.w(TAG, "Deferred cleanup for export target ${target.id}")
-        }
-    }
-
     private fun alignDown(value: Long, alignment: Long): Long {
         if (value <= 0L || alignment <= 1L) return value.coerceAtLeast(0L)
         return value - value % alignment
@@ -2920,7 +3118,7 @@ open class ReverbService : Service() {
         val next = try { SilenceGatePreferences.read(this).config }
         catch (error: Exception) {
             Log.w(TAG, "Invalid silence curve; retaining audio without filtering", error)
-            AppFeedbackCenter.post(getString(R.string.silence_invalid_settings), FeedbackTone.ERROR)
+            AppFeedbackCenter.post(actionableErrorMessage(this@ReverbService, getString(R.string.silence_invalid_settings), error), FeedbackTone.ERROR)
             SilenceGateConfig()
         }
         if (next != silenceGateConfig) {
@@ -2951,14 +3149,16 @@ open class ReverbService : Service() {
         bytes: ByteArray, offset: Int, count: Int, slot: BufferSlot, epoch: Long,
         readEndedAtNanos: Long, captureStartedAtNanos: Long?,
         drainOwner: AcceptedCaptureReadOwner?,
+        batchStartedAtMillis: Long? = null,
     ) {
         silenceSampleRequest?.let { request ->
             if (request.running()) try {
-                if (request.remainingTimeoutMillis() == 0L) request.failSamplingTimeout(
+                if (!calibrationMicrophoneAvailable(request, audioRecord)) Unit
+                else if (request.remainingTimeoutMillis() == 0L) request.failSamplingTimeout(
                     getString(R.string.silence_sample_failed))
                 else request.acceptCaptured(bytes, offset, count, sampleRate, channelMode.channelCount, pcmSampleFormat,
                         captureStartedAtNanos, readEndedAtNanos)
-            } catch (error: Exception) { request.fail(error.message ?: getString(R.string.silence_sample_failed)) }
+            } catch (error: Exception) { request.fail(getString(R.string.silence_sample_failed), error) }
             if (!request.running()) silenceSampleRequest = null
         }
         val rate = sampleRate
@@ -2966,7 +3166,7 @@ open class ReverbService : Service() {
         val format = pcmSampleFormat
         if (!silenceGateConfig.enabled) {
             finishSilenceGate()
-            appendCapturedAudio(bytes, offset, count, slot, captureBatchStartedAtMillis(
+            appendCapturedAudio(bytes, offset, count, slot, batchStartedAtMillis ?: captureBatchStartedAtMillis(
                 System.currentTimeMillis(), count, channels * format.bytesPerSample, rate), drainOwner)
             return
         }
@@ -2974,7 +3174,7 @@ open class ReverbService : Service() {
         if (silenceGateSlot != slot || silenceGateEpoch != epoch || previous?.sampleRate != rate ||
             previous.channels != channels || previous.format != format) {
             finishSilenceGate()
-            val anchor = captureBatchStartedAtMillis(
+            val anchor = batchStartedAtMillis ?: captureBatchStartedAtMillis(
                 System.currentTimeMillis(), count, channels * format.bytesPerSample, rate)
             silenceGateSlot = slot
             silenceGateEpoch = epoch
@@ -3021,13 +3221,15 @@ open class ReverbService : Service() {
             // Serialize re-arming with timeout dispatch so a short tap replaces the
             // already-running held deadline, including a stalled audio queue.
             mainHandler.post(rearmTimeout)
-            audioHandler.post {
-                try { request.processPendingControl() }
-                catch (error: Exception) { request.fail(error.message ?: getString(R.string.silence_sample_failed)) }
+            postCaptureWork post@ {
+                try {
+                    if (calibrationMicrophoneAvailable(request, audioRecord)) request.processPendingControl()
+                }
+                catch (error: Exception) { request.fail(getString(R.string.silence_sample_failed), error) }
             }
         }
         mainHandler.post(rearmTimeout)
-        if (serviceDestroying || !audioHandler.post {
+        if (serviceDestroying || !postCaptureWork post@ {
                 // onCreate posts initialization first. Admission must stay on this queue: a
                 // main-thread bind may observe invented defaults or a valid operational fallback.
                 if (serviceDestroying || !request.running() || request.remainingTimeoutMillis() == 0L ||
@@ -3040,6 +3242,7 @@ open class ReverbService : Service() {
                     return@post
                 }
                 silenceSampleRequest?.cancel()
+                if (!calibrationMicrophoneAvailable(request, audioRecord)) return@post
                 if (audioRecord != null && state == STATE_LISTENING) {
                     silenceSampleRequest = request
                 } else sampleSilenceWhileIdle(request, expectedInput)
@@ -3058,6 +3261,23 @@ open class ReverbService : Service() {
         } catch (_: Exception) { false }
     }
 
+    private fun calibrationMicrophoneAvailable(request: SilenceSampleRequest, record: CaptureAudioInput?): Boolean = try {
+        val permissionGranted = ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        val appOp = getSystemService(android.app.AppOpsManager::class.java)?.checkOpNoThrow(
+            android.app.AppOpsManager.OPSTR_RECORD_AUDIO, Process.myUid(), packageName)
+        if (calibrationMicrophoneBlocked(permissionGranted, appOp, record?.isClientSilenced() == true)) {
+            request.fail(getString(R.string.silence_microphone_blocked))
+            false
+        } else true
+    } catch (_: SecurityException) {
+        request.fail(getString(R.string.silence_microphone_blocked))
+        false
+    } catch (error: Exception) {
+        request.fail(getString(R.string.silence_sample_failed), error)
+        false
+    }
+
     private fun sampleSilenceWhileIdle(request: SilenceSampleRequest, expectedInput: SilenceCalibrationInput?) {
         val generation = listeningCommandGeneration.get()
         var temporary: CaptureAudioInput? = null
@@ -3068,7 +3288,7 @@ open class ReverbService : Service() {
             // before constructing the temporary recorder, just as the capture-start path does.
             loadConfiguration()
             if (!silenceSampleInputIsCurrent(expectedInput)) throw IOException(getString(R.string.silence_input_changed))
-            val record = createAudioRecord() ?: throw IOException(getString(R.string.silence_sample_failed))
+            val record = createAudioRecord() ?: throw IOException(getString(R.string.failure_microphone_unavailable))
             temporary = record
             if (!request.running() || serviceDestroying) return
             record.startRecording()
@@ -3077,6 +3297,7 @@ open class ReverbService : Service() {
             val bytes = ByteArray(maxOf(frameBytes, sampleRate / 25 * frameBytes))
             val buffer = ByteBuffer.allocateDirect(bytes.size).order(ByteOrder.nativeOrder())
             while (request.running() && !serviceDestroying && generation == listeningCommandGeneration.get()) {
+                if (!calibrationMicrophoneAvailable(request, record)) break
                 request.processPendingControl()
                 if (!request.running()) break
                 if (request.remainingTimeoutMillis() == 0L) throw IOException(
@@ -3084,7 +3305,8 @@ open class ReverbService : Service() {
                 buffer.clear()
                 val read = record.read(buffer, bytes.size, AudioRecord.READ_NON_BLOCKING)
                 val readEndedAtNanos = System.nanoTime()
-                if (read < 0) throw IOException(getString(R.string.silence_sample_failed))
+                if (!calibrationMicrophoneAvailable(request, record)) break
+                if (read < 0) throw IOException(getString(R.string.failure_audio_read_code, read))
                 if (read > 0) {
                     buffer.position(0); buffer.get(bytes, 0, read)
                     request.acceptCaptured(bytes, 0, read - read % frameBytes, sampleRate, channelMode.channelCount,
@@ -3102,7 +3324,7 @@ open class ReverbService : Service() {
                     onReleaseFailure = ::reportAudioRecordReleaseFailure,
                 )
             }
-            failure?.let { request.fail(it.message ?: getString(R.string.silence_sample_failed)) }
+            failure?.let { request.fail(getString(R.string.silence_sample_failed), it) }
         }
     }
 
@@ -3137,7 +3359,8 @@ open class ReverbService : Service() {
                                 BufferSlot.LOOPING
                             }
                         val overflow = count - writtenToOneShot
-                        if (overflow > 0 && oneShotOverflowMayUseLoopingFallback(alreadyOnLooping, handoffAccepted)) {
+                        if (overflow > 0 && (oneShotOverflowMayUseLoopingFallback(alreadyOnLooping, handoffAccepted) ||
+                                queuedOverflowMayDrainWithoutHandoff(drainOwner))) {
                             appendToCaptureSink(array, offset + writtenToOneShot, overflow, BufferSlot.LOOPING,
                                 startedAtMillis?.let { recordingTimestampWithOffset(it,
                                     writtenToOneShot / (channelMode.channelCount * pcmSampleFormat.bytesPerSample) * 1000L / sampleRate) })
@@ -3149,9 +3372,20 @@ open class ReverbService : Service() {
             }
         }
         if (state == STATE_LISTENING && !hasWritableCaptureTarget()) {
-            pauseListeningForNoWritableBufferOnAudioThread()
+            // Old completed data cannot turn a newer explicit Start into an automatic Stop.
+            pauseListeningForNoWritableBufferOnAudioThread(
+                if (drainOwner?.queued == true) drainOwner.commandGeneration else listeningCommandGeneration.get())
         }
     }
+
+    private fun queuedOverflowMayDrainWithoutHandoff(owner: AcceptedCaptureReadOwner?): Boolean =
+        synchronized(listeningIntentLock) {
+            owner?.queued == true && durableCaptureIntentAuthorityValid &&
+                captureIo.currentInput()?.record === owner.input &&
+                captureGateOutputMayCommit(owner.continuityGeneration, persistenceInterruptedCaptureEpoch) &&
+                (owner.commandGeneration != listeningCommandGeneration.get() ||
+                    owner.releaseGeneration != audioRecordReleaseGeneration.get() || !durableListeningIntentEnabled)
+        }
 
     private fun appendToCaptureSink(
         array: ByteArray,
@@ -3226,11 +3460,17 @@ open class ReverbService : Service() {
             if (committed) durableListeningIntentEnabled = false
             // Keep known-Stop incident state in the same lifetime transaction as the intent.
             // onDestroy takes this lock before it can classify an armed marker as interrupted.
-            val incidentStopPersisted = committed &&
-                RecordingIncidentStore.recordKnownCaptureStop(this) == KnownCaptureStopResult.DURABLE
+            val incidentStopPersisted = committed && try {
+                reserveKnownCaptureStopForDrain()
+                true
+            } catch (error: Exception) {
+                Log.e(TAG, "Unable to reserve automatic Stop evidence", error)
+                false
+            }
             listeningCommandGeneration.incrementAndGet()
             captureContinuityGeneration.incrementAndGet()
             state = STATE_PAUSED
+            publishCaptureIngress()
             automaticCaptureStopDisposition(committed, incidentStopPersisted)
         }
         when (disposition) {
@@ -3238,7 +3478,7 @@ open class ReverbService : Service() {
             AutomaticCaptureStopDisposition.PERSISTENCE_FAILURE -> {
                 val error = IOException("Unable to persist automatic capture stop")
                 reportTerminalCaptureStoreFailure("persist automatic stop", error)
-                RecordingIncidentStore.recordCaptureInterrupted(
+                RecordingIncidentStore.recordCaptureServiceStopped(
                     this,
                     "Capture stopped because automatic-stop persistence failed",
                 )
@@ -3246,31 +3486,35 @@ open class ReverbService : Service() {
             AutomaticCaptureStopDisposition.INCIDENT_STATE_FAILURE -> {
                 val error = IOException("Unable to persist automatic known-Stop incident state")
                 reportTerminalCaptureStoreFailure("persist automatic Stop incident state", error)
-                RecordingIncidentStore.recordCaptureInterrupted(
+                RecordingIncidentStore.recordCaptureServiceStopped(
                     this,
                     "Capture stopped because known-Stop incident state could not be persisted",
                 )
             }
         }
-        audioHandler.removeCallbacks(audioReader)
-        try {
-            sealActiveChunks()
-        } catch (error: Exception) {
-            reportTerminalCaptureStoreFailure("seal while auto-pausing", error)
-        } finally {
-            releaseAudioRecord()
-            updateWakeLockState()
-        }
-        publishQuickTileSnapshotOnAudioThread(refreshTiles = true, persistDurations = true)
-        mainHandler.post {
-            if (state == STATE_LISTENING) return@post
-            requestServiceStopWhenExportIdle()
+        postCaptureWork(pauseInput = true) post@ {
+
+            try {
+                sealActiveChunks()
+            } catch (error: Exception) {
+                reportPendingKnownCaptureStopDrainFailure(error)
+                reportTerminalCaptureStoreFailure("seal while auto-pausing", error)
+            } finally {
+                releaseAudioRecord()
+                updateWakeLockState()
+            }
+            publishQuickTileSnapshotOnAudioThread(refreshTiles = true, persistDurations = true)
+            mainHandler.post {
+                if (state == STATE_LISTENING) return@post
+                requestServiceStopWhenExportIdle()
+            }
         }
     }
 
     private fun sealActiveChunks() {
         finishSilenceGate()
         forEachAudioStore(PersistentAudioChunkStore::sealActiveChunk)
+        completePendingKnownCaptureStopAfterSeal()
         scheduleRetentionMaintenanceIfNeeded()
     }
 
@@ -3332,17 +3576,19 @@ open class ReverbService : Service() {
                 nextGeneration
             }
         }
+        publishCaptureIngress()
+        if (::captureIo.isInitialized) captureIo.stopInput(preserveInFlight = false, writerFailed = true)
         reportTerminalCaptureStoreFailure(operation, error)
         if (generation == null) return // Terminal close owns release; never enqueue pause/restart/UI work.
         RecordingIncidentStore.recordCaptureInterrupted(
             this,
             "Capture stopped after persistence failure: $operation",
         )
-        audioHandler.post {
+        postCaptureWork(pauseInput = true) post@ {
             if (serviceDestroying || generation != listeningCommandGeneration.get() || state == STATE_LISTENING) {
                 return@post
             }
-            audioHandler.removeCallbacks(audioReader)
+
             runCatching { sealActiveChunks() }
                 .onFailure { sealError -> reportTerminalCaptureStoreFailure("seal after persistence failure", sealError) }
             releaseAudioRecord()
@@ -3379,120 +3625,200 @@ open class ReverbService : Service() {
         firstFailure?.let { throw it }
     }
 
+    private lateinit var captureIo: CaptureIoCoordinator
+    private var preparedCaptureStorage: CaptureIoCoordinator.Storage? = null
+    private val captureCommandAdmissionFailed = AtomicBoolean()
+    private val captureIngressLock = Any()
+    private data class CaptureIngressSnapshot(
+        val input: CaptureAudioInput, val release: Long, val continuity: Long, val command: Long,
+        val destination: BufferSlot, val sampleRate: Int, val channels: Int,
+        val sampleFormat: PcmSampleFormat, val mayStart: Boolean, val mayCommit: Boolean,
+    )
+    private var captureIngress: CaptureIngressSnapshot? = null
+
+    private fun publishCaptureIngress() = synchronized(listeningIntentLock) {
+        if (!::captureIo.isInitialized) return@synchronized
+        val current = captureIo.currentInput()
+        val record = audioRecord
+        val enabled = record != null && current?.record === record && durableCaptureIntentAuthorityValid &&
+            durableListeningIntentEnabled && state == STATE_LISTENING && !persistenceFailureBlocked
+        synchronized(captureIngressLock) {
+            captureIngress = if (record == null || current?.record !== record) null else CaptureIngressSnapshot(
+                record, audioRecordReleaseGeneration.get(), captureContinuityGeneration.get(),
+                listeningCommandGeneration.get(), activeBufferSlot, sampleRate, channelMode.channelCount,
+                pcmSampleFormat, enabled && !serviceDestroying, enabled,
+            )
+            if (current != null && !enabled) captureIo.stopInput(preserveInFlight = false)
+            else if (current != null && serviceDestroying) captureIo.stopInput(preserveInFlight = true)
+        }
+    }
+
+    private fun postCaptureWork(
+        pauseInput: Boolean = false,
+        terminalClose: Boolean = false,
+        onRejected: () -> Unit = {},
+        work: () -> Unit,
+    ): Boolean {
+        if (!::captureIo.isInitialized) return audioHandler.post(work)
+        val admission = captureIo.post(pauseInput, allowTerminal = true,
+            terminalClose = terminalClose, rejected = onRejected, work = work)
+        if (admission == CaptureControlMailbox.Admission.DISPATCH_FAILED && terminalClose) {
+            return captureIo.postTerminalAfterDispatchFailure(onRejected)
+        }
+        if (admission == CaptureControlMailbox.Admission.FULL) failCaptureCommandAdmission()
+        // Ordinary closed admission must not revoke a generic teardown's accepted native read.
+        return admission == CaptureControlMailbox.Admission.ACCEPTED
+    }
+
+    /** Runs after the failed dispatcher has relinquished its current writer callback. */
+    private fun failCaptureWriterDispatch(error: Throwable) {
+        captureCommandAdmissionFailed.set(true)
+        persistenceFailureBlocked = true
+        persistenceInterruptedCaptureEpoch = maxOf(persistenceInterruptedCaptureEpoch, captureContinuityGeneration.get())
+        captureContinuityGeneration.incrementAndGet()
+        state = STATE_PAUSED
+        forceReleaseAudioRecordAfterShutdownTimeout()
+        RecordingIncidentStore.recordUnexpectedErrorInBackground(this, "Capture writer dispatch", error)
+        AppFeedbackCenter.post(userFacingError(getString(R.string.audio_input_init_failed), error), FeedbackTone.ERROR)
+        runTerminalStoreCleanup(seal = ::sealActiveChunks, releaseInput = ::releaseAudioRecord,
+            onFailure = {
+                reportPendingKnownCaptureStopDrainFailure(it)
+                reportTerminalCaptureStoreFailure("capture dispatch failure cleanup", it)
+            })
+        mainHandler.post { updateWakeLockState(); requestServiceStopWhenExportIdle() }
+    }
+
+    private fun failCaptureCommandAdmission() {
+        if (!captureCommandAdmissionFailed.compareAndSet(false, true)) return
+        val error = IOException("Capture control queue rejected work")
+        captureIo.stopInput(preserveInFlight = false)
+        persistenceFailureBlocked = true
+        captureContinuityGeneration.incrementAndGet()
+        state = STATE_PAUSED
+        publishCaptureIngress()
+        RecordingIncidentStore.recordUnexpectedErrorInBackground(this, "Capture command admission", error)
+        AppFeedbackCenter.post(userFacingError(getString(R.string.audio_input_init_failed), error), FeedbackTone.ERROR)
+        captureIo.post(pauseInput = true, allowTerminal = true, emergency = true, rejected = {
+            RecordingIncidentStore.recordUnexpectedErrorInBackground(this, "Capture terminal command rejected", error)
+        }) {
+            RecordingIncidentStore.recordCaptureInterrupted(this, "Capture stopped after command queue failure")
+            runTerminalStoreCleanup(seal = ::sealActiveChunks, releaseInput = ::releaseAudioRecord,
+                onFailure = { reportTerminalCaptureStoreFailure("capture command failure cleanup", it) })
+            updateWakeLockState()
+        }
+    }
+
+    private fun startQueuedCapture() {
+        val record = audioRecord ?: return
+        if (captureIo.currentInput()?.record === record) { captureIo.resumeInput(); return }
+        val storage = checkNotNull(preparedCaptureStorage)
+        preparedCaptureStorage = null
+        val release = audioRecordReleaseGeneration.get()
+        val continuity = captureContinuityGeneration.get()
+        try { captureIo.install(record, release, continuity, storage,
+            admit = { ring -> synchronized(captureIngressLock) {
+                val accepted = captureIngress
+                if (accepted == null || accepted.input !== record || accepted.release != release || !accepted.mayStart) {
+                    ring.stop(preserveInFlight = accepted?.mayCommit == true)
+                    null
+                } else {
+                    val requested = captureReadByteCount(accepted.sampleRate, storage.budget.frameBytes,
+                        storage.budget.maxReadBytes, visualizationCallbacks.current() != null,
+                        appUiForeground || silenceSampleRequest?.running() == true)
+                    ring.reserve(CaptureReadIdentity(accepted.release, accepted.continuity, accepted.command,
+                        accepted.destination.storageCode, accepted.sampleRate, accepted.channels,
+                        accepted.sampleFormat.bytesPerSample, accepted.sampleFormat.storageCode.toInt(),
+                        System.nanoTime()), requested)
+                }
+            } },
+            mayComplete = { lease -> synchronized(captureIngressLock) {
+                val current = captureIngress
+                current != null && current.input === record && current.release == release && current.mayCommit &&
+                    current.continuity == lease.identity.continuityGeneration
+            } },
+            captureClockRequested = { silenceSampleRequest?.running() == true },
+        ) } catch (error: Exception) {
+            failListeningOnAudioThread(getString(R.string.audio_input_init_failed), error,
+                listeningCommandGeneration.get())
+            return
+        }
+        publishCaptureIngress()
+        captureCommandAdmissionFailed.set(false)
+        captureIo.resumeInput()
+    }
+
+    private fun consumeQueuedCapture(input: CaptureIoCoordinator.Input, packet: CapturePcmRing.Packet, bytes: ByteArray) {
+        check(audioHandler.looper == Looper.myLooper())
+        val id = packet.lease.identity
+        check(id.sampleRate == sampleRate && id.channels == channelMode.channelCount &&
+            id.bytesPerSample == pcmSampleFormat.bytesPerSample && id.encodingCode == pcmSampleFormat.storageCode.toInt()) {
+            "Queued PCM crossed an un-drained format boundary"
+        }
+        // Persistence failure poisons later PCM; Stop/teardown retain the already-completed prefix.
+        if (!captureGateOutputMayCommit(id.continuityGeneration, persistenceInterruptedCaptureEpoch)) return
+        val slot = checkNotNull(BufferSlot.fromStorageCode(id.destinationCode.toInt()))
+        val owner = AcceptedCaptureReadOwner(input.record,
+            id.continuityGeneration, input.releaseGeneration, id.commandGeneration, queued = true)
+        val startedMillis = captureBatchStartedAtMillis(packet.endedAtMillis, packet.byteCount,
+            id.frameBytes, id.sampleRate)
+        processCapturedAudio(bytes, 0, packet.byteCount, slot, id.continuityGeneration,
+            packet.endedAtNanos, packet.captureStartedAtNanos, owner, startedMillis)
+        if (!serviceDestroying && state == STATE_LISTENING &&
+            id.continuityGeneration == captureContinuityGeneration.get()) {
+            publishVisualization(bytes, 0, packet.byteCount, slot,
+                id.commandGeneration, id.continuityGeneration)
+        }
+        requestDurabilitySyncIfDue()
+    }
+
+    private fun finishQueuedInputFailure(input: CaptureIoCoordinator.Input, error: Throwable) {
+        if (captureIo.currentInput() !== input) return
+        val owner = CaptureInputOperationOwner(input.record, input.continuityGeneration, input.releaseGeneration)
+        if (error is NativeReadFailure && error.status == AudioRecord.ERROR_DEAD_OBJECT) {
+            recoverAudioRecordOnAudioThread(owner)
+        } else if (input.storage.ring.status().terminal == CapturePcmRing.Terminal.EXHAUSTED) {
+            // This event remains visible even if a racing Stop already disarmed the listening marker.
+            RecordingIncidentStore.recordUnexpectedErrorInBackground(this, "Capture PCM backlog exhausted", error)
+            // The completed prefix has drained before this interruption revokes continuity.
+            pauseListeningAfterPersistenceFailure("capture backlog exhausted", IOException(error.message, error))
+        } else {
+            failListeningOnAudioThread(getString(R.string.audio_input_init_failed), error,
+                listeningCommandGeneration.get(), captureOwner = owner)
+        }
+    }
+
+    private fun postCaptureRunnable(work: Runnable, onRejected: () -> Unit = {}): Boolean =
+        postCaptureWork(onRejected = onRejected) { work.run() }
+
+    private fun forceReleaseAudioRecordAfterShutdownTimeout() {
+        val record = synchronized(listeningIntentLock) {
+            val current = audioRecord
+            captureIo.revokeAfterForcedNativeRelease(current)
+            audioRecord = null
+            audioRecordGeneration = Long.MIN_VALUE
+            audioRecordReleaseGeneration.incrementAndGet()
+            publishCaptureIngress()
+            current
+        }
+        record?.let(::releaseDetachedAudioRecord)
+    }
+
     private fun prepareCaptureReadBuffersOnAudioThread() {
         check(audioHandler.looper == Looper.myLooper())
-        val capacity = captureScratchCapacityBytes(sampleRate, channelMode.channelCount * pcmSampleFormat.bytesPerSample)
-        if (captureReadBuffers?.scratch?.size != capacity) {
-            // Publish only after both allocations succeed; failed replacement retains the old pair.
-            captureReadBuffers = CaptureReadBuffers(capacity)
-        }
+        val budget = CapturePcmBudget.forFormat(sampleRate, channelMode.channelCount, pcmSampleFormat.bytesPerSample)
+        preparedCaptureStorage = CaptureIoCoordinator.Storage(budget)
     }
 
     private fun flushAudioRecord() {
         check(audioHandler.looper == Looper.myLooper())
-        if (audioRecord == null) { finishSilenceGate(); return }
-        audioHandler.removeCallbacks(audioReader)
-        audioReader.run()
+        // Save/snapshot preparation owns a completed nonpausing capture fence.
         finishSilenceGate()
-    }
-
-    private fun readCaptureIntoScratch(generation: Long): Int {
-        val currentRecord: CaptureAudioInput
-        val readContinuityGeneration: Long
-        val readReleaseGeneration: Long
-        val captureBufferSlot: BufferSlot
-        synchronized(listeningIntentLock) {
-            if (!captureReadMayStart(serviceDestroying) || generation != listeningCommandGeneration.get() ||
-                audioRecordGeneration != generation || state != STATE_LISTENING || !isListeningEnabled()
-            ) return 0
-            currentRecord = audioRecord ?: return 0
-            readContinuityGeneration = captureContinuityGeneration.get()
-            readReleaseGeneration = audioRecordReleaseGeneration.get()
-            captureBufferSlot = activeBufferSlot
-        }
-        val buffers = checkNotNull(captureReadBuffers) { "Capture buffers were not prepared" }
-        val captureScratch = buffers.scratch
-        val captureBuffer = buffers.buffer
-        val frameBytes = (channelMode.channelCount * pcmSampleFormat.bytesPerSample).coerceAtLeast(1)
-        val requestedBytes = captureReadByteCount(
-            sampleRate = sampleRate,
-            frameBytes = frameBytes,
-            capacityBytes = captureScratch.size,
-            visualizationActive = visualizationCallbacks.current() != null,
-            appUiForeground = appUiForeground || silenceSampleRequest?.running() == true,
-        )
-        captureBuffer.clear()
-        val read = currentRecord.read(captureBuffer, requestedBytes, AudioRecord.READ_BLOCKING)
-        val readEndedAtNanos = System.nanoTime()
-        val captureStartedAtNanos = if (read > 0 && silenceSampleRequest?.running() == true)
-            currentRecord.lastReadStartedAtNanos(readEndedAtNanos) else null
-        if (read == AudioRecord.ERROR_DEAD_OBJECT) {
-            recoverAudioRecordOnAudioThread(
-                CaptureInputOperationOwner(currentRecord, readContinuityGeneration, readReleaseGeneration),
-            )
-            return 0
-        }
-        if (read < 0) {
-            throw IOException("AudioRecord read failed: $read")
-        }
-
-        val commandGenerationUnchanged = generation == listeningCommandGeneration.get()
-        val recordStillOwned = audioRecord === currentRecord && audioRecordGeneration == generation &&
-            audioRecordReleaseGeneration.get() == readReleaseGeneration
-        val continuousCapture = captureReadMayCommit(
-            readContinuityGeneration = readContinuityGeneration,
-            currentContinuityGeneration = captureContinuityGeneration.get(),
-            listeningIntentEnabled = isListeningEnabled(),
-            recorderListening = state == STATE_LISTENING,
-            recordStillOwned = recordStillOwned,
-        )
-        if (!continuousCapture) return read
-
-        val alignedRead = read - read % frameBytes
-        if (alignedRead > 0) {
-            captureBuffer.position(0)
-            captureBuffer.limit(alignedRead)
-            captureBuffer.get(captureScratch, 0, alignedRead)
-            // A destination-only version change may already have moved the UI to the new
-            // buffer. Avoid attributing this final old-buffer read to the new visualizer.
-            if (commandGenerationUnchanged) publishVisualization(captureScratch, 0, alignedRead)
-            val drainOwner = if (captureBufferSlot == BufferSlot.ONE_SHOT) AcceptedCaptureReadOwner(
-                currentRecord, readContinuityGeneration, readReleaseGeneration, generation,
-            ) else null
-            try {
-                processCapturedAudio(captureScratch, 0, alignedRead, captureBufferSlot, readContinuityGeneration,
-                    readEndedAtNanos, captureStartedAtNanos, drainOwner)
-            } catch (error: Exception) {
-                // Delivered PCM failed in its gate/store phase, not the native input. Preserve
-                // durable intent and report even when generic teardown already owns the service.
-                pauseListeningAfterPersistenceFailure("process captured audio", error)
-                return read
-            }
-            requestDurabilitySyncIfDue()
-        }
-
-        // A command that changed the state generation owns scheduling the next read. Generic
-        // teardown may begin while this blocking read is in flight: keep these bytes, but never
-        // start another read after the destroy boundary.
-        if (!captureReadShouldReschedule(
-                commandGenerationUnchanged = commandGenerationUnchanged,
-                serviceDestroying = serviceDestroying,
-                recorderListening = state == STATE_LISTENING,
-                recordStillOwned = audioRecord === currentRecord,
-            )
-        ) return read
-        if (read > 0) {
-            audioHandler.post(audioReader)
-        } else {
-            audioHandler.postDelayed(audioReader, EMPTY_READ_RETRY_MILLIS)
-        }
-        return read
     }
 
     private fun recoverAudioRecordOnAudioThread(owner: CaptureInputOperationOwner): Boolean {
         check(audioHandler.looper == Looper.myLooper())
         val generation = continuingCaptureGeneration(owner) ?: return false
-        audioHandler.removeCallbacks(audioReader)
+
         return try {
             // Finishing a held gate can automatically hand One-shot overflow to Looping.
             // That changes the command, but this exact continuous input still owns recovery.
@@ -3551,7 +3877,7 @@ open class ReverbService : Service() {
                 return false
             }
             lastDurabilitySyncRequestNanos = System.nanoTime()
-            audioHandler.post(audioReader)
+            startQueuedCapture()
             true
         } catch (error: Exception) {
             Log.e(TAG, "Unable to recover AudioRecord", error)
@@ -3565,28 +3891,6 @@ open class ReverbService : Service() {
         }
     }
 
-    private val audioReader = Runnable {
-        val generation = audioRecordGeneration
-        if (generation == Long.MIN_VALUE || generation != listeningCommandGeneration.get()) return@Runnable
-        val readInput = audioRecord ?: return@Runnable
-        val readContinuityGeneration = captureContinuityGeneration.get()
-        val readReleaseGeneration = audioRecordReleaseGeneration.get()
-        try {
-            readCaptureIntoScratch(generation)
-        } catch (error: Exception) {
-            Log.e(TAG, "Audio capture failed", error)
-            failListeningOnAudioThread(
-                getString(R.string.audio_input_init_failed),
-                error,
-                generation,
-                // Destination-only handoffs can advance the command while this exact input
-                // is still delivering its read (including gate output and overflow). Bind
-                // failure to that input and continuity, not the superseded destination.
-                captureOwner = CaptureInputOperationOwner(readInput, readContinuityGeneration, readReleaseGeneration),
-            )
-        }
-    }
-
     private fun failListeningOnAudioThread(
         message: String,
         error: Throwable?,
@@ -3594,6 +3898,7 @@ open class ReverbService : Service() {
         captureOwner: CaptureInputOperationOwner? = null,
     ) {
         check(audioHandler.looper == Looper.myLooper())
+        val intentFailures = ArrayList<Throwable>(2)
         val persisted = synchronized(listeningIntentLock) {
             if (serviceDestroying) return
             if (captureOwner != null) {
@@ -3607,6 +3912,7 @@ open class ReverbService : Service() {
             val committed = commitRecorderPreferenceMutation(
                 commit = { prefs.edit().putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false).commit() },
                 onException = { commitError ->
+                    intentFailures.add(commitError)
                     Log.e(TAG, "Fatal recorder-stop commit threw", commitError)
                     RecordingIncidentStore.recordUnexpectedErrorInBackground(
                         this,
@@ -3620,6 +3926,7 @@ open class ReverbService : Service() {
                     prefs = prefs,
                     snapshot = previousPreferences,
                     onException = { rollbackError ->
+                        intentFailures.add(rollbackError)
                         RecordingIncidentStore.recordUnexpectedErrorInBackground(
                             this,
                             "Fatal recorder intent rollback commit",
@@ -3643,13 +3950,14 @@ open class ReverbService : Service() {
             listeningCommandGeneration.incrementAndGet()
             captureContinuityGeneration.incrementAndGet()
             state = STATE_READY
+            publishCaptureIngress()
             committed
         }
         RecordingIncidentStore.recordCaptureInterrupted(
             this,
             "Capture stopped after audio input failure",
         )
-        audioHandler.removeCallbacks(audioReader)
+
         val sealFailure = runCatching { sealActiveChunks() }.exceptionOrNull()
         if (sealFailure != null) {
             // The final terminal message below includes this failure. Keep diagnostics without
@@ -3659,13 +3967,14 @@ open class ReverbService : Service() {
         releaseAudioRecord()
         updateWakeLockState()
         publishQuickTileSnapshotOnAudioThread(refreshTiles = true, persistDurations = true)
-        val primaryFailure = if (!persisted) getString(R.string.recorder_state_persist_failed)
-        else if (error == null) message
-        else userFacingError(message, error)
-        val sealMessage = sealFailure?.let {
-            userFacingError(getString(R.string.recorder_state_persist_failed), it)
-        }
-        reportTerminalCaptureFailure(combineRecorderTerminalFailureMessages(primaryFailure, sealMessage))
+        val primaryFailure = if (error == null) message else userFacingError(message, error)
+        reportTerminalCaptureFailure(combineRecorderTerminalPersistenceFailures(
+            primary = primaryFailure,
+            intentPersisted = persisted,
+            persistenceSummary = getString(R.string.recorder_state_persist_failed),
+            intentFailureDetails = intentFailures.map { userFacingError("", it) },
+            sealFailureDetail = sealFailure?.let { userFacingError("", it) },
+        ))
         mainHandler.post {
             if (state == STATE_LISTENING) return@post
             requestServiceStopWhenExportIdle()
@@ -3774,8 +4083,13 @@ open class ReverbService : Service() {
                     }
                     true
                 },
-                enqueue = { work -> audioHandler.post(work) },
+                enqueue = { work -> postCaptureWork(
+                    onRejected = { rejectCaptureCommandWork(work) }) { work.run() } },
                 onIdle = { mainHandler.post { releaseCaptureCommandStartedLifetimeIfIdle() } },
+                onRejected = {
+                    RecordingQuickTileStateCache.markRuntimeUnavailable(this)
+                    RecordingQuickTiles.refreshCachedSnapshot(this, requestSystemRefresh = true)
+                },
             ) {
                 recorderErrors.captureProcessCommand(::reportTerminalCaptureFailure) {
                     try {
@@ -3896,7 +4210,8 @@ open class ReverbService : Service() {
                 val loopingBytes = availableBufferedSampleBytes(BufferSlot.LOOPING)
                 val oneShotFull = oneShotBufferEnabled && oneShotAudioChunkStore.isFull()
                 val listening = isLogicalListeningState(state, isListeningEnabled())
-                val exporting = hasActiveExport()
+                val exporting = hasUiBlockingExport()
+                val sampledExportGeneration = exportUiGeneration.get()
                 val activeBuffer = activeBufferSlot
                 val sampledOneShotEnabled = oneShotBufferEnabled
                 val sampledLoopingEnabled = loopingBufferEnabled
@@ -3907,7 +4222,8 @@ open class ReverbService : Service() {
                         deliverUnavailableState(callback)
                         return@post
                     }
-                    if (commandGeneration != listeningCommandGeneration.get() || exporting != hasActiveExport()) {
+                    if (commandGeneration != listeningCommandGeneration.get() ||
+                        sampledExportGeneration != exportUiGeneration.get() || exporting != hasUiBlockingExport()) {
                         // Start/Stop and export acceptance/terminal can win while this snapshot
                         // is queued on main. Resample instead of replaying stale control state.
                         getState(callback)
@@ -3956,7 +4272,7 @@ open class ReverbService : Service() {
             false,
             false,
             null,
-            hasActiveExport(),
+            hasUiBlockingExport(),
         )
     }
 
@@ -4022,7 +4338,8 @@ open class ReverbService : Service() {
     private fun visualizationAnalyzerForAudioOwner(): AudioVisualizationAnalyzer =
         visualizationAnalyzer ?: AudioVisualizationAnalyzer().also { visualizationAnalyzer = it }
 
-    private fun publishVisualization(array: ByteArray, offset: Int, count: Int) {
+    private fun publishVisualization(array: ByteArray, offset: Int, count: Int,
+        slot: BufferSlot, commandGeneration: Long, continuityGeneration: Long) {
         val registration = visualizationCallbacks.currentRegistration() ?: return
         if (visualizationFaulted) return
         // The capture read itself is display-rate while the visualizer is attached. Analyze every
@@ -4036,7 +4353,10 @@ open class ReverbService : Service() {
                 sampleFormat = pcmSampleFormat,
                 channelCount = channelMode.channelCount,
                 sampleRate = sampleRate,
-            )
+            ).copy(silenceSuppressed = silenceGateConfig.enabled && silenceGateSlot == slot &&
+                silenceGateEpoch == continuityGeneration && silenceGateStream?.suppressingSilence == true,
+                bufferSlot = slot, captureCommandGeneration = commandGeneration,
+                captureContinuityGeneration = continuityGeneration)
         } catch (error: Exception) {
             visualizationFaulted = true
             Log.w(TAG, "Audio visualization disabled until the UI reconnects", error)
@@ -4167,15 +4487,37 @@ open class ReverbService : Service() {
                     !bufferClearOperationIsCurrent(operation) || !captureControlFence.mayApply(control)
                 ) return@synchronized null
                 val generation = listeningCommandGeneration.get()
-                generation.takeIf {
-                    clearBufferCommandMayExecute(
+                fun stillEligible(): Boolean = !operation.cancelRequested.get() && !serviceDestroying &&
+                    captureStoresReady && bufferClearOperationIsCurrent(operation) &&
+                    captureControlFence.mayApply(control) && clearBufferCommandMayExecute(
                         requestedBuffer = bufferSlot,
                         activeBuffer = activeBufferSlot,
                         listeningIntentEnabled = isListeningEnabled(),
                         acceptedGeneration = generation,
-                        currentGeneration = generation,
+                        currentGeneration = listeningCommandGeneration.get(),
                     )
+                if (!stillEligible()) return@synchronized null
+                if (silenceGateSlot == bufferSlot) {
+                    // The capture fence drains native packets, but their partial gate window
+                    // still owns this destination. Deliver it before destructive retirement.
+                    if (persistenceFailureBlocked || !durableCaptureIntentAuthorityValid) {
+                        throw IOException("Held capture audio has no healthy authority for buffer Clear")
+                    }
+                    val interruptedEpoch = persistenceInterruptedCaptureEpoch
+                    try { finishSilenceGate() }
+                    catch (error: Exception) {
+                        try { pauseListeningAfterPersistenceFailure("settle held audio before buffer Clear", error) }
+                        catch (reportingError: Throwable) {
+                            if (reportingError !== error) error.addSuppressed(reportingError)
+                        }
+                        throw error
+                    }
+                    if (persistenceFailureBlocked || persistenceInterruptedCaptureEpoch != interruptedEpoch ||
+                        !durableCaptureIntentAuthorityValid) {
+                        throw IOException("Unable to settle held capture audio before buffer Clear")
+                    }
                 }
+                generation.takeIf { stillEligible() }
             }
         }
         return try {
@@ -4187,7 +4529,10 @@ open class ReverbService : Service() {
                 // persistence settles first; later queued capture commands cannot be absorbed
                 // into Clear's generation. No nested executor submission can fail at teardown.
                 bufferClearExecutor.execute { runBufferClear(operation, preparation) }
-                if (!audioHandler.post(preparation)) {
+                if (!postCaptureRunnable(preparation, onRejected = {
+                    preparation.cancel(false)
+                    finishBufferClearOperation(operation, BufferClearPhase.FAILED, 0L, 0L, 0, 0)
+                })) {
                     throw RejectedExecutionException("Buffer Clear preparation was rejected")
                 }
             }
@@ -4205,7 +4550,7 @@ open class ReverbService : Service() {
             if (!serviceDestroying) {
                 reportPersistentStoreFailure("start clear history", error)
                 if (!appUiForeground) {
-                    AppFeedbackCenter.post(getString(R.string.clear_buffer_failed), FeedbackTone.ERROR)
+                    AppFeedbackCenter.post(actionableErrorMessage(this@ReverbService, getString(R.string.clear_buffer_failed), error), FeedbackTone.ERROR)
                 }
             }
             null
@@ -4387,7 +4732,7 @@ open class ReverbService : Service() {
             )
             reportPersistentStoreFailure("clear history", error)
             if (!appUiForeground) {
-                AppFeedbackCenter.post(getString(R.string.clear_buffer_failed), FeedbackTone.ERROR)
+                AppFeedbackCenter.post(actionableErrorMessage(this@ReverbService, getString(R.string.clear_buffer_failed), error), FeedbackTone.ERROR)
             }
         }
     }
@@ -4395,7 +4740,7 @@ open class ReverbService : Service() {
     private fun scheduleRetentionMaintenanceIfNeeded() {
         if (serviceDestroying || !::audioHandler.isInitialized) return
         if (Looper.myLooper() != audioHandler.looper) {
-            audioHandler.post { scheduleRetentionMaintenanceIfNeeded() }
+            postCaptureWork post@ { scheduleRetentionMaintenanceIfNeeded() }
             return
         }
         if (!captureStoresAdmitted || !retentionMaintenanceMayRun(serviceDestroying, foregroundServiceTimedOut) ||
@@ -4451,7 +4796,15 @@ open class ReverbService : Service() {
         // Configuration/rearm and the resulting capture pause share the audio owner. Do not let
         // a worker latch an old failure, then pause capture after a newer configuration succeeds.
         if (Looper.myLooper() != audioHandler.looper) {
-            if (!audioHandler.post { failRetentionMaintenancePass(passId, operation, error) }) {
+            val retireRejectedPass = {
+                if (retentionMaintenanceState.cancelPass(passId)) {
+                    mainHandler.post { if (!serviceDestroying) requestServiceStopWhenExportIdle() }
+                }
+                Unit
+            }
+            if (!postCaptureWork(pauseInput = true, onRejected = retireRejectedPass) post@ {
+                    failRetentionMaintenancePass(passId, operation, error)
+                }) {
                 // Teardown owns a closed audio queue; retire only this terminal worker ticket.
                 if (retentionMaintenanceState.cancelPass(passId)) {
                     mainHandler.post { if (!serviceDestroying) requestServiceStopWhenExportIdle() }
@@ -4728,6 +5081,17 @@ open class ReverbService : Service() {
             return retainedCaptureStartMode()
         }
         if (intent?.action == ACTION_EXPORT_KEEPALIVE) {
+            if (!serviceDestroying && !foregroundServiceTimedOut && foregroundServiceTypes == 0) {
+                try {
+                    // Cold recovery owns its lifetime before asynchronous journal hydration.
+                    promoteForeground(foregroundServiceTypesForWork(listening = false, exporting = true), exporting = true)
+                } catch (error: RuntimeException) {
+                    durableWorkGeneration.incrementAndGet()
+                    foregroundServiceTimedOut = true
+                    Log.w(TAG, "Unable to foreground recovered saves", error)
+                    stopSelf()
+                }
+            }
             if (!hasActiveExport()) requestServiceStopWhenExportIdle()
             return retainedCaptureStartMode()
         }
@@ -4786,12 +5150,12 @@ open class ReverbService : Service() {
                 )
             } catch (error: RuntimeException) {
                 Log.e(TAG, "Unable to enter microphone foreground state", error)
-                audioHandler.post {
+                postCaptureWork post@ {
                     pauseListeningAfterForegroundStartFailure(attempt, error)
                 }
                 return START_NOT_STICKY
             }
-            if (!audioHandler.post { startCaptureAfterForegroundAdmissionOnAudioThread(attempt) }) {
+            if (!postCaptureWork(pauseInput = true) post@ { startCaptureAfterForegroundAdmissionOnAudioThread(attempt) }) {
                 requestServiceStopWhenExportIdle()
                 return START_NOT_STICKY
             }
@@ -4804,12 +5168,13 @@ open class ReverbService : Service() {
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        audioHandler.post {
+        postCaptureWork post@ {
             if (!serviceDestroying && captureStoresAdmitted) checkpointAudioStores("task-removed checkpoint")
         }
     }
 
     override fun onTimeout(startId: Int, fgsType: Int) {
+        durableWorkGeneration.incrementAndGet()
         foregroundServiceTimedOut = true
         // Stop accepting in-flight PCM before any incident/journal I/O. A type transition can
         // race this callback; preserve durable user intent so a foreground bind can retry.
@@ -4818,6 +5183,7 @@ open class ReverbService : Service() {
                 listeningCommandGeneration.incrementAndGet()
                 captureContinuityGeneration.incrementAndGet()
                 state = STATE_PAUSED
+                publishCaptureIngress()
             }
         }
         RecordingIncidentStore.recordCaptureInterrupted(
@@ -4833,17 +5199,17 @@ open class ReverbService : Service() {
                 reportFailure = true,
             )
             if (requestBufferClearCancellation(reportFailure = true) && !appUiForeground) {
-                AppFeedbackCenter.post(getString(R.string.clear_buffer_failed), FeedbackTone.ERROR)
+                AppFeedbackCenter.post(getString(R.string.clear_buffer_failed) + " " + getString(R.string.failure_background_timeout), FeedbackTone.ERROR)
             }
             if (retentionMaintenanceWasActive) {
                 AppFeedbackCenter.post(
-                    getString(R.string.retention_update_failed),
+                    getString(R.string.retention_update_failed) + " " + getString(R.string.failure_background_timeout),
                     FeedbackTone.ERROR,
                 )
             }
         }
-        audioHandler.post {
-            audioHandler.removeCallbacks(audioReader)
+        postCaptureWork(pauseInput = true) post@ {
+
             runTerminalStoreCleanup(
                 seal = ::sealActiveChunks,
                 releaseInput = ::releaseAudioRecord,
@@ -4975,10 +5341,8 @@ open class ReverbService : Service() {
         checkpointAudioStores(operation)
     }
 
-    private fun userFacingError(message: String, error: Throwable): String {
-        val detail = error.message?.trim().orEmpty()
-        return if (detail.isBlank() || message.contains(detail)) message else "$message $detail"
-    }
+    private fun userFacingError(message: String, error: Throwable): String =
+        actionableErrorMessage(this@ReverbService, message, error)
 
     internal open fun configurePersistentBuffer() {
         // A failed reconfiguration must not leave the previous mode looking authoritative to
@@ -5097,15 +5461,17 @@ open class ReverbService : Service() {
             waitForCompletion = waitForCompletion,
             unblockAfterTimeout = {
                 state = STATE_READY
-                audioHandler.removeCallbacks(audioReader)
-                releaseAudioRecord()
+
+                forceReleaseAudioRecordAfterShutdownTimeout()
             },
         ) {
-            audioHandler.removeCallbacks(audioReader)
+
             runTerminalStoreCleanup(
                 // Keep the accepted gate tail's input/state owner until it has drained. New
                 // reads and every public admission are already closed by serviceDestroying.
-                seal = { if (captureStoresAdmitted) sealActiveChunks() },
+                seal = {
+                    if (captureStoresAdmitted) sealActiveChunks() else completePendingKnownCaptureStopAfterSeal()
+                },
                 releaseInput = {
                     state = STATE_READY
                     releaseAudioRecord()
@@ -5113,6 +5479,7 @@ open class ReverbService : Service() {
                 closeLoopingStore = loopingAudioChunkStore::close,
                 closeOneShotStore = oneShotAudioChunkStore::close,
                 onFailure = { error ->
+                    reportPendingKnownCaptureStopDrainFailure(error)
                     reportTerminalCaptureStoreFailure("seal/close stores during shutdown", error)
                 },
             )
@@ -5120,7 +5487,7 @@ open class ReverbService : Service() {
         if (shouldCloseAudioStoresOffThread(waitResult)) {
             // Rejection means store-close ownership never transferred to the audio thread.
             state = STATE_READY
-            audioHandler.removeCallbacks(audioReader)
+
             releaseAudioRecord()
             runTerminalStoreCleanup(
                 closeLoopingStore = loopingAudioChunkStore::close,
@@ -5142,18 +5509,16 @@ open class ReverbService : Service() {
             return AudioThreadShutdownWaitResult.COMPLETED
         }
         if (Looper.myLooper() == audioHandler.looper) {
-            block()
-            return AudioThreadShutdownWaitResult.COMPLETED
+            return if (postCaptureWork(pauseInput = true, terminalClose = true, onRejected = block, work = block))
+                AudioThreadShutdownWaitResult.QUEUED_PENDING else AudioThreadShutdownWaitResult.REJECTED
         }
 
         val latch = CountDownLatch(1)
-        val posted = audioHandler.post {
-            try {
-                block()
-            } finally {
-                latch.countDown()
-            }
+        val terminalWork = {
+            try { block() } finally { latch.countDown() }
         }
+        val posted = postCaptureWork(pauseInput = true, terminalClose = true,
+            onRejected = terminalWork, work = terminalWork)
         if (!posted) {
             Log.w(TAG, "Audio thread rejected shutdown work")
             return AudioThreadShutdownWaitResult.REJECTED
@@ -5191,7 +5556,7 @@ open class ReverbService : Service() {
         Log.d(TAG, "handleDebugCommand action=$action")
 
         val seconds = intent.getFloatExtra(EXTRA_DEBUG_SECONDS, 0f)
-        audioHandler.post {
+        postCaptureWork(pauseInput = true) post@ {
             if (serviceDestroying || !captureStoresReady) return@post
             try {
                 when (action) {
@@ -5374,7 +5739,7 @@ open class ReverbService : Service() {
                     error,
                 )
                 AppFeedbackCenter.post(
-                    getString(R.string.wake_lock_acquire_failed),
+                    actionableErrorMessage(this@ReverbService, getString(R.string.wake_lock_acquire_failed), error),
                     FeedbackTone.ERROR,
                 )
             },
@@ -5398,7 +5763,7 @@ open class ReverbService : Service() {
                     error,
                 )
                 AppFeedbackCenter.post(
-                    getString(R.string.wake_lock_release_failed),
+                    actionableErrorMessage(this@ReverbService, getString(R.string.wake_lock_release_failed), error),
                     FeedbackTone.ERROR,
                 )
             },
@@ -5406,6 +5771,9 @@ open class ReverbService : Service() {
     }
 
     interface AudioFileReceiver {
+        /** The selected PCM and save request have crossed their durable admission barrier. */
+        fun saveQueued(jobId: String) = Unit
+
         fun fileReady(recording: RecordingEntity)
 
         fun fileFailed(message: String, error: Throwable? = null) = Unit
@@ -5508,6 +5876,10 @@ open class ReverbService : Service() {
     data class VisualizationFrame(
         val activity: Float,
         val bins: FloatArray,
+        val silenceSuppressed: Boolean = false,
+        val bufferSlot: BufferSlot? = null,
+        val captureCommandGeneration: Long = Long.MIN_VALUE,
+        val captureContinuityGeneration: Long = Long.MIN_VALUE,
     ) {
         companion object {
             val EMPTY = VisualizationFrame(
@@ -5542,6 +5914,18 @@ open class ReverbService : Service() {
         val sampleFormat: PcmSampleFormat,
         val sampleRate: Int,
     )
+
+    private class DurableSaveOwner(
+        val id: Long,
+        val receiver: AudioFileReceiver,
+        val generation: Long,
+        var jobId: String? = null,
+        var initialPublication: DurableSavePublicationReceipt? = null,
+    ) {
+        var failurePublication: DurableSavePublicationReceipt? = null
+        val started = AtomicBoolean()
+        val terminalDelivered = AtomicBoolean()
+    }
 
     private data class ExportCancellationToken(
         val id: Long,
@@ -5724,12 +6108,6 @@ internal fun foregroundServiceTypesForWork(
     else -> 0
 }
 
-internal enum class ExplicitCaptureStopDisposition {
-    KNOWN_STOP,
-    REJECT_REARMED,
-    INCIDENT_STATE_FAILURE,
-}
-
 internal fun captureCommandRollbackRequiresFailClosed(
     rollbackPersisted: Boolean,
 ): Boolean = !rollbackPersisted
@@ -5741,18 +6119,8 @@ internal fun captureIntentAuthorityAfterRollback(
 
 internal fun captureIntentRepairClearsPersistenceBlock(
     authorityWasValid: Boolean,
-    stopDisposition: ExplicitCaptureStopDisposition,
-): Boolean = !authorityWasValid && stopDisposition == ExplicitCaptureStopDisposition.KNOWN_STOP
-
-internal fun explicitCaptureStopDisposition(
-    stopIntentChanged: Boolean,
-    incidentResult: KnownCaptureStopResult,
-): ExplicitCaptureStopDisposition = when {
-    incidentResult == KnownCaptureStopResult.DURABLE -> ExplicitCaptureStopDisposition.KNOWN_STOP
-    incidentResult == KnownCaptureStopResult.FAILED_REARMED && stopIntentChanged ->
-        ExplicitCaptureStopDisposition.REJECT_REARMED
-    else -> ExplicitCaptureStopDisposition.INCIDENT_STATE_FAILURE
-}
+    stopReservationAccepted: Boolean,
+): Boolean = !authorityWasValid && stopReservationAccepted
 
 internal enum class AutomaticCaptureStopDisposition {
     KNOWN_STOP,
@@ -6002,13 +6370,6 @@ internal enum class ExportCancellationTerminal { CANCELLED, FAILED }
 
 internal fun exportCancellationTerminal(reportFailure: Boolean): ExportCancellationTerminal =
     if (reportFailure) ExportCancellationTerminal.FAILED else ExportCancellationTerminal.CANCELLED
-
-internal fun shouldDeleteExportTarget(
-    cancelled: Boolean,
-    verifiedComplete: Boolean,
-    committed: Boolean,
-    preserveVerifiedOutput: Boolean = false,
-): Boolean = !committed && (!verifiedComplete || (cancelled && !preserveVerifiedOutput))
 
 internal fun isLogicalListeningState(
     recorderState: Int,

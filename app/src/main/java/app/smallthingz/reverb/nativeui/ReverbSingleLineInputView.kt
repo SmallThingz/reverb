@@ -76,6 +76,7 @@ import smallthingz.ui.text.style.LineHeightStyle
 import androidx.core.view.inputmethod.EditorInfoCompat
 import kotlin.math.ceil
 import kotlin.math.roundToInt
+import smallthingz.ui.animation.view.ViewColorTransition
 
 /**
  * Native editable/IME owner extracted mechanically from SettingsRetentionInputView. No composition
@@ -112,6 +113,9 @@ internal class ReverbSingleLineInputView private constructor(
     private var previousOwnerText: String? = null
     private var lastCallbackText: String? = null
     private var configuration = initialConfiguration
+    private val colorMotion:ViewColorTransition by lazy {ViewColorTransition(this,
+        intArrayOf(initialConfiguration.textColor,initialConfiguration.selectionBackgroundColor,
+            initialConfiguration.cursorColor,initialConfiguration.selectionHandleColor),::applyColors)}
     private var onDone: (() -> Unit)? = null
     var onNativeFocusChanged: ((Boolean) -> Unit)? = null
     private var readCurrentRaw: (() -> String)? = null
@@ -511,6 +515,18 @@ internal class ReverbSingleLineInputView private constructor(
     private fun direction(): LayoutDirection =
         if (layoutDirection == LAYOUT_DIRECTION_RTL) LayoutDirection.Rtl else LayoutDirection.Ltr
 
+    private fun applyColors() {
+        setTextColor(colorMotion.color(0))
+        highlightColor=colorMotion.color(1)
+        val cursorWidth=2f*environment.textDensity.density
+        if(Build.VERSION.SDK_INT>=29) {
+            cursorDrawable.bind(cursorWidth,colorMotion.color(2))
+            textSelectHandle?.setTint(colorMotion.color(3))
+            textSelectHandleLeft?.setTint(colorMotion.color(3))
+            textSelectHandleRight?.setTint(colorMotion.color(3))
+        } else legacyCursor?.bind(cursorWidth,colorMotion.color(2))
+    }
+
     private fun applyTypography() {
         val style = currentStyle()
         val resolved = resolveDefaults(style, direction())
@@ -542,19 +558,17 @@ internal class ReverbSingleLineInputView private constructor(
         setTextSize(TypedValue.COMPLEX_UNIT_PX, sizePx)
         letterSpacing = tracking
         setLineSpacing(0f, 1f)
-        setTextColor(configuration.textColor)
-        highlightColor = configuration.selectionBackgroundColor
         val lineStyle = resolved.lineHeightStyle ?: LineHeightStyle.Default
         lineHeightSpan = NativeEditableLineHeightSpan(heightPx, lineStyle)
         if (Build.VERSION.SDK_INT >= 29) {
-            cursorDrawable.bind(2f * density.density, configuration.cursorColor)
             textCursorDrawable = cursorDrawable
-            textSelectHandle?.mutate()?.setTint(configuration.selectionHandleColor)
-            textSelectHandleLeft?.mutate()?.setTint(configuration.selectionHandleColor)
-            textSelectHandleRight?.mutate()?.setTint(configuration.selectionHandleColor)
-        } else {
-            legacyCursor?.bind(2f * density.density, configuration.cursorColor)
+            textSelectHandle?.mutate()
+            textSelectHandleLeft?.mutate()
+            textSelectHandleRight?.mutate()
         }
+        colorMotion.retarget(configuration.textColor,configuration.selectionBackgroundColor,
+            configuration.cursorColor,configuration.selectionHandleColor)
+        applyColors()
         minimumParagraph = Paragraph(
             text = "HHHHHHHHHH", style = resolved, spanStyles = emptyList(),
             maxLines = 1, overflow = TextOverflow.Clip,

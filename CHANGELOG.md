@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.3-rc3 — 2026-11-07 (prerelease)
+
+- Save recordings in the background. Keep source audio until the saved file is verified, including after a restart or buffer clear.
+- Show save progress in Library rows and notifications. Reduce repeated file checks and source-data copies.
+- Request All files access during setup. Rename and delete shared recordings without extra Android prompts when access is granted.
+- Fix rename failures, multi-recording deletion, and playback state at the end of a recording. Show specific error causes.
+- Improve silence detection and calibration controls. Add a calibration adjustment from -6 to 18 dB.
+- Improve light and dark theme contrast, shared controls, and progress animations.
+- Restore the blob's full active color, remove its inner line, and smooth its response to silence.
+- Fix Library scroll restoration, keyboard input, and gesture handling.
+
 ## 0.1.3-rc2 — 2026-10-29 (prerelease)
 
 - Fix native animation compatibility on Android 9–12 while preserving system animation-scale settings.

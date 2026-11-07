@@ -11,6 +11,8 @@ import android.provider.Settings
 import android.util.TypedValue
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.ActivityResultLauncher
 import smallthingz.ui.text.font.createFontFamilyResolver
 import smallthingz.ui.unit.Density
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
@@ -18,6 +20,7 @@ import androidx.core.view.WindowCompat
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import app.smallthingz.reverb.nativeui.*
@@ -42,6 +45,9 @@ class MainActivity : ComponentActivity() {
     private var renderedDark: Boolean? = null
     private lateinit var environment: ReverbViewEnvironment
     private lateinit var directoryResultKey: String
+    private var deletionConsentToken: String? = null
+    private var deletionConsentLauncher: ActivityResultLauncher<IntentSenderRequest>? = null
+    private var playbackRequest: RecordingPlaybackRequest? = null
 
     // Preserve original registerForActivityResult field order exactly.
     private val microphone = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
@@ -59,6 +65,7 @@ class MainActivity : ComponentActivity() {
 
     private val runtimeLifecycle = object : DefaultLifecycleObserver {
         override fun onStart(owner: LifecycleOwner) { runtime.setStarted(true) }
+        override fun onResume(owner: LifecycleOwner) { deliverPlaybackRequest() }
         override fun onStop(owner: LifecycleOwner) { runtime.setStarted(false) }
     }
 
@@ -70,6 +77,13 @@ class MainActivity : ComponentActivity() {
         val configuredMode = getConfiguredThemeMode(this)
         setTheme(if (configuredMode.nativeIsDark(systemDark())) R.style.Theme_Reverb_Dark else R.style.Theme_Reverb_Light)
         super.onCreate(savedInstanceState)
+        ViewModelProvider(this)[RecordingRenameConsentHostViewModel::class.java]
+        playbackRequest = if (savedInstanceState?.containsKey(STATE_PLAYBACK_REQUEST) == true)
+            RecordingPlaybackRequest.fromBundle(savedInstanceState.getBundle(STATE_PLAYBACK_REQUEST))
+        else RecordingPlaybackRequest.consume(intent)
+        deletionConsentToken = savedInstanceState?.getString(STATE_DELETION_CONSENT_TOKEN)
+            ?.takeIf(RecordingDeletionConsent::owns)
+        deletionConsentToken?.let(::registerDeletionConsent)
         val windowBackground = TypedValue()
         if (theme.resolveAttribute(android.R.attr.colorBackground, windowBackground, true)) {
             val color = if (windowBackground.resourceId != 0) getColor(windowBackground.resourceId) else windowBackground.data
@@ -139,6 +153,31 @@ class MainActivity : ComponentActivity() {
         applyWindowPalette(dark)
         content.bind(owner.snapshot, environment)
         owner.attach()
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                RecordingDeletionConsent.changes.collect {
+                    if (!closed && !isFinishing && lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) &&
+                        deletionConsentToken == null
+                    ) {
+                        val request = RecordingDeletionConsent.claim(this@MainActivity) ?: return@collect
+                        deletionConsentToken = request.token
+                        try {
+                            registerDeletionConsent(request.token)
+                            deletionConsentLauncher?.launch(IntentSenderRequest.Builder(request.sender).build())
+                        } catch (error: android.content.IntentSender.SendIntentException) {
+                            retireDeletionConsentLauncher()
+                            RecordingDeletionConsent.finish(this@MainActivity, request.token, false, launchFailed = true, launchFailure = error)
+                        } catch (error: ActivityNotFoundException) {
+                            retireDeletionConsentLauncher()
+                            RecordingDeletionConsent.finish(this@MainActivity, request.token, false, launchFailed = true, launchFailure = error)
+                        } catch (error: SecurityException) {
+                            retireDeletionConsentLauncher()
+                            RecordingDeletionConsent.finish(this@MainActivity, request.token, false, launchFailed = true, launchFailure = error)
+                        }
+                    }
+                }
+            }
+        }
         themeJob = lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 processCommittedTheme.state.collect {
@@ -152,6 +191,29 @@ class MainActivity : ComponentActivity() {
 
     private fun systemDark() =
         resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
+
+    private fun registerDeletionConsent(token: String) {
+        // The registry key and callback both carry the request token. A process-death or
+        // recreation result can never be attached to a newer queued recording.
+        val launcher = activityResultRegistry.register("recording_delete_$token",
+            ActivityResultContracts.StartIntentSenderForResult()) { result ->
+            if (deletionConsentToken == token) {
+                retireDeletionConsentLauncher()
+            }
+            @Suppress("DEPRECATION")
+            val launchError = result.data?.getSerializableExtra(
+                ActivityResultContracts.StartIntentSenderForResult.EXTRA_SEND_INTENT_EXCEPTION) as? Exception
+            RecordingDeletionConsent.finish(this, token, result.resultCode == RESULT_OK && !closed,
+                launchFailed = launchError != null, launchFailure = launchError)
+        }
+        if (deletionConsentToken == token) deletionConsentLauncher = launcher else launcher.unregister()
+    }
+
+    private fun retireDeletionConsentLauncher() {
+        deletionConsentToken = null
+        deletionConsentLauncher?.unregister()
+        deletionConsentLauncher = null
+    }
 
     private fun publishTheme() {
         if (closed) return
@@ -183,7 +245,26 @@ class MainActivity : ComponentActivity() {
         owner.onStart()
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        RecordingPlaybackRequest.consume(intent)?.let {
+            playbackRequest = it
+            deliverPlaybackRequest()
+        }
+    }
+
+    private fun deliverPlaybackRequest() {
+        if (closed || !::content.isInitialized || !lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return
+        val request = playbackRequest ?: return
+        content.openSavedRecording(request) {
+            if (playbackRequest?.token == request.token) playbackRequest = null
+        }
+    }
+
     override fun onSaveInstanceState(outState: Bundle) {
+        outState.putBundle(STATE_PLAYBACK_REQUEST, playbackRequest?.toBundle())
+        outState.putString(STATE_DELETION_CONSENT_TOKEN, deletionConsentToken)
         owner.saveInstanceState(outState) // Original four requested-flag keys retained by owner.
         outState.putString(STATE_DIRECTORY_RESULT_KEY, directoryResultKey)
         content.saveMain()?.let { outState.putBundle(STATE_MAIN, it.toBundle()) }
@@ -199,6 +280,12 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         closed = true
+        deletionConsentLauncher?.unregister()
+        deletionConsentLauncher = null
+        if (!isChangingConfigurations) {
+            deletionConsentToken?.let { RecordingDeletionConsent.finish(this, it, false) }
+            deletionConsentToken = null
+        }
         var failure: Throwable? = null
         fun release(block: () -> Unit) {
             try { block() } catch (error: Throwable) {
@@ -221,6 +308,8 @@ class MainActivity : ComponentActivity() {
         private const val STATE_ONBOARDING_DRAFT = "native_onboarding_draft"
         private const val STATE_ONBOARDING_VIEWPORT = "native_onboarding_viewport"
         private const val STATE_DIRECTORY_RESULT_KEY = "native_settings_directory_result_key"
+        private const val STATE_DELETION_CONSENT_TOKEN = "native_recording_deletion_consent_token"
+        private const val STATE_PLAYBACK_REQUEST = "native_saved_recording_playback_request"
     }
 }
 

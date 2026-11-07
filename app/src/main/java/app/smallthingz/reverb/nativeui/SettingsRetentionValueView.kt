@@ -54,8 +54,8 @@ internal class SettingsRetentionValueView(
         heading.setTypography(retentionValueLabelStyle,environment.textDensity,environment.sharedFontResolver)
         unit.setTypography(retentionValueLabelStyle,environment.textDensity,environment.sharedFontResolver)
         estimate.setTypography(retentionValueEstimateStyle,environment.textDensity,environment.sharedFontResolver)
-        heading.setTextColor(environment.palette.muted);unit.setTextColor(environment.palette.muted)
-        estimate.setTextColor(environment.palette.muted);icon.bind(glyph,environment.palette.muted)
+        heading.animateTextColor(environment.palette.muted);unit.animateTextColor(environment.palette.muted)
+        estimate.animateTextColor(environment.palette.muted);icon.bind(glyph,environment.palette.muted)
     }
     override fun onMeasure(w:Int,h:Int) {
         val width=MeasureSpec.getSize(w)

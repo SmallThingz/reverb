@@ -205,9 +205,7 @@ private class SettingsAudioDropdownView<T>(
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.BUTT
     }
-    private val backgroundSpring = ReleasedSpringValue.color(Color(initialPalette.field))
-    private val backgroundDriver = ViewSpringDriver(this, backgroundSpring, { fill.color = it.toArgb() },
-        { reverbAnimatorDurationScale(context) })
+    private var colorMotion:smallthingz.ui.animation.view.ViewColorTransition?=null
     private var content: SettingsDropdownContent<T>? = null
     private var textHeight = 0
     private var textGap = 0
@@ -242,22 +240,25 @@ private class SettingsAudioDropdownView<T>(
     fun bind(next: SettingsDropdownContent<T>, expanded: Boolean, palette: ReverbPalette) {
         content = next
         val nextPresent = next.options.size > 1
-        val target = Color(if (expanded) palette.raised else palette.field)
-        if (!present || !nextPresent) {
-            backgroundSpring.snapTo(target)
-            fill.color = target.toArgb()
-        } else backgroundDriver.retarget(target)
+        val colors=intArrayOf(if(expanded)palette.raised else palette.field,palette.muted,palette.ink,
+            palette.muted,palette.border,palette.ink)
+        if(!present||!nextPresent){colorMotion?.close();colorMotion=null}
         present = nextPresent
         visibility = if (present) VISIBLE else GONE
         title.setText(next.label)
-        title.setTextColor(palette.muted)
         selected.setText(next.optionLabel(next.selected))
-        selected.setTextColor(palette.ink)
-        arrow.bind(ReverbIcon.ArrowDropDown, palette.muted)
-        divider.color = palette.border
-        rippleColor = palette.ink
+        val motion=colorMotion ?: smallthingz.ui.animation.view.ViewColorTransition(this,colors,{publishColors()})
+            .also {colorMotion=it}
+        motion.retarget(*colors);publishColors()
         input.bind(present, palette.ink)
         onBinding(this, next)
+        invalidate()
+    }
+
+    private fun publishColors() {
+        val colors=colorMotion ?: return
+        fill.color=colors.color(0);title.setTextColor(colors.color(1));selected.setTextColor(colors.color(2))
+        arrow.setTintImmediately(colors.color(3));divider.color=colors.color(4);rippleColor=colors.color(5)
         invalidate()
     }
 
@@ -344,7 +345,7 @@ private class SettingsAudioDropdownView<T>(
         if (closed) return
         closed = true
         input.cancel()
-        backgroundDriver.close()
+        colorMotion?.close();colorMotion=null
         content = null
     }
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).roundToInt()
