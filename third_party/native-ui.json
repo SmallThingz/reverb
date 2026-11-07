@@ -2,6 +2,6 @@
   "schema": 1,
   "path": "native-ui",
   "bundle": "third_party/native-ui.bundle",
-  "commit": "bbe105e84d2b678550e1d43efafd1393414bb86b",
-  "bundle_sha256": "52837755310ff6b4110b949a26c92038f5ff2e605237d946f521455d7ac27437"
+  "commit": "33185ef0bd40bf9c7fce22cae11cf0023e4c4ead",
+  "bundle_sha256": "358bec56bb980e648972e31433c898d579b6368a7866bb84ec9918a6b24788ef"
 }
