@@ -43,7 +43,10 @@ internal class CapturePcmRing(val budget: CapturePcmBudget) {
     )
     class Fence internal constructor(
         internal val owner: CapturePcmRing, val afterSequence: Long, val pauseAdmission: Boolean,
-    ) { internal var completed = false }
+    ) {
+        internal var completed = false
+        internal var admissionPaused = pauseAdmission
+    }
     data class Status(val terminal: Terminal?, val occupiedBytes: Int, val highWaterBytes: Int,
         val occupiedPackets: Int, val highWaterPackets: Int, val reading: Boolean, val fence: Boolean)
 
@@ -149,8 +152,18 @@ internal class CapturePcmRing(val budget: CapturePcmBudget) {
         require(token.owner === this && !token.completed)
         token.completed = true
         fenceCount--
-        if (token.pauseAdmission) pausedFences--
+        if (token.admissionPaused) pausedFences--
         check(fenceCount >= 0 && pausedFences >= 0)
+    }
+    /** Keep the control's FIFO ownership while releasing only its native-admission pause. */
+    @Synchronized fun releaseFencePause(token: Fence) {
+        require(token.owner === this && !token.completed)
+        check(prefixDrained(token))
+        if (token.admissionPaused) {
+            token.admissionPaused = false
+            pausedFences--
+        }
+        check(pausedFences >= 0)
     }
     @Synchronized fun stop(preserveInFlight: Boolean) {
         if (terminal == null || (terminal == Terminal.TEARDOWN && !preserveInFlight)) {

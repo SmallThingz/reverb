@@ -691,6 +691,10 @@ internal class PersistentAudioChunkStore internal constructor(
     }
 
     @Synchronized
+    internal fun retentionConfigurationMatches(mode: RetentionMode, value: Long): Boolean =
+        retentionMode == mode && retentionValue == normalizeRetentionValue(mode, value, configuredFrameBytesLocked())
+
+    @Synchronized
     fun hasData(): Boolean {
         ensureLoadedLocked()
         return retainedPayloadBytes > 0L

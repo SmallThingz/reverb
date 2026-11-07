@@ -55,6 +55,7 @@ internal class CaptureIoCoordinator(
     private val writerPosted = AtomicBoolean()
     private val writerExecutionLock = Any()
     private val dispatchCleanupStarted = AtomicBoolean()
+    private var executingBoundary: Boundary? = null
 
     fun install(
         record: CaptureAudioInput, releaseGeneration: Long, continuityGeneration: Long, storage: Storage,
@@ -78,6 +79,15 @@ internal class CaptureIoCoordinator(
     }
 
     fun resumeInput() { input?.let(::kickReader) }
+    /** Only the executing writer control may relax its own already-drained pause. */
+    fun releaseExecutingControlPause() {
+        check(Looper.myLooper() == writer.looper)
+        val boundary = checkNotNull(executingBoundary)
+        val current = boundary.input ?: return
+        check(current === input)
+        current.storage.ring.releaseFencePause(checkNotNull(boundary.fence))
+        kickReader(current)
+    }
     fun closeAdmission() { commands.closeAdmission() }
 
     fun afterDispatchFailure(work: () -> Unit) {
@@ -244,12 +254,14 @@ internal class CaptureIoCoordinator(
         val prefix = boundary?.input?.storage?.ring
         if (control != null && (prefix == null || prefix.prefixDrained(checkNotNull(boundary?.fence)))) {
             if (!commands.begin(control)) return
+            executingBoundary = boundary
             try {
                 if (checkNotNull(boundary).allowTerminal ||
                     (prefix?.fenceMayExecute(checkNotNull(boundary.fence)) ?: boundary.healthy)) {
                     control.work()
                 } else control.rejected()
             } finally {
+                executingBoundary = null
                 checkNotNull(boundary).fence?.let { prefix!!.completeFence(it) }
                 commands.finish(control)
                 if (control.kind == CaptureControlMailbox.Kind.TERMINAL) writer.looper.quitSafely()

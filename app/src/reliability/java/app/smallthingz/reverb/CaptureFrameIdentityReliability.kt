@@ -44,7 +44,15 @@ class CaptureFrameIdentityService : ReverbService() {
     }
 
     // Fail closed before onCreate instead of ever falling back to ordinary QA capture history.
-    override fun getNoBackupFilesDir(): File = admission.root
+    override fun getNoBackupFilesDir(): File {
+        admission.retentionSyncBarrier.get()?.let { barrier ->
+            if (Thread.currentThread().stackTrace.any {
+                    it.className == "app.smallthingz.reverb.RetentionRecoveryKt" &&
+                        it.methodName == "syncRetentionRecoveryDirectory"
+                }) barrier()
+        }
+        return admission.root
+    }
     override fun getApplicationContext(): Context = admission.context
     override fun getFilesDir(): File = admission.context.filesDir
     override fun getCacheDir(): File = admission.context.cacheDir
@@ -94,6 +102,7 @@ internal data class FrameFixtureAdmission(
     val handoffFault: FrameHandoffFault? = null,
     val isolateSaveCoordinator: Boolean = false,
     val replacementInput: AtomicReference<FrameReplacementInput?> = AtomicReference(),
+    val retentionSyncBarrier: AtomicReference<(() -> Unit)?> = AtomicReference(),
 )
 internal class FrameReplacementInput(val input: PipelineInput) {
     val entered = CountDownLatch(1)
@@ -1110,7 +1119,17 @@ internal fun withFramePipeline(context: Context, token: String, fault: FrameHand
     isolateSaveCoordinator: Boolean = false, body: (FramePipelineFixture) -> Unit) {
     check(context.packageName == "app.smallthingz.reverb.reliability")
     check(android.os.Looper.myLooper() != android.os.Looper.getMainLooper())
-    if (isolateSaveCoordinator) admitScopedSaveFixture()
+    if (isolateSaveCoordinator) {
+        admitScopedSaveFixture()
+        // The controller excludes existing QA services and concurrent external launches.
+        // Reject a retained process-local owner here, before creating or binding the fixture.
+        synchronized(DurableSaveJobs) {
+            for (name in listOf("recoveryOwner", "recoveryRequest")) {
+                val field = DurableSaveJobs::class.java.getDeclaredField(name).apply { isAccessible = true }
+                check(field.get(DurableSaveJobs) == null) { "Existing QA save recovery $name requires separate disposition" }
+            }
+        }
+    }
     val parent = File(context.noBackupFilesDir, "capture-pipeline").also { check(it.mkdirs() || it.isDirectory) }
     val root = Files.createTempDirectory(parent.toPath(), "$token-").toFile()
     val admission = createFrameFixtureAdmission(context, root, handoffFault = fault)

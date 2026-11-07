@@ -2978,6 +2978,7 @@ open class ReverbService : Service() {
     private fun applyConfiguredPreferencesOnAudioThread() {
         check(audioHandler.looper == Looper.myLooper())
         if (serviceDestroying || !captureStoresAdmitted) return
+        val previousGateConfig = silenceGateConfig
         loadSilenceGatePreferences()
         val configured = readConfiguredCaptureSnapshot()
         val captureConfigChanged = captureInputConfigurationChanged(configuredCaptureSnapshot, configured)
@@ -3005,7 +3006,24 @@ open class ReverbService : Service() {
                 outputCodec = configured.codec
                 publishConfigurationSnapshot()
             }
-            configurePersistentBuffer()
+            configurePersistentBuffer { retention ->
+                if (state == STATE_LISTENING && !serviceDestroying && !persistenceFailureBlocked &&
+                    durableCaptureIntentAuthorityValid && durableListeningIntentEnabled &&
+                    captureSettingsMayResumeLoopingInput(retention, loopingBufferEnabled, oneShotBufferEnabled,
+                        channelMode.channelCount * pcmSampleFormat.bytesPerSample,
+                        inputConfigurationChanged = captureConfigChanged,
+                        silenceGateChanged = previousGateConfig != silenceGateConfig,
+                        recordingLooping = activeBufferSlot == BufferSlot.LOOPING,
+                        oneShotRetentionUnchanged = oneShotAudioChunkStore.retentionConfigurationMatches(
+                            retention.mode, when (retention.mode) {
+                                RetentionMode.SIZE -> retention.oneShotSizeBytes
+                                RetentionMode.TIME -> retention.oneShotSeconds
+                            }))) {
+                    // No input or destination boundary changes. Keep this control's FIFO position,
+                    // but drain native PCM while retention publication/configuration performs IO.
+                    captureIo.releaseExecutingControlPause()
+                }
+            }
             val hasActiveTarget = ensureActiveCaptureTargetOnAudioThread()
             if (state == STATE_LISTENING && (!hasActiveTarget || !hasWritableCaptureTarget())) {
                 pauseListeningForNoWritableBufferOnAudioThread()
@@ -5344,7 +5362,9 @@ open class ReverbService : Service() {
     private fun userFacingError(message: String, error: Throwable): String =
         actionableErrorMessage(this@ReverbService, message, error)
 
-    internal open fun configurePersistentBuffer() {
+    internal open fun configurePersistentBuffer() = configurePersistentBuffer(onResolved = {})
+
+    private fun configurePersistentBuffer(onResolved: (RetentionConfiguration) -> Unit) {
         // A failed reconfiguration must not leave the previous mode looking authoritative to
         // Capture. This runs on the serialized audio thread; publish a mode again only after
         // both stores accept the resolved durable configuration below.
@@ -5374,6 +5394,8 @@ open class ReverbService : Service() {
                 "Retention configuration is unavailable; preserving existing buffered audio",
             )
             val resolvedConfiguration = resolved.configuration
+
+            onResolved(resolvedConfiguration)
 
             // This is a write-ahead durability barrier. No retention limit that can retire audio
             // reaches either chunk store until its exact configuration is independently recoverable.

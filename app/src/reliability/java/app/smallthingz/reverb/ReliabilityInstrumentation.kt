@@ -231,6 +231,9 @@ class ReliabilityInstrumentation : Instrumentation() {
             } else if (requestedTest == "capture_teardown_identity") {
                 executed++
                 verifyCaptureTeardownFrameIdentity(targetContext, report)
+            } else if (requestedTest == "capture_settings_drain") {
+                executed++
+                verifyCaptureSettingsDrain(targetContext, report)
             } else if (requestedTest == "native_library_fixture_observation") {
                 executed++
                 observeNativeLibraryMigratedFixtures(this, report, fixtureSessionNonce)

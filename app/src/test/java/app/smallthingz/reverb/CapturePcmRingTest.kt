@@ -179,6 +179,44 @@ class CapturePcmRingTest {
         assertNotNull(q.reserve(identity(), 8))
     }
 
+    @Test fun releasedPauseKeepsControlFenceWhileNewPcmArrives() {
+        val q = ring()
+        append(q, byteArrayOf(1, 2))
+        val control = q.reserveFence(true)
+        assertArrayEquals(byteArrayOf(1, 2), consume(q))
+        q.releaseFencePause(control)
+        q.releaseFencePause(control)
+        assertTrue(q.status().fence)
+        append(q, byteArrayOf(3, 4))
+        assertTrue(q.prefixDrained(control))
+        q.completeFence(control)
+        assertArrayEquals(byteArrayOf(3, 4), consume(q))
+        assertFalse(q.status().fence)
+    }
+
+    @Test fun earlyPauseReleaseNeverReleasesAnotherControlOrTerminalBoundary() {
+        for (terminal in listOf(false, true)) {
+            val q = ring()
+            val first = q.reserveFence(true)
+            val second = q.reserveFence(true)
+            q.releaseFencePause(first)
+            q.completeFence(first)
+            assertNull(q.reserve(identity(), 2))
+            if (terminal) q.stop(false)
+            q.releaseFencePause(second)
+            q.completeFence(second)
+            if (terminal) assertNull(q.reserve(identity(), 2)) else assertNotNull(q.reserve(identity(), 2))
+        }
+    }
+
+    @Test fun earlyPauseReleaseRequiresDrainedNativePrefix() {
+        val q = ring()
+        requireNotNull(q.reserve(identity(), 2))
+        val fence = q.reserveFence(true)
+        try { q.releaseFencePause(fence); fail() } catch (_: IllegalStateException) { }
+        assertTrue(q.status().reading)
+    }
+
     @Test fun shortReadDescriptorExhaustionIsExplicitEvenWithFreePcmBytes() {
         val q = CapturePcmRing(CapturePcmBudget(2, 8, 32, 2))
         append(q, byteArrayOf(1, 2), requested = 8)
