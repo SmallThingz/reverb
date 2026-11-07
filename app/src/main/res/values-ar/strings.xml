@@ -15,10 +15,6 @@
     <string name="export">تصدير</string>
     <string name="no_app_available">لا يوجد تطبيق متوافق.</string>
     <string name="undo">تراجع</string>
-    <string name="theme_title">السمة</string>
-    <string name="theme_system">النظام</string>
-    <string name="theme_light">فاتح</string>
-    <string name="theme_dark">داكن</string>
     <string name="retention_mode_title">الاحتفاظ</string>
     <string name="retention_time_label">الوقت</string>
     <string name="retention_time_invalid">استخدم MM:SS أو HH:MM:SS.</string>

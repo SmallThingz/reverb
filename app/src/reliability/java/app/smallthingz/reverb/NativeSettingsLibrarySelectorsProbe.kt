@@ -16,9 +16,11 @@ import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
 import kotlin.math.pow
 import app.smallthingz.reverb.nativeui.NativeSettingsScreenContent
-import app.smallthingz.reverb.nativeui.SettingsSegmentedControlView
-import app.smallthingz.reverb.nativeui.SettingsSegment
+import app.smallthingz.reverb.nativeui.ReverbSegmentedPresentation
+import app.smallthingz.reverb.nativeui.segmentedPalette
+import smallthingz.ui.components.NativeChoice
 import smallthingz.ui.components.NativeSegmentedChoice
+import smallthingz.ui.components.NativeSegmentedControl
 import java.io.File
 import org.json.JSONArray
 import org.json.JSONObject
@@ -71,9 +73,11 @@ internal fun verifyNativeSettingsLibrarySelectors(instrumentation: Instrumentati
                 .firstOrNull { it.inputAllowed }?.also { settings = it } != null
         }
         main {
-            val tiny = SettingsSegmentedControlView(context,
-                listOf(SettingsSegment("time", 0, "Time"), SettingsSegment("size", 1, "Size")),
-                0, settings.pointerEnvironment, { current.board }) { error("Geometry fixture must not activate") }
+            val palette = segmentedPalette(settings.pointerEnvironment)
+            val tiny = NativeSegmentedControl(context, palette, ReverbSegmentedPresentation(context)).apply {
+                onSelectionRequest = { error("Geometry fixture must not activate") }
+                bind(listOf(NativeChoice("time", "Time"), NativeChoice("size", "Size")), "time", palette)
+            }
             try {
                 val inset = (4 * context.resources.displayMetrics.density).roundToInt()
                 for (direction in listOf(View.LAYOUT_DIRECTION_LTR, View.LAYOUT_DIRECTION_RTL)) {
@@ -200,7 +204,7 @@ internal fun verifyNativeSettingsLibrarySelectors(instrumentation: Instrumentati
                 val density = context.resources.displayMetrics.density
                 check(group.height == (34 * density).roundToInt())
                 val adapter = generateSequence(group.parent as? View) { it.parent as? View }
-                    .filterIsInstance<SettingsSegmentedControlView<*>>().first()
+                    .filterIsInstance<NativeSegmentedControl>().first()
                 check(adapter.height == (42 * density).roundToInt())
                 check(target.getGlobalVisibleRect(Rect()))
                 val node = target.createAccessibilityNodeInfo()

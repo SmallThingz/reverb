@@ -10,19 +10,8 @@ import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.View
 
-/** Existing parent owns this per-AndroidView request route; no extra layout/visual wrapper. */
-internal class NativeAndroidInteropRequests {
-    private var listener: ((Boolean) -> Unit)? = null
-    fun request(disallow: Boolean) { listener?.invoke(disallow) }
-    fun bind(onRequest: (Boolean) -> Unit): AutoCloseable {
-        listener = onRequest
-        return AutoCloseable { if (listener === onRequest) listener = null }
-    }
-}
-
-internal interface NativeAndroidInteropHost {
-    val nativeInteropRequests: NativeAndroidInteropRequests
-}
+internal typealias NativeAndroidInteropRequests = smallthingz.ui.input.NativeAndroidInteropRequests
+internal typealias NativeAndroidInteropHost = smallthingz.ui.input.NativeAndroidInteropHost
 
 /**
  * Actual native wheel/curve/editor delivery in the owning window's shared Initial/Main/Final path.

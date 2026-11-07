@@ -202,12 +202,11 @@ enum class ChannelMode(
 }
 
 enum class AppThemeMode(
-    @param:StringRes @field:StringRes val labelRes: Int,
     val storageCode: Byte,
 ) {
-    SYSTEM(R.string.theme_system, 0),
-    LIGHT(R.string.theme_light, 1),
-    DARK(R.string.theme_dark, 2),
+    SYSTEM(0),
+    LIGHT(1),
+    DARK(2),
     ;
 
     companion object {

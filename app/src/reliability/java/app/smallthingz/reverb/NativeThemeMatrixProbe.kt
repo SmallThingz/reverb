@@ -153,7 +153,7 @@ internal fun verifyNativeThemeMatrix(instrumentation: Instrumentation, report: S
                     settle()
                 }
                 main { settings.click(host.getString(R.string.open_settings)) }
-                capture("$name-settings", settings.board) { it.getText() in setOf(host.getString(R.string.theme_title), host.getString(R.string.retention_mode_title)) }
+                capture("$name-settings", settings.board) { it.getText() in setOf(host.getString(smallthingz.ui.R.string.native_theme_title), host.getString(R.string.retention_mode_title)) }
                 val longError = actionableErrorMessage(host, host.getString(R.string.share_recording_failed),
                     java.io.IOException("The selected storage provider cannot create a shareable document while its account is offline. Reconnect that account in the provider app and retry this operation."))
                 val oldIds = AppFeedbackCenter.events.value.map { it.id }.toSet()

@@ -6,6 +6,10 @@ import android.view.ViewGroup
 import smallthingz.ui.runtime.MonotonicFrameClock
 import androidx.lifecycle.Lifecycle
 import app.smallthingz.reverb.nativeui.*
+import smallthingz.ui.components.NativeThemePresentation
+import smallthingz.ui.components.NativeSegmentedPresentation
+import smallthingz.ui.components.NativeThemeSelector
+import smallthingz.ui.controls.ControlPalette
 import kotlinx.coroutines.CoroutineScope
 import kotlin.math.max
 import kotlin.math.min
@@ -57,15 +61,31 @@ internal class NativeSettingsSections(
     private fun theme(): NativeSettingsSection {
         val initial = owner.state
         var activation = initial.activation
-        val body = SettingsThemeSection(context, initial.displayed.snapshot.themeMode, environment(), inputRoot) {
-            owner.themeChanged(activation, it)
+        var env = environment()
+        fun palette() = segmentedPalette(env)
+        lateinit var body: NativeThemeSelector
+        val presentation = object : NativeThemePresentation,
+            NativeSegmentedPresentation by ReverbSegmentedPresentation(context) {
+            override val title = env.paragraph(context, "", ReverbTextRole.BODY_LARGE, env.palette.onSurface)
+            override fun bindTitle(titleText: String, palette: ControlPalette, titleColor: Int) {
+                title.setText(titleText)
+                bindSectionTitle(title, env)
+            }
         }
+        body = NativeThemeSelector(context, palette(), initial.displayed.snapshot.themeMode.toNativeThemeMode(),
+            env.palette.onSurface, presentation, env.textDensity.density, inputAllowed = {
+                body.settingsInputAllowed(inputRoot)
+            }, onSelectionRequest = {
+                owner.themeChanged(activation, it.toAppThemeMode())
+                true
+            })
         return object : NativeSettingsSection {
             override val view = body
             override fun bind() {
                 val state = owner.state
                 activation = state.activation
-                body.bind(state.displayed.snapshot.themeMode, environment())
+                env = environment()
+                body.bind(state.displayed.snapshot.themeMode.toNativeThemeMode(), palette(), env.palette.onSurface, env.textDensity.density)
             }
             override fun close() = body.close()
         }

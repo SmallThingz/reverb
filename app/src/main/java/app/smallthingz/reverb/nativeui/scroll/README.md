@@ -1,16 +1,16 @@
-# Native vertical scroll proposal
+# Native scroll adaptation notes
 
-This directory is outside every frozen source set. It contains executable Kotlin state, delta/fling, mutation ownership and overscroll code plus twenty-one focused test cases; none has been compiled, run, integrated or installed by this lane. It replaces no current ScrollView yet.
+These notes retain the original port's design and qualification history. References below to proposed integration or unexecuted checks describe that original work, not the current build status. Current scroll owners and routing are app-owned; the shared overscroll engine is in `smallthingz.ui.scroll`. Qualification belongs to each change's test results.
 
-The reference is released v0.1.2 (3e16f8ddb78dca15df4b436d34d330801ce83ffd) and its pinned foundation/animation 1.11.2. MainActivity.kt:751 calls fillMaxSize().verticalScroll(scrollState, enabled=interactionEnabled) without a custom fling, reverse direction or overscroll factory. PROVENANCE.json hashes the actual extracted dependencies. The pinned source is retained under pinned/; Apache license is included.
+The reference is released v0.1.2 (3e16f8ddb78dca15df4b436d34d330801ce83ffd) and its pinned foundation/animation 1.11.2. MainActivity.kt:751 calls fillMaxSize().verticalScroll(scrollState, enabled=interactionEnabled) without a custom fling, reverse direction or overscroll factory. PROVENANCE.json records the source archive entries and their hashes; the Apache license is included.
 
 ## Concrete pieces
 
 - NativeVerticalScrollState: ordinary fields replacing ScrollState's rendering state, including the fractional accumulator, unknown initial maximum, layout clamp, direction bookkeeping, and integer-only saver.
 - NativeVerticalScrollEngine: synchronous source pre-scroll -> local scroll -> post-scroll composition. Physical finger down is positive; the non-reversed vertical state uses its negation. dispatchWithOverscroll wraps the nested chain only when forward/backward scrolling is possible.
 - NativeVerticalFling: deterministic default-fling sampling using the pinned public DecayAnimation. Supply splineBasedDecay<Float>(Density(currentDensity)); there is no copied spline, OverScroller approximation or invented velocity threshold.
-- NativeVerticalOverscroll: vertical-only adaptation of the released Android edge-effect path. API31+ uses the actual stretch RenderNode and negation effects; API28–30 uses the source glow compatibility behavior. It attaches to an existing host's drawing and observes pointer positions without consuming events.
-- NativeEdgeEffectCompat: mechanically copied pinned source, changing only package and object name. The legacy opposite-release threshold, platform preview fallbacks and spline relaxation-distance arithmetic are preserved.
+- NativeVerticalOverscroll and NativeHorizontalOverscroll: small app adapters to the library's NativeAxisOverscroll. The shared engine keeps explicit axis transforms, API31+ stretch RenderNode/negation effects and API28–30 glow behavior. It attaches to the existing host and observes pointers without consuming events.
+- smallthingz.ui.scroll.NativeEdgeEffectCompat: mechanically copied pinned source, moved from the app without changing its body. The legacy opposite-release threshold, platform preview fallbacks and spline relaxation-distance arithmetic are preserved.
 - NativeVerticalScrollOwner: one ordinary coroutine owner per real host. The retained state shares the pinned MutatorMutex, while each host supplies its actual frame clock, suspendable nested pre/post-fling chain and attachment state. No extra coroutine scope, gesture detector or scheduler is invented.
 - NativeVerticalScrollOwnerTest: ten unexecuted ownership/continuation tests cover shared-page preemption, priority rejection, real versus local cancellation, partial nested consumption, zero-velocity terminals, suspended ancestor callbacks, captured key viewport and raw nested-scroll admission.
 - NativeVerticalScrollEngineTest: eleven unexecuted state/consumption/ownership regression tests. They verify fractional reversals, bounds/re-measure, save/direction semantics, nested ordering, page-key admission, tiny/NaN velocity, blocked fling termination and reentrant cancellation.

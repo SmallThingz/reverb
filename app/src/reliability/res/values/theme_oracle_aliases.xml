@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Preserve frozen oracle names; localized values remain owned by the library. -->
+    <item type="string" name="theme_title">@string/native_theme_title</item>
+    <item type="string" name="theme_system">@string/native_theme_system</item>
+    <item type="string" name="theme_light">@string/native_theme_light</item>
+    <item type="string" name="theme_dark">@string/native_theme_dark</item>
+</resources>

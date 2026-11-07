@@ -15,10 +15,6 @@
     <string name="export">निर्यात</string>
     <string name="no_app_available">कोई संगत ऐप उपलब्ध नहीं है।</string>
     <string name="undo">पूर्ववत करें</string>
-    <string name="theme_title">थीम</string>
-    <string name="theme_system">सिस्टम</string>
-    <string name="theme_light">हल्की</string>
-    <string name="theme_dark">गहरी</string>
     <string name="retention_mode_title">रखरखाव</string>
     <string name="retention_time_label">समय</string>
     <string name="retention_time_invalid">MM:SS या HH:MM:SS उपयोग करें।</string>

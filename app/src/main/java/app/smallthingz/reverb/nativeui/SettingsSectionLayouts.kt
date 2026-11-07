@@ -3,9 +3,10 @@ package app.smallthingz.reverb.nativeui
 import android.content.Context
 import android.view.View
 import android.view.ViewGroup
+import smallthingz.ui.components.NativeChoice
+import smallthingz.ui.components.NativeSegmentedControl
 import smallthingz.ui.text.font.FontWeight
 import smallthingz.ui.unit.sp
-import app.smallthingz.reverb.AppThemeMode
 import app.smallthingz.reverb.R
 import app.smallthingz.reverb.RetentionMode
 import kotlin.math.max
@@ -23,44 +24,6 @@ internal enum class SettingsSectionKey(val sourceKey:String) {
     }
 }
 
-internal class SettingsThemeSection(
-    context:Context,
-    initialTheme:AppThemeMode,
-    private var environment:ReverbViewEnvironment,
-    inputRoot:()->View?,
-    onTheme:(AppThemeMode)->Unit,
-):ViewGroup(context),AutoCloseable {
-    private val title=settingsSectionTitle(context,R.string.theme_title,environment)
-    private val segments=SettingsSegmentedControlView(context,AppThemeMode.entries.map {
-        SettingsSegment(it.name,it,context.getString(it.labelRes),when(it) {
-            AppThemeMode.SYSTEM->ReverbIcon.ThemeSystem
-            AppThemeMode.LIGHT->ReverbIcon.ThemeLight
-            AppThemeMode.DARK->ReverbIcon.ThemeDark
-        })
-    },initialTheme,environment,inputRoot,onTheme)
-    private var rowHeight=0
-    private var gap=0
-    init {importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO;addView(title);addView(segments)}
-    fun bind(theme:AppThemeMode,next:ReverbViewEnvironment) {
-        environment=next;bindSectionTitle(title,next);segments.bind(theme,next);requestLayout()
-    }
-    override fun onMeasure(w:Int,h:Int) {
-        val width=View.MeasureSpec.getSize(w)
-        val available=(width-2*dp(16)).coerceAtLeast(0)
-        title.measure(atMost(available),unspecified())
-        gap=min(dp(16),(available-title.measuredWidth).coerceAtLeast(0))
-        segments.measure(exact((available-title.measuredWidth-gap).coerceAtLeast(0)),unspecified())
-        rowHeight=max(title.measuredHeight,segments.measuredHeight)
-        setMeasuredDimension(resolveSize(width,w),resolveSize(2*dp(12)+rowHeight+dp(12),h))
-    }
-    override fun onLayout(changed:Boolean,l:Int,t:Int,r:Int,b:Int) {
-        placeLogical(title,dp(16),dp(12)+((rowHeight-title.measuredHeight)/2f).roundToInt())
-        placeLogical(segments,dp(16)+title.measuredWidth+gap,dp(12)+((rowHeight-segments.measuredHeight)/2f).roundToInt())
-    }
-    override fun close()=segments.close()
-    private fun dp(v:Int)=(v*environment.textDensity.density).roundToInt()
-}
-
 /**
  * Released RetentionSection structural layout. The two passed values are the real native retention
  * value Views (label/editor/estimate), not strings or replacement platform text fields.
@@ -75,10 +38,13 @@ internal class SettingsRetentionSection(
     loopingValue:View,
 ):ViewGroup(context),AutoCloseable {
     private val title=settingsSectionTitle(context,R.string.retention_mode_title,environment)
-    private val modes=SettingsSegmentedControlView(context,listOf(
-        SettingsSegment("time",RetentionMode.TIME,context.getString(R.string.retention_time_label)),
-        SettingsSegment("size",RetentionMode.SIZE,context.getString(R.string.retention_size_mode_label)),
-    ),mode,environment,inputRoot,onMode)
+    private val modeValues=mapOf("time" to RetentionMode.TIME,"size" to RetentionMode.SIZE)
+    private val modeOptions=listOf(NativeChoice("time",context.getString(R.string.retention_time_label)),
+        NativeChoice("size",context.getString(R.string.retention_size_mode_label)))
+    private val modes=NativeSegmentedControl(context,segmentedPalette(environment),ReverbSegmentedPresentation(context),
+        environment.textDensity.density,inputAllowed={settingsInputAllowed(inputRoot)}).apply {
+        onSelectionRequest={id->modeValues[id]?.let {onMode(it);true}?:false}
+    }
     private val surface=ReverbGroupLayout(context,23f)
     private val body=RetentionBody(context,oneShotValue,loopingValue)
     private val error=environment.paragraph(context,"",ReverbTextRole.BODY_SMALL,environment.palette.error)
@@ -90,9 +56,10 @@ internal class SettingsRetentionSection(
         surface.addRow(body,ReverbGroupLayout.LayoutParams(-1,-2))
         surface.setPalette(environment.palette.field,environment.palette.border)
         addView(title);addView(modes);addView(surface)
+        bindMode(mode,environment)
     }
     fun bind(mode:RetentionMode,message:String?,next:ReverbViewEnvironment) {
-        environment=next;bindSectionTitle(title,next);modes.bind(mode,next)
+        environment=next;bindSectionTitle(title,next);bindMode(mode,next)
         error.setText(message.orEmpty());error.visibility=if(message==null)GONE else VISIBLE
         next.bindParagraphStyle(error,ReverbTextRole.BODY_SMALL,next.palette.error)
         surface.setPalette(next.palette.field,next.palette.border);requestLayout()
@@ -112,6 +79,8 @@ internal class SettingsRetentionSection(
         placeLogical(modes,width-dp(16)-modes.measuredWidth,((headerHeight-modes.measuredHeight)/2f).roundToInt())
         surface.layout(dp(16),headerHeight+dp(14),width-dp(16),headerHeight+dp(14)+surface.measuredHeight)
     }
+    private fun bindMode(mode:RetentionMode,next:ReverbViewEnvironment) = modes.bind(modeOptions,
+        modeValues.entries.single {it.value==mode}.key,segmentedPalette(next),next.textDensity.density)
     override fun close()=modes.close()
     private fun dp(v:Int)=(v*environment.textDensity.density).roundToInt()
     private inner class RetentionBody(context:Context,val first:View,val second:View):ViewGroup(context) {

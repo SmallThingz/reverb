@@ -5,6 +5,7 @@ import android.app.Instrumentation
 import android.content.Context
 import android.content.res.Configuration
 import android.graphics.Bitmap
+import android.graphics.drawable.Drawable
 import android.graphics.Canvas as AndroidCanvas
 import android.os.Build
 import android.view.Gravity
@@ -48,6 +49,8 @@ import androidx.compose.ui.unit.dp
 import app.smallthingz.reverb.nativeui.ReverbIcon
 import app.smallthingz.reverb.nativeui.ReverbIconDrawable
 import app.smallthingz.reverb.nativeui.fitReverbIcon
+import smallthingz.ui.components.NativeThemeIconDrawable
+import smallthingz.ui.components.NativeThemeMode
 import java.io.File
 import kotlin.math.ceil
 import kotlin.math.round
@@ -55,7 +58,12 @@ import kotlin.math.roundToInt
 import org.json.JSONArray
 import org.json.JSONObject
 
-private data class IconSample(val icon: ReverbIcon, val reference: ImageVector)
+private class IconSample(val name: String, val reference: ImageVector, val create: (Float, Int) -> Drawable) {
+    constructor(icon: ReverbIcon, reference: ImageVector) : this(icon.name, reference,
+        { density, tint -> ReverbIconDrawable(icon, density, tint) })
+    constructor(mode: NativeThemeMode, reference: ImageVector) : this("Theme" + mode.name.lowercase().replaceFirstChar { it.uppercaseChar() },
+        reference, { density, tint -> NativeThemeIconDrawable(mode, density, tint) })
+}
 
 // Actual released vectors, never the generated candidate's paths.
 private val iconSamples = listOf(
@@ -86,9 +94,9 @@ private val iconSamples = listOf(
     IconSample(ReverbIcon.Folder, AppIcons.folder),
     IconSample(ReverbIcon.Undo, AppIcons.undo),
     IconSample(ReverbIcon.BackgroundWarning, AppIcons.backgroundWarning),
-    IconSample(ReverbIcon.ThemeSystem, AppIcons.themeSystem),
-    IconSample(ReverbIcon.ThemeLight, AppIcons.themeLight),
-    IconSample(ReverbIcon.ThemeDark, AppIcons.themeDark),
+    IconSample(NativeThemeMode.SYSTEM, AppIcons.themeSystem),
+    IconSample(NativeThemeMode.LIGHT, AppIcons.themeLight),
+    IconSample(NativeThemeMode.DARK, AppIcons.themeDark),
     IconSample(ReverbIcon.ArrowDropDown, AppIcons.arrowDropDown),
     IconSample(ReverbIcon.Add, Icons.Rounded.Add),
 )
@@ -109,14 +117,17 @@ private val iconFrames = listOf(
 /** Native View host versus actual released vectors; no production Activity/data. */
 internal fun verifyNativeIconParity(instrumentation: Instrumentation, report: StringBuilder) {
     val context = instrumentation.targetContext
-    check(context.packageName == "app.smallthingz.reverb.nativeparity.reliability")
+    val currentUiSmoke = context.packageName == "app.smallthingz.reverb.uitheme.reliability"
+    check(currentUiSmoke || context.packageName == "app.smallthingz.reverb.nativeparity.reliability")
     check(context.applicationContext.javaClass == Application::class.java)
-    check(iconSamples.size == 32 && iconSamples.map { it.icon }.distinct().size == 32)
+    check(iconSamples.size == 32 && iconSamples.map { it.name }.distinct().size == 32)
     check(iconSamples.all { it.reference.defaultWidth == 24.dp && it.reference.defaultHeight == 24.dp })
     val directory = File(context.filesDir, "native-icon-parity-" + System.currentTimeMillis())
     check(directory.mkdir())
     val cases = JSONArray()
     val result = JSONObject()
+        .put("mode", if (currentUiSmoke) "current-ui-isolated-icon-oracle" else "historical-native-parity")
+        .put("scope", "32 independent icon vectors only; no full screen parity claim")
         .put("baseline_commit", "3e16f8ddb78dca15df4b436d34d330801ce83ffd")
         .put("app_icons_sha256", "baeb2191e2c0e3c98de368c2ab112044abc719f2888fe5527c23d3fab4643273")
         .put("reference", "Released AppIcons and Rounded.Add; Material3 Icon/direct VectorPainter alpha route")
@@ -133,7 +144,7 @@ internal fun verifyNativeIconParity(instrumentation: Instrumentation, report: St
     var expectedCases = 0
     var terminalFailure: Throwable? = null
     try {
-        val host = launchNativeParityActivity(instrumentation)
+        val host = if (currentUiSmoke) launchCurrentUiSmokeActivity(instrumentation) else launchNativeParityActivity(instrumentation)
         activity = host
         awaitNativeParityDraw(instrumentation, host.fixtureRoot)
         requireNativeParityHost(instrumentation, host)
@@ -336,7 +347,7 @@ private class IconParityBoards(private val activity: NativeParityActivity, densi
 private class NativeIconBoard(context: Context, density: Float, private val cellSize: Int) : ViewGroup(context) {
     private var iconWidth = 0
     private var iconHeight = 0
-    private val cells = iconSamples.map { NativeIconCell(context, ReverbIconDrawable(it.icon, density, 0xff000000.toInt())) }
+    private val cells = iconSamples.map { NativeIconCell(context, it.create(density, 0xff000000.toInt())) }
     init { clipChildren = false; clipToPadding = false; cells.forEach { addView(it) } }
 
     fun update(width: Int, height: Int, tint: Int, alpha: Float, direction: Int) {
@@ -370,7 +381,7 @@ private class NativeIconBoard(context: Context, density: Float, private val cell
     }
 }
 
-private class NativeIconCell(context: Context, val icon: ReverbIconDrawable) : View(context) {
+private class NativeIconCell(context: Context, val icon: Drawable) : View(context) {
     override fun onSizeChanged(width: Int, height: Int, oldWidth: Int, oldHeight: Int) { icon.setBounds(0, 0, width, height) }
     override fun onDraw(canvas: AndroidCanvas) { icon.draw(canvas) }
 }

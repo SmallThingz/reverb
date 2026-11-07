@@ -15,10 +15,6 @@
     <string name="export">Экспорт</string>
     <string name="no_app_available">Нет совместимого приложения.</string>
     <string name="undo">Отменить</string>
-    <string name="theme_title">Тема</string>
-    <string name="theme_system">Системная</string>
-    <string name="theme_light">Светлая</string>
-    <string name="theme_dark">Тёмная</string>
     <string name="retention_mode_title">Хранение</string>
     <string name="retention_time_label">Время</string>
     <string name="retention_time_invalid">Используйте MM:SS или HH:MM:SS.</string>

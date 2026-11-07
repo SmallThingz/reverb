@@ -77,6 +77,22 @@ allprojects {
             reliabilityImplementation 'androidx.compose.ui:ui'
             reliabilityImplementation 'androidx.compose.ui:ui-tooling-preview'
         }
+        if (currentUiSmoke) {
+            def iconOracleCheck = tasks.register('verifyCurrentUiIconOracle') {
+                def iconsSource = file('src/reliability/java/app/smallthingz/reverb/AppIcons.kt')
+                inputs.file(iconsSource)
+                doLast {
+                    def actual = java.security.MessageDigest.getInstance('SHA-256')
+                        .digest(iconsSource.bytes).encodeHex().toString()
+                    if (actual != 'baeb2191e2c0e3c98de368c2ab112044abc719f2888fe5527c23d3fab4643273') {
+                        throw new GradleException('Current UI icon oracle changed from released AppIcons')
+                    }
+                }
+            }
+            tasks.matching { it.name == 'preReliabilityBuild' }.configureEach {
+                dependsOn iconOracleCheck
+            }
+        }
         if (parityOnly) {
             def oracleCheck = tasks.register('verifyNativeParityOracle') {
                 def settingsSource = file('src/main/java/app/smallthingz/reverb/SettingsScreen.kt')

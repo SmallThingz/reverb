@@ -15,10 +15,6 @@
     <string name="export">Ekspor</string>
     <string name="no_app_available">Tidak ada aplikasi yang kompatibel.</string>
     <string name="undo">Urungkan</string>
-    <string name="theme_title">Tema</string>
-    <string name="theme_system">Sistem</string>
-    <string name="theme_light">Terang</string>
-    <string name="theme_dark">Gelap</string>
     <string name="retention_mode_title">Retensi</string>
     <string name="retention_time_label">Waktu</string>
     <string name="retention_time_invalid">Gunakan MM:SS atau HH:MM:SS.</string>

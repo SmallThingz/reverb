@@ -15,10 +15,6 @@
     <string name="export">Dışa aktar</string>
     <string name="no_app_available">Uyumlu uygulama yok.</string>
     <string name="undo">Geri al</string>
-    <string name="theme_title">Tema</string>
-    <string name="theme_system">Sistem</string>
-    <string name="theme_light">Açık</string>
-    <string name="theme_dark">Koyu</string>
     <string name="retention_mode_title">Saklama</string>
     <string name="retention_time_label">Süre</string>
     <string name="retention_time_invalid">MM:SS veya HH:MM:SS kullanın.</string>

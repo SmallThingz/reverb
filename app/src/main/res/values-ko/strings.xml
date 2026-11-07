@@ -15,10 +15,6 @@
     <string name="export">내보내기</string>
     <string name="no_app_available">호환되는 앱이 없습니다.</string>
     <string name="undo">실행 취소</string>
-    <string name="theme_title">테마</string>
-    <string name="theme_system">시스템</string>
-    <string name="theme_light">라이트</string>
-    <string name="theme_dark">다크</string>
     <string name="retention_mode_title">보존</string>
     <string name="retention_time_label">시간</string>
     <string name="retention_time_invalid">MM:SS 또는 HH:MM:SS 형식을 사용하세요.</string>

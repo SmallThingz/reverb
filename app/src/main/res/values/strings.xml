@@ -88,10 +88,6 @@
     <string name="export">Export</string>
     <string name="no_app_available">No compatible app available.</string>
     <string name="undo">Undo</string>
-    <string name="theme_title">Theme</string>
-    <string name="theme_system">Auto</string>
-    <string name="theme_light">Light</string>
-    <string name="theme_dark">Dark</string>
     <string name="retention_mode_title">Retention</string>
     <string name="retention_time_label">Time</string>
     <string name="retention_time_invalid">Use H:MM:SS.</string>

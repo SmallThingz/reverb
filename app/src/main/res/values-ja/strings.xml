@@ -15,10 +15,6 @@
     <string name="export">エクスポート</string>
     <string name="no_app_available">対応アプリがありません。</string>
     <string name="undo">元に戻す</string>
-    <string name="theme_title">テーマ</string>
-    <string name="theme_system">システム</string>
-    <string name="theme_light">ライト</string>
-    <string name="theme_dark">ダーク</string>
     <string name="retention_mode_title">保持</string>
     <string name="retention_time_label">時間</string>
     <string name="retention_time_invalid">MM:SS または HH:MM:SS を使用してください。</string>

@@ -15,10 +15,6 @@
     <string name="export">Exporter</string>
     <string name="no_app_available">Aucune application compatible disponible.</string>
     <string name="undo">Annuler</string>
-    <string name="theme_title">Thème</string>
-    <string name="theme_system">Système</string>
-    <string name="theme_light">Clair</string>
-    <string name="theme_dark">Sombre</string>
     <string name="retention_mode_title">Rétention</string>
     <string name="retention_time_label">Temps</string>
     <string name="retention_time_invalid">Utilisez MM:SS ou HH:MM:SS.</string>

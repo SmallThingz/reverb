@@ -15,10 +15,6 @@
     <string name="export">خروجی</string>
     <string name="no_app_available">برنامه سازگار موجود نیست.</string>
     <string name="undo">برگرداندن</string>
-    <string name="theme_title">پوسته</string>
-    <string name="theme_system">سیستم</string>
-    <string name="theme_light">روشن</string>
-    <string name="theme_dark">تیره</string>
     <string name="retention_mode_title">نگهداری</string>
     <string name="retention_time_label">زمان</string>
     <string name="retention_time_invalid">از MM:SS یا HH:MM:SS استفاده کنید.</string>

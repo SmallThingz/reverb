@@ -74,11 +74,13 @@ class ReliabilityInstrumentation : Instrumentation() {
             val currentUiSmoke = targetContext.packageName == "app.smallthingz.reverb.uitheme.reliability"
             if (currentUiSmoke) {
                 check(targetContext.applicationContext.javaClass == android.app.Application::class.java &&
-                    requestedTest in setOf("native_settings_library_selectors", "native_theme_matrix", "native_settings_calibration_current", "current_media_delete_consent",
+                    requestedTest in setOf("native_icon_parity", "native_settings_library_selectors", "native_theme_matrix", "native_settings_calibration_current", "current_media_delete_consent",
                         "native_silence_blob_current", "native_silence_diagnostic_current", "native_blob_feel_current", "native_material_progress_current", "native_library_admission")) {
                     "Current UI smoke accepts only explicit current UI selectors with plain Application"
                 }
-                report.appendLine("MODE current-ui-smoke; isolated current UI only, not released-renderer parity")
+                report.appendLine(if (requestedTest == "native_icon_parity")
+                    "MODE current-ui-smoke; isolated icon-only released-vector oracle, not full screen parity"
+                else "MODE current-ui-smoke; isolated current UI only, not released-renderer parity")
             }
             val parityOnly = targetContext.applicationContext.javaClass == android.app.Application::class.java
             check(!parityOnly || requestedTest in setOf(

@@ -122,6 +122,12 @@
       "sha256": "29616ea6501cf785d0de5c2ae325df09c58504683cc54b7576efb84b2a892e62"
     }
   ],
+  "shared_axis_extraction": {
+    "app_base": "86d4d0ec0cd1e6b49a6228e2898b0471bacbb9f8",
+    "implementation": "smallthingz.ui.scroll.NativeAxisOverscroll",
+    "compatibility_helper": "smallthingz.ui.scroll.NativeEdgeEffectCompat",
+    "changes": "Share scalar ownership while retaining explicit axis rendering transforms. Compatibility helper body is unchanged; app adapters retain routing. The mechanical_copy entries below describe the original port."
+  },
   "mechanical_copy": {
     "NativeEdgeEffectCompat.kt": [
       "package androidx.compose.foundation -> app.smallthingz.reverb.nativeui",
