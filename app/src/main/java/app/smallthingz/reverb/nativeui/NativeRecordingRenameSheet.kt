@@ -36,7 +36,7 @@ internal class NativeRecordingRenameSheet(
     private val actions=LibrarySheetActions(anchor.context,dialog.contentContext,listOf(cancel,confirm))
     init {
         dialog.bindDismissalAdmission { !owner.state.isRenaming }
-        dialog.setContent(field,actions,listOf(actions.hitLayout,field.hitLayout))
+        dialog.setContent(field,actions,listOf(actions.hitLayout,field.hitLayout),scrollable=true)
         ready=true
         render()
     }

@@ -1,5 +1,6 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.text.view.ParagraphView
 import android.content.Context
 import androidx.annotation.ColorInt
 import androidx.annotation.MainThread
@@ -29,7 +30,7 @@ internal class ReverbViewEnvironment(
         text: String,
         role: ReverbTextRole,
         @ColorInt textColor: Int = palette.ink,
-    ): ReverbParagraphView = ReverbParagraphView(
+    ): ParagraphView = ParagraphView(
         context = context,
         initialStyle = ReverbParagraphStyles[role],
         initialDensity = textDensity,
@@ -43,7 +44,7 @@ internal class ReverbViewEnvironment(
      */
     @MainThread
     fun bindParagraphStyle(
-        view: ReverbParagraphView,
+        view: ParagraphView,
         role: ReverbTextRole,
         @ColorInt textColor: Int = palette.ink,
     ) {

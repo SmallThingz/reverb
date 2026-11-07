@@ -1,14 +1,14 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.text.view.NativePlainTextViewGeometry
+import smallthingz.ui.text.view.NativeTextSemanticsClip
+import smallthingz.ui.text.view.NativeTextSemanticsClipPolicy
 import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityEvent
 import android.widget.FrameLayout
 import smallthingz.ui.unit.Density
-import app.smallthingz.reverb.nativeui.NativePlainTextViewGeometry
-import app.smallthingz.reverb.nativeui.NativeTextSemanticsClip
-import app.smallthingz.reverb.nativeui.NativeTextSemanticsClipPolicy
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope

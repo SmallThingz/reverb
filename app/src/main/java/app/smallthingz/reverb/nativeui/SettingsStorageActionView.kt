@@ -1,5 +1,16 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.interaction.view.NativeClickBinding
+import smallthingz.ui.interaction.view.NativeClickEnvironment
+import smallthingz.ui.interaction.view.RowIndication
+import smallthingz.ui.interaction.view.RowIndicationSink
+import smallthingz.ui.interaction.view.ViewClickController
+import smallthingz.ui.interaction.view.readCachedAnimatorDurationScale
+import smallthingz.ui.text.view.MergedRowAccessibility
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityState
+import smallthingz.ui.text.view.NativeMergedRowRole
+import smallthingz.ui.text.view.ParagraphView
 import android.content.Context
 import android.graphics.Color as AndroidColor
 import android.graphics.Rect
@@ -32,8 +43,8 @@ internal class SettingsStorageActionView(
     private val radius=if(icon==null)12f else 14f
     private val surface=ReverbGroupLayout(context,radius)
     private val content=ActionContent(context)
-    private val indication=ReverbRowIndication.install(content,initial.palette.onSurface,{ reverbAnimatorDurationScale(context) })
-    private val controller=ReverbClickController(content,object:NativeClickEnvironment {
+    private val indication=RowIndication.install(content,initial.palette.onSurface,{ readCachedAnimatorDurationScale(context) })
+    private val controller=ViewClickController(content,object:NativeClickEnvironment {
         override val nativeInputRoot:View? get()=inputRoot()
         override val minimumTouchWidthPx get()=48f*environment.textDensity.density
         override val minimumTouchHeightPx get()=minimumTouchWidthPx
@@ -42,7 +53,7 @@ internal class SettingsStorageActionView(
                 event.getToolType(0)==MotionEvent.TOOL_TYPE_FINGER,minimumTouchWidthPx)
         override fun interestedParent(event:MotionEvent)=false
         override fun longPressOwnershipChanged(owns:Boolean)=Unit
-    },ReverbRowIndicationSink(indication){x,y,out->out.set(x,y)})
+    },RowIndicationSink(indication){x,y,out->out.set(x,y)})
     private val endpoint=ReverbClickPhaseEndpoint(controller)
     val visual:View get()=content
     init {
@@ -84,7 +95,7 @@ internal class SettingsStorageActionView(
 
     private inner class ActionContent(context:Context):ViewGroup(context),
         NativeClickPhaseHost,NativePointerLayerShape,NativeMergedRowAccessibilityHost {
-        val label=if(icon==null)ReverbParagraphView(context,reverbButtonTextStyle(),environment.textDensity,
+        val label=if(icon==null)ParagraphView(context,reverbButtonTextStyle(),environment.textDensity,
             environment.sharedFontResolver,environment.palette.primary).also {it.setText(description)}else null
         val glyph=icon?.let {OnboardingIconView(context,it,environment.palette.onSurfaceVariant).apply {
             contentDescription=description
@@ -96,7 +107,7 @@ internal class SettingsStorageActionView(
             environment.textDensity.density,radius).contains(x,y)
         override val mergedRowAccessibility=run {
             val children=listOf(semanticChild)
-            ReverbMergedRowAccessibility(this,NativeMergedRowRole.BUTTON,
+            MergedRowAccessibility(this,NativeMergedRowRole.BUTTON,
                 {NativeMergedRowAccessibilityState(isEnabled,null,null,children)},{activate()})
         }
         init {

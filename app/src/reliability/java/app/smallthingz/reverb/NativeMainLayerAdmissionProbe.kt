@@ -1,13 +1,13 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
+import smallthingz.ui.text.view.NativeTextSemanticsClip
 import android.app.Instrumentation
 import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.FrameLayout
-import app.smallthingz.reverb.nativeui.NativeMergedRowAccessibilityHost
 import app.smallthingz.reverb.nativeui.NativeSettingsScreenContent
-import app.smallthingz.reverb.nativeui.NativeTextSemanticsClip
 import app.smallthingz.reverb.nativeui.ReverbHomeScaffoldView
 import app.smallthingz.reverb.nativeui.ReverbTopBarIconAction
 import org.json.JSONArray

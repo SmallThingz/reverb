@@ -11,6 +11,7 @@
  */
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.text.view.ParagraphView
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
@@ -193,8 +194,8 @@ private class SettingsAudioDropdownView<T>(
     private val onBinding: (View, SettingsDropdownContent<T>) -> Unit,
     private val open: (View, SettingsDropdownContent<T>) -> Unit,
 ) : ViewGroup(context), app.smallthingz.reverb.NativeClickPhaseHost, AutoCloseable {
-    private val title = ReverbParagraphView(context, bodySmall, density, resolver, initialPalette.muted)
-    private val selected = ReverbParagraphView(context, bodyLarge, density, resolver, initialPalette.ink)
+    private val title = ParagraphView(context, bodySmall, density, resolver, initialPalette.muted)
+    private val selected = ParagraphView(context, bodyLarge, density, resolver, initialPalette.ink)
     private val arrow = OnboardingIconView(context, ReverbIcon.ArrowDropDown, initialPalette.muted)
     private val input = interactions.row(this)
     override val nativeClickEndpoint get() = input.pointerEndpoint

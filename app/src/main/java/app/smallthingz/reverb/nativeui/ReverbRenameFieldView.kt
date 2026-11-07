@@ -4,6 +4,7 @@
  */
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.text.view.ParagraphView
 import android.content.Context
 import android.content.ClipboardManager
 import android.graphics.Canvas
@@ -78,7 +79,7 @@ internal class ReverbRenameFieldView(
     private val scope=CoroutineScope(host.runtime.scope.coroutineContext+ownerJob)
     override val nativeInteropRequests=NativeAndroidInteropRequests()
     val editor=ReverbSingleLineInputView(context,environment,configuration())
-    private val support=ReverbParagraphView(context,renameSupportingStyle,environment.textDensity,
+    private val support=ParagraphView(context,renameSupportingStyle,environment.textDensity,
         environment.sharedFontResolver,environment.palette.error)
     private val interop=NativeAndroidInteropNode(this,nativeInteropRequests)
     val hitLayout:NativeViewPointerHitLayout=host.hit(this,listOf(interop))

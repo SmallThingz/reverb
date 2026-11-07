@@ -1,5 +1,6 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.text.view.ParagraphView
 import android.app.Application
 import android.app.Instrumentation
 import android.graphics.Bitmap
@@ -28,7 +29,7 @@ internal fun verifyNativeThemeMatrix(instrumentation: Instrumentation, report: S
     val host = launchCurrentUiSmokeActivity(instrumentation)
     fun main(action: () -> Unit) = nativeParityOnMain(instrumentation, action)
     fun settle() { repeat(24) { awaitNativeParityDraw(instrumentation, host.fixtureRoot); instrumentation.waitForIdleSync() } }
-    fun capture(name: String, root: View, targets: (ReverbParagraphView) -> Boolean = { false }) {
+    fun capture(name: String, root: View, targets: (ParagraphView) -> Boolean = { false }) {
         settle()
         val hardware = captureNativeParityContent(instrumentation, host) { root }
         try { saveNativeParityBitmap(directory, "$name.png", hardware) } finally { hardware.recycle() }
@@ -131,8 +132,8 @@ internal fun verifyNativeThemeMatrix(instrumentation: Instrumentation, report: S
                             host.getString(R.string.silence_calibrate), terminalError)
                     }
                         if (terminalError != null) main {
-                            fun find(view: View): ReverbParagraphView? {
-                                if (view is ReverbParagraphView && view.getText() == terminalError) return view
+                            fun find(view: View): ParagraphView? {
+                                if (view is ParagraphView && view.getText() == terminalError) return view
                                 if (view is ViewGroup) for (index in 0 until view.childCount) find(view.getChildAt(index))?.let { return it }
                                 return null
                             }
@@ -161,11 +162,11 @@ internal fun verifyNativeThemeMatrix(instrumentation: Instrumentation, report: S
                 val synthetic = AppFeedbackCenter.events.value.single { it.id !in oldIds && it.message == longError }
                 try {
                     val errorDeadline = android.os.SystemClock.uptimeMillis() + 5000
-                    var visible: ReverbParagraphView? = null
+                    var visible: ParagraphView? = null
                     while (visible == null) {
                         main {
-                            fun find(view: View): ReverbParagraphView? {
-                                if (view is ReverbParagraphView && view.getText() == longError && view.isShown) return view
+                            fun find(view: View): ParagraphView? {
+                                if (view is ParagraphView && view.getText() == longError && view.isShown) return view
                                 if (view is ViewGroup) for (index in 0 until view.childCount) find(view.getChildAt(index))?.let { return it }
                                 return null
                             }
@@ -214,7 +215,7 @@ internal fun verifyNativeThemeMatrix(instrumentation: Instrumentation, report: S
 
 /** Cross-frame hardware observations only; host semantic composites remain the contrast gate. */
 private fun measureThemeText(instrumentation: Instrumentation, host: NativeParityActivity,
-    root: View, targets: (ReverbParagraphView) -> Boolean): JSONArray {
+    root: View, targets: (ParagraphView) -> Boolean): JSONArray {
     fun views(view: View): Sequence<View> = sequence {
         yield(view)
         if (view is ViewGroup) repeat(view.childCount) { yieldAll(views(view.getChildAt(it))) }
@@ -225,7 +226,7 @@ private fun measureThemeText(instrumentation: Instrumentation, host: NativeParit
     }
     val candidates = nativeParityOnMain(instrumentation) {
         check(root.width.toLong() * root.height <= 12_000_000L) { "Theme readback exceeds bounded fixture size" }
-        views(root).filterIsInstance<ReverbParagraphView>().filter(targets).filter {
+        views(root).filterIsInstance<ParagraphView>().filter(targets).filter {
             it.isShown && it.width > 0 && it.height > 0 && it.getGlobalVisibleRect(Rect())
         }.take(12).toList()
     }

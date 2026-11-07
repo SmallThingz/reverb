@@ -1,5 +1,11 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.interaction.view.NativeClickBinding
+import smallthingz.ui.interaction.view.NativeClickEnvironment
+import smallthingz.ui.interaction.view.NativeClickIndication
+import smallthingz.ui.interaction.view.NativePressToken
+import smallthingz.ui.interaction.view.NativeStateToken
+import smallthingz.ui.interaction.view.ViewClickController
 import android.content.Context
 import android.content.res.Configuration
 import android.graphics.Canvas
@@ -96,7 +102,7 @@ internal class ReverbHomeBlobControl(
         pressMotion.frame(nanos, scale)
         applyTransform()
     }
-    private val click = ReverbClickController(this, inputEnvironment, object : NativeClickIndication {
+    private val click = ViewClickController(this, inputEnvironment, object : NativeClickIndication {
         override fun press(token: NativePressToken) { presses.add(token); updatePressed() }
         override fun release(token: NativePressToken) { presses.remove(token); updatePressed() }
         override fun cancel(token: NativePressToken) { presses.remove(token); updatePressed() }

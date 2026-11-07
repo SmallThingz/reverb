@@ -1,5 +1,6 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.text.view.ParagraphView
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
@@ -536,7 +537,7 @@ private fun tileStatus(context: Context, value: String, environment: ReverbViewE
     environment.paragraph(context, value, ReverbTextRole.BODY_SMALL, environment.palette.muted).apply {
         accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
     }
-private fun bindStatus(view: ReverbParagraphView, text: String?, environment: ReverbViewEnvironment) {
+private fun bindStatus(view: ParagraphView, text: String?, environment: ReverbViewEnvironment) {
     view.setText(text.orEmpty())
     view.visibility = if (text == null) View.GONE else View.VISIBLE
     environment.bindParagraphStyle(view, ReverbTextRole.BODY_SMALL, environment.palette.muted)

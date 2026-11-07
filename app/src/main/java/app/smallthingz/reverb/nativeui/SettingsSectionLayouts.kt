@@ -1,5 +1,6 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.text.view.ParagraphView
 import android.content.Context
 import android.view.View
 import android.view.ViewGroup
@@ -117,7 +118,7 @@ internal class SettingsRecordingSection(
     context:Context,
     private val choices:SettingsAudioChoicesSection,
     outputCompression:View,
-    flacWarning:ReverbParagraphView,
+    flacWarning:ParagraphView,
     skipSilence:View,
     notificationSave:View,
     private var environment:ReverbViewEnvironment,
@@ -174,10 +175,10 @@ internal class SettingsInsetView(
     private fun dp(v:Int)=(v*environment.textDensity.density).roundToInt()
 }
 
-internal fun settingsSectionTitle(context:Context,stringRes:Int,environment:ReverbViewEnvironment):ReverbParagraphView =
+internal fun settingsSectionTitle(context:Context,stringRes:Int,environment:ReverbViewEnvironment):ParagraphView =
     environment.paragraph(context,context.getString(stringRes),ReverbTextRole.BODY_LARGE,environment.palette.onSurface)
         .also { bindSectionTitle(it,environment) }
-internal fun bindSectionTitle(view:ReverbParagraphView,environment:ReverbViewEnvironment) {
+internal fun bindSectionTitle(view:ParagraphView,environment:ReverbViewEnvironment) {
     view.setTypography(settingsSectionTitleStyle,
         environment.textDensity,environment.sharedFontResolver)
     view.animateTextColor(environment.palette.onSurface)

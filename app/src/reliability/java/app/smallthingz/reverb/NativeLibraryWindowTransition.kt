@@ -1,5 +1,6 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.text.view.ParagraphView
 import android.os.Process
 import android.os.SystemClock
 import android.view.View
@@ -12,7 +13,6 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getAllSemanticsNodes
 import androidx.compose.ui.semantics.getOrNull
-import app.smallthingz.reverb.nativeui.ReverbParagraphView
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -41,6 +41,7 @@ internal class NativeLibraryWindowTransition(
     private val initial = visibleRoots()
     private var popup: View? = null
     private var auxiliary: View? = null
+    private var pendingUnfocusedPair = false
     private var reads = 0
     private val initialAuxiliary: View?
 
@@ -75,6 +76,32 @@ internal class NativeLibraryWindowTransition(
         if (initialAuxiliary != null) {
             check(added.isEmpty()) { "Unexpected new window during the classified sheet action" }
         }
+        if (pendingUnfocusedPair) {
+            check(added.size == 2 && popup in added && auxiliary in added) {
+                "Pending native sheet/tooltip pair changed before focused classification"
+            }
+        }
+        if (focused.isEmpty() && added.size > 1) {
+            val incoming = added.singleOrNull { it.javaClass.name == "com.android.internal.policy.DecorView" }
+            val extra = added.singleOrNull { it !== incoming }
+            check(observeSheetAuxiliaryOverlap && sheetTooltip?.compose == false &&
+                added.size == 2 && incoming != null && extra != null && origin !in roots) {
+                "Ambiguous unfocused windows during owned UI transition"
+            }
+            requireSheetTooltipAnchor(extra, incoming)
+            check((popup == null || popup === incoming) && (auxiliary == null || auxiliary === extra)) {
+                "Pending native sheet/tooltip identity changed"
+            }
+            popup = incoming
+            auxiliary = extra
+            pendingUnfocusedPair = true
+            evidence.put("pending_unfocused_popup_identity", System.identityHashCode(incoming))
+                .put("pending_unfocused_tooltip", auxiliaryObservation(extra))
+                .put("zero_focus_reads", evidence.optInt("zero_focus_reads") + 1)
+            // Only structural ownership is established here. The same uniquely focused pair must
+            // pass the complete scene classifier below before the caller can accept readiness.
+            return null
+        }
         if (added.size > 1) {
             // A sheet and its keyboard tooltip can appear before the very first readiness read.
             // Pin only the unique focused incoming Decor after validating the complete pair below.
@@ -101,6 +128,9 @@ internal class NativeLibraryWindowTransition(
             evidence.put("last_auxiliary_observation", detail)
                 .put("auxiliary_overlap_reads", evidence.optInt("auxiliary_overlap_reads") + 1)
             requireSheetTooltip(knownExtra, checkNotNull(pinned), detail)
+            if (pendingUnfocusedPair) evidence.put("pending_pair_focused_classification", true)
+                .put("popup_identity", System.identityHashCode(pinned))
+            pendingUnfocusedPair = false
             if (popup == null) {
                 popup = pinned
                 evidence.put("popup_identity", System.identityHashCode(pinned))
@@ -138,11 +168,11 @@ internal class NativeLibraryWindowTransition(
         return focused.single()
     }
 
-    private fun requireSheetTooltip(root: View, info: View, detail: JSONObject) {
+    private fun requireSheetTooltipAnchor(root: View, info: View) {
         val expected = checkNotNull(sheetTooltip) { "Unclassified auxiliary window" }
-        check(info.javaClass.name == "com.android.internal.policy.DecorView" && info.hasWindowFocus() &&
+        check(info.javaClass.name == "com.android.internal.policy.DecorView" &&
             root.javaClass.name == expectedTooltipClass() && !root.hasWindowFocus()) {
-            "Auxiliary is not attached to the focused sheet scene"
+            "Auxiliary is not attached to the expected sheet scene"
         }
         val parameters = checkNotNull(root.layoutParams as? WindowManager.LayoutParams)
         check(parameters.type == WindowManager.LayoutParams.TYPE_APPLICATION_SUB_PANEL &&
@@ -156,6 +186,12 @@ internal class NativeLibraryWindowTransition(
                 "Native Sheet tooltip anchor is not the sheet drag handle"
             }
         }
+    }
+
+    private fun requireSheetTooltip(root: View, info: View, detail: JSONObject) {
+        val expected = checkNotNull(sheetTooltip) { "Unclassified auxiliary window" }
+        check(info.hasWindowFocus()) { "Sheet scene has not acquired focus" }
+        requireSheetTooltipAnchor(root, info)
         check(!detail.has("content_unavailable") && !detail.getBoolean("descendant_walk_capped") &&
             detail.getJSONArray("native_text").length() == 0) { "Unreadable Sheet tooltip content" }
         fun nodes(view: View, merged: Boolean = false) = ownedViews(view).filterIsInstance<ViewRootForTest>().flatMap {
@@ -197,7 +233,7 @@ internal class NativeLibraryWindowTransition(
                 "Sheet auxiliary is not the noninteractive native drag-handle tooltip"
             }
             val views = ownedViews(info)
-            val paragraphs = views.filterIsInstance<ReverbParagraphView>().filter(View::isShown)
+            val paragraphs = views.filterIsInstance<ParagraphView>().filter(View::isShown)
             labels = paragraphs.map { it.getText().toString() }
             actionCount = { label, enabledOnly ->
                 paragraphs.filter { it.getText().toString() == label }.mapNotNull { leaf ->
@@ -284,7 +320,7 @@ internal class NativeLibraryWindowTransition(
                 visit(root)
                 put("descendant_classes", JSONArray(views.map { it.javaClass.name }.distinct()))
                 put("native_text", JSONArray(views.filterIsInstance<TextView>().map { it.text.toString() }))
-                put("paragraph_labels", JSONArray(views.filterIsInstance<ReverbParagraphView>().map { it.getText().toString() }))
+                put("paragraph_labels", JSONArray(views.filterIsInstance<ParagraphView>().map { it.getText().toString() }))
                 val labels = views.filterIsInstance<ViewRootForTest>().flatMap {
                     it.semanticsOwner.getAllSemanticsNodes(false)
                 }.flatMap { node ->

@@ -1,5 +1,16 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.interaction.view.NativeClickBinding
+import smallthingz.ui.interaction.view.NativeClickEnvironment
+import smallthingz.ui.interaction.view.RowIndication
+import smallthingz.ui.interaction.view.RowIndicationSink
+import smallthingz.ui.interaction.view.ViewClickController
+import smallthingz.ui.interaction.view.readCachedAnimatorDurationScale
+import smallthingz.ui.text.view.MergedRowAccessibility
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityState
+import smallthingz.ui.text.view.NativeMergedRowRole
+import smallthingz.ui.text.view.ParagraphView
 import android.content.Context
 import android.graphics.Color
 import android.graphics.Canvas
@@ -72,7 +83,7 @@ internal class NativePermissionRequiredView(
 private class PermissionContent(context:Context,private val host:NativeMaterialButtonHost,
                                 review:()->Unit,library:()->Unit):ViewGroup(context),AutoCloseable {
     private var environment=host.environment
-    private val message=ReverbParagraphView(context,reverbDefaultTextStyle(),environment.textDensity,
+    private val message=ParagraphView(context,reverbDefaultTextStyle(),environment.textDensity,
         environment.sharedFontResolver,environment.palette.onSurfaceVariant).apply {
         setText(context.getString(R.string.permission_required_message))
         isScreenReaderFocusable=true
@@ -198,9 +209,9 @@ private class PermissionLibraryAction(context:Context,private val host:NativeMat
     private val surface=ReverbGroupLayout(context,18f)
     private val visual=LibraryVisual(context)
     private var action:(()->Unit)?=action
-    private val indication=ReverbRowIndication.install(visual,environment.palette.onSurface,
-        { reverbAnimatorDurationScale(context) })
-    private val controller=ReverbClickController(visual,object:NativeClickEnvironment {
+    private val indication=RowIndication.install(visual,environment.palette.onSurface,
+        { readCachedAnimatorDurationScale(context) })
+    private val controller=ViewClickController(visual,object:NativeClickEnvironment {
         override val nativeInputRoot:View get()=host.inputRoot
         override val minimumTouchWidthPx get()=48f*environment.textDensity.density
         override val minimumTouchHeightPx get()=minimumTouchWidthPx
@@ -209,7 +220,7 @@ private class PermissionLibraryAction(context:Context,private val host:NativeMat
                 event.getToolType(0)==MotionEvent.TOOL_TYPE_FINGER,minimumTouchWidthPx)
         override fun interestedParent(event:MotionEvent)=false
         override fun longPressOwnershipChanged(owns:Boolean)=Unit
-    },ReverbRowIndicationSink(indication){x,y,p->p.set(x,y)})
+    },RowIndicationSink(indication){x,y,p->p.set(x,y)})
     private val endpoint=ReverbClickPhaseEndpoint(controller)
     private val click=NativeClickPhaseNode(visual,endpoint,host.interestedParent)
     private val clipLease=host.registerTextClip(surface)
@@ -257,7 +268,7 @@ private class PermissionLibraryAction(context:Context,private val host:NativeMat
         }
         private val accessibilityChildren=listOf(glyph)
         override val nativeClickEndpoint get()=endpoint
-        override val mergedRowAccessibility=ReverbMergedRowAccessibility(this,NativeMergedRowRole.BUTTON,
+        override val mergedRowAccessibility=MergedRowAccessibility(this,NativeMergedRowRole.BUTTON,
             {NativeMergedRowAccessibilityState(true,null,null,accessibilityChildren)},{activate()})
         init {
             isClickable=true;isFocusable=true;descendantFocusability=FOCUS_BLOCK_DESCENDANTS

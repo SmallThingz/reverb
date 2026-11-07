@@ -1,5 +1,13 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.text.view.MergedRowAccessibility
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityState
+import smallthingz.ui.text.view.NativeMergedRowRole
+import smallthingz.ui.text.view.NativePlainTextViewGeometry
+import smallthingz.ui.text.view.NativeSourceAccessibilityNode
+import smallthingz.ui.text.view.ParagraphView
+import smallthingz.ui.text.view.PlainTextAccessibilityWindowScope
 import smallthingz.ui.animation.view.ViewColorTransition
 
 import android.content.Context
@@ -318,7 +326,7 @@ private class FooterButton(
     private val onActivate: () -> Unit,
 ) : ViewGroup(context), NativeClickPhaseHost, NativeMergedRowAccessibilityHost {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
-    private val label = ReverbParagraphView(context, style, density, resolver, android.graphics.Color.TRANSPARENT)
+    private val label = ParagraphView(context, style, density, resolver, android.graphics.Color.TRANSPARENT)
     private var colorMotion: ViewColorTransition? = null
     var compactPadding = false
     private val accessibilityChildren = listOf(label)
@@ -370,7 +378,7 @@ private class FooterButton(
     }
     private val interaction = factory.create(this, content, filled) { elevation = it }
     override val nativeClickEndpoint: NativeClickPhaseEndpoint get() = interaction.pointerEndpoint
-    override val mergedRowAccessibility = ReverbMergedRowAccessibility(this, NativeMergedRowRole.BUTTON,
+    override val mergedRowAccessibility = MergedRowAccessibility(this, NativeMergedRowRole.BUTTON,
         sourceState = { NativeMergedRowAccessibilityState(isEnabled, null, null, accessibilityChildren) },
         invokeSourceClick = {
             if (isEnabled && isAttachedToWindow) { onActivate(); true } else false

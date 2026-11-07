@@ -1,5 +1,15 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.text.view.MergedRowAccessibility
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityState
+import smallthingz.ui.text.view.NativeMergedRowRole
+import smallthingz.ui.text.view.NativePlainTextViewGeometry
+import smallthingz.ui.text.view.NativeSourceAccessibilityNode
+import smallthingz.ui.text.view.NativeSourceAccessibilityNodeProvider
+import smallthingz.ui.text.view.NativeTextSemanticsClip
+import smallthingz.ui.text.view.ParagraphView
+import smallthingz.ui.text.view.PlainTextAccessibilityWindowScope
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Outline
@@ -130,7 +140,7 @@ private class ButtonSurface(context:Context,private val host:NativeMaterialButto
     private var closed=false
     private val fill=Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
     private var colorMotion:ViewColorTransition?=null
-    private val label=ReverbParagraphView(context,reverbButtonTextStyle(),environment.textDensity,
+    private val label=ParagraphView(context,reverbButtonTextStyle(),environment.textDensity,
         environment.sharedFontResolver,environment.palette.primary)
     private val accessibilityChildren=listOf(label)
     private var icon=leadingIcon?.let { ReverbIconDrawable(it,environment.textDensity.density,environment.palette.onPrimary) }
@@ -179,7 +189,7 @@ private class ButtonSurface(context:Context,private val host:NativeMaterialButto
     }
     private val interactions=OnboardingNativeInteractionsFactory {host.inputRoot}.create(this,content,filled) {elevation=it}
     override val nativeClickEndpoint get()=interactions.pointerEndpoint
-    override val mergedRowAccessibility=ReverbMergedRowAccessibility(this,NativeMergedRowRole.BUTTON,
+    override val mergedRowAccessibility=MergedRowAccessibility(this,NativeMergedRowRole.BUTTON,
         {NativeMergedRowAccessibilityState(isEnabled,null,null,accessibilityChildren)},
         {if(isEnabled&&isAttachedToWindow){action();true}else false})
     private val leases=ArrayList<AutoCloseable>()

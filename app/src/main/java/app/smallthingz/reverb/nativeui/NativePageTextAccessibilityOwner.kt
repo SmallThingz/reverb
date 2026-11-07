@@ -1,5 +1,13 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
+import smallthingz.ui.text.view.NativePlainTextViewGeometry
+import smallthingz.ui.text.view.NativeSourceAccessibilityNode
+import smallthingz.ui.text.view.NativeTextSemanticsClip
+import smallthingz.ui.text.view.NativeTextSemanticsClipPolicy
+import smallthingz.ui.text.view.NativeTextSemanticsTransformPolicy
+import smallthingz.ui.text.view.ParagraphView
+import smallthingz.ui.text.view.PlainTextAccessibilityWindowScope
 import android.view.View
 import android.view.ViewGroup
 import androidx.annotation.MainThread
@@ -145,7 +153,7 @@ internal class NativeWindowTextAccessibilityOwner(
  * this map contains no copied text/layout/state, observers or tasks.
  * Detach does NOT close this owner: pager reattachment must preserve the label's semantic identity.
  * Explicit disposal or native window replacement closes it. Old close handles are token guarded by
- * ReverbParagraphView and cannot remove a subsequently installed binding.
+ * ParagraphView and cannot remove a subsequently installed binding.
  */
 @MainThread
 internal class NativePageTextAccessibilityOwner internal constructor(
@@ -163,7 +171,7 @@ internal class NativePageTextAccessibilityOwner internal constructor(
         val present = IdentityHashMap<View, Boolean>()
         fun visit(view: View) {
             if (view.importantForAccessibility == View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS) return
-            if (view is ReverbParagraphView || view is NativeMergedRowAccessibilityHost ||
+            if (view is ParagraphView || view is NativeMergedRowAccessibilityHost ||
                 (page is OnboardingPageContentView && view is SettingsCalibrationProgressView) ||
                 (view is OnboardingIconView && !view.contentDescription.isNullOrEmpty())) present[view] = true
             if (view is ViewGroup) {
@@ -174,13 +182,13 @@ internal class NativePageTextAccessibilityOwner internal constructor(
         val retired = leases.keys.filter { !present.containsKey(it) }
         retired.forEach { leases.remove(it)?.close() }
         present.keys.forEach { view ->
-            if (view is ReverbParagraphView) {
+            if (view is ParagraphView) {
                 // SemanticsNode.isUnmergedLeafNode excludes a leaf with a merging ancestor, but
                 // the source still exposes that leaf and all of its cursor/character-box actions.
                 view.isScreenReaderFocusable = !view.hasMergingRowAncestor(page)
             }
             if (!leases.containsKey(view)) leases[view] = when (view) {
-                is ReverbParagraphView -> view.bindPlainTextAccessibility(cursor, geometry,
+                is ParagraphView -> view.bindPlainTextAccessibility(cursor, geometry,
                     sourceNode?.let { node -> { node(view) } }) { exposed(view) }
                 is NativeMergedRowAccessibilityHost -> if (sourceNode != null) {
                     view.mergedRowAccessibility.bindSourceGeometry(geometry, sourceNode) { exposed(view) }

@@ -1,5 +1,6 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.text.view.ParagraphView
 import android.content.Context
 import android.view.View
 import android.view.ViewGroup
@@ -23,7 +24,7 @@ internal class QuickTileDeleteContent(
     private val hasWindowFocus: () -> Boolean,
 ) : AutoCloseable {
     // Text() inherits MaterialTheme's bodyLarge; the source does not specify bodyMedium here.
-    val body = ReverbParagraphView(context, reverbDefaultTextStyle(), environment.textDensity,
+    val body = ParagraphView(context, reverbDefaultTextStyle(), environment.textDensity,
         environment.sharedFontResolver, environment.palette.onSurface).also {
         it.setText(context.getString(R.string.tiles_ui_delete_confirmation))
     }

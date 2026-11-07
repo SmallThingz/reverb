@@ -11,6 +11,16 @@ import android.view.ViewGroup
 import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
 import android.widget.FrameLayout
+import android.widget.EditText
+import app.smallthingz.reverb.nativeui.ReverbSingleLineInputView
+import app.smallthingz.reverb.nativeui.NativeSingleLineInputConfiguration
+import app.smallthingz.reverb.nativeui.nativeRenameImeContract
+import app.smallthingz.reverb.nativeui.ReverbParagraphStyles
+import app.smallthingz.reverb.nativeui.ReverbTextRole
+import app.smallthingz.reverb.nativeui.reverbColorWithAlpha
+import smallthingz.ui.text.TextStyle
+import smallthingz.ui.text.PlatformTextStyle
+import smallthingz.ui.text.style.LineHeightStyle
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
@@ -68,7 +78,8 @@ private val retentionCases = listOf(
  */
 internal fun verifyNativeRetentionInputParity(instrumentation: Instrumentation, report: StringBuilder) {
     val context = instrumentation.targetContext
-    check(context.packageName == "app.smallthingz.reverb.nativeparity.reliability")
+    check(context.packageName in setOf("app.smallthingz.reverb.nativeparity.reliability",
+        "app.smallthingz.reverb.uitheme.reliability"))
     check(context.applicationContext.javaClass == Application::class.java)
     val typography = Class.forName("app.smallthingz.reverb.ReverbThemeKt")
         .getDeclaredField("ReverbTypography").apply { isAccessible = true }.get(null) as Typography
@@ -90,7 +101,8 @@ internal fun verifyNativeRetentionInputParity(instrumentation: Instrumentation, 
     var completed = 0
     var mismatches = 0
     try {
-        val activity = launchNativeParityActivity(instrumentation)
+        val activity = (if (context.packageName == "app.smallthingz.reverb.uitheme.reliability")
+            launchCurrentUiSmokeActivity(instrumentation) else launchNativeParityActivity(instrumentation))
         host = activity
         awaitNativeParityDraw(instrumentation, activity.fixtureRoot)
         for (case in retentionCases) {
@@ -328,14 +340,33 @@ private fun verifyRetentionNativeConnectionContract(host: NativeParityActivity):
     val environment = nativeParityEnvironment(host,
         Density(host.resources.displayMetrics.density, host.resources.configuration.fontScale),
         ReverbPalette.resolve(host, false))
-    for (mode in listOf(RetentionMode.TIME, RetentionMode.SIZE)) {
+    for (mode in listOf(RetentionMode.TIME, RetentionMode.SIZE, null)) {
         var owner = "12"
         var accepts = true
         val callbacks = mutableListOf<String>()
-        val input = SettingsRetentionInputView(host, environment)
-        fun bind() = input.bind(owner, mode, "One-shot", environment, false, { owner }) {
+        // The same raw-command assertions exercise both real app editor implementations.
+        // Styling is the Rename field's configuration; this matrix makes no rename raster claim.
+        val renameConfiguration = NativeSingleLineInputConfiguration(
+            style = TextStyle.Default.copy(
+                platformStyle = PlatformTextStyle(includeFontPadding = false),
+                lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.None),
+            ).merge(ReverbParagraphStyles[ReverbTextRole.BODY_LARGE]),
+            textColor = environment.palette.onSurface, cursorColor = environment.palette.primary,
+            selectionBackgroundColor = reverbColorWithAlpha(environment.palette.primary, .4f),
+            selectionHandleColor = environment.palette.primary, ime = nativeRenameImeContract())
+        val input: EditText = if (mode == null) ReverbSingleLineInputView(host, environment, renameConfiguration)
+            else SettingsRetentionInputView(host, environment)
+        val changed: (String) -> Unit = {
             callbacks += it
             if (accepts) owner = it
+        }
+        fun bind() {
+            if (input is ReverbSingleLineInputView) input.bind(owner, renameConfiguration, environment, { owner }, changed, {})
+            else (input as SettingsRetentionInputView).bind(owner, checkNotNull(mode), "One-shot", environment, false, { owner }, changed)
+        }
+        fun release() {
+            if (input is ReverbSingleLineInputView) input.releaseCallbacks()
+            else (input as SettingsRetentionInputView).releaseCallbacks()
         }
         bind()
         host.fixtureRoot.addView(input, FrameLayout.LayoutParams(240, -2))
@@ -343,8 +374,9 @@ private fun verifyRetentionNativeConnectionContract(host: NativeParityActivity):
         val connection = checkNotNull(input.onCreateInputConnection(info))
         var primary: Throwable? = null
         try {
-            val expected = retentionImeContract(mode)
-            check(info.inputType == expected.inputType && info.imeOptions == expected.imeOptions)
+            val expectedType = if (mode == null) nativeRenameImeContract().inputType else retentionImeContract(mode).inputType
+            val expectedOptions = if (mode == null) nativeRenameImeContract().imeOptions else retentionImeContract(mode).imeOptions
+            check(info.inputType == expectedType && info.imeOptions == expectedOptions)
             check(connection.setSelection(owner.length, owner.length))
             check(callbacks.isEmpty()) { "Selection must not invoke raw String callback" }
             check(connection.commitText("α\n-.😀", 1))
@@ -376,7 +408,7 @@ private fun verifyRetentionNativeConnectionContract(host: NativeParityActivity):
             connection.closeConnection()
             check(owner == "8xy" && input.text.toString() == "8xy") { "Closing an unfinished IME batch committed it" }
             check(!connection.commitText("after-close", 1))
-            result.put(JSONObject().put("mode", mode.name).put("passed", true)
+            result.put(JSONObject().put("mode", mode?.name ?: "RENAME").put("passed", true)
                 .put("callbacks", JSONArray(callbacks)).put("input_type", info.inputType)
                 .put("ime_options", info.imeOptions))
         } catch (error: Throwable) {
@@ -386,7 +418,7 @@ private fun verifyRetentionNativeConnectionContract(host: NativeParityActivity):
             var cleanup: Throwable? = null
             for (close in listOf<() -> Unit>(
                 { connection.closeConnection() },
-                { input.releaseCallbacks() },
+                { release() },
                 { host.fixtureRoot.removeView(input) },
             )) {
                 try { close() }

@@ -4,6 +4,17 @@
  */
 package app.smallthingz.reverb
 
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
+import smallthingz.ui.text.view.NativePlainTextViewGeometry
+import smallthingz.ui.text.view.NativeSourceAccessibilityNode
+import smallthingz.ui.text.view.NativeSourceAccessibilityNodeProvider
+import smallthingz.ui.text.view.NativeTextSemanticsClip
+import smallthingz.ui.text.view.NativeTextSemanticsClipPolicy
+import smallthingz.ui.text.view.NativeTextSemanticsTransformPolicy
+import smallthingz.ui.text.view.ParagraphView
+import smallthingz.ui.text.view.PlainTextAccessibilityGeometry
+import smallthingz.ui.text.view.nativeMergedRoleBoundsInScreen
+import smallthingz.ui.text.view.nativeTextSemanticsMatrix
 import android.graphics.Rect
 import android.graphics.Region
 import android.view.View
@@ -63,7 +74,7 @@ internal class NativeOnboardingAccessibility(
 
     private fun isSemantic(view: View): Boolean = view === pager() ||
         view is NativeVerticalViewport || view is NativeMergedRowAccessibilityHost ||
-        view is ReverbParagraphView ||
+        view is ParagraphView ||
         view is SilenceCurveView || view is SettingsCalibrationProgressView ||
         view.parent is CompressionSliderView ||
         (view is OnboardingIconView && !view.contentDescription.isNullOrEmpty())
@@ -84,7 +95,7 @@ internal class NativeOnboardingAccessibility(
     }
 
     private fun localBounds(view: View) = when (view) {
-        is ReverbParagraphView -> view.originalAccessibilityBoundsInView()
+        is ParagraphView -> view.originalAccessibilityBoundsInView()
         is SettingsCalibrationProgressView -> view.semanticsBoundsInView()
         else -> ComposeRect(0f, 0f, view.width.toFloat(), view.height.toFloat())
     }

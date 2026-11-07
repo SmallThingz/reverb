@@ -1,5 +1,12 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.interaction.view.NativeClickBinding
+import smallthingz.ui.interaction.view.NativeClickEnvironment
+import smallthingz.ui.interaction.view.RowIndication
+import smallthingz.ui.interaction.view.RowIndicationSink
+import smallthingz.ui.interaction.view.ViewClickController
+import smallthingz.ui.interaction.view.readCachedAnimatorDurationScale
+import smallthingz.ui.text.view.NativeSourceAccessibilityNode
 import app.smallthingz.reverb.closePreservingPrimaryFailure
 
 import android.content.Context
@@ -29,9 +36,9 @@ internal class NativeSheetDragHandle(
 ):ViewGroup(context),NativeClickPhaseHost,AutoCloseable {
     private val identity=Any()
     val mark=HandleMark(context,environment)
-    private val indication=ReverbRowIndication.install(this,environment.palette.onSurface,
-        { reverbAnimatorDurationScale(context) })
-    private val controller=ReverbClickController(this,object:NativeClickEnvironment {
+    private val indication=RowIndication.install(this,environment.palette.onSurface,
+        { readCachedAnimatorDurationScale(context) })
+    private val controller=ViewClickController(this,object:NativeClickEnvironment {
         override val nativeInputRoot get()=inputRoot()
         override val minimumTouchWidthPx get()=48f*environment.textDensity.density
         override val minimumTouchHeightPx get()=minimumTouchWidthPx
@@ -42,7 +49,7 @@ internal class NativeSheetDragHandle(
         }
         override fun interestedParent(event:MotionEvent)=false
         override fun longPressOwnershipChanged(owns:Boolean)=Unit
-    },ReverbRowIndicationSink(indication) {x,y,out->out.set(x,y)})
+    },RowIndicationSink(indication) {x,y,out->out.set(x,y)})
     override val nativeClickEndpoint=ReverbClickPhaseEndpoint(controller)
     val tooltip=NativeSheetTooltip(this,environment,runtime,mark.contentDescription.toString())
     var sourceNode:(()->NativeSourceAccessibilityNode)?=null

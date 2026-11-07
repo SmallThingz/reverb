@@ -1,5 +1,10 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.interaction.view.readCachedAnimatorDurationScale
+import smallthingz.ui.text.view.NativePlainTextViewGeometry
+import smallthingz.ui.text.view.NativeSourceAccessibilityNode
+import smallthingz.ui.text.view.NativeTextSemanticsClip
+import smallthingz.ui.text.view.NativeTextSemanticsClipPolicy
 import android.app.Application
 import android.app.Instrumentation
 import android.view.View
@@ -41,7 +46,7 @@ internal fun verifyNativeMaterialProgress(instrumentation: Instrumentation, repo
         try { saveNativeParityBitmap(directory, "$name.png", bitmap) } finally { bitmap.recycle() }
     }
     try {
-        admittedScale = nativeParityOnMain(instrumentation) { reverbAnimatorDurationScale(host) }
+        admittedScale = nativeParityOnMain(instrumentation) { readCachedAnimatorDurationScale(host) }
         check(admittedScale == 0f || admittedScale == 1f) {
             "Probe admits animator scale 0 or 1 only; observed $admittedScale (device setting unchanged)"
         }
@@ -71,7 +76,7 @@ internal fun verifyNativeMaterialProgress(instrumentation: Instrumentation, repo
         do {
             draw()
             val value = nativeParityOnMain(instrumentation) {
-                check(reverbAnimatorDurationScale(host) == admittedScale) { "Animator scale changed during probe" }
+                check(readCachedAnimatorDurationScale(host) == admittedScale) { "Animator scale changed during probe" }
                 field.getFloat(row.row.summarySurface)
             }
             check(value >= previous - .00001f && value <= .80001f)
@@ -270,7 +275,7 @@ private fun verifyMaterialHomePending(
             awaitNativeParityDraw(instrumentation, host.fixtureRoot)
             instrumentation.waitForIdleSync()
             nativeParityOnMain(instrumentation) {
-                check(reverbAnimatorDurationScale(host) == admittedScale) { "Animator scale changed during probe" }
+                check(readCachedAnimatorDurationScale(host) == admittedScale) { "Animator scale changed during probe" }
                 status = reconcileCaptureExportStatus(false, gate.attached, status, false)
                 saving = captureExportUiBusy(false, gate.attached, status)
                 bind.invoke(card, status, environment)
@@ -286,7 +291,7 @@ private fun verifyMaterialHomePending(
             awaitNativeParityDraw(instrumentation, host.fixtureRoot)
             instrumentation.waitForIdleSync()
             val gone = nativeParityOnMain(instrumentation) {
-                check(reverbAnimatorDurationScale(host) == admittedScale) { "Animator scale changed during probe" }
+                check(readCachedAnimatorDurationScale(host) == admittedScale) { "Animator scale changed during probe" }
                 card!!.visibility == View.GONE
             }
         } while (!gone && android.os.SystemClock.elapsedRealtime() < exitDeadline)

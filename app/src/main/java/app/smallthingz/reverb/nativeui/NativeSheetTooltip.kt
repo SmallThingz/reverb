@@ -5,6 +5,13 @@
  */
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.interaction.view.readCachedAnimatorDurationScale
+import smallthingz.ui.text.view.NativePlainTextViewGeometry
+import smallthingz.ui.text.view.NativeSourceAccessibilityNode
+import smallthingz.ui.text.view.NativeTextSemanticsClip
+import smallthingz.ui.text.view.NativeTextSemanticsClipPolicy
+import smallthingz.ui.text.view.PlainTextAccessibilityWindowScope
+import smallthingz.ui.text.view.nativeMergedRoleBoundsInScreen
 import android.graphics.Canvas
 import android.graphics.Outline
 import android.graphics.Paint
@@ -203,7 +210,7 @@ internal class NativeSheetTooltip(
         if(animation==null&&popup!=null) {
             val next=scope.launch(start=CoroutineStart.LAZY) {
                 while(isActive&&popup!=null)runtime.frames.withFrameNanos {time->
-                    motion.frame(time,reverbAnimatorDurationScale(anchor.context))
+                    motion.frame(time,readCachedAnimatorDurationScale(anchor.context))
                     popup?.frame(motion.sizeScale,motion.alpha)
                     if(!motion.shouldExist) {
                         val ownedPopup=popup;popup=null

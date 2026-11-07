@@ -1,5 +1,21 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.interaction.view.NativeClickBinding
+import smallthingz.ui.interaction.view.NativeClickEnvironment
+import smallthingz.ui.interaction.view.RowIndication
+import smallthingz.ui.interaction.view.RowIndicationSink
+import smallthingz.ui.interaction.view.ViewClickController
+import smallthingz.ui.interaction.view.readCachedAnimatorDurationScale
+import smallthingz.ui.text.view.MergedRowAccessibility
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityState
+import smallthingz.ui.text.view.NativeMergedRowRole
+import smallthingz.ui.text.view.NativePlainTextViewGeometry
+import smallthingz.ui.text.view.NativeSourceAccessibilityNode
+import smallthingz.ui.text.view.NativeTextSemanticsClip
+import smallthingz.ui.text.view.PlainTextAccessibility
+import smallthingz.ui.text.view.PlainTextAccessibilitySnapshot
+import smallthingz.ui.text.view.PlainTextAccessibilityWindowScope
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Outline
@@ -316,14 +332,14 @@ private class ReverbTopBarActionLeaf(
     private val colorMotion=colorTransition(environment.palette.ink) {icon.setTint(it);invalidate()}
     private val descriptionView = ReverbTopBarDescriptionView(context, description)
     private val accessibilityChildren = listOf(descriptionView)
-    override val mergedRowAccessibility = ReverbMergedRowAccessibility(
+    override val mergedRowAccessibility = MergedRowAccessibility(
         this, NativeMergedRowRole.BUTTON,
         sourceState = { NativeMergedRowAccessibilityState(isEnabled, null, null,
             accessibilityChildren, rolePresent = false) },
         invokeSourceClick = { if (isEnabled && click != null) { click?.invoke(); true } else false },
     )
-    private val indication = ReverbRowIndication.install(this, environment.palette.ink, { reverbAnimatorDurationScale(context) })
-    private val controller = ReverbClickController(this, object : NativeClickEnvironment {
+    private val indication = RowIndication.install(this, environment.palette.ink, { readCachedAnimatorDurationScale(context) })
+    private val controller = ViewClickController(this, object : NativeClickEnvironment {
         override val nativeInputRoot: View = inputRoot
         override val minimumTouchWidthPx get() = 48f * environment.textDensity.density
         override val minimumTouchHeightPx get() = minimumTouchWidthPx
@@ -332,7 +348,7 @@ private class ReverbTopBarActionLeaf(
             event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER, minimumTouchWidthPx)
         override fun interestedParent(event: MotionEvent) = false
         override fun longPressOwnershipChanged(owns: Boolean) = Unit
-    }, ReverbRowIndicationSink(indication) { x, y, point -> point.set(x, y) })
+    }, RowIndicationSink(indication) { x, y, point -> point.set(x, y) })
     override val nativeClickEndpoint: NativeClickPhaseEndpoint = ReverbClickPhaseEndpoint(controller)
     override fun containsPointerLayer(x: Float, y: Float) =
         reverbGroupGeometry(width.toFloat(), height.toFloat(), environment.textDensity.density, 15f).contains(x, y)
@@ -418,7 +434,7 @@ private class ReverbTopBarBrandAction(context: Context, private var environment:
     private val mark = ReverbBrandMarkView(context)
     private val descriptionView = ReverbTopBarDescriptionView(context, context.getString(R.string.app_name))
     private val accessibilityChildren = listOf(descriptionView)
-    override val mergedRowAccessibility = ReverbMergedRowAccessibility(
+    override val mergedRowAccessibility = MergedRowAccessibility(
         this, NativeMergedRowRole.BUTTON,
         sourceState = { NativeMergedRowAccessibilityState(isEnabled, null, null,
             accessibilityChildren, rolePresent = false) },
@@ -426,8 +442,8 @@ private class ReverbTopBarBrandAction(context: Context, private var environment:
     )
     private val softwareClip = Path()
     private var click: (() -> Unit)? = null
-    private val indication = ReverbRowIndication.install(this, environment.palette.ink, { reverbAnimatorDurationScale(context) })
-    private val controller = ReverbClickController(this, object : NativeClickEnvironment {
+    private val indication = RowIndication.install(this, environment.palette.ink, { readCachedAnimatorDurationScale(context) })
+    private val controller = ViewClickController(this, object : NativeClickEnvironment {
         override val nativeInputRoot: View = inputRoot
         override val minimumTouchWidthPx get() = 48f * environment.textDensity.density
         override val minimumTouchHeightPx get() = minimumTouchWidthPx
@@ -436,7 +452,7 @@ private class ReverbTopBarBrandAction(context: Context, private var environment:
             .acceptsPointer(event.x, event.y, event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER, minimumTouchWidthPx)
         override fun interestedParent(event: MotionEvent) = false
         override fun longPressOwnershipChanged(owns: Boolean) = Unit
-    }, ReverbRowIndicationSink(indication) { x, y, point -> point.set(x, y) })
+    }, RowIndicationSink(indication) { x, y, point -> point.set(x, y) })
     override val nativeClickEndpoint: NativeClickPhaseEndpoint = ReverbClickPhaseEndpoint(controller)
     override fun containsPointerLayer(x: Float, y: Float) =
         reverbGroupGeometry(width.toFloat(), height.toFloat(), environment.textDensity.density,
@@ -568,7 +584,7 @@ private class ReverbTopBarDescriptionView(context: Context, description: String)
     override fun getAccessibilityClassName(): CharSequence = "android.view.View"
 }
 
-private fun bindTopBarActionAccessibility(host: ViewGroup, parent: ReverbMergedRowAccessibility,
+private fun bindTopBarActionAccessibility(host: ViewGroup, parent: MergedRowAccessibility,
     description: ReverbTopBarDescriptionView, cursor: PlainTextAccessibilityWindowScope,
     geometry: NativePlainTextViewGeometry, sourceNode: (View) -> NativeSourceAccessibilityNode): AutoCloseable {
     val parentLease = parent.bindSourceGeometry(geometry, sourceNode) { sourceNode(host).present }

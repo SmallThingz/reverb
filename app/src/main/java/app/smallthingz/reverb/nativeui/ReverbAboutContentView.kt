@@ -1,5 +1,19 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.interaction.view.NativeClickBinding
+import smallthingz.ui.interaction.view.NativeClickEnvironment
+import smallthingz.ui.interaction.view.RowIndication
+import smallthingz.ui.interaction.view.RowIndicationSink
+import smallthingz.ui.interaction.view.ViewClickController
+import smallthingz.ui.interaction.view.readCachedAnimatorDurationScale
+import smallthingz.ui.text.view.NativePlainTextViewGeometry
+import smallthingz.ui.text.view.NativeTextSemanticsClip
+import smallthingz.ui.text.view.NativeTextSemanticsClipPolicy
+import smallthingz.ui.text.view.ParagraphView
+import smallthingz.ui.text.view.PlainTextAccessibility
+import smallthingz.ui.text.view.PlainTextAccessibilitySnapshot
+import smallthingz.ui.text.view.PlainTextAccessibilityWindowScope
+import smallthingz.ui.text.view.nativeMergedRoleBoundsInScreen
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -395,8 +409,8 @@ private class AboutCloseButton(context: Context, private var appearance: AboutCo
     var nativeInputRoot: View? = null
     private val key = Any()
     val visual = AboutCloseVisual(context, appearance.palette.muted)
-    private val indication = ReverbRowIndication.install(visual, appearance.palette.ink, { reverbAnimatorDurationScale(context) })
-    private val controller = ReverbClickController(visual, object : NativeClickEnvironment {
+    private val indication = RowIndication.install(visual, appearance.palette.ink, { readCachedAnimatorDurationScale(context) })
+    private val controller = ViewClickController(visual, object : NativeClickEnvironment {
         override val nativeInputRoot: View? get() = this@AboutCloseButton.nativeInputRoot
         override val minimumTouchWidthPx get() = 48f * appearance.density.density
         override val minimumTouchHeightPx get() = minimumTouchWidthPx
@@ -413,7 +427,7 @@ private class AboutCloseButton(context: Context, private var appearance: AboutCo
         }
         override fun interestedParent(event: MotionEvent) = false // Shared touch phases supply actual vertical interest.
         override fun longPressOwnershipChanged(owns: Boolean) = Unit
-    }, ReverbRowIndicationSink(indication) { x, y, output -> output.set(x, y) })
+    }, RowIndicationSink(indication) { x, y, output -> output.set(x, y) })
 
     val clickEndpoint = ReverbClickPhaseEndpoint(controller)
 
@@ -554,9 +568,9 @@ private class AboutRepositoryRow(context: Context, private var appearance: About
     val title = aboutParagraph(context, appearance, appearance.titleSmall,
         reverbAboutRepositoryTitleColor(appearance.palette, appearance.titleSmall))
     val label = aboutParagraph(context, appearance, appearance.bodySmall, appearance.palette.muted)
-    private val indication = ReverbRowIndication.install(this,
-        reverbAboutRepositoryContentColor(appearance.palette), { reverbAnimatorDurationScale(context) })
-    private val controller = ReverbClickController(this, object : NativeClickEnvironment {
+    private val indication = RowIndication.install(this,
+        reverbAboutRepositoryContentColor(appearance.palette), { readCachedAnimatorDurationScale(context) })
+    private val controller = ViewClickController(this, object : NativeClickEnvironment {
         override val nativeInputRoot: View? get() = this@AboutRepositoryRow.nativeInputRoot
         override val minimumTouchWidthPx get() = 48f * appearance.density.density
         override val minimumTouchHeightPx get() = minimumTouchWidthPx
@@ -564,7 +578,7 @@ private class AboutRepositoryRow(context: Context, private var appearance: About
             .acceptsPointer(event.x, event.y, event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER, minimumTouchWidthPx)
         override fun interestedParent(event: MotionEvent) = false // Shared touch phases supply actual vertical interest.
         override fun longPressOwnershipChanged(owns: Boolean) = Unit
-    }, ReverbRowIndicationSink(indication) { x, y, output -> output.set(x, y) })
+    }, RowIndicationSink(indication) { x, y, output -> output.set(x, y) })
     val clickEndpoint = ReverbClickPhaseEndpoint(controller)
     init {
         isClickable = true; isFocusable = true
@@ -678,7 +692,7 @@ private class AboutErrorCard(context: Context, private var appearance: AboutCont
 
 private const val ABOUT_PAINT_FLAGS = Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG
 private fun aboutParagraph(context: Context, appearance: AboutContentAppearance, style: TextStyle, color: Int) =
-    ReverbParagraphView(context, style, appearance.density, appearance.fontResolver, color)
+    ParagraphView(context, style, appearance.density, appearance.fontResolver, color)
 
 private fun aboutTonalColor(color: Int, palette: ReverbPalette, elevationDp: Float): Int {
     if (color != palette.surface || elevationDp == 0f) return color
@@ -788,7 +802,7 @@ private class AboutContentAccessibilityOwner(
             return false
         }
         fun visit(view: View) {
-            if (view is ReverbParagraphView) {
+            if (view is ParagraphView) {
                 view.isScreenReaderFocusable = view !== content.repository.row.title && view !== content.repository.row.label
                 leases += view.bindPlainTextAccessibility(window, geometry) { exposed(view) }
                 leases += bindAboutVisibility(view, { exposed(view) },

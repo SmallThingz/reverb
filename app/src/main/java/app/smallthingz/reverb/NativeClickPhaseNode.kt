@@ -1,8 +1,8 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.interaction.view.ViewClickController
 import android.view.MotionEvent
 import android.view.View
-import app.smallthingz.reverb.nativeui.ReverbClickController
 
 /** Requires the adjacent reviewed click-consumption-hook.patch; stream handled != consumed. */
 internal interface NativeClickPhaseEndpoint {
@@ -18,7 +18,7 @@ internal interface NativeClickPhaseHost {
     val nativeClickEndpoint: NativeClickPhaseEndpoint
 }
 
-internal class ReverbClickPhaseEndpoint(private val input: ReverbClickController) : NativeClickPhaseEndpoint {
+internal class ReverbClickPhaseEndpoint(private val input: ViewClickController) : NativeClickPhaseEndpoint {
     override fun pointerBounds(width: Int, height: Int) = input.pointerBounds(width, height)
     override fun touch(
         event: MotionEvent,

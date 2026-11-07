@@ -1,5 +1,9 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
+import smallthingz.ui.text.view.NativeTextSemanticsTransformPolicy
+import smallthingz.ui.text.view.ParagraphView
+import smallthingz.ui.text.view.nativeTextSemanticsMatrix
 import android.app.Instrumentation
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Context
@@ -17,10 +21,6 @@ import androidx.compose.ui.semantics.getAllSemanticsNodes
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.core.view.accessibility.AccessibilityNodeInfoCompat
-import app.smallthingz.reverb.nativeui.ReverbParagraphView
-import app.smallthingz.reverb.nativeui.NativeTextSemanticsTransformPolicy
-import app.smallthingz.reverb.nativeui.nativeTextSemanticsMatrix
-import app.smallthingz.reverb.nativeui.NativeMergedRowAccessibilityHost
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -67,7 +67,7 @@ internal fun onboardingGeometryEvidence(content: View, reference: Boolean): JSON
     } else {
         onboardingViewDescendants(content).forEach { view ->
             val location = pointInFixture(view, content, Offset.Zero)
-            val goneAncestor = if (view is ReverbParagraphView) goneInFixture(view, content) else null
+            val goneAncestor = if (view is ParagraphView) goneInFixture(view, content) else null
             val rawNode = JSONObject().put("class", view.javaClass.name)
                 .put("position", JSONArray(listOf(location.x.toDouble(), location.y.toDouble())))
                 .put("size", JSONArray(listOf(view.width, view.height)))
@@ -79,7 +79,7 @@ internal fun onboardingGeometryEvidence(content: View, reference: Boolean): JSON
                 .put("text_geometry_excluded_reason", "GONE in captured ancestor chain")
                 .put("gone_ancestor_class", goneAncestor.javaClass.name)
             raw.put(rawNode)
-            if (view is ReverbParagraphView && goneAncestor == null) {
+            if (view is ParagraphView && goneAncestor == null) {
                 val paragraph = view.createOriginalSemanticsParagraph()
                 text += textGeometry(
                     view.getText(),
@@ -359,8 +359,8 @@ private fun missingNativeChildDiagnostic(
                     .put("physical_bounds", JSONArray(listOf(location[0], location[1], location[0]+view.width, location[1]+view.height)))
                     .put("node_present", info != null).put("node_hash", info?.hashCode() ?: JSONObject.NULL)
                     .put("node_text", info?.text?.toString() ?: JSONObject.NULL)
-                    .put("paragraph_text", (view as? ReverbParagraphView)?.getText() ?: JSONObject.NULL)
-                    .put("paragraph_source_present", (view as? ReverbParagraphView)?.isAccessibilityNodePresent() ?: JSONObject.NULL)
+                    .put("paragraph_text", (view as? ParagraphView)?.getText() ?: JSONObject.NULL)
+                    .put("paragraph_source_present", (view as? ParagraphView)?.isAccessibilityNodePresent() ?: JSONObject.NULL)
             } finally { info?.recycle() }
         }
         val viewports = JSONArray()
@@ -388,7 +388,7 @@ private fun missingNativeChildDiagnostic(
         // Complete the bounded physical-tree preflight before any provider callback:
         // source children and node creation may themselves inspect descendants.
         for (view in admitted) {
-            if (view is ReverbParagraphView && view.getText() == content.context.getString(R.string.retention_loop_label))
+            if (view is ParagraphView && view.getText() == content.context.getString(R.string.retention_loop_label))
                 loopLabels.put(describe(view))
             if (view is ReverbLibraryRecyclerView) {
                 val location = IntArray(2)

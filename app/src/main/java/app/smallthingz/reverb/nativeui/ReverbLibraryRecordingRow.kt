@@ -1,5 +1,16 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.interaction.view.NativeClickBinding
+import smallthingz.ui.interaction.view.NativeClickEnvironment
+import smallthingz.ui.interaction.view.RowIndication
+import smallthingz.ui.interaction.view.RowIndicationSink
+import smallthingz.ui.interaction.view.ViewClickController
+import smallthingz.ui.interaction.view.readCachedAnimatorDurationScale
+import smallthingz.ui.text.view.MergedRowAccessibility
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityState
+import smallthingz.ui.text.view.NativeMergedRowRole
+import smallthingz.ui.text.view.ParagraphView
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Outline
@@ -119,10 +130,10 @@ internal class ReverbLibraryRecordingRow(
         }
         scheduleFrame()
     }
-    private val bodyIndication = ReverbRowIndication.install(body, initialEnvironment.palette.ink,
-        { reverbAnimatorDurationScale(context) })
-    private val leadingIndication = ReverbRowIndication.install(body.leading, initialEnvironment.palette.ink,
-        { reverbAnimatorDurationScale(context) })
+    private val bodyIndication = RowIndication.install(body, initialEnvironment.palette.ink,
+        { readCachedAnimatorDurationScale(context) })
+    private val leadingIndication = RowIndication.install(body.leading, initialEnvironment.palette.ink,
+        { readCachedAnimatorDurationScale(context) })
     var parentInterestedInDown: (MotionEvent) -> Boolean = { false }
     private val bodyInput = input(body, bodyIndication)
     private val leadingInput = input(body.leading, leadingIndication)
@@ -190,7 +201,7 @@ internal class ReverbLibraryRecordingRow(
         body.leading.setContent(leadingContent)
         body.setTrailingContent(trailingContent)
     }
-    val paragraphLeaves: List<ReverbParagraphView> get() = body.paragraphLeaves
+    val paragraphLeaves: List<ParagraphView> get() = body.paragraphLeaves
     val summarySurface: ReverbGroupLayout get() = surface
 
     fun setFrame(frame: LibraryRecordingRowFrame) {
@@ -264,7 +275,7 @@ internal class ReverbLibraryRecordingRow(
         val current = row
         val callbacks = actions
         val enabled = current != null && current.interactionsEnabled && callbacks?.activate != null
-        fun bind(target: RecordingRowInputTarget, controller: ReverbClickController, leading: Boolean) {
+        fun bind(target: RecordingRowInputTarget, controller: ViewClickController, leading: Boolean) {
             val long = if (leading) callbacks?.leadingLongClick ?: callbacks?.longClick else callbacks?.longClick
             target.isClickable = enabled
             target.isLongClickable = enabled && long != null
@@ -282,8 +293,8 @@ internal class ReverbLibraryRecordingRow(
         bind(body.leading, leadingInput, true)
     }
 
-    private fun input(target: View, indication: ReverbRowIndication): ReverbClickController =
-        ReverbClickController(target, object : NativeClickEnvironment {
+    private fun input(target: View, indication: RowIndication): ViewClickController =
+        ViewClickController(target, object : NativeClickEnvironment {
             override val nativeInputRoot: View get() = this@ReverbLibraryRecordingRow.nativeInputRoot
             override val minimumTouchWidthPx get() = 48f * environment.textDensity.density
             override val minimumTouchHeightPx get() = minimumTouchWidthPx
@@ -295,7 +306,7 @@ internal class ReverbLibraryRecordingRow(
             override fun longPressOwnershipChanged(owns: Boolean) {
                 target.parent?.requestDisallowInterceptTouchEvent(owns)
             }
-        }, ReverbRowIndicationSink(indication) { x, y, output -> output.set(x, y) })
+        }, RowIndicationSink(indication) { x, y, output -> output.set(x, y) })
 
     override fun onAttachedToWindow() { super.onAttachedToWindow(); bindInputs(); scheduleFrame() }
     override fun onVisibilityChanged(changedView: View, visibility: Int) {
@@ -373,7 +384,7 @@ private abstract class RecordingRowInputTarget(context: Context) : ViewGroup(con
     var sourceLongClick: () -> Boolean = { false }
     protected open fun semanticChildren(): List<View> = emptyList()
     override val mergesAccessibilityDescendants get() = sourceClickPresent
-    override val mergedRowAccessibility = ReverbMergedRowAccessibility(this, NativeMergedRowRole.BUTTON,
+    override val mergedRowAccessibility = MergedRowAccessibility(this, NativeMergedRowRole.BUTTON,
         { NativeMergedRowAccessibilityState(true, null, clickLabel, semanticChildren(),
             selected = selectedSemantic, contentDescription = contentDescription,
             clickable = isClickable, longClickable = isLongClickable, longClickLabel = longClickLabel,
@@ -397,7 +408,7 @@ private abstract class RecordingRowInputTarget(context: Context) : ViewGroup(con
         if(semanticPresent)mergedRowAccessibility.addChildrenForAccessibility(out)else super.addChildrenForAccessibility(out)
     }
     private var endpoint: NativeClickPhaseEndpoint? = null
-    var input: ReverbClickController? = null
+    var input: ViewClickController? = null
         set(value) { field = value; endpoint = value?.let(::ReverbClickPhaseEndpoint) }
     override val nativeClickEndpoint: NativeClickPhaseEndpoint get() = checkNotNull(endpoint)
     override val sourceClickPresent: Boolean get() = isClickable

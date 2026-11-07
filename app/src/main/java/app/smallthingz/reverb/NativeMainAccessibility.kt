@@ -4,6 +4,15 @@
  */
 package app.smallthingz.reverb
 
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
+import smallthingz.ui.text.view.NativePlainTextViewGeometry
+import smallthingz.ui.text.view.NativeSourceAccessibilityNode
+import smallthingz.ui.text.view.NativeSourceAccessibilityNodeProvider
+import smallthingz.ui.text.view.NativeTextSemanticsClip
+import smallthingz.ui.text.view.NativeTextSemanticsClipPolicy
+import smallthingz.ui.text.view.ParagraphView
+import smallthingz.ui.text.view.PlainTextAccessibilityGeometry
+import smallthingz.ui.text.view.nativeMergedRoleBoundsInScreen
 import android.graphics.Rect
 import android.graphics.Region
 import android.view.View
@@ -85,7 +94,7 @@ internal class NativeMainAccessibility(
 
     private fun semantic(view: View, layers: List<View>): Boolean {
         if (view is NativeMergedRowAccessibilityHost) return view.hasAccessibilitySemanticNode
-        return view in layers || view is ReverbParagraphView || view is NativeClickPhaseHost ||
+        return view in layers || view is ParagraphView || view is NativeClickPhaseHost ||
             view is NativeRangeEndpointView || view.importantForAccessibility == View.IMPORTANT_FOR_ACCESSIBILITY_YES ||
             view is NativeVerticalViewport || view is RecyclerView ||
             view.isScreenReaderFocusable || !view.contentDescription.isNullOrEmpty()
@@ -106,7 +115,7 @@ internal class NativeMainAccessibility(
     }
 
     private fun bounds(view: View, minimumTouch: Float): ComposeRect {
-        val base = if (view is ReverbParagraphView) view.originalAccessibilityBoundsInView()
+        val base = if (view is ParagraphView) view.originalAccessibilityBoundsInView()
             else (view as? NativeMergedRowAccessibilityHost)?.accessibilityBoundsInView
                 ?: ComposeRect(0f, 0f, view.width.toFloat(), view.height.toFloat())
         if (minimumTouch <= 0f) return base
@@ -166,7 +175,7 @@ internal class NativeMainAccessibility(
 
     private fun important(view: View): Boolean {
         if (view is NativeMergedRowAccessibilityHost) return view.hasAccessibilitySemanticNode
-        return view is ReverbParagraphView || view is NativeClickPhaseHost ||
+        return view is ParagraphView || view is NativeClickPhaseHost ||
             view is NativeRangeEndpointView || view is android.widget.TextView ||
             view is NativeVerticalViewport || view is RecyclerView ||
             view.isScreenReaderFocusable || !view.contentDescription.isNullOrEmpty()

@@ -1,5 +1,6 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.interaction.view.readCachedAnimatorDurationScale
 import android.content.Context
 import smallthingz.ui.runtime.MonotonicFrameClock
 import smallthingz.ui.runtime.PausableMonotonicFrameClock
@@ -35,7 +36,7 @@ internal class NativeAboutWindowRuntime(context: Context) : AutoCloseable {
         }
     }
     private val duration = object : MotionDurationScale {
-        override val scaleFactor get() = reverbAnimatorDurationScale(applicationContext)
+        override val scaleFactor get() = readCachedAnimatorDurationScale(applicationContext)
     }
     val scope = CoroutineScope(main + SupervisorJob() + frames + duration)
 

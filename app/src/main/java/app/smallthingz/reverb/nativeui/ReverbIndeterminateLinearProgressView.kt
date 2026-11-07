@@ -4,6 +4,9 @@
  */
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.text.view.NativePlainTextViewGeometry
+import smallthingz.ui.text.view.NativeSourceAccessibilityNode
+import smallthingz.ui.text.view.nativeMergedRoleBoundsInScreen
 import smallthingz.ui.animation.view.ViewColorTransition
 
 import android.animation.ValueAnimator

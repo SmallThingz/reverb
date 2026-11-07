@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.text.view.NativeSourceAccessibilityNode
+import smallthingz.ui.text.view.ParagraphView
 import android.content.Context
 import android.os.Build
 import android.view.View
@@ -89,7 +91,7 @@ internal class OnboardingPageContentView(
         1 -> ReverbIcon.OneShot
         else -> ReverbIcon.Capture
     }, initialPalette.primary)
-    private val header = ReverbParagraphView(context, typography.headlineMedium, density, resolver, initialPalette.onSurface)
+    private val header = ParagraphView(context, typography.headlineMedium, density, resolver, initialPalette.onSurface)
     private val permissionBody = if (page == 0) label(context, typography.bodyMedium, density, resolver,
         R.string.onboarding_permissions_body, initialPalette.onSurfaceVariant) else null
     private val permissions = if (page == 0)
@@ -383,8 +385,8 @@ private class OnboardingPageColumn(context: Context) : ViewGroup(context) {
 }
 
 private fun label(context: Context, style: TextStyle, density: Density, resolver: FontFamily.Resolver,
-                  text: Int, color: Int): ReverbParagraphView =
-    ReverbParagraphView(context, style, density, resolver, color).apply { setText(context.getString(text)) }
+                  text: Int, color: Int): ParagraphView =
+    ParagraphView(context, style, density, resolver, color).apply { setText(context.getString(text)) }
 
 /**
  * Source Modifier.padding sits outside Text semantics. Keeping that inset on the paragraph itself
@@ -393,7 +395,7 @@ private fun label(context: Context, style: TextStyle, density: Density, resolver
  */
 private class OnboardingPaddedLabel(
     context: Context,
-    private val label: ReverbParagraphView,
+    private val label: ParagraphView,
     density: Density,
 ) : ViewGroup(context) {
     private val horizontalInset = (14f * density.density).roundToInt()

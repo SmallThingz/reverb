@@ -5,6 +5,7 @@
  */
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.text.view.NativeSourceAccessibilityNode
 import app.smallthingz.reverb.NativeScrollAccessibilityRegistration
 
 import android.content.Context

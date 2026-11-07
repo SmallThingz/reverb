@@ -178,9 +178,15 @@ internal class NativeSheetSurface(
             getChildAt(0).let {it.layout(0,contentTop,it.measuredWidth,contentTop+it.measuredHeight)}
         }
     }
-    internal class SheetColumn(context:Context,val handle:View,val content:View):ViewGroup(context) {
+    internal class SheetColumn(context:Context,val handle:View,var content:View):ViewGroup(context) {
         init {clipChildren=false;clipToPadding=false;importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO
             addView(handle);addView(content)}
+        fun wrapContent(wrapper:NativeVerticalViewport) {
+            removeView(content)
+            wrapper.setContent(content)
+            content=wrapper
+            addView(wrapper)
+        }
         override fun onMeasure(widthMeasureSpec:Int,heightMeasureSpec:Int) {
             val width=MeasureSpec.getSize(widthMeasureSpec)
             val remaining=MeasureSpec.getSize(heightMeasureSpec)
@@ -196,7 +202,7 @@ internal class NativeSheetSurface(
     }
 }
 
-/** Released app Column: no inferred weighting, scrolling, safety padding or layout normalization. */
+/** App column; a caller-owned viewport may measure its complete content without a height cap. */
 internal class NativeSheetAppContent(
     context:Context,
     private var environment:ReverbViewEnvironment,
@@ -244,17 +250,19 @@ internal class NativeSheetAppContent(
         val width=MeasureSpec.getSize(widthMeasureSpec)
         val pad=(24f*density).roundToInt()
         val inner=max(0,width-pad*2)
-        val maximum=MeasureSpec.getSize(heightMeasureSpec)
+        val bounded=MeasureSpec.getMode(heightMeasureSpec)!=MeasureSpec.UNSPECIFIED
+        val maximum=if(bounded)MeasureSpec.getSize(heightMeasureSpec)else Int.MAX_VALUE
         val bottom=min(pad,maximum)
         var used=0
         var remaining=max(0,maximum-bottom)
-        header.measure(sheetSurfaceExact(inner),sheetSurfaceAtMost(remaining));used+=header.measuredHeight;remaining-=header.measuredHeight
+        fun childHeight()=if(bounded)sheetSurfaceAtMost(remaining)else MeasureSpec.makeMeasureSpec(0,MeasureSpec.UNSPECIFIED)
+        header.measure(sheetSurfaceExact(inner),childHeight());used+=header.measuredHeight;remaining-=header.measuredHeight
         val gap12=min((12f*density).roundToInt(),remaining);used+=gap12;remaining-=gap12
         topBody=used
-        body?.let {it.measure(sheetSurfaceExact(inner),sheetSurfaceAtMost(remaining));used+=it.measuredHeight;remaining-=it.measuredHeight}
+        body?.let {it.measure(sheetSurfaceExact(inner),childHeight());used+=it.measuredHeight;remaining-=it.measuredHeight}
         val gap20=min((20f*density).roundToInt(),remaining);used+=gap20;remaining-=gap20
         topActions=used
-        actions?.let {it.measure(sheetSurfaceExact(inner),sheetSurfaceAtMost(remaining));used+=it.measuredHeight}
+        actions?.let {it.measure(sheetSurfaceExact(inner),childHeight());used+=it.measuredHeight}
         setMeasuredDimension(width,resolveSize(used+bottom,heightMeasureSpec))
     }
     override fun onLayout(changed:Boolean,l:Int,t:Int,r:Int,b:Int) {

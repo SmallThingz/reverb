@@ -1,5 +1,16 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.interaction.view.ButtonElevationInteraction
+import smallthingz.ui.interaction.view.ButtonElevationToken
+import smallthingz.ui.interaction.view.NativeClickBinding
+import smallthingz.ui.interaction.view.NativeClickEnvironment
+import smallthingz.ui.interaction.view.NativeClickIndication
+import smallthingz.ui.interaction.view.NativePressToken
+import smallthingz.ui.interaction.view.NativeStateToken
+import smallthingz.ui.interaction.view.RowIndication
+import smallthingz.ui.interaction.view.RowIndicationSink
+import smallthingz.ui.interaction.view.ViewClickController
+import smallthingz.ui.interaction.view.readCachedAnimatorDurationScale
 import android.graphics.drawable.Drawable
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -41,8 +52,8 @@ private class OnboardingNativeInteractions(
     setShadowElevationPx: ((Float) -> Unit)?,
     inputRoot: () -> View?,
 ) : OnboardingFooterInteractions {
-    private val indication = ReverbRowIndication.install(
-        indicationHost, android.graphics.Color.BLACK, { reverbAnimatorDurationScale(inputHost.context) },
+    private val indication = RowIndication.install(
+        indicationHost, android.graphics.Color.BLACK, { readCachedAnimatorDurationScale(inputHost.context) },
     )
     override val foreground: Drawable get() = indication
     private val shadow = setShadowElevationPx?.let {
@@ -50,16 +61,16 @@ private class OnboardingNativeInteractions(
     }
     private val inputLocation = IntArray(2)
     private val indicationLocation = IntArray(2)
-    private val ripple = ReverbRowIndicationSink(indication) { x, y, output ->
+    private val ripple = RowIndicationSink(indication) { x, y, output ->
         inputHost.getLocationInWindow(inputLocation)
         indicationHost.getLocationInWindow(indicationLocation)
         output.set(x + inputLocation[0] - indicationLocation[0], y + inputLocation[1] - indicationLocation[1])
     }
-    private val elevationTokens = IdentityHashMap<Any, ReverbButtonElevationToken>()
+    private val elevationTokens = IdentityHashMap<Any, ButtonElevationToken>()
     private val sink = object : NativeClickIndication {
         override fun press(token: NativePressToken) {
             ripple.press(token)
-            shadow?.begin(ReverbButtonElevationInteraction.PRESS)?.let { elevationTokens[token] = it }
+            shadow?.begin(ButtonElevationInteraction.PRESS)?.let { elevationTokens[token] = it }
         }
         override fun release(token: NativePressToken) {
             ripple.release(token)
@@ -72,8 +83,8 @@ private class OnboardingNativeInteractions(
         override fun stateEnter(token: NativeStateToken) {
             ripple.stateEnter(token)
             val kind = when (token.kind) {
-                NativeStateToken.Kind.HOVER -> ReverbButtonElevationInteraction.HOVER
-                NativeStateToken.Kind.FOCUS -> ReverbButtonElevationInteraction.FOCUS
+                NativeStateToken.Kind.HOVER -> ButtonElevationInteraction.HOVER
+                NativeStateToken.Kind.FOCUS -> ButtonElevationInteraction.FOCUS
             }
             shadow?.begin(kind)?.let { elevationTokens[token] = it }
         }
@@ -97,7 +108,7 @@ private class OnboardingNativeInteractions(
         // None of these released onboarding controls has a long-click action.
         override fun longPressOwnershipChanged(owns: Boolean) = Unit
     }
-    private val input = ReverbClickController(inputHost, environment, sink)
+    private val input = ViewClickController(inputHost, environment, sink)
     override val pointerEndpoint: NativeClickPhaseEndpoint = ReverbClickPhaseEndpoint(input)
     private var enabled = inputHost.isEnabled
 

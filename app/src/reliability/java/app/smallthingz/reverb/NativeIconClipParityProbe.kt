@@ -1,5 +1,8 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.text.view.NativePlainTextViewGeometry
+import smallthingz.ui.text.view.NativeTextSemanticsClip
+import smallthingz.ui.text.view.NativeTextSemanticsClipPolicy
 import android.app.Application
 import android.app.Instrumentation
 import android.content.Context
@@ -50,9 +53,6 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
-import app.smallthingz.reverb.nativeui.NativePlainTextViewGeometry
-import app.smallthingz.reverb.nativeui.NativeTextSemanticsClip
-import app.smallthingz.reverb.nativeui.NativeTextSemanticsClipPolicy
 import app.smallthingz.reverb.nativeui.NativeVerticalNestedHost
 import app.smallthingz.reverb.nativeui.NativeVerticalScrollSource
 import app.smallthingz.reverb.nativeui.NativeVerticalScrollState

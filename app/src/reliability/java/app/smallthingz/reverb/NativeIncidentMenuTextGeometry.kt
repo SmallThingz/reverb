@@ -1,5 +1,6 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.text.view.ParagraphView
 import android.os.Process
 import android.os.SystemClock
 import android.view.View
@@ -13,7 +14,6 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.Paragraph
 import smallthingz.ui.text.TextStyle
 import smallthingz.ui.unit.Density
-import app.smallthingz.reverb.nativeui.ReverbParagraphView
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -80,7 +80,7 @@ internal fun incidentMenuTextGeometry(host: NativeParityActivity, expectedWindow
         } else {
             for (label in labels) {
                 val entry = JSONObject().put("text", label).also(texts::put)
-                val candidates = views.filterIsInstance<ReverbParagraphView>().filter { it.getText() == label }
+                val candidates = views.filterIsInstance<ParagraphView>().filter { it.getText() == label }
                 entry.put("matches", candidates.size)
                 val text = candidates.single()
                 val parents = JSONArray().also { entry.put("view_ancestors", it) }
@@ -90,9 +90,9 @@ internal fun incidentMenuTextGeometry(host: NativeParityActivity, expectedWindow
                     view = view.parent as? View
                 }
                 // Exact current own UI fields only; do not introduce production diagnostic APIs.
-                val style = ReverbParagraphView::class.java.getDeclaredField("textStyle")
+                val style = ParagraphView::class.java.getDeclaredField("textStyle")
                     .apply { isAccessible = true }.get(text) as TextStyle
-                val density = ReverbParagraphView::class.java.getDeclaredField("density")
+                val density = ParagraphView::class.java.getDeclaredField("density")
                     .apply { isAccessible = true }.get(text) as Density
                 val paragraph = checkNotNull(text.currentParagraph)
                 entry.put("draw_paragraph_state", incidentDrawParagraphState(paragraph))

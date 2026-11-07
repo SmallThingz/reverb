@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.interaction.view.ButtonElevationInteraction
+import smallthingz.ui.interaction.view.FilledButtonElevationState
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.FloatTweenSpec
@@ -11,10 +13,10 @@ import org.junit.Test
 /** Focused state/math checks, not native shadow or scheduling proof. */
 class ReverbButtonElevationTest {
     @Test fun latestActiveIdentityWinsAndEndingOlderTokenDoesNotReorder() {
-        val state = ReverbFilledButtonElevationState()
-        val olderHover = state.begin(ReverbButtonElevationInteraction.HOVER)
-        val focus = state.begin(ReverbButtonElevationInteraction.FOCUS)
-        val newerHover = state.begin(ReverbButtonElevationInteraction.HOVER)
+        val state = FilledButtonElevationState()
+        val olderHover = state.begin(ButtonElevationInteraction.HOVER)
+        val focus = state.begin(ButtonElevationInteraction.FOCUS)
+        val newerHover = state.begin(ButtonElevationInteraction.HOVER)
         assertEquals(1f, state.targetDp, 0f)
         state.end(olderHover)
         assertEquals(1f, state.targetDp, 0f)
@@ -25,8 +27,8 @@ class ReverbButtonElevationTest {
     }
 
     @Test fun hoverIncomingAndOutgoingUseDifferentPinned120msEasings() {
-        val state = ReverbFilledButtonElevationState()
-        val hover = state.begin(ReverbButtonElevationInteraction.HOVER)
+        val state = FilledButtonElevationState()
+        val hover = state.begin(ButtonElevationInteraction.HOVER)
         state.frame(1_000_000_000L, 1f)
         state.frame(1_060_000_000L, 1f)
         val incoming = FloatTweenSpec(duration = 120, easing = FastOutSlowInEasing)
@@ -43,8 +45,8 @@ class ReverbButtonElevationTest {
     }
 
     @Test fun disablingNewZeroTargetSnapsButDisablingExistingZeroTargetDoesNot() {
-        val snap = ReverbFilledButtonElevationState()
-        snap.begin(ReverbButtonElevationInteraction.HOVER)
+        val snap = FilledButtonElevationState()
+        snap.begin(ButtonElevationInteraction.HOVER)
         snap.frame(1_000_000_000L, 1f)
         snap.frame(1_060_000_000L, 1f)
         assertTrue(snap.valueDp > 0f)
@@ -52,8 +54,8 @@ class ReverbButtonElevationTest {
         assertEquals(0f, snap.valueDp, 0f)
         assertFalse(snap.isRunning)
 
-        val existingTarget = ReverbFilledButtonElevationState()
-        val hover = existingTarget.begin(ReverbButtonElevationInteraction.HOVER)
+        val existingTarget = FilledButtonElevationState()
+        val hover = existingTarget.begin(ButtonElevationInteraction.HOVER)
         existingTarget.frame(1_000_000_000L, 1f)
         existingTarget.frame(1_120_000_000L, 1f)
         existingTarget.end(hover)
@@ -67,14 +69,14 @@ class ReverbButtonElevationTest {
     }
 
     @Test fun zeroDurationScaleFinishesAndOwnerRetirementInvalidatesOldTokens() {
-        val state = ReverbFilledButtonElevationState()
-        val oldHover = state.begin(ReverbButtonElevationInteraction.HOVER)
+        val state = FilledButtonElevationState()
+        val oldHover = state.begin(ButtonElevationInteraction.HOVER)
         state.frame(1_000_000_000L, 0f)
         assertEquals(1f, state.valueDp, 0f)
         assertFalse(state.isRunning)
         state.retireOwner()
         assertEquals(0f, state.valueDp, 0f)
-        val newHover = state.begin(ReverbButtonElevationInteraction.HOVER)
+        val newHover = state.begin(ButtonElevationInteraction.HOVER)
         state.end(oldHover)
         assertEquals(1f, state.targetDp, 0f)
         state.end(newHover)
@@ -82,12 +84,12 @@ class ReverbButtonElevationTest {
     }
 
     @Test fun interruptionKeepsDeliveredValueAndStartsNewTweenAtLastFrame() {
-        val state = ReverbFilledButtonElevationState()
-        state.begin(ReverbButtonElevationInteraction.HOVER)
+        val state = FilledButtonElevationState()
+        state.begin(ButtonElevationInteraction.HOVER)
         state.frame(1_000_000_000L, 1f)
         state.frame(1_040_000_000L, 1f)
         val interrupted = state.valueDp
-        state.begin(ReverbButtonElevationInteraction.PRESS)
+        state.begin(ButtonElevationInteraction.PRESS)
         assertEquals(interrupted.toBits(), state.valueDp.toBits())
         state.frame(1_100_000_000L, 1f)
         val incoming = FloatTweenSpec(duration = 120, easing = FastOutSlowInEasing)

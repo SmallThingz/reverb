@@ -1,5 +1,9 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.text.view.MergedRowAccessibility
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityState
+import smallthingz.ui.text.view.NativeMergedRowRole
 import android.content.Context
 import android.os.Bundle
 import android.view.View
@@ -209,7 +213,7 @@ private class CaptureStatusBranch(
     private val surfaceClipLease = host.registerTextClip(row.summarySurface.pointerContent)
     override val mergesAccessibilityDescendants get() = !saving
     override val hasAccessibilitySemanticNode get() = !saving
-    override val mergedRowAccessibility = ReverbMergedRowAccessibility(this, NativeMergedRowRole.BUTTON,
+    override val mergedRowAccessibility = MergedRowAccessibility(this, NativeMergedRowRole.BUTTON,
         { NativeMergedRowAccessibilityState(true, null, null,
             row.paragraphLeaves.filter { it.visibility != GONE }, clickable = false, rolePresent = false) },
         { false })

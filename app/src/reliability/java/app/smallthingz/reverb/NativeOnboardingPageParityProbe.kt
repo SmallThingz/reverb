@@ -1,5 +1,7 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.text.view.NativeTextSemanticsClip
+import smallthingz.ui.text.view.NativeTextSemanticsClipPolicy
 import android.app.Application
 import android.app.Instrumentation
 import android.content.res.Configuration
@@ -34,8 +36,6 @@ import app.smallthingz.reverb.nativeui.OnboardingPageContentView
 import app.smallthingz.reverb.nativeui.OnboardingPageTypography
 import app.smallthingz.reverb.nativeui.OnboardingPermissionStatus
 import app.smallthingz.reverb.nativeui.NativeWindowTextAccessibilityOwner
-import app.smallthingz.reverb.nativeui.NativeTextSemanticsClip
-import app.smallthingz.reverb.nativeui.NativeTextSemanticsClipPolicy
 import app.smallthingz.reverb.nativeui.NativeVerticalScrollState
 import app.smallthingz.reverb.nativeui.NativeVerticalScrollSource
 import app.smallthingz.reverb.nativeui.NativeVerticalNestedHost

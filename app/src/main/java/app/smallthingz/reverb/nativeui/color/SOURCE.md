@@ -17,3 +17,5 @@ SHA-256: `3e3209422a382566a780e2c1410edd866e4474498098fdbcf942c690ade1ddaa`
 Copyright 2021, 2024 The Android Open Source Project. Licensed under Apache License 2.0; see `LICENSE.txt` and the retained file headers. Reverb-specific mapping/adaptation remains in `ReverbPalette.kt`.
 
 This is a static ARGB palette, not an animation implementation. Compose color animations interpolate in Oklab and require a separately qualified native adapter; Android's ARGB evaluator is not equivalent.
+
+CAM16/HCT implementation ownership has moved to native-ui/src/main/kotlin/smallthingz/ui/graphics/hct/. Its SOURCE.md retains the complete provenance and subset history. ReverbPalette resource mappings, fallback roles, alpha conversion and animation policy remain app-owned.

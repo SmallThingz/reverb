@@ -1,5 +1,6 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.text.view.ParagraphView
 import android.content.Context
 import android.app.Application
 import android.content.res.Configuration
@@ -7,7 +8,6 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.os.LocaleList
 import android.view.View
-import app.smallthingz.reverb.nativeui.ReverbParagraphView
 import java.util.Locale
 import app.smallthingz.reverb.nativeui.ReverbParagraphStyles
 import app.smallthingz.reverb.nativeui.ReverbTextRole
@@ -196,7 +196,7 @@ private fun appendUnresolvedSemanticsCases(
                         val width = (case.widthDp * nativeDensity.density).toInt()
                         val style = ReverbParagraphStyles[role]
                         check(style.layoutDirection == null)
-                        val view = ReverbParagraphView(configured, style, nativeDensity, nativeFonts,
+                        val view = ParagraphView(configured, style, nativeDensity, nativeFonts,
                             android.graphics.Color.BLACK).apply {
                             layoutDirection = if (rtl) View.LAYOUT_DIRECTION_RTL else View.LAYOUT_DIRECTION_LTR
                             setText(case.text)

@@ -19,7 +19,7 @@ package app.smallthingz.reverb.nativeui
 import android.content.Context
 import android.os.Build
 import androidx.annotation.RequiresApi
-import app.smallthingz.reverb.nativeui.color.Cam
+import smallthingz.ui.graphics.hct.Cam16Color
 
 /**
  * Resolved sRGB roles for the released Material3 1.4.0 palette, without Compose types.
@@ -312,8 +312,8 @@ private fun dynamic34(darkTheme: Boolean, readColor: (Int) -> Int): ReverbPalett
 @RequiresApi(31)
 private fun dynamic31(darkTheme: Boolean, readColor: (Int) -> Int): ReverbPalette {
     // Material3 1.4.0 uses neutral2 (chroma 8), not neutral1, on Android 12/13.
-    val neutralBase = Cam.fromInt(readColor(android.R.color.system_neutral2_600))
-    fun neutralTone(tone: Float): Int = Cam.getInt(neutralBase.hue, neutralBase.chroma, tone)
+    val neutralBase = Cam16Color.fromArgb(readColor(android.R.color.system_neutral2_600))
+    fun neutralTone(tone: Float): Int = Cam16Color.toneToArgb(neutralBase.hue, neutralBase.chroma, tone)
     val neutralSurface = neutralTone(if (darkTheme) 6f else 98f)
     return if (darkTheme) ReverbPalette.fallback(true).copy(
         primary = readColor(android.R.color.system_accent1_200),

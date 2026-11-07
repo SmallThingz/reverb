@@ -1,5 +1,9 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
+import smallthingz.ui.text.view.NativeTextSemanticsClip
+import smallthingz.ui.text.view.NativeTextSemanticsClipPolicy
+import smallthingz.ui.text.view.ParagraphView
 import android.app.Application
 import android.app.Instrumentation
 import android.content.res.Configuration
@@ -67,13 +71,9 @@ import app.smallthingz.reverb.nativeui.ReverbHomeScreenView
 import app.smallthingz.reverb.nativeui.ReverbPalette
 import app.smallthingz.reverb.nativeui.ReverbViewEnvironment
 import app.smallthingz.reverb.nativeui.HomeBufferSegment
-import app.smallthingz.reverb.nativeui.NativeMergedRowAccessibilityHost
-import app.smallthingz.reverb.nativeui.NativeTextSemanticsClip
-import app.smallthingz.reverb.nativeui.NativeTextSemanticsClipPolicy
 import app.smallthingz.reverb.nativeui.NativeWindowTextAccessibilityOwner
 import app.smallthingz.reverb.nativeui.ReverbGroupLayout
 import app.smallthingz.reverb.nativeui.ReverbHomeControlSurface
-import app.smallthingz.reverb.nativeui.ReverbParagraphView
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -875,7 +875,7 @@ internal fun verifyNativeHomeAccessibilityParity(instrumentation: Instrumentatio
                                     "Direct native node disagrees with actual platform tree for $label"
                                 }
                                 val children = ArrayList<View>().also(target::addChildrenForAccessibility)
-                                check(children.size == 2 && children[0] is ReverbParagraphView)
+                                check(children.size == 2 && children[0] is ParagraphView)
                                 val bounds = expected.getJSONArray("bounds")
                                 check(bounds.getInt(3) - bounds.getInt(1) >= kotlin.math.floor(current.dp(48f)).toInt()) {
                                     "Tab semantic target lost its released48dp minimum"
@@ -973,7 +973,7 @@ private fun homeViewDescendants(root: View): List<View> = buildList {
 
 private fun homeNativeTab(root: View, label: String): HomeBufferSegment =
     homeViewDescendants(root).filterIsInstance<HomeBufferSegment>().single { tab ->
-        homeViewDescendants(tab).filterIsInstance<ReverbParagraphView>().any { it.getText() == label }
+        homeViewDescendants(tab).filterIsInstance<ParagraphView>().any { it.getText() == label }
     }
 
 private fun clickHomeTabNode(root: View, reference: Boolean, label: String): Boolean {

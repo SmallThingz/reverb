@@ -10,7 +10,7 @@ import org.json.JSONObject
 
 /** Public QA connection: never suppress the user's enabled accessibility services. */
 internal fun nativeParityUiAutomation(instrumentation: Instrumentation): UiAutomation {
-    check(instrumentation.targetContext.packageName == "app.smallthingz.reverb.nativeparity.reliability")
+    check(instrumentation.targetContext.packageName in setOf("app.smallthingz.reverb.nativeparity.reliability", "app.smallthingz.reverb.uitheme.reliability"))
     check(instrumentation.targetContext.applicationContext.javaClass == android.app.Application::class.java)
     return checkNotNull(instrumentation.getUiAutomation(UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES))
 }
@@ -65,7 +65,7 @@ internal class NativeParityInteractiveWindows private constructor(
 
     companion object {
         fun open(instrumentation: Instrumentation, result: JSONObject): NativeParityInteractiveWindows {
-            check(instrumentation.targetContext.packageName == "app.smallthingz.reverb.nativeparity.reliability")
+            check(instrumentation.targetContext.packageName in setOf("app.smallthingz.reverb.nativeparity.reliability", "app.smallthingz.reverb.uitheme.reliability"))
             check(instrumentation.targetContext.applicationContext.javaClass == android.app.Application::class.java)
             val evidence = JSONObject().put("expected_display_id", 0).put("restored", false)
                 .put("connection_flags", UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES)

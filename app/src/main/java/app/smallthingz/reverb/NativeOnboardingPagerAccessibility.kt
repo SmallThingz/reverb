@@ -6,6 +6,8 @@
  */
 package app.smallthingz.reverb
 
+import smallthingz.ui.text.view.NativePlainTextViewGeometry
+import smallthingz.ui.text.view.nativeMergedRoleBoundsInScreen
 import android.graphics.Rect
 import android.os.Build
 import android.os.Bundle
@@ -14,8 +16,6 @@ import android.view.ViewGroup
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.annotation.MainThread
-import app.smallthingz.reverb.nativeui.NativePlainTextViewGeometry
-import app.smallthingz.reverb.nativeui.nativeMergedRoleBoundsInScreen
 import smallthingz.ui.geometry.Offset
 import smallthingz.ui.geometry.Rect as ComposeRect
 import kotlinx.coroutines.CoroutineScope

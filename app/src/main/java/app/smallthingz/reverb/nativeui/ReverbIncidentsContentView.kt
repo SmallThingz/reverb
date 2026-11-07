@@ -1,5 +1,8 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.text.view.NativeSourceAccessibilityNode
+import smallthingz.ui.text.view.NativeTextSemanticsClip
+import smallthingz.ui.text.view.ParagraphView
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -553,4 +556,4 @@ private class IncidentsAdapter(
 }
 
 private fun paragraph(context: Context, appearance: IncidentCardAppearance, style: TextStyle, color: Int) =
-    ReverbParagraphView(context, style, appearance.density, appearance.fontResolver, color)
+    ParagraphView(context, style, appearance.density, appearance.fontResolver, color)

@@ -1,5 +1,16 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.interaction.view.NativeClickBinding
+import smallthingz.ui.interaction.view.NativeClickEnvironment
+import smallthingz.ui.interaction.view.RowIndication
+import smallthingz.ui.interaction.view.RowIndicationSink
+import smallthingz.ui.interaction.view.ViewClickController
+import smallthingz.ui.interaction.view.readCachedAnimatorDurationScale
+import smallthingz.ui.text.view.MergedRowAccessibility
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityState
+import smallthingz.ui.text.view.NativeMergedRowRole
+import smallthingz.ui.text.view.ParagraphView
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Outline
@@ -86,11 +97,11 @@ internal class ReverbIncidentCardView(
     private val body = IncidentBody(context, initialAppearance,
         onPrimaryAction = { performPrimaryAction(); true },
         onOpenMenu = { openMenu(); true })
-    private val bodyIndication = ReverbRowIndication.install(this, initialAppearance.palette.ink) {
-        reverbAnimatorDurationScale(context)
+    private val bodyIndication = RowIndication.install(this, initialAppearance.palette.ink) {
+        readCachedAnimatorDurationScale(context)
     }
-    private val checkIndication = ReverbRowIndication.install(body.checkTarget, initialAppearance.palette.ink) {
-        reverbAnimatorDurationScale(context)
+    private val checkIndication = RowIndication.install(body.checkTarget, initialAppearance.palette.ink) {
+        readCachedAnimatorDurationScale(context)
     }
     /** Current scroll recognizer interest, supplied by the containing list for this down. */
     var parentInterestedInDown: (MotionEvent) -> Boolean = { false }
@@ -239,8 +250,8 @@ internal class ReverbIncidentCardView(
         checkInput.focusChanged(body.checkTarget.isFocused)
     }
 
-    private fun createInput(target: View, drawHost: View, indication: ReverbRowIndication,
-        checkbox: Boolean): ReverbClickController {
+    private fun createInput(target: View, drawHost: View, indication: RowIndication,
+        checkbox: Boolean): ViewClickController {
         val environment = object : NativeClickEnvironment {
             override val nativeInputRoot get() = pointerInputRoot
             override val minimumTouchWidthPx get() = 48f * appearance.density.density
@@ -256,7 +267,7 @@ internal class ReverbIncidentCardView(
                 target.parent?.requestDisallowInterceptTouchEvent(owns)
             }
         }
-        return ReverbClickController(target, environment, ReverbRowIndicationSink(indication) { x, y, out ->
+        return ViewClickController(target, environment, RowIndicationSink(indication) { x, y, out ->
             // Body, group content and surface have no local transforms; item animation transforms
             // the shared outer card. Preserve the original hotspot through their layout offsets.
             var px = x
@@ -320,7 +331,7 @@ private class IncidentBody(
 ) : ViewGroup(context), NativeClickPhaseHost, NativeMergedRowAccessibilityHost {
     private var endpoint: NativeClickPhaseEndpoint? = null
     override val nativeClickEndpoint get() = checkNotNull(endpoint)
-    var input: ReverbClickController? = null
+    var input: ViewClickController? = null
         set(value) { field = value; endpoint = value?.let(::ReverbClickPhaseEndpoint) }
     private var appearance = initial
     private var clickLabel: String? = null
@@ -334,7 +345,7 @@ private class IncidentBody(
     val checkTarget = IncidentCheckTarget(context, initial.density.density, onPrimaryAction, onOpenMenu)
     private val details = arrayOf<View>(divider, cause, runtime, age, description)
     private val accessibilityChildren = arrayOf<View>(date, summary, checkTarget, cause, runtime, age, description)
-    override val mergedRowAccessibility = ReverbMergedRowAccessibility(this, NativeMergedRowRole.BUTTON, {
+    override val mergedRowAccessibility = MergedRowAccessibility(this, NativeMergedRowRole.BUTTON, {
         val visible = ArrayList<View>(accessibilityChildren.size)
         for (child in accessibilityChildren) if (child.visibility == VISIBLE) visible.add(child)
         NativeMergedRowAccessibilityState(true, null, clickLabel, visible,
@@ -353,7 +364,7 @@ private class IncidentBody(
         clear()
     }
 
-    private fun label(style: TextStyle) = ReverbParagraphView(context, style, appearance.density,
+    private fun label(style: TextStyle) = ParagraphView(context, style, appearance.density,
         appearance.fontResolver, appearance.palette.ink).apply {
         // Source keeps the original unmerged Text children under its role-less merging card.
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
@@ -502,7 +513,7 @@ private class IncidentCheckTarget(
 ) : ViewGroup(context), NativeClickPhaseHost, NativePointerLayerShape, NativeMergedRowAccessibilityHost {
     private var endpoint: NativeClickPhaseEndpoint? = null
     override val nativeClickEndpoint get() = checkNotNull(endpoint)
-    var input: ReverbClickController? = null
+    var input: ViewClickController? = null
         set(value) { field = value; endpoint = value?.let(::ReverbClickPhaseEndpoint) }
     var geometryChanged: () -> Unit = {}
     private var density = initialDensity
@@ -511,7 +522,7 @@ private class IncidentCheckTarget(
     private val glyph = OnboardingIconView(context, ReverbIcon.Unchecked, tint)
     private var clickLabel: String? = null
     private var hitGeometry = reverbGroupGeometry(0f, 0f, density, cornerRadiusDp = 23f)
-    override val mergedRowAccessibility = ReverbMergedRowAccessibility(this, NativeMergedRowRole.BUTTON, {
+    override val mergedRowAccessibility = MergedRowAccessibility(this, NativeMergedRowRole.BUTTON, {
         NativeMergedRowAccessibilityState(true, null, clickLabel,
             if (glyph.contentDescription != null) listOf(glyph) else emptyList(),
             longClickable = true, rolePresent = false)

@@ -1,5 +1,6 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.interaction.view.NativeClickEnvironment
 import android.content.Context
 import android.graphics.RectF
 import android.view.MotionEvent

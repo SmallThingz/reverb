@@ -1,5 +1,17 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.interaction.view.NativeClickBinding
+import smallthingz.ui.interaction.view.NativeClickEnvironment
+import smallthingz.ui.interaction.view.NativeClickIndication
+import smallthingz.ui.interaction.view.NativePressToken
+import smallthingz.ui.interaction.view.NativeStateToken
+import smallthingz.ui.interaction.view.ViewClickController
+import smallthingz.ui.text.view.MergedRowAccessibility
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityState
+import smallthingz.ui.text.view.NativeMergedRowRole
+import smallthingz.ui.text.view.NativePlainTextViewGeometry
+import smallthingz.ui.text.view.PlainTextAccessibilityWindowScope
 import smallthingz.ui.animation.view.ViewColorTransition
 
 import android.content.Context
@@ -285,7 +297,7 @@ internal class ReverbSpringFineSeekView(
         val glyph = OnboardingIconView(context, ReverbIcon.Play, palette.surface)
         private val surfaceBounds = RectF()
         private val surfacePaint = Paint(PAINT_FLAGS)
-        val controller = ReverbClickController(this, object : NativeClickEnvironment {
+        val controller = ViewClickController(this, object : NativeClickEnvironment {
             override val nativeInputRoot get() = environment.inputRoot
             override fun admitDown(event: MotionEvent) =
                 event.x >= 0f && event.y >= 0f && event.x <= width && event.y <= height
@@ -296,7 +308,7 @@ internal class ReverbSpringFineSeekView(
         }, NO_INDICATION)
         override val mergedRowAccessibility = run {
             val children = listOf(glyph)
-            ReverbMergedRowAccessibility(
+            MergedRowAccessibility(
                 this, NativeMergedRowRole.BUTTON,
                 sourceState = { NativeMergedRowAccessibilityState(binding?.enabled == true, null, null, children) },
                 invokeSourceClick = {

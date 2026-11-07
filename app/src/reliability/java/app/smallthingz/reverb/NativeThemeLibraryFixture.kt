@@ -1,5 +1,7 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.interaction.view.readCachedAnimatorDurationScale
+import smallthingz.ui.text.view.ParagraphView
 import android.content.Context
 import android.view.View
 import android.view.ViewGroup
@@ -74,7 +76,7 @@ internal class NativeThemeLibraryFixture(
         pending.forEach { presentation ->
             check(descendants(presentation.row).none { it.isClickable || it.isLongClickable })
         }
-        check(descendants(completed).filterIsInstance<ReverbParagraphView>().all { paragraph ->
+        check(descendants(completed).filterIsInstance<ParagraphView>().all { paragraph ->
             var ancestor: View? = paragraph
             var opacity = 1f
             while (ancestor != null && ancestor !== view) {
@@ -89,7 +91,7 @@ internal class NativeThemeLibraryFixture(
             val spinner = descendants(row).filterIsInstance<ReverbIncidentLoadingView>().single()
             val jobField = ReverbIncidentLoadingView::class.java.getDeclaredField("frameJob").apply { isAccessible = true }
             fun running() = (jobField.get(spinner) as? Job)?.isActive == true
-            val motionEnabled = reverbAnimatorDurationScale(view.context) != 0f
+            val motionEnabled = readCachedAnimatorDurationScale(view.context) != 0f
             check(running() == motionEnabled)
             presentation.setPresentationActive(false)
             check(!running())

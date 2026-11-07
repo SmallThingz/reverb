@@ -1,5 +1,6 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.text.view.ParagraphView
 import android.app.Application
 import android.app.Instrumentation
 import android.graphics.Rect
@@ -206,7 +207,7 @@ internal fun verifyNativeSettingsCalibrationCurrent(
                 val row = button.parent as View
                 val body = row.parent as View
                 check(row.bottom == body.height) { "Calibration retains a footer at $label" }
-                check(calibrationCurrentViews(body).filterIsInstance<ReverbParagraphView>().none {
+                check(calibrationCurrentViews(body).filterIsInstance<ParagraphView>().none {
                     it.visibility == View.VISIBLE && it.top >= row.bottom && it.parent === body
                 }) { "Nonerror status text remains below calibration at $label" }
                 cases.put(JSONObject().put("case", label).put("height", silence.height).put("passed", true))
@@ -225,7 +226,7 @@ internal fun verifyNativeSettingsCalibrationCurrent(
                 main {
                     check(state.calibrating && !state.holdingCalibration && taps == 1 && cancels == 0 && directStarts == 0)
                     check(calibrationCurrentViews(silence).filterIsInstance<SettingsCalibrationActionView>().count() == 1)
-                    check(calibrationCurrentViews(button).filterIsInstance<ReverbParagraphView>()
+                    check(calibrationCurrentViews(button).filterIsInstance<ParagraphView>()
                         .any { it.getText() == host.getString(R.string.cancel) })
                     cases.put(JSONObject().put("case", "start_up_preserves_timed_sample_same_button_cancel_label").put("passed", true))
                     // Losing new-sample admission must not disable Cancel for the accepted sample.
@@ -238,7 +239,7 @@ internal fun verifyNativeSettingsCalibrationCurrent(
                     check(state.calibrating && begins == 1 && cancels == 0)
                     motion(MotionEvent.ACTION_UP, cancelDown, initial.second.exactCenterX(), initial.second.exactCenterY(), cancelDown + 80)
                     check(!state.calibrating && cancels == 1 && begins == 1 && taps == 1 && directStarts == 0)
-                    check(calibrationCurrentViews(button).filterIsInstance<ReverbParagraphView>()
+                    check(calibrationCurrentViews(button).filterIsInstance<ParagraphView>()
                         .any { it.getText() == host.getString(R.string.silence_calibrate) })
                     cases.put(JSONObject().put("case", "later_same_button_cancel_once_without_restarting").put("passed", true))
                     update(state.copy(calibrationAllowed = true))
@@ -256,7 +257,7 @@ internal fun verifyNativeSettingsCalibrationCurrent(
             settle()
             main {
                 check(bounds(button)==expectedButton) { "Calibration button moved at $label" }
-                val text=calibrationCurrentViews(silence).filterIsInstance<ReverbParagraphView>()
+                val text=calibrationCurrentViews(silence).filterIsInstance<ParagraphView>()
                     .single {it.visibility==View.VISIBLE&&it.getText()==longError}
                 check(text.width>0 && text.intrinsicTextHeight(text.width)<=text.height) {
                     "Full actionable explanation was clipped at $label"

@@ -1,5 +1,7 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.text.view.NativeTextSemanticsClip
+import smallthingz.ui.text.view.NativeTextSemanticsClipPolicy
 import android.animation.ValueAnimator
 import android.app.Application
 import android.app.Instrumentation

@@ -11,6 +11,9 @@
  */
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.input.NativeEditableState
+import smallthingz.ui.components.input.NativeQueuedInputConnection
+
 import smallthingz.ui.animation.view.ViewColorTransition
 
 import android.content.Context
@@ -26,7 +29,6 @@ import android.text.InputType
 import android.text.Layout
 import android.text.Selection
 import android.text.Spanned
-import android.text.TextUtils
 import android.text.TextWatcher
 import android.text.method.TextKeyListener
 import android.text.style.LineHeightSpan
@@ -34,33 +36,13 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
-import android.view.inputmethod.CompletionInfo
-import android.view.inputmethod.CorrectionInfo
-import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
-import android.view.inputmethod.InputConnectionWrapper
 import android.view.inputmethod.InputMethodManager
-import android.view.inputmethod.TextAttribute
 import android.widget.EditText
-import androidx.annotation.RequiresApi
 import smallthingz.ui.graphics.Color
 import smallthingz.ui.text.Paragraph
 import smallthingz.ui.text.TextStyle
-import smallthingz.ui.text.TextRange
-import smallthingz.ui.text.input.CommitTextCommand
-import smallthingz.ui.text.input.DeleteSurroundingTextCommand
-import smallthingz.ui.text.input.DeleteSurroundingTextInCodePointsCommand
-import smallthingz.ui.text.input.EditCommand
-import smallthingz.ui.text.input.EditProcessor
-import smallthingz.ui.text.input.FinishComposingTextCommand
-import smallthingz.ui.text.input.SetComposingRegionCommand
-import smallthingz.ui.text.input.SetComposingTextCommand
-import smallthingz.ui.text.input.SetSelectionCommand
-import smallthingz.ui.text.input.TextFieldValue
-import smallthingz.ui.text.input.getSelectedText
-import smallthingz.ui.text.input.getTextAfterSelection
-import smallthingz.ui.text.input.getTextBeforeSelection
 import smallthingz.ui.text.font.FontStyle
 import smallthingz.ui.text.font.FontSynthesis
 import smallthingz.ui.text.font.FontWeight
@@ -112,25 +94,14 @@ internal class SettingsRetentionInputView private constructor(
     private val cursorDrawable = legacyCursor?.cursor ?: NativeEditableCursorDrawable(
         2f * initialEnvironment.textDensity.density, initialEnvironment.palette.primary)
     private var initialized = false
-    private var applyingOwner = false
-    private var previousOwnerText: String? = null
-    private var lastCallbackText: String? = null
     private var mode = RetentionMode.TIME
-    private var readCurrentRaw: (() -> String)? = null
-    private var onRawChanged: ((String) -> Unit)? = null
     private var focusKey: Boolean? = null
     private var focusPending = false
     private var appliedTypeface: Typeface? = null
     private var appliedEnvironment: ReverbViewEnvironment? = null
     private var minimumParagraph: Paragraph? = null
     private var lineHeightSpan: RetentionLineHeightSpan? = null
-    private var nativeEditDepth = 0
-    private var nativeEditPending = false
-    private val editProcessor = EditProcessor()
-    // Public composing-span manipulation on the same Editable; never a registered IME session.
-    private val composingSpans = object : BaseInputConnection(this, true) {
-        override fun getEditable(): Editable = checkNotNull(this@SettingsRetentionInputView.editableText)
-    }
+    private val editing = NativeEditableState(this, ::installLineHeightSpan)
 
     private val focusRequest = Runnable {
         if (!focusPending) return@Runnable
@@ -202,9 +173,7 @@ internal class SettingsRetentionInputView private constructor(
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
             override fun afterTextChanged(value: Editable?) {
-                if (applyingOwner || !initialized) return
-                nativeEditPending = true
-                if (nativeEditDepth == 0) publishNativeRaw()
+                if (initialized) editing.afterTextChanged()
             }
         })
     }
@@ -218,15 +187,14 @@ internal class SettingsRetentionInputView private constructor(
         readCurrentRaw: () -> String,
         onRawChanged: (String) -> Unit,
     ) {
-        this.readCurrentRaw = readCurrentRaw
-        this.onRawChanged = onRawChanged
+        editing.bindCallbacks(readCurrentRaw, onRawChanged)
         this.environment = environment
         contentDescription = bufferLabel
         val modeChanged = this.mode != mode
         this.mode = mode
         applyTypography()
         applyImeHints()
-        acceptOwnerText(rawString)
+        editing.acceptOwnerText(rawString)
         if (modeChanged && isFocused) {
             context.getSystemService(InputMethodManager::class.java).restartInput(this)
         }
@@ -243,8 +211,7 @@ internal class SettingsRetentionInputView private constructor(
     fun releaseCallbacks() {
         removeCallbacks(focusRequest)
         focusPending = false
-        readCurrentRaw = null
-        onRawChanged = null
+        editing.releaseCallbacks()
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -266,27 +233,6 @@ internal class SettingsRetentionInputView private constructor(
         super.scrollTo(x, 0)
     }
 
-    private fun acceptOwnerText(raw: String) {
-        if (raw != previousOwnerText) {
-            previousOwnerText = raw
-            lastCallbackText = raw // remember(value), not every rejected onValueChange callback.
-        }
-        if (TextUtils.equals(text, raw)) return
-        val start = selectionStart.coerceAtLeast(0).coerceAtMost(raw.length)
-        val end = selectionEnd.coerceAtLeast(0).coerceAtMost(raw.length)
-        applyingOwner = true
-        try {
-            // Source EditProcessor.reset commits composition on an external string replacement.
-            val value = checkNotNull(editableText)
-            BaseInputConnection.removeComposingSpans(value)
-            value.replace(0, length(), raw)
-            Selection.setSelection(value, start, end)
-            installLineHeightSpan()
-        } finally {
-            applyingOwner = false
-        }
-    }
-
     private fun applyImeHints() {
         val hints = retentionImeContract(mode)
         // Keep the unrestricted key listener installed above; never use setInputType here.
@@ -305,191 +251,21 @@ internal class SettingsRetentionInputView private constructor(
         EditorInfoCompat.setInitialSurroundingText(outAttrs, text.toString())
         // KeyboardOptions defaults autoCorrect to true for both modes. Decimal only omits the
         // TYPE_TEXT_FLAG_AUTO_CORRECT bit; source commitCorrection still returns this option.
-        return RetentionInputConnection(connection, autoCorrect = true)
+        return NativeQueuedInputConnection(connection, editing, autoCorrect = true) { action ->
+            // Native IME_NULL must not synthesize another Enter; other source defaults do nothing.
+            when (action) {
+                EditorInfo.IME_ACTION_DONE, EditorInfo.IME_ACTION_NEXT, EditorInfo.IME_ACTION_PREVIOUS ->
+                    onEditorAction(action)
+            }
+        }
     }
 
     override fun onTextContextMenuItem(id: Int): Boolean =
         // RecordingInputConnection/BasicTextField(String) preserves raw characters, not rich spans.
-        nativeEdit { super.onTextContextMenuItem(if (id == android.R.id.paste) android.R.id.pasteAsPlainText else id) }
+        editing.nativeEdit { super.onTextContextMenuItem(if (id == android.R.id.paste) android.R.id.pasteAsPlainText else id) }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean =
-        nativeEdit { super.onKeyDown(keyCode, event) }
-
-    private inline fun <T> nativeEdit(block: () -> T): T {
-        nativeEditDepth++
-        try { return block() }
-        finally {
-            nativeEditDepth--
-            if (nativeEditDepth == 0 && nativeEditPending) publishNativeRaw()
-        }
-    }
-
-    private fun publishNativeRaw() {
-        nativeEditPending = false
-        val proposed = text.toString()
-        val changed = proposed != lastCallbackText
-        lastCallbackText = proposed
-        if (changed) onRawChanged?.invoke(proposed)
-        // Restore rejected drafts only after the complete command/key/paste updated selection.
-        readCurrentRaw?.invoke()?.let(::acceptOwnerText)
-        installLineHeightSpan()
-    }
-
-    private fun currentFieldValue(): TextFieldValue {
-        val value = checkNotNull(editableText)
-        val start = BaseInputConnection.getComposingSpanStart(value)
-        val end = BaseInputConnection.getComposingSpanEnd(value)
-        return TextFieldValue(value.toString(),
-            TextRange(selectionStart.coerceAtLeast(0), selectionEnd.coerceAtLeast(0)),
-            if (start >= 0 && end >= 0 && start != end) TextRange(start, end) else null)
-    }
-
-    private fun applyFieldValue(value: TextFieldValue) {
-        applyingOwner = true
-        try {
-            val target = checkNotNull(editableText)
-            if (!TextUtils.equals(target, value.text)) target.replace(0, target.length, value.text)
-            BaseInputConnection.removeComposingSpans(target)
-            value.composition?.let { composingSpans.setComposingRegion(it.min, it.max) }
-            Selection.setSelection(target, value.selection.start, value.selection.end)
-            installLineHeightSpan()
-        } finally { applyingOwner = false }
-    }
-
-    /**
-     * Pinned foundation RecordingInputConnection158–204 queues EditCommands, rather than exposing
-     * partially applied native Editable changes during an IME batch. Reuse the same public low-level
-     * EditProcessor as released CoreTextField. No Composition or second rendering/state tree exists.
-     */
-    private inner class RetentionInputConnection(
-        private val target: InputConnection,
-        private val autoCorrect: Boolean,
-    ) : InputConnectionWrapper(target, false) {
-        private var active = true
-        private var depth = 0
-        private val commands = ArrayList<EditCommand>()
-        private val actions = NativeEditableConnectionActions(
-            active = { active },
-            currentTextLength = { checkNotNull(editableText).length },
-            queueSelectAll = { command(SetSelectionCommand(0, it)) },
-            sendKey = { action, code -> sendKeyEvent(KeyEvent(action, code)) },
-            onEditorAction = { action ->
-                // Released KeyboardActionRunner handles Done/Next/Previous; its other defaults
-                // do nothing. In particular, native IME_NULL must not synthesize another Enter.
-                when (action) {
-                    EditorInfo.IME_ACTION_DONE,
-                    EditorInfo.IME_ACTION_NEXT,
-                    EditorInfo.IME_ACTION_PREVIOUS ->
-                        this@SettingsRetentionInputView.onEditorAction(action)
-                }
-            },
-        )
-
-        override fun beginBatchEdit(): Boolean {
-            if (!active) return false
-            depth++
-            return true
-        }
-
-        override fun endBatchEdit(): Boolean {
-            depth--
-            if (depth == 0 && commands.isNotEmpty()) {
-                editProcessor.reset(currentFieldValue(), null)
-                val value = editProcessor.apply(commands.toList())
-                target.beginBatchEdit()
-                try {
-                    applyFieldValue(value)
-                    publishNativeRaw()
-                } finally { target.endBatchEdit() }
-                commands.clear()
-            }
-            return depth > 0
-        }
-
-        private fun command(value: EditCommand): Boolean {
-            if (!active) return false
-            depth++
-            try { commands.add(value) }
-            finally { endBatchEdit() }
-            return true
-        }
-
-        override fun commitText(text: CharSequence?, newCursorPosition: Int) =
-            command(CommitTextCommand(text.toString(), newCursorPosition))
-        override fun setComposingText(text: CharSequence?, newCursorPosition: Int) =
-            command(SetComposingTextCommand(text.toString(), newCursorPosition))
-        override fun setComposingRegion(start: Int, end: Int) = command(SetComposingRegionCommand(start, end))
-        override fun setSelection(start: Int, end: Int) = command(SetSelectionCommand(start, end))
-        override fun finishComposingText() = command(FinishComposingTextCommand())
-        override fun deleteSurroundingText(beforeLength: Int, afterLength: Int) =
-            command(DeleteSurroundingTextCommand(beforeLength, afterLength))
-        override fun deleteSurroundingTextInCodePoints(beforeLength: Int, afterLength: Int) =
-            command(DeleteSurroundingTextInCodePointsCommand(beforeLength, afterLength))
-
-        // InputConnectionWrapper otherwise forwards these overloads directly to Native Editor,
-        // bypassing our command queue. Source RecordingIC inherits the interface's forwarding.
-        @RequiresApi(33)
-        override fun commitText(text: CharSequence, newCursorPosition: Int, textAttribute: TextAttribute?) =
-            commitText(text, newCursorPosition)
-        @RequiresApi(33)
-        override fun setComposingText(text: CharSequence, newCursorPosition: Int, textAttribute: TextAttribute?) =
-            setComposingText(text, newCursorPosition)
-        @RequiresApi(33)
-        override fun setComposingRegion(start: Int, end: Int, textAttribute: TextAttribute?) =
-            setComposingRegion(start, end)
-        @RequiresApi(34)
-        override fun replaceText(start: Int, end: Int, text: CharSequence,
-                                 newCursorPosition: Int, textAttribute: TextAttribute?): Boolean {
-            // Exact Android InputConnection default; these are API argument checks, not draft filters.
-            require(start >= 0 && end >= 0)
-            beginBatchEdit()
-            finishComposingText()
-            setSelection(start, end)
-            commitText(text, newCursorPosition, textAttribute)
-            endBatchEdit()
-            return true
-        }
-
-        override fun getTextBeforeCursor(n: Int, flags: Int): CharSequence =
-            currentFieldValue().getTextBeforeSelection(n).toString()
-        override fun getTextAfterCursor(n: Int, flags: Int): CharSequence =
-            currentFieldValue().getTextAfterSelection(n).toString()
-        override fun getSelectedText(flags: Int): CharSequence? = currentFieldValue().let {
-            if (it.selection.collapsed) null else it.getSelectedText().toString()
-        }
-        override fun commitCompletion(text: CompletionInfo?): Boolean = false
-        override fun commitCorrection(correctionInfo: CorrectionInfo?): Boolean = active && autoCorrect
-        override fun performContextMenuAction(id: Int): Boolean = actions.performContextMenuAction(id)
-        override fun performEditorAction(actionCode: Int): Boolean = actions.performEditorAction(actionCode)
-        override fun sendKeyEvent(event: KeyEvent): Boolean =
-            actions.sendKeyEvent { target.sendKeyEvent(event) }
-        override fun performPrivateCommand(action: String?, data: Bundle?): Boolean =
-            actions.performPrivateCommand()
-        override fun clearMetaKeyStates(states: Int): Boolean = false
-        override fun requestCursorUpdates(cursorUpdateMode: Int): Boolean =
-            active && target.requestCursorUpdates(cursorUpdateMode)
-        @RequiresApi(33)
-        override fun requestCursorUpdates(cursorUpdateMode: Int, cursorUpdateFilter: Int): Boolean =
-            active && target.requestCursorUpdates(cursorUpdateMode, cursorUpdateFilter)
-
-        override fun closeConnection() {
-            if (!active) return
-            active = false
-            commands.clear() // Source discards an unfinished batch without applying it.
-            depth = 0
-            val preserved = currentFieldValue()
-            var primary: Throwable? = null
-            try { target.closeConnection() }
-            catch (error: Throwable) { primary = error; throw error }
-            finally {
-                // Native Editor may clear composing spans on close; source RecordingIC does not.
-                try { applyFieldValue(preserved) }
-                catch (error: Throwable) {
-                    if (primary == null) throw error else primary.addSuppressed(error)
-                }
-            }
-        }
-    }
+        editing.nativeEdit { super.onKeyDown(keyCode, event) }
 
     private fun currentStyle(): TextStyle = ReverbParagraphStyles[ReverbTextRole.BODY_LARGE].copy(
         color = Color(environment.palette.ink),

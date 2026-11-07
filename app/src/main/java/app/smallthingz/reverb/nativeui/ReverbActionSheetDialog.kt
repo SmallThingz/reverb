@@ -48,6 +48,8 @@ import app.smallthingz.reverb.NativeViewPhasePointerNode
 import app.smallthingz.reverb.NativeViewPointerHitLayout
 import app.smallthingz.reverb.NativeWindowPointerCoordinates
 import app.smallthingz.reverb.NativeWindowScrollAccessibilityEvents
+import app.smallthingz.reverb.NativeVerticalPhaseBinding
+import app.smallthingz.reverb.NativeVerticalScrollAccessibilityBinding
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
@@ -99,6 +101,8 @@ internal class ReverbActionSheetDialog(
         root,environment,runtime,nested,pointer,dragNode::interested,accessibility,scrollEvents,
     )
     private val insets=NativeWindowInsetsBinding(root) {root.insets(it)}
+    private var contentScroll:NativeVerticalPhaseBinding?=null
+    private var contentScrollAccessibility:AutoCloseable?=null
     private val lifecycleObserver=LifecycleEventObserver {_,event->
         when(event) {
             Lifecycle.Event.ON_START->runtime.setStarted(true)
@@ -164,8 +168,25 @@ internal class ReverbActionSheetDialog(
         }
     }
 
-    fun setContent(body:View,actions:View,hitLayouts:List<NativeViewPointerHitLayout>) {
+    fun setContent(body:View,actions:View,hitLayouts:List<NativeViewPointerHitLayout>,scrollable:Boolean=false) {
         appContent.setContent(body,actions)
+        if(scrollable && contentScroll==null) {
+            val viewport=NativeVerticalViewport(context,NativeVerticalScrollState(),environment.textDensity,
+                runtime.frames,runtime.scope,nested)
+            val binding=NativeVerticalPhaseBinding(viewport,
+                {android.view.ViewConfiguration.get(context).scaledTouchSlop.toFloat()},
+                {android.view.ViewConfiguration.get(context).scaledMaximumFlingVelocity.toFloat()},dragNode::interested)
+            contentScroll=binding
+            surface.column.wrapContent(viewport)
+            viewport.sourceAccessibilityNode={accessibility.sourceNode(viewport)}
+            contentScrollAccessibility=NativeVerticalScrollAccessibilityBinding(viewport,scrollEvents) {
+                accessibility.sourceNode(viewport).present
+            }
+            pointer.wrapContentHits {children->
+                contentContext.hit(viewport,binding.nodes,children={children},minimumTouchTarget=Size.Zero,
+                    clip={it.x>=0f&&it.x<viewport.width&&it.y>=0f&&it.y<viewport.height})
+            }
+        }
         pointer.setContentHits(hitLayouts)
     }
     /** Callback and title updates never recreate bodies, accepted actions, draft fields or gestures. */
@@ -286,6 +307,8 @@ internal class ReverbActionSheetDialog(
         release {back.remove()}
         release {insets.close()}
         release {pointer.close()}
+        release {contentScroll?.close()}
+        release {contentScrollAccessibility?.close()}
         release {dragChannel.close()}
         release {accessibility.close()}
         release {scrollEvents.close()}
@@ -419,6 +442,7 @@ internal class SheetPointerOwner(private val density:Float):AutoCloseable {
     private var contentHits=emptyList<NativeViewPointerHitLayout>()
     private var fixedContentHits=emptyList<NativeViewPointerHitLayout>()
     private var combinedContentHits=emptyList<NativeViewPointerHitLayout>()
+    private var contentWrapper:((List<NativeViewPointerHitLayout>)->NativeViewPointerHitLayout)?=null
     val layout=object:NativeViewPointerHitLayout {
         override val placed get()=root?.isAttachedToWindow==true
         override val size get()=Size((root?.width?:0).toFloat(),(root?.height?:0).toFloat())
@@ -460,12 +484,21 @@ internal class SheetPointerOwner(private val density:Float):AutoCloseable {
         contentHits=value
         refreshContentHits()
     }
+    fun wrapContentHits(wrapper:(List<NativeViewPointerHitLayout>)->NativeViewPointerHitLayout) {
+        contentWrapper=wrapper
+        refreshContentHits()
+    }
     private fun refreshContentHits() {
-        combinedContentHits=if(contentHits.isEmpty())fixedContentHits else contentHits+fixedContentHits
+        val wrapper=contentWrapper
+        combinedContentHits=if(wrapper==null)contentHits+fixedContentHits else {
+            // Close scrolls with the app content; the drag handle remains outside the viewport.
+            listOf(wrapper(contentHits+fixedContentHits.take(1)))+fixedContentHits.drop(1)
+        }
     }
     override fun close() {
         root?.cancelPointerInput()
         sheets=emptyList();contentHits=emptyList();fixedContentHits=emptyList();combinedContentHits=emptyList();root=null
+        contentWrapper=null
     }
 }
 private fun sheetWindowExact(value:Int)=View.MeasureSpec.makeMeasureSpec(value,View.MeasureSpec.EXACTLY)

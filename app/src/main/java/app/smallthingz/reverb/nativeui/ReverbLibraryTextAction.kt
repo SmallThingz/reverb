@@ -1,5 +1,16 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.interaction.view.NativeClickBinding
+import smallthingz.ui.interaction.view.NativeClickEnvironment
+import smallthingz.ui.interaction.view.RowIndication
+import smallthingz.ui.interaction.view.RowIndicationSink
+import smallthingz.ui.interaction.view.ViewClickController
+import smallthingz.ui.interaction.view.readCachedAnimatorDurationScale
+import smallthingz.ui.text.view.MergedRowAccessibility
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityState
+import smallthingz.ui.text.view.NativeMergedRowRole
+import smallthingz.ui.text.view.ParagraphView
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Outline
@@ -23,7 +34,7 @@ import kotlin.math.roundToInt
 internal class ReverbLibraryTextAction(context: Context, environment: ReverbViewEnvironment, inputRoot: View) : ViewGroup(context) {
     private var density = environment.textDensity.density
     private val visual = LibraryTextActionSurface(context, environment, inputRoot)
-    val textView: ReverbParagraphView get() = visual.label
+    val textView: ParagraphView get() = visual.label
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         clipChildren = false
@@ -69,11 +80,11 @@ private class LibraryTextActionSurface(context: Context, private var environment
     ViewGroup(context), NativeClickPhaseHost, NativePointerLayerShape, NativeMergedRowAccessibilityHost {
     private val identity = Any()
     private var action: (() -> Unit)? = null
-    val label = ReverbParagraphView(context, reverbButtonTextStyle(), environment.textDensity,
+    val label = ParagraphView(context, reverbButtonTextStyle(), environment.textDensity,
         environment.sharedFontResolver, environment.palette.primary)
     private val path = Path()
-    private val indication = ReverbRowIndication.install(this, environment.palette.primary, { reverbAnimatorDurationScale(context) })
-    private val controller = ReverbClickController(this, object : NativeClickEnvironment {
+    private val indication = RowIndication.install(this, environment.palette.primary, { readCachedAnimatorDurationScale(context) })
+    private val controller = ViewClickController(this, object : NativeClickEnvironment {
         override val nativeInputRoot: View = inputRoot
         override val minimumTouchWidthPx get() = 48f * environment.textDensity.density
         override val minimumTouchHeightPx get() = minimumTouchWidthPx
@@ -82,11 +93,11 @@ private class LibraryTextActionSurface(context: Context, private var environment
             .acceptsPointer(event.x, event.y, event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER, minimumTouchWidthPx)
         override fun interestedParent(event: MotionEvent): Boolean = false
         override fun longPressOwnershipChanged(owns: Boolean) = Unit
-    }, ReverbRowIndicationSink(indication) { x, y, point -> point.set(x, y) })
+    }, RowIndicationSink(indication) { x, y, point -> point.set(x, y) })
     override val nativeClickEndpoint: NativeClickPhaseEndpoint = ReverbClickPhaseEndpoint(controller)
     override val mergedRowAccessibility = run {
         val children = listOf(label)
-        ReverbMergedRowAccessibility(this, NativeMergedRowRole.BUTTON,
+        MergedRowAccessibility(this, NativeMergedRowRole.BUTTON,
             sourceState = { NativeMergedRowAccessibilityState(isEnabled, null, null, children) },
             invokeSourceClick = {
                 if (isEnabled && isAttachedToWindow && action != null) { action?.invoke(); true } else false

@@ -1,5 +1,6 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
 import android.content.Context
 import android.content.res.Configuration
 import android.graphics.Canvas

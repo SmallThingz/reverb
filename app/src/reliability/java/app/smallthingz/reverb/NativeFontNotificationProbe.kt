@@ -1,5 +1,6 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.text.view.ParagraphView
 import android.app.Application
 import android.app.Instrumentation
 import android.graphics.Typeface
@@ -20,7 +21,6 @@ import smallthingz.ui.text.font.FontWeight
 import smallthingz.ui.text.font.ResolvedTypeface
 import smallthingz.ui.unit.Density
 import smallthingz.ui.unit.sp
-import app.smallthingz.reverb.nativeui.ReverbParagraphView
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -77,10 +77,10 @@ internal fun verifyNativeFontNotifications(instrumentation: Instrumentation, rep
             check(loader.started.await(5, TimeUnit.SECONDS)) { "Emoji metadata loader did not start" }
             return loader
         }
-        fun createView(resolver: FontFamily.Resolver = fonts): ReverbParagraphView = ReverbParagraphView(
+        fun createView(resolver: FontFamily.Resolver = fonts): ParagraphView = ParagraphView(
             host, style, density, resolver, 0xff111111.toInt(),
         ).apply { setText("Audio ready 😀") }
-        fun attach(view: ReverbParagraphView) {
+        fun attach(view: ParagraphView) {
             check(host.hasWindowFocus())
             host.fixtureRoot.removeAllViews()
             host.fixtureRoot.setBackgroundColor(0xffeeeeee.toInt())
@@ -89,7 +89,7 @@ internal fun verifyNativeFontNotifications(instrumentation: Instrumentation, rep
         }
 
         val attachedLoader = startLoading()
-        lateinit var attached: ReverbParagraphView
+        lateinit var attached: ParagraphView
         instrumentation.runOnMainSync { attached = createView(); attach(attached) }
         awaitNativeParityDraw(instrumentation, attached)
         awaitFontFrames(instrumentation, 4)
@@ -129,7 +129,7 @@ internal fun verifyNativeFontNotifications(instrumentation: Instrumentation, rep
             .put("automatic_draw", true).put("passed", true))
 
         val detachedLoader = startLoading()
-        lateinit var detached: ReverbParagraphView
+        lateinit var detached: ParagraphView
         lateinit var detachedParagraph: Paragraph
         var detachedRequestedLayout = false
         instrumentation.runOnMainSync { detached = createView(); attach(detached) }
@@ -175,7 +175,7 @@ internal fun verifyNativeFontNotifications(instrumentation: Instrumentation, rep
                 return resolved
             }
         }
-        lateinit var raced: ReverbParagraphView
+        lateinit var raced: ParagraphView
         var firstRaceParagraph: Paragraph? = null
         val raceLayout = CountDownLatch(1)
         val raceDraw = CountDownLatch(1)
@@ -229,7 +229,7 @@ internal fun verifyNativeFontNotifications(instrumentation: Instrumentation, rep
         cases.put(JSONObject().put("name", "closed-queued-callback").put("passed", true))
 
         val failedLoader = startLoading()
-        lateinit var failed: ReverbParagraphView
+        lateinit var failed: ParagraphView
         lateinit var failedParagraph: Paragraph
         instrumentation.runOnMainSync { failed = createView(); attach(failed) }
         awaitNativeParityDraw(instrumentation, failed)

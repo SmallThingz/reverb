@@ -1,5 +1,7 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
+import smallthingz.ui.text.view.ParagraphView
 import android.app.Application
 import android.app.Instrumentation
 import android.content.res.Configuration
@@ -167,7 +169,7 @@ internal fun verifyNativeOnboardingAudioFlow(instrumentation: Instrumentation, r
             main { check(current().settledPages == listOf(0)) { "Initial settled page was not delivered exactly once" } }
             val permission = nativeParityOnMain(instrumentation) { row(R.string.onboarding_microphone_title) }
             main {
-                val label = onboardingViewDescendants(permission).filterIsInstance<ReverbParagraphView>()
+                val label = onboardingViewDescendants(permission).filterIsInstance<ParagraphView>()
                     .single { it.getText() == activity.getString(R.string.onboarding_microphone_title) }
                 val target = Rect(); val text = Rect()
                 check(permission.getGlobalVisibleRect(target) && label.getGlobalVisibleRect(text))
@@ -370,7 +372,7 @@ private class OnboardingAudioQaFixture(
 private fun onboardingAudioQaRow(root: View, label: String): View =
     onboardingViewDescendants(root).filter { candidate ->
         candidate is NativeMergedRowAccessibilityHost && onboardingViewDescendants(candidate)
-            .filterIsInstance<ReverbParagraphView>().any { it.getText() == label }
+            .filterIsInstance<ParagraphView>().any { it.getText() == label }
     }.single()
 
 private data class OnboardingAudioQaVisibleGeometry(

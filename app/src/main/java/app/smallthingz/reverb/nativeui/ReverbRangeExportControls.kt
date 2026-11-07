@@ -1,5 +1,11 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.interaction.view.NativeClickBinding
+import smallthingz.ui.interaction.view.NativeClickEnvironment
+import smallthingz.ui.interaction.view.RowIndication
+import smallthingz.ui.interaction.view.RowIndicationSink
+import smallthingz.ui.interaction.view.ViewClickController
+import smallthingz.ui.interaction.view.readCachedAnimatorDurationScale
 import android.content.Context
 import android.graphics.Rect
 import android.view.KeyEvent
@@ -197,9 +203,9 @@ internal class ExportContent(
     private val glyph = OnboardingIconView(context, ReverbIcon.Save, environment.palette.muted)
     private var loadingView: ReverbIncidentLoadingView? = null
     val label = environment.paragraph(context, context.getString(R.string.export), ReverbTextRole.LABEL_LARGE)
-    private val indication = ReverbRowIndication.install(this, environment.palette.onSurface,
-        { reverbAnimatorDurationScale(context) })
-    private val controller = ReverbClickController(this, object : NativeClickEnvironment {
+    private val indication = RowIndication.install(this, environment.palette.onSurface,
+        { readCachedAnimatorDurationScale(context) })
+    private val controller = ViewClickController(this, object : NativeClickEnvironment {
         override val nativeInputRoot get() = inputRoot()
         override val minimumTouchWidthPx get() = 48f * environment.textDensity.density
         override val minimumTouchHeightPx get() = minimumTouchWidthPx
@@ -208,7 +214,7 @@ internal class ExportContent(
         override fun admitDown(event: MotionEvent) = reverbGroupGeometry(width.toFloat(), height.toFloat(),
             environment.textDensity.density, 20f).acceptsPointer(event.x, event.y,
             event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER, minimumTouchWidthPx)
-    }, ReverbRowIndicationSink(indication) { x, y, point -> point.set(x, y) })
+    }, RowIndicationSink(indication) { x, y, point -> point.set(x, y) })
     override val nativeClickEndpoint = ReverbClickPhaseEndpoint(controller)
     override fun containsPointerLayer(x: Float, y: Float) = reverbGroupGeometry(
         width.toFloat(), height.toFloat(), environment.textDensity.density, 20f).contains(x, y)

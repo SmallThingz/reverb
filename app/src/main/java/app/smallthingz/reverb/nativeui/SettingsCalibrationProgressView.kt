@@ -5,6 +5,9 @@
  */
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.text.view.NativePlainTextViewGeometry
+import smallthingz.ui.text.view.NativeSourceAccessibilityNode
+import smallthingz.ui.text.view.nativeMergedRoleBoundsInScreen
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint

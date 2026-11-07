@@ -1,5 +1,7 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
+import smallthingz.ui.text.view.ParagraphView
 import android.app.Application
 import android.app.Instrumentation
 import android.content.res.Configuration
@@ -309,7 +311,7 @@ private fun verifyOnboardingExplicitFooterFocus(render: ScreenParityRender): JSO
     val label = render.view.context.getString(R.string.onboarding_continue)
     val button = onboardingViewDescendants(render.view).single { view ->
         view is NativeMergedRowAccessibilityHost && onboardingViewDescendants(view)
-            .filterIsInstance<ReverbParagraphView>().any { it.getText() == label }
+            .filterIsInstance<ParagraphView>().any { it.getText() == label }
     }
     check(button.isEnabled && button.isFocusable)
     check(!button.defaultFocusHighlightEnabled) { "Source indication must be the sole focus highlight" }
@@ -334,7 +336,7 @@ internal fun invokeOnboardingSemanticClick(render: ScreenParityRender, label: St
     } else {
         val matches = onboardingViewDescendants(render.view).filter { view ->
             view is NativeMergedRowAccessibilityHost && onboardingViewDescendants(view)
-                .filterIsInstance<ReverbParagraphView>().any { it.getText() == label }
+                .filterIsInstance<ParagraphView>().any { it.getText() == label }
         }
         check(matches.size == 1) { "Expected one native button for $label, got ${matches.size}" }
         check(matches.single().performAccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, null))

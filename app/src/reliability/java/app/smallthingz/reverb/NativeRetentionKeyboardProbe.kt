@@ -41,7 +41,8 @@ internal fun verifyNativeRetentionKeyboardParity(
     keyboardSessionNonce: String?,
 ) {
     val context = instrumentation.targetContext
-    check(context.packageName == "app.smallthingz.reverb.nativeparity.reliability")
+    check(context.packageName in setOf("app.smallthingz.reverb.nativeparity.reliability",
+        "app.smallthingz.reverb.uitheme.reliability"))
     check(context.applicationContext.javaClass == Application::class.java)
     checkNotNull(keyboardSessionNonce) { "The sole targeted keyboard coordinator is required" }
     check(Build.VERSION.SDK_INT >= 30) { "Physical display/IME window evidence requires API30+" }
@@ -62,7 +63,8 @@ internal fun verifyNativeRetentionKeyboardParity(
         result.put("initial_discovery_regressions", JSONArray(verifyRetentionInitialDiscoveryChecks()))
         result.put("target_resolution_regressions", JSONArray(verifyRetentionEditableLabelChecks()))
         val windowScope = NativeParityInteractiveWindows.open(instrumentation, result).also { interactiveWindows = it }
-        val activity = launchNativeParityActivity(instrumentation).also { host = it }
+        val activity = (if (context.packageName == "app.smallthingz.reverb.uitheme.reliability")
+            launchCurrentUiSmokeActivity(instrumentation) else launchNativeParityActivity(instrumentation)).also { host = it }
         awaitNativeParityDraw(instrumentation, activity.fixtureRoot)
         windowScope.recordHost(instrumentation, activity)
         val typography = Class.forName("app.smallthingz.reverb.ReverbThemeKt")

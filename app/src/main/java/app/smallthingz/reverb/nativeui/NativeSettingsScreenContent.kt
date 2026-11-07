@@ -1,5 +1,6 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.text.view.NativeTextSemanticsClip
 import android.content.Context
 import android.graphics.Rect
 import android.view.View

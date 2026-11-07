@@ -1,5 +1,9 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.text.view.NativeSourceAccessibilityNode
+import smallthingz.ui.text.view.PlainTextAccessibility
+import smallthingz.ui.text.view.PlainTextAccessibilitySnapshot
+import smallthingz.ui.text.view.PlainTextAccessibilityWindowScope
 import android.content.Context
 import android.os.Bundle
 import android.view.KeyEvent
@@ -9,10 +13,6 @@ import android.view.accessibility.AccessibilityManager
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.core.view.accessibility.AccessibilityNodeInfoCompat
 import androidx.lifecycle.Lifecycle
-import app.smallthingz.reverb.nativeui.NativeSourceAccessibilityNode
-import app.smallthingz.reverb.nativeui.PlainTextAccessibility
-import app.smallthingz.reverb.nativeui.PlainTextAccessibilitySnapshot
-import app.smallthingz.reverb.nativeui.PlainTextAccessibilityWindowScope
 
 /** Existing source endpoint Box, not a stock SeekBar or another pointer recognizer. */
 internal class NativeRangeEndpointView(context: Context) : View(context) {

@@ -1,5 +1,6 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.text.view.ParagraphView
 import android.app.Application
 import android.app.Instrumentation
 import android.content.res.Configuration
@@ -89,11 +90,11 @@ internal fun verifyNativeOnboardingResponsive(instrumentation: Instrumentation, 
                     check(rendered.width == dp(widthDp)) { "Host did not provide requested fixture width" }
                     check(rendered.saveViewportState().page == 1)
                     val row = responsiveDescendants(rendered).filterIsInstance<OnboardingBufferRow>().first {
-                        (it.getChildAt(1) as ReverbParagraphView).getText() == themed.getString(R.string.onboarding_one_shot_title)
+                        (it.getChildAt(1) as ParagraphView).getText() == themed.getString(R.string.onboarding_one_shot_title)
                     }
                     val footer = responsiveDescendants(rendered).filterIsInstance<OnboardingFooterView>().single()
-                    val title = row.getChildAt(1) as ReverbParagraphView
-                    val continueLabel = responsiveDescendants(footer).filterIsInstance<ReverbParagraphView>().single { it.getText() == themed.getString(R.string.onboarding_continue) }
+                    val title = row.getChildAt(1) as ParagraphView
+                    val continueLabel = responsiveDescendants(footer).filterIsInstance<ParagraphView>().single { it.getText() == themed.getString(R.string.onboarding_continue) }
                     entry.put("rendered", JSONObject().put("screen", responsiveBounds(rendered))
                         .put("row", responsiveRowEvidence(row)).put("footer", responsiveFooterEvidence(footer))
                         .put("layout_direction", rendered.layoutDirection))
@@ -146,9 +147,9 @@ internal fun verifyNativeOnboardingResponsive(instrumentation: Instrumentation, 
                     host.fixtureRoot.addView(sample, FrameLayout.LayoutParams(dp(widthDp), dp(700)))
                     responsiveMeasure(sample, dp(widthDp), dp(700), View.MeasureSpec.EXACTLY)
                     val row = responsiveDescendants(sample).filterIsInstance<OnboardingBufferRow>().first {
-                        (it.getChildAt(1) as ReverbParagraphView).getText() == themed.getString(R.string.onboarding_one_shot_title)
+                        (it.getChildAt(1) as ParagraphView).getText() == themed.getString(R.string.onboarding_one_shot_title)
                     }
-                    val title = row.getChildAt(1) as ReverbParagraphView
+                    val title = row.getChildAt(1) as ParagraphView
                     val measurements = entry.getJSONArray("measurements")
                     val regular = title.maxIntrinsicTextWidth() + 2 * dp(16) + dp(44) + dp(52) + 2 * dp(14)
                     val compact = title.maxIntrinsicTextWidth() + 2 * dp(12) + dp(44) + dp(52) + 2 * dp(8)
@@ -167,8 +168,8 @@ internal fun verifyNativeOnboardingResponsive(instrumentation: Instrumentation, 
                         }
                     }
                     val footer = responsiveDescendants(sample).filterIsInstance<OnboardingFooterView>().single()
-                    val backLabel = responsiveDescendants(footer.getChildAt(0)).filterIsInstance<ReverbParagraphView>().single()
-                    val nextLabel = responsiveDescendants(footer.getChildAt(1)).filterIsInstance<ReverbParagraphView>().single()
+                    val backLabel = responsiveDescendants(footer.getChildAt(0)).filterIsInstance<ParagraphView>().single()
+                    val nextLabel = responsiveDescendants(footer.getChildAt(1)).filterIsInstance<ParagraphView>().single()
                     val minimumBack = max(dp(48), backLabel.maxIntrinsicTextWidth() + 2 * dp(12))
                     val minimumNext = max(dp(48), nextLabel.maxIntrinsicTextWidth() + 2 * dp(12))
                     val footerThreshold = minimumBack + minimumNext + dp(10)
@@ -261,12 +262,12 @@ private fun responsiveRowEvidence(row: OnboardingBufferRow): JSONObject = JSONOb
     .put("bounds", responsiveBounds(row)).put("marker", responsiveBounds(row.getChildAt(0)))
     .put("title", responsiveBounds(row.getChildAt(1))).put("body", responsiveBounds(row.getChildAt(2)))
     .put("switch", responsiveBounds(row.getChildAt(3)))
-    .put("title_lines", (row.getChildAt(1) as ReverbParagraphView).currentParagraph?.lineCount)
+    .put("title_lines", (row.getChildAt(1) as ParagraphView).currentParagraph?.lineCount)
 
 private fun responsiveFooterEvidence(footer: OnboardingFooterView): JSONObject = JSONObject()
     .put("bounds", responsiveBounds(footer)).put("back", responsiveBounds(footer.getChildAt(0)))
     .put("continue", responsiveBounds(footer.getChildAt(1)))
-    .put("label_lines", JSONArray(responsiveDescendants(footer).filterIsInstance<ReverbParagraphView>()
+    .put("label_lines", JSONArray(responsiveDescendants(footer).filterIsInstance<ParagraphView>()
         .map { JSONObject().put("text", it.getText()).put("lines", it.currentParagraph?.lineCount) }.toList()))
 
 private fun responsiveAssertNoOverlap(row: OnboardingBufferRow) {

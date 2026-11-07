@@ -1,5 +1,15 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.interaction.view.NativeClickBinding
+import smallthingz.ui.interaction.view.NativeClickEnvironment
+import smallthingz.ui.interaction.view.RowIndication
+import smallthingz.ui.interaction.view.RowIndicationSink
+import smallthingz.ui.interaction.view.ViewClickController
+import smallthingz.ui.interaction.view.readCachedAnimatorDurationScale
+import smallthingz.ui.text.view.MergedRowAccessibility
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityState
+import smallthingz.ui.text.view.NativeMergedRowRole
 import android.content.Context
 import android.content.res.Configuration
 import android.graphics.Canvas
@@ -219,12 +229,12 @@ internal abstract class HomeClickable(
     private val radiusDp: Float?,
 ) : ViewGroup(context), NativeClickPhaseHost {
     protected var action: () -> Unit = {}
-    protected val indication = ReverbRowIndication.install(this, currentEnvironment.palette.ink,
-        { reverbAnimatorDurationScale(context) })
+    protected val indication = RowIndication.install(this, currentEnvironment.palette.ink,
+        { readCachedAnimatorDurationScale(context) })
     private val key = Any()
     private val performCurrentClick: () -> Unit = { performClick() }
     private var clickBinding: NativeClickBinding? = null
-    private val input = ReverbClickController(this, object : NativeClickEnvironment {
+    private val input = ViewClickController(this, object : NativeClickEnvironment {
         override val nativeInputRoot get() = nativeRoot()
         override val minimumTouchWidthPx get() = 48f * currentEnvironment.textDensity.density
         override val minimumTouchHeightPx get() = minimumTouchWidthPx
@@ -235,7 +245,7 @@ internal abstract class HomeClickable(
             radiusDp ?: min(width, height) / (2f * currentEnvironment.textDensity.density),
         ).acceptsPointer(event.x, event.y,
             event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER, minimumTouchWidthPx)
-    }, ReverbRowIndicationSink(indication) { x, y, target -> target.set(x, y) })
+    }, RowIndicationSink(indication) { x, y, target -> target.set(x, y) })
     override val nativeClickEndpoint = ReverbClickPhaseEndpoint(input)
 
     fun hitLayout(coordinates: NativeWindowPointerCoordinates): NativeViewPointerHitLayout {
@@ -323,7 +333,7 @@ internal class HomeBufferSegment(context: Context, currentEnvironment: ReverbVie
     private var recording = false
     private var bufferEnabled = true
     private var filled = false
-    override val mergedRowAccessibility = ReverbMergedRowAccessibility(this, NativeMergedRowRole.TAB,
+    override val mergedRowAccessibility = MergedRowAccessibility(this, NativeMergedRowRole.TAB,
         { NativeMergedRowAccessibilityState(isEnabled, null, null, accessibilityChildren, selected = selection) },
         { action(); true })
     private val frames = HomeFrameLoop(this, animationScope,

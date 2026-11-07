@@ -6,6 +6,7 @@
  */
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.interaction.view.readCachedAnimatorDurationScale
 import android.graphics.Outline
 import android.graphics.PixelFormat
 import android.graphics.Rect
@@ -146,7 +147,7 @@ internal class SettingsMenuWindow(
                 frames.withFrameNanos { time ->
                     if (!closed) {
                         updatePosition()
-                        transition.frame(time,reverbAnimatorDurationScale(context))
+                        transition.frame(time,readCachedAnimatorDurationScale(context))
                         animationLayer.scaleX = transition.scale
                         animationLayer.scaleY = transition.scale
                         animationLayer.alpha = if (positioned && anchor.isAttachedToWindow) transition.alpha else 0f

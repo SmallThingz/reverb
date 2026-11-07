@@ -1,5 +1,6 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.text.view.ParagraphView
 import android.content.Context
 import smallthingz.ui.runtime.MonotonicFrameClock
 import kotlinx.coroutines.CoroutineScope
@@ -88,8 +89,8 @@ internal class ReverbLibraryPlayerView(
     private val content = PlayerColumn(context, environment, fineSeekView, nativeInputRoot, frames, scope, durationScale)
     private var state: LibraryPlayerUiState? = null
     val waveformInput: NativeViewPhasePointerNode get() = content.timeline
-    val startLabel: ReverbParagraphView get() = content.times.start
-    val endLabel: ReverbParagraphView get() = content.times.end
+    val startLabel: ParagraphView get() = content.times.start
+    val endLabel: ParagraphView get() = content.times.end
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         clipChildren = true
@@ -143,7 +144,7 @@ private class PlayerColumn(context: Context, private var environment: ReverbView
     private val durationScale: () -> Float) : ViewGroup(context) {
     val timeline = PlayerTimeline(context, environment)
     val times = PlayerTimes(context, environment)
-    var error: ReverbParagraphView? = null
+    var error: ParagraphView? = null
         private set
     private var heading: PlayerTrimHeading? = null
     private var buttons: PlayerTrimButtons? = null
@@ -314,7 +315,7 @@ private class PlayerTimes(context: Context, private var environment: ReverbViewE
         val modeChanged = lastTrimMode != state.trimMode || lastPreparing != state.preparing
         val typographyChanged = lastTrimMode == null || environment !== value
         environment = value
-        fun bindText(label: ReverbParagraphView, first: Boolean) {
+        fun bindText(label: ParagraphView, first: Boolean) {
             val target = if (first) InlineFineSeekTarget.TRIM_START else InlineFineSeekTarget.TRIM_END
             val millis = if (state.trimMode) {
                 if (first) state.trimStartMillis else state.trimEndMillis
@@ -353,7 +354,7 @@ private class PlayerTimes(context: Context, private var environment: ReverbViewE
 }
 
 /** Adds the source boundary semantics/actions to the original Text leaf, never a new text label. */
-private class PlayerBoundary(private val label: ReverbParagraphView, private val target: InlineFineSeekTarget) {
+private class PlayerBoundary(private val label: ParagraphView, private val target: InlineFineSeekTarget) {
     private var state: LibraryPlayerUiState? = null
     private var actions: LibraryPlayerActions? = null
     init {

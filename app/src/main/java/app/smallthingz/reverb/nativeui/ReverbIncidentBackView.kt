@@ -1,5 +1,15 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.interaction.view.NativeClickBinding
+import smallthingz.ui.interaction.view.NativeClickEnvironment
+import smallthingz.ui.interaction.view.RowIndication
+import smallthingz.ui.interaction.view.RowIndicationSink
+import smallthingz.ui.interaction.view.ViewClickController
+import smallthingz.ui.interaction.view.readCachedAnimatorDurationScale
+import smallthingz.ui.text.view.MergedRowAccessibility
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityState
+import smallthingz.ui.text.view.NativeMergedRowRole
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Outline
@@ -34,12 +44,12 @@ internal class ReverbIncidentBackView(
     }
     override val mergedRowAccessibility = run {
         val children = listOf(icon)
-        ReverbMergedRowAccessibility(this, NativeMergedRowRole.BUTTON,
+        MergedRowAccessibility(this, NativeMergedRowRole.BUTTON,
             { NativeMergedRowAccessibilityState(true, null, null, children) },
             invokeSourceClick = { onBack(); true })
     }
-    private val indication = ReverbRowIndication.install(this, palette.ink, { reverbAnimatorDurationScale(context) })
-    private val controller = ReverbClickController(this, object : NativeClickEnvironment {
+    private val indication = RowIndication.install(this, palette.ink, { readCachedAnimatorDurationScale(context) })
+    private val controller = ViewClickController(this, object : NativeClickEnvironment {
         override val nativeInputRoot get() = pointerInputRoot
         override val minimumTouchWidthPx get() = 48f * resources.displayMetrics.density
         override val minimumTouchHeightPx get() = minimumTouchWidthPx
@@ -49,7 +59,7 @@ internal class ReverbIncidentBackView(
         ).acceptsPointer(event.x, event.y, event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER, minimumTouchWidthPx)
         override fun interestedParent(event: MotionEvent): Boolean = false
         override fun longPressOwnershipChanged(owns: Boolean) = Unit
-    }, ReverbRowIndicationSink(indication) { x, y, target -> target.set(x, y) })
+    }, RowIndicationSink(indication) { x, y, target -> target.set(x, y) })
 
     override val nativeClickEndpoint = ReverbClickPhaseEndpoint(controller)
 

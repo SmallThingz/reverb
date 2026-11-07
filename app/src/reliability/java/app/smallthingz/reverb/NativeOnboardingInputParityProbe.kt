@@ -1,5 +1,7 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
+import smallthingz.ui.text.view.ParagraphView
 import android.app.Application
 import android.app.Instrumentation
 import android.graphics.Bitmap
@@ -19,9 +21,7 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getAllSemanticsNodes
 import androidx.compose.ui.semantics.getOrNull
-import app.smallthingz.reverb.nativeui.NativeMergedRowAccessibilityHost
 import app.smallthingz.reverb.nativeui.OnboardingPageContentView
-import app.smallthingz.reverb.nativeui.ReverbParagraphView
 import java.io.File
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -231,7 +231,7 @@ private class OnboardingInputRoute(
         } else {
             descendants(view).filterIsInstance<NativeMergedRowAccessibilityHost>().mapNotNull { candidate ->
                 val target = candidate as View
-                if (descendants(target).filterIsInstance<ReverbParagraphView>().none { it.getText() == label })
+                if (descendants(target).filterIsInstance<ParagraphView>().none { it.getText() == label })
                     return@mapNotNull null
                 observedControl(target.createAccessibilityNodeInfo())
             }.toList()
@@ -289,7 +289,7 @@ private class OnboardingInputRoute(
             } else {
                 val target = descendants(view).single { candidate ->
                     candidate is NativeMergedRowAccessibilityHost && descendants(candidate)
-                        .filterIsInstance<ReverbParagraphView>().any { it.getText() == label }
+                        .filterIsInstance<ParagraphView>().any { it.getText() == label }
                 }
                 val node = checkNotNull(target.createAccessibilityNodeInfo())
                 try { JSONObject().put("enabled", node.isEnabled).put("clickable", node.isClickable) }

@@ -1,5 +1,11 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.interaction.view.readCachedAnimatorDurationScale
+import smallthingz.ui.text.view.NativePlainTextViewGeometry
+import smallthingz.ui.text.view.NativeSourceAccessibilityNode
+import smallthingz.ui.text.view.NativeTextSemanticsClip
+import smallthingz.ui.text.view.ParagraphView
+import smallthingz.ui.text.view.PlainTextAccessibilityWindowScope
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.drawable.ColorDrawable
@@ -70,7 +76,7 @@ internal class ReverbSettingsTopBarView(
     private var hintColor = initialEnvironment.palette.onSurface
     private val hintColorMotion=colorTransition(hintColor) {hintColor=it;paintHint(hintStrength)}
     private var hintStrength = 0f
-    val title: ReverbParagraphView get() = content.title
+    val title: ParagraphView get() = content.title
     val navigation: ReverbStandardIconButtonView get() = content.navigation
     val done: ReverbStandardIconButtonView get() = content.done
     val contentClipView: View get() = content
@@ -105,7 +111,7 @@ internal class ReverbSettingsTopBarView(
                 try {
                     hintProgress.snapTo(1f)
                     paintHint(1f)
-                    if (reverbAnimatorDurationScale(context) == 0f) delay(600L)
+                    if (readCachedAnimatorDurationScale(context) == 0f) delay(600L)
                     else hintProgress.animateTo(0f, tween(600)) { paintHint(this.value) }
                 } finally {
                     if (hint === expected) paintHint(0f)

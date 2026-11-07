@@ -1,5 +1,14 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
+import smallthingz.ui.text.view.NativePlainTextViewGeometry
+import smallthingz.ui.text.view.NativeSourceAccessibilityNode
+import smallthingz.ui.text.view.NativeTextSemanticsClip
+import smallthingz.ui.text.view.NativeTextSemanticsClipPolicy
+import smallthingz.ui.text.view.PlainTextAccessibility
+import smallthingz.ui.text.view.PlainTextAccessibilitySnapshot
+import smallthingz.ui.text.view.PlainTextAccessibilityWindowScope
+import smallthingz.ui.text.view.nativeMergedRoleBoundsInScreen
 import android.graphics.Rect
 import android.os.Bundle
 import android.view.View

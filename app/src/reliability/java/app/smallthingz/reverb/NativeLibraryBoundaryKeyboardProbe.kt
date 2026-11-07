@@ -1,5 +1,6 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.text.view.ParagraphView
 import android.app.Instrumentation
 import android.graphics.Rect
 import android.view.KeyEvent
@@ -29,13 +30,13 @@ internal fun verifyLibraryBoundaryKeyboard(instrumentation: Instrumentation, hos
             var state = LibraryPlayerUiState("qa-keyboard", true, false, 10000, 0, true, false,
                 1000, 9000, target, null, true, false, 0f, 0f)
             var edits = 0
-            lateinit var label: ReverbParagraphView
+            lateinit var label: ParagraphView
             lateinit var bind: () -> Unit
             nativeParityOnMain(instrumentation) {
                 label = environment.paragraph(host, "QA trim boundary", ReverbTextRole.BODY_MEDIUM,
                     environment.palette.ink)
                 val type = Class.forName("app.smallthingz.reverb.nativeui.PlayerBoundary")
-                val owner = type.getDeclaredConstructor(ReverbParagraphView::class.java,
+                val owner = type.getDeclaredConstructor(ParagraphView::class.java,
                     InlineFineSeekTarget::class.java).apply { isAccessible = true }.newInstance(label, target)
                 val method = type.getDeclaredMethod("bind", LibraryPlayerUiState::class.java,
                     LibraryPlayerActions::class.java).apply { isAccessible = true }

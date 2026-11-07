@@ -78,6 +78,16 @@ allprojects {
             reliabilityImplementation 'androidx.compose.ui:ui-tooling-preview'
         }
         if (currentUiSmoke) {
+            def retentionOracleCheck = tasks.register('verifyCurrentUiRetentionOracle') {
+                def oracle = file('src/reliability/java/app/smallthingz/reverb/ReleasedRetentionEditorOracle.kt')
+                inputs.file(oracle)
+                doLast {
+                    def actual = java.security.MessageDigest.getInstance('SHA-256').digest(oracle.bytes).encodeHex().toString()
+                    if (actual != 'ddbab4f6155ebb5400917282c7c32c5fd9f9841de26babeb4b7fc077e5b9f726') {
+                        throw new GradleException('Current UI retention oracle changed from frozen released editor')
+                    }
+                }
+            }
             def iconOracleCheck = tasks.register('verifyCurrentUiIconOracle') {
                 def iconsSource = file('src/reliability/java/app/smallthingz/reverb/AppIcons.kt')
                 inputs.file(iconsSource)
@@ -90,7 +100,7 @@ allprojects {
                 }
             }
             tasks.matching { it.name == 'preReliabilityBuild' }.configureEach {
-                dependsOn iconOracleCheck
+                dependsOn iconOracleCheck, retentionOracleCheck
             }
         }
         if (parityOnly) {

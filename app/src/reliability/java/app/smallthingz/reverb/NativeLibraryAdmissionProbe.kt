@@ -1,5 +1,9 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
+import smallthingz.ui.text.view.NativeTextSemanticsClip
+import smallthingz.ui.text.view.NativeTextSemanticsClipPolicy
+import smallthingz.ui.text.view.ParagraphView
 import android.app.Instrumentation
 import android.app.UiAutomation
 import android.content.Context
@@ -250,7 +254,7 @@ private class LibraryAdmissionFixture(
                     viewport.sourceAccessibilityNode = { source.node(viewport) }
                     markers += marker
                 } else {
-                    val paragraphs = libraryAdmissionViews(current).filterIsInstance<ReverbParagraphView>().toList()
+                    val paragraphs = libraryAdmissionViews(current).filterIsInstance<ParagraphView>().toList()
                     check(paragraphs.size == 2)
                     paragraphs.forEachIndexed { index, paragraph ->
                         val marker = "QA Library Error $index"
@@ -362,7 +366,7 @@ private class LibraryAdmissionFixture(
                 .put("expected_viewport_visible", independentlyVisibleInViewport(view))
                 .put("source_present", node.present).put("source_hidden", node.hidden)
                 .put("platform_node_present", libraryAdmissionNodePresent(view))
-                .put("titles", JSONArray(libraryAdmissionViews(view).filterIsInstance<ReverbParagraphView>()
+                .put("titles", JSONArray(libraryAdmissionViews(view).filterIsInstance<ParagraphView>()
                     .map { it.getText().toString() }.toList())))
         }
         return JSONObject().put("layout_requested", list.isLayoutRequested)
@@ -403,7 +407,7 @@ private class LibraryAdmissionFixture(
         }
     }
 
-    fun visibleRowTitles(): List<String> = libraryAdmissionViews(content).filterIsInstance<ReverbParagraphView>()
+    fun visibleRowTitles(): List<String> = libraryAdmissionViews(content).filterIsInstance<ParagraphView>()
         .filter { it.getText().startsWith("QA Library row ") && independentlyVisibleInViewport(it) }
         .map { it.getText().toString() }.toList()
 

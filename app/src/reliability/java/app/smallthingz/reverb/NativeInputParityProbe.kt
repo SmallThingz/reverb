@@ -1,5 +1,11 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.interaction.view.NativeClickBinding
+import smallthingz.ui.interaction.view.NativeClickEnvironment
+import smallthingz.ui.interaction.view.NativeClickIndication
+import smallthingz.ui.interaction.view.NativePressToken
+import smallthingz.ui.interaction.view.NativeStateToken
+import smallthingz.ui.interaction.view.ViewClickController
 import android.app.Application
 import android.app.Instrumentation
 import android.content.Context
@@ -37,12 +43,6 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getAllSemanticsNodes
 import androidx.compose.ui.semantics.getOrNull
-import app.smallthingz.reverb.nativeui.NativeClickBinding
-import app.smallthingz.reverb.nativeui.NativeClickEnvironment
-import app.smallthingz.reverb.nativeui.NativeClickIndication
-import app.smallthingz.reverb.nativeui.NativePressToken
-import app.smallthingz.reverb.nativeui.NativeStateToken
-import app.smallthingz.reverb.nativeui.ReverbClickController
 import java.io.File
 import java.util.IdentityHashMap
 import java.util.concurrent.CountDownLatch
@@ -476,7 +476,7 @@ private class NativeInputFixture(context: Context, override val trace: InputTrac
 }
 
 private class NativeInputView(context: Context, trace: InputTrace) : View(context) {
-    val controller = ReverbClickController(this, object : NativeClickEnvironment {
+    val controller = ViewClickController(this, object : NativeClickEnvironment {
         override val minimumTouchWidthPx = 48f * resources.displayMetrics.density
         override val minimumTouchHeightPx = minimumTouchWidthPx
         override fun admitDown(event: MotionEvent) =

@@ -6,6 +6,13 @@
  */
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.interaction.view.NativeClickBinding
+import smallthingz.ui.interaction.view.NativeClickEnvironment
+import smallthingz.ui.interaction.view.RowIndication
+import smallthingz.ui.interaction.view.RowIndicationSink
+import smallthingz.ui.interaction.view.ViewClickController
+import smallthingz.ui.interaction.view.readCachedAnimatorDurationScale
+import smallthingz.ui.text.view.ParagraphView
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Outline
@@ -233,16 +240,16 @@ internal class SettingsMenuItemView(
     private val interestedParent: (MotionEvent) -> Boolean,
 ) : ViewGroup(context), AutoCloseable {
     // DropdownMenuItem's ProvideTextStyle(labelLarge) merges the inherited default body style.
-    private val text = ReverbParagraphView(context, reverbDefaultTextStyle().merge(style), density, resolver, palette.muted)
+    private val text = ParagraphView(context, reverbDefaultTextStyle().merge(style), density, resolver, palette.muted)
     private val check = OnboardingIconView(context, ReverbIcon.Check, palette.primary)
     private val horizontal = dp(16f)
     private val vertical = dp(8f)
     private val radius = 12f * density.density
     private val clip = Path()
-    private val indication = ReverbRowIndication.install(this, palette.ink, { reverbAnimatorDurationScale(context) })
-    private val sink = ReverbRowIndicationSink(indication) { x, y, point -> point.set(x, y) }
+    private val indication = RowIndication.install(this, palette.ink, { readCachedAnimatorDurationScale(context) })
+    private val sink = RowIndicationSink(indication) { x, y, point -> point.set(x, y) }
     var pointerRoot: View? = null
-    val input = ReverbClickController(this, object : NativeClickEnvironment {
+    val input = ViewClickController(this, object : NativeClickEnvironment {
         override val nativeInputRoot get() = pointerRoot
         override val minimumTouchWidthPx get() = 48f * density.density
         override val minimumTouchHeightPx get() = minimumTouchWidthPx

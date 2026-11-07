@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.text.view.NativeTextSemanticsClip
+import smallthingz.ui.text.view.ParagraphView
 import android.content.Context
 import android.graphics.Color
 import android.view.View
@@ -91,7 +93,7 @@ internal class ReverbRecordingInfoBody(
         }
         accessibility.extraClip = ownClips
         restoredClip = { if (accessibility.extraClip === ownClips) accessibility.extraClip = previousClips }
-        fun bindText(text: ReverbParagraphView) {
+        fun bindText(text: ParagraphView) {
             leases += text.bindPlainTextAccessibility(accessibility.cursor, accessibility.geometry,
                 sourceNode = { accessibility.sourceNode(text) }) { accessibility.sourceNode(text).present }
         }

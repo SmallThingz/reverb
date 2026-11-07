@@ -1,5 +1,11 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.interaction.view.NativeClickBinding
+import smallthingz.ui.interaction.view.NativeClickEnvironment
+import smallthingz.ui.interaction.view.RowIndication
+import smallthingz.ui.interaction.view.RowIndicationSink
+import smallthingz.ui.interaction.view.ViewClickController
+import smallthingz.ui.interaction.view.readCachedAnimatorDurationScale
 import android.content.Context
 import smallthingz.ui.runtime.MonotonicFrameClock
 import kotlinx.coroutines.CoroutineScope
@@ -133,8 +139,8 @@ private class PlayerTrimActionRow(context: Context, private var environment: Rev
     private var spinner: ReverbIncidentLoadingView? = null
     private var owner: String? = null
     private var action: (() -> Unit)? = null
-    private val indication = ReverbRowIndication.install(this, environment.palette.onSurface, { reverbAnimatorDurationScale(context) })
-    private val input = ReverbClickController(this, object : NativeClickEnvironment {
+    private val indication = RowIndication.install(this, environment.palette.onSurface, { readCachedAnimatorDurationScale(context) })
+    private val input = ViewClickController(this, object : NativeClickEnvironment {
         override val nativeInputRoot: View = inputRoot
         override val minimumTouchWidthPx get() = 48f * environment.textDensity.density
         override val minimumTouchHeightPx get() = minimumTouchWidthPx
@@ -143,7 +149,7 @@ private class PlayerTrimActionRow(context: Context, private var environment: Rev
             event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER, minimumTouchWidthPx)
         override fun interestedParent(event: MotionEvent) = true
         override fun longPressOwnershipChanged(owns: Boolean) = Unit
-    }, ReverbRowIndicationSink(indication) { x, y, point -> point.set(x, y) })
+    }, RowIndicationSink(indication) { x, y, point -> point.set(x, y) })
     override val nativeClickEndpoint: NativeClickPhaseEndpoint = ReverbClickPhaseEndpoint(input)
     init {
         isClickable = true

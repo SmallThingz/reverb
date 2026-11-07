@@ -1,5 +1,10 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.text.view.MergedRowAccessibility
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityState
+import smallthingz.ui.text.view.NativeMergedRowRole
+import smallthingz.ui.text.view.ParagraphView
 import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Canvas
@@ -37,7 +42,7 @@ internal class SettingsCalibrationActionView(
 ):ViewGroup(context),AutoCloseable {
     private var environment=environment
     private val visual=CalibrationActionSurface(context,environment,inputRoot,leadingIcon,progressSurface,action)
-    private val sizingLabel=if(stableLabels.isEmpty())null else ReverbParagraphView(context,reverbButtonTextStyle(),
+    private val sizingLabel=if(stableLabels.isEmpty())null else ParagraphView(context,reverbButtonTextStyle(),
         environment.textDensity,environment.sharedFontResolver,environment.palette.primary)
     val textView get()=visual.label
     init {
@@ -83,7 +88,7 @@ private class CalibrationActionSurface(
     private val progressSurface:Boolean,
     private var action:(()->Unit)?,
 ):ViewGroup(context),NativeClickPhaseHost,NativePointerLayerShape,NativeMergedRowAccessibilityHost,AutoCloseable {
-    val label=ReverbParagraphView(context,reverbButtonTextStyle(),environment.textDensity,
+    val label=ParagraphView(context,reverbButtonTextStyle(),environment.textDensity,
         environment.sharedFontResolver,environment.palette.primary)
     private val icon=leadingIcon?.let {OnboardingIconView(context,it,environment.palette.primary).apply {
         importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -157,7 +162,7 @@ private class CalibrationActionSurface(
         environment.textDensity.density,min(width,height)/(2f*environment.textDensity.density)).contains(x,y)
     override val mergedRowAccessibility=run {
         val children=listOf(label)
-        ReverbMergedRowAccessibility(this,NativeMergedRowRole.BUTTON,
+        MergedRowAccessibility(this,NativeMergedRowRole.BUTTON,
             {NativeMergedRowAccessibilityState(enabled,null,null,children)},{activate()})
     }
     init {

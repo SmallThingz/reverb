@@ -1,5 +1,6 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.text.view.ParagraphView
 import android.app.Application
 import android.app.Instrumentation
 import android.content.Context
@@ -41,7 +42,6 @@ import androidx.compose.ui.unit.sp
 import app.smallthingz.reverb.nativeui.ReverbTextRole
 import app.smallthingz.reverb.nativeui.ReverbParagraphStyles
 import app.smallthingz.reverb.nativeui.ReverbTextScale
-import app.smallthingz.reverb.nativeui.ReverbParagraphView
 import app.smallthingz.reverb.nativeui.resolveMetrics
 import java.io.File
 import kotlin.math.ceil
@@ -133,7 +133,7 @@ internal fun verifyNativeTextParity(instrumentation: Instrumentation, report: St
         .put("baseline_commit", "3e16f8ddb78dca15df4b436d34d330801ce83ffd")
         .put("reference", "Actual released ReverbTypography and callback-free Material3 Text; ui-text 1.11.2")
         .put("metric_reference", "Separate onTextLayout route; its raster must equal the callback-free reference")
-        .put("candidate", "Ordinary native ReverbParagraphView using Android TextPaint/StaticLayout and native role metadata")
+        .put("candidate", "Ordinary native ParagraphView using Android TextPaint/StaticLayout and native role metadata")
         .put("comparison", "Exact ARGB and text metrics per viewport batch; no masks or tolerance")
         .put("schema", "native_text_viewport_batches_v1")
         .put("sample_names", JSONArray(textParitySamples.map { it.name }))
@@ -363,7 +363,7 @@ private fun showTextParityCase(
             for (index in batch.first until batch.endExclusive) {
                 val sample = textParitySamples[index]
                 val row = FrameLayout(context)
-                val label = ReverbParagraphView(
+                val label = ParagraphView(
                     context,
                     nativeParagraphTextStyle(sample.role),
                     nativeDensity,

@@ -1,5 +1,9 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.text.view.MergedRowAccessibility
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityState
+import smallthingz.ui.text.view.NativeMergedRowRole
 import android.content.Context
 import android.graphics.Rect
 import android.view.KeyEvent
@@ -32,7 +36,7 @@ internal class SettingsToggleRowView(
     override val nativeClickEndpoint:NativeClickPhaseEndpoint get()=interactions.pointerEndpoint
     override val mergedRowAccessibility=run {
         val children=listOf(label)
-        ReverbMergedRowAccessibility(this,NativeMergedRowRole.SWITCH,
+        MergedRowAccessibility(this,NativeMergedRowRole.SWITCH,
             {NativeMergedRowAccessibilityState(enabled,checked,null,children)},{activate()})
     }
     private var gap=0

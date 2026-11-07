@@ -1,5 +1,13 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.text.view.NativePlainTextViewGeometry
+import smallthingz.ui.text.view.NativeSourceAccessibilityNode
+import smallthingz.ui.text.view.NativeTextSemanticsClip
+import smallthingz.ui.text.view.NativeTextSemanticsClipPolicy
+import smallthingz.ui.text.view.NativeTextSemanticsTransformPolicy
+import smallthingz.ui.text.view.ParagraphView
+import smallthingz.ui.text.view.PlainTextAccessibilityGeometry
+import smallthingz.ui.text.view.nativeMergedRoleBoundsInScreen
 import app.smallthingz.reverb.nativeui.colorTransition
 
 import android.content.Context
@@ -251,7 +259,7 @@ internal class NativeActivityContentView(
         val bounds = ArrayList<Rect>()
         fun visit(view: View) {
             if (view.visibility != VISIBLE) return
-            if (view is ReverbParagraphView) {
+            if (view is ParagraphView) {
                 val facts = feedbackSourceNode(view)
                 if (facts.present && !facts.hidden) {
                     val mapped = textGeometry.capture(view, Offset.Zero, view.originalAccessibilityBoundsInView())
@@ -270,7 +278,7 @@ internal class NativeActivityContentView(
     private fun feedbackSourceNode(view: View): NativeSourceAccessibilityNode {
         if (!view.isAttachedToWindow || !view.isLaidOut || view.visibility != VISIBLE)
             return NativeSourceAccessibilityNode.absent()
-        val local = if (view is ReverbParagraphView) view.originalAccessibilityBoundsInView()
+        val local = if (view is ParagraphView) view.originalAccessibilityBoundsInView()
             else ComposeRect(0f, 0f, view.width.toFloat(), view.height.toFloat())
         val mapped = textGeometry.capture(view, Offset.Zero, local) ?: return NativeSourceAccessibilityNode.absent()
         val visible = mapped.visibleBoundsInRoot.intersect(ComposeRect(0f, 0f, width.toFloat(), height.toFloat()))

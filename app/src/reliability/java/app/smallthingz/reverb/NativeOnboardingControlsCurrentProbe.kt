@@ -1,5 +1,6 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.text.view.ParagraphView
 import android.app.Application
 import android.app.Instrumentation
 import android.content.res.Configuration
@@ -339,7 +340,7 @@ internal fun verifyNativeOnboardingControlsCurrent(instrumentation: Instrumentat
                 }
                 visible(restoredCalibrationContainer)
                 val restoredLabel = nativeParityOnMain(instrumentation) {
-                    currentOnboardingViews(restoredCalibrationContainer).filterIsInstance<ReverbParagraphView>().first { target ->
+                    currentOnboardingViews(restoredCalibrationContainer).filterIsInstance<ParagraphView>().first { target ->
                         val info = checkNotNull(target.createAccessibilityNodeInfo())
                         try { info.text?.toString() == host.getString(R.string.silence_calibrate) }
                         finally { @Suppress("DEPRECATION") info.recycle() }

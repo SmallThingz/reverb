@@ -1,5 +1,6 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.interaction.view.readCachedAnimatorDurationScale
 import app.smallthingz.reverb.safeReportedErrorDetail
 
 import android.content.Context
@@ -25,7 +26,7 @@ internal class LibraryPendingSaveRowPresentation(
     val row = ReverbLibraryRecordingRow(context, environment, scope, inputRoot)
     private val progress = ReverbIncidentLoadingView(context, environment.palette.primary,
         checkNotNull(scope.coroutineContext[MonotonicFrameClock]), scope,
-        { reverbAnimatorDurationScale(context) }, strokeWidthDp = 2.5f)
+        { readCachedAnimatorDurationScale(context) }, strokeWidthDp = 2.5f)
     private val noActions = LibraryRecordingRowActions(null, null, null)
     private val fill = smoothProgressSpring()
     private var driver: ViewSpringDriver<Float, AnimationVector1D>? = null

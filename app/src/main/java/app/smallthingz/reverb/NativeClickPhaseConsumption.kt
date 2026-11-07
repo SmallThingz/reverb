@@ -1,7 +1,9 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.interaction.view.ViewClickController
+
 /**
- * Only the original down-change exemption is retained here; ReverbClickController still owns
+ * Only the original down-change exemption is retained here; ViewClickController still owns
  * every click/press/long-press state. The callback's handled Boolean has no consumption meaning.
  */
 internal class NativeClickPhaseConsumption {

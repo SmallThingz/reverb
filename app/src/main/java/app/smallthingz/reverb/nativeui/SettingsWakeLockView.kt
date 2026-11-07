@@ -1,5 +1,16 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.interaction.view.NativeClickBinding
+import smallthingz.ui.interaction.view.NativeClickEnvironment
+import smallthingz.ui.interaction.view.NativeClickIndication
+import smallthingz.ui.interaction.view.NativePressToken
+import smallthingz.ui.interaction.view.NativeStateToken
+import smallthingz.ui.interaction.view.ViewClickController
+import smallthingz.ui.interaction.view.readCachedAnimatorDurationScale
+import smallthingz.ui.text.view.MergedRowAccessibility
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityState
+import smallthingz.ui.text.view.NativeMergedRowRole
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
@@ -76,7 +87,7 @@ private class WakeLockRow(
         override fun stateEnter(token:NativeStateToken)=Unit
         override fun stateExit(token:NativeStateToken)=Unit
     }
-    private val input=ReverbClickController(this,object:NativeClickEnvironment {
+    private val input=ViewClickController(this,object:NativeClickEnvironment {
         override val nativeInputRoot:View? get()=inputRoot()
         override val minimumTouchWidthPx:Float get()=48f*environment.textDensity.density
         override val minimumTouchHeightPx:Float get()=minimumTouchWidthPx
@@ -89,7 +100,7 @@ private class WakeLockRow(
     override val nativeClickEndpoint:NativeClickPhaseEndpoint=ReverbClickPhaseEndpoint(input)
     override val mergedRowAccessibility=run {
         val children=listOf(title,summary)
-        ReverbMergedRowAccessibility(this,NativeMergedRowRole.SWITCH,
+        MergedRowAccessibility(this,NativeMergedRowRole.SWITCH,
             {NativeMergedRowAccessibilityState(true,this.checked,null,children)},
             {activate()})
     }
@@ -208,8 +219,8 @@ private class WakeSwitch(context:Context,checked:Boolean,private var environment
         if(checked)environment.palette.primary else environment.palette.raised,
         if(checked)environment.palette.onPrimary else reverbColorWithAlpha(environment.palette.onSurfaceVariant,.84f),
         environment.palette.onSurface),{trackView.invalidate();thumbView.invalidate()})
-    private val offsetDriver=ViewSpringDriver(this,offset,{updateOffset()}, { reverbAnimatorDurationScale(context) })
-    private val overlayDriver=ViewSpringDriver(this,overlay,{trackView.invalidate()}, { reverbAnimatorDurationScale(context) })
+    private val offsetDriver=ViewSpringDriver(this,offset,{updateOffset()}, { readCachedAnimatorDurationScale(context) })
+    private val overlayDriver=ViewSpringDriver(this,overlay,{trackView.invalidate()}, { readCachedAnimatorDurationScale(context) })
     init {addView(trackView);importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS}
     fun bind(checked:Boolean,next:ReverbViewEnvironment) {
         environment=next

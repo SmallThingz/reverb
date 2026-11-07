@@ -1,5 +1,14 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.text.view.MergedRowAccessibility
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityState
+import smallthingz.ui.text.view.NativeMergedRowRole
+import smallthingz.ui.text.view.NativeSourceAccessibilityNode
+import smallthingz.ui.text.view.ParagraphView
+import smallthingz.ui.text.view.PlainTextAccessibility
+import smallthingz.ui.text.view.PlainTextAccessibilitySnapshot
+import smallthingz.ui.text.view.PlainTextAccessibilityWindowScope
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Rect
@@ -145,7 +154,7 @@ internal class OnboardingMarker(
     marker: String? = null,
 ) {
     val view = ReverbGroupLayout(context, cornerRadiusDp = 14f)
-    internal val text = if (icon == null) ReverbParagraphView(context, style, density, resolver, 0).apply {
+    internal val text = if (icon == null) ParagraphView(context, style, density, resolver, 0).apply {
         setText(marker.orEmpty())
     } else null
     private val glyph = icon?.let { OnboardingIconView(context, it, 0) }
@@ -199,8 +208,8 @@ internal open class OnboardingCardView(
     interactions: OnboardingNativeInteractionsFactory,
     accessibilityRole: NativeMergedRowRole = NativeMergedRowRole.BUTTON,
 ) : ViewGroup(context), NativeMergedRowAccessibilityHost, app.smallthingz.reverb.NativeClickPhaseHost {
-    private val title = ReverbParagraphView(context, typography.titleMedium, density, resolver, 0)
-    private val body = ReverbParagraphView(context, typography.bodyMedium, density, resolver, 0)
+    private val title = ParagraphView(context, typography.titleMedium, density, resolver, 0)
+    private val body = ParagraphView(context, typography.bodyMedium, density, resolver, 0)
     private val input = interactions.row(this)
     override val nativeClickEndpoint get() = input.pointerEndpoint
     private var textHeight = 0
@@ -214,7 +223,7 @@ internal open class OnboardingCardView(
     var onActivate: (() -> Unit)? = null
     protected open val accessibilityClickLabel: CharSequence? get() = null
     protected open val accessibilityChecked: Boolean? get() = null
-    override val mergedRowAccessibility = ReverbMergedRowAccessibility(this, accessibilityRole,
+    override val mergedRowAccessibility = MergedRowAccessibility(this, accessibilityRole,
         sourceState = {
             NativeMergedRowAccessibilityState(canActivate, accessibilityChecked, accessibilityClickLabel,
                 buildList {
@@ -366,7 +375,7 @@ internal class OnboardingAudioRow(
     palette: ReverbPalette,
     interactions: OnboardingNativeInteractionsFactory,
 ) : ViewGroup(context), NativeMergedRowAccessibilityHost, app.smallthingz.reverb.NativeClickPhaseHost {
-    private val title = ReverbParagraphView(context, typography.bodyLarge, density, resolver, 0)
+    private val title = ParagraphView(context, typography.bodyLarge, density, resolver, 0)
     private val toggle = ReverbMaterialSwitchView(context, palette)
     private val input = interactions.row(this)
     override val nativeClickEndpoint get() = input.pointerEndpoint
@@ -375,7 +384,7 @@ internal class OnboardingAudioRow(
     var onActivate: (() -> Unit)? = null
     override val mergedRowAccessibility = run {
         val children = listOf(title)
-        ReverbMergedRowAccessibility(this, NativeMergedRowRole.SWITCH,
+        MergedRowAccessibility(this, NativeMergedRowRole.SWITCH,
             sourceState = { NativeMergedRowAccessibilityState(canActivate, checked, null, children) },
             invokeSourceClick = { if (canActivate && isAttachedToWindow) { onActivate?.invoke(); true } else false })
     }

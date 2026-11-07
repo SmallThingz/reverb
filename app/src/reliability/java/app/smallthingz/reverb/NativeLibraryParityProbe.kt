@@ -1,5 +1,6 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.text.view.ParagraphView
 import android.Manifest
 import android.animation.ValueAnimator
 import android.app.Application
@@ -726,7 +727,7 @@ internal class LibraryParityBoard(
         .filterIsInstance<ViewRootForTest>().flatMap { it.semanticsOwner.getAllSemanticsNodes(merged) }
     private fun playbackTexts(compose: Boolean): List<String> = if (compose) playbackNodes(false)
         .flatMap { it.config.getOrNull(SemanticsProperties.Text).orEmpty().map { text -> text.text } }
-        else libraryViews(playbackGuard()).filterIsInstance<ReverbParagraphView>().filter { it.isShown }.map { it.getText() }
+        else libraryViews(playbackGuard()).filterIsInstance<ParagraphView>().filter { it.isShown }.map { it.getText() }
     private fun hasPlaybackText(compose: Boolean, text: String) = text in playbackTexts(compose)
     private fun clickPlaybackText(compose: Boolean, text: String) {
         if (compose) {
@@ -737,7 +738,7 @@ internal class LibraryParityBoard(
             }
             check(node.config.getOrNull(SemanticsActions.OnClick)!!.action!!.invoke())
         } else {
-            val target = libraryViews(playbackGuard()).filterIsInstance<ReverbParagraphView>()
+            val target = libraryViews(playbackGuard()).filterIsInstance<ParagraphView>()
                 .filter { it.isShown && it.getText() == text }.mapNotNull { leaf ->
                     var view: View? = leaf
                     while (view != null && !view.isClickable) view = view.parent as? View
@@ -757,7 +758,7 @@ internal class LibraryParityBoard(
             }
             check(node.config.getOrNull(SemanticsActions.OnLongClick)!!.action!!.invoke())
         } else {
-            val row = libraryViews(checkNotNull(native)).filterIsInstance<ReverbParagraphView>()
+            val row = libraryViews(checkNotNull(native)).filterIsInstance<ParagraphView>()
                 .filter { it.isShown && it.getText() == title }.mapNotNull { leaf ->
                     var view: View? = leaf
                     while (view != null && !view.isLongClickable) view = view.parent as? View
