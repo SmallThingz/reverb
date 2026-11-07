@@ -92,7 +92,12 @@ internal fun safeReportedErrorDetail(message: String?, maximumLength: Int = 160)
     text = text.replace(errorControls, " ")
     text = text.replace(errorEmail, "[address]")
     text = text.replace(errorLongToken, "[redacted]")
-    text = text.replace(errorWhitespace, " ").trim().take(maximumLength)
+    text = text.replace(errorWhitespace, " ").trim()
+    if (text.length > maximumLength) {
+        var end = maximumLength - 1 // Reserve one UTF-16 code unit for a visible truncation marker.
+        if (end > 0 && text[end - 1].isHighSurrogate() && text[end].isLowSurrogate()) end--
+        text = text.substring(0, end) + "\u2026"
+    }
     if (text.isBlank() || text.lowercase() in uninformativeErrors) return null
     return text
 }

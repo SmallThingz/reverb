@@ -57,6 +57,24 @@ class ErrorPresentationTest {
         assertNull(safeReportedErrorDetail("An error occurred"))
         assertTrue(safeReportedErrorDetail("x ".repeat(2000))!!.length <= 160)
     }
+    @Test fun truncatedProviderExplanationShowsTheOmittedTailWithinTheExistingLimit() {
+        val message = "The selected storage provider cannot create a shareable document while its account is offline. Reconnect that account in the provider app and retry this operation."
+        val expected = "The selected storage provider cannot create a shareable document while its account is offline. Reconnect that account in the provider app and retry this operat\u2026"
+        assertEquals(expected, safeReportedErrorDetail(message))
+        assertEquals(160, expected.length)
+    }
+    @Test fun detailAtOrWithinTheLimitDoesNotGainAMarker() {
+        assertEquals("Retry later", safeReportedErrorDetail("Retry later", maximumLength = 11))
+        assertEquals("Retry later", safeReportedErrorDetail("Retry later", maximumLength = 12))
+    }
+    @Test fun oneCharacterLimitCanStillIndicateTruncation() {
+        assertEquals("a", safeReportedErrorDetail("a", maximumLength = 1))
+        assertEquals("\u2026", safeReportedErrorDetail("ab", maximumLength = 1))
+    }
+    @Test fun truncationNeverSeparatesAValidSurrogatePair() {
+        assertEquals("ab\u2026", safeReportedErrorDetail("ab\uD83D\uDE00cd", maximumLength = 4))
+        assertEquals("ab\uD83D\uDE00\u2026", safeReportedErrorDetail("ab\uD83D\uDE00cd", maximumLength = 5))
+    }
     @Test fun quotedAuthorizationIsRedactedAtomically() {
         for (value in listOf("\"Bearer secret123\"", "'Basic secret456'", "\"multiple private words\"")) {
             assertEquals("Provider rejected [redacted]", safeReportedErrorDetail("Provider rejected Authorization: $value"))
