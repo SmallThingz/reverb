@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.scroll.NativeVerticalViewport
+
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Outline

@@ -4,6 +4,11 @@
  */
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.scroll.NativeVerticalFling
+import smallthingz.ui.scroll.NativeVerticalNestedHost
+import smallthingz.ui.scroll.NativeVerticalOverscroll
+import smallthingz.ui.scroll.NativeVerticalScrollSource
+
 import smallthingz.ui.text.view.NativeSourceAccessibilityNode
 import android.content.Context
 import android.graphics.Canvas

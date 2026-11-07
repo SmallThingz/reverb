@@ -4,6 +4,8 @@
  */
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.scroll.NativeVerticalViewport
+
 import smallthingz.ui.text.view.NativeSourceAccessibilityNode
 import smallthingz.ui.text.view.NativeTextSemanticsClipPolicy
 import android.os.Bundle
@@ -15,10 +17,10 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.accessibility.AccessibilityNodeInfoCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
-import app.smallthingz.reverb.NativeAccessibilityScrollRange
-import app.smallthingz.reverb.NativeScrollAccessibilityRegistration
-import app.smallthingz.reverb.NativeVerticalScrollAccessibilityBinding
-import app.smallthingz.reverb.NativeWindowScrollAccessibilityEvents
+import smallthingz.ui.scroll.NativeAccessibilityScrollRange
+import smallthingz.ui.scroll.NativeScrollAccessibilityRegistration
+import smallthingz.ui.scroll.NativeVerticalScrollAccessibilityBinding
+import smallthingz.ui.scroll.NativeWindowScrollAccessibilityEvents
 import java.util.IdentityHashMap
 
 /** Existing Views and the existing Main cursor/scroll queue; no copied semantic or rendering tree. */

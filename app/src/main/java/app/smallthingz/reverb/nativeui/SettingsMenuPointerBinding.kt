@@ -10,7 +10,7 @@ import smallthingz.ui.input.phase.NativeClickPhaseNode
 import smallthingz.ui.input.phase.NativeDragPointerEvent
 import smallthingz.ui.input.phase.PhasePointerRoot
 import smallthingz.ui.input.phase.NativePointerPass
-import app.smallthingz.reverb.NativeVerticalPhaseBinding
+import smallthingz.ui.scroll.NativeVerticalPhaseBinding
 import smallthingz.ui.input.phase.NativeViewPhasePointerNode
 import smallthingz.ui.input.phase.NativeViewPointerHitLayout
 import smallthingz.ui.input.phase.NativeWindowPointerCoordinates

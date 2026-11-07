@@ -6,6 +6,11 @@
  */
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.scroll.NativeVerticalNestedHost
+import smallthingz.ui.scroll.NativeVerticalScrollSource
+import smallthingz.ui.scroll.NativeVerticalScrollState
+import smallthingz.ui.scroll.NativeVerticalViewport
+
 import smallthingz.ui.interaction.view.NativeClickBinding
 import smallthingz.ui.interaction.view.NativeClickEnvironment
 import smallthingz.ui.interaction.view.RowIndication

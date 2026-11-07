@@ -1,5 +1,8 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.scroll.NativeVerticalNestedHost
+import smallthingz.ui.scroll.NativeVerticalScrollSource
+
 import smallthingz.ui.input.phase.NativeClickPhaseHost
 import smallthingz.ui.input.phase.NativeClickPhaseNode
 import smallthingz.ui.input.phase.NativeViewPhasePointerNode

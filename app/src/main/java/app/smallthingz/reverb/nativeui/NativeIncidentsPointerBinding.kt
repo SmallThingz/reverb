@@ -1,5 +1,8 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.scroll.NativeVerticalNestedHost
+import smallthingz.ui.scroll.NativeVerticalScrollSource
+
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup

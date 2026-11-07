@@ -4,8 +4,8 @@ import smallthingz.ui.foundation.gestures.ScrollScope
 import smallthingz.ui.geometry.Offset
 import smallthingz.ui.unit.Velocity
 import app.smallthingz.reverb.nativeui.NativeHorizontalOverscroll
-import app.smallthingz.reverb.nativeui.NativeVerticalNestedHost
-import app.smallthingz.reverb.nativeui.NativeVerticalScrollSource
+import smallthingz.ui.scroll.NativeVerticalNestedHost
+import smallthingz.ui.scroll.NativeVerticalScrollSource
 import kotlinx.coroutines.CancellationException
 
 /**

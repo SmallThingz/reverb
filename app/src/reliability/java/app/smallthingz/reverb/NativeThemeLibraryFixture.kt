@@ -1,5 +1,8 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.scroll.NativeVerticalNestedHost
+import smallthingz.ui.scroll.NativeVerticalScrollSource
+
 import smallthingz.ui.interaction.view.readCachedAnimatorDurationScale
 import smallthingz.ui.text.view.ParagraphView
 import android.content.Context

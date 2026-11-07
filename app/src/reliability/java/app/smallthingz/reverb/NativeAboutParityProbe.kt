@@ -50,7 +50,7 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.window.DialogWindowProvider
 import app.smallthingz.reverb.nativeui.AboutContentAppearance
-import app.smallthingz.reverb.nativeui.NativeVerticalViewport
+import smallthingz.ui.scroll.NativeVerticalViewport
 import app.smallthingz.reverb.nativeui.ReverbAboutDialog
 import app.smallthingz.reverb.nativeui.ReverbPalette
 import org.json.JSONArray

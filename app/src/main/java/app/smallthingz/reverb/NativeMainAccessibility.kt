@@ -4,6 +4,8 @@
  */
 package app.smallthingz.reverb
 
+import smallthingz.ui.scroll.NativeVerticalViewport
+
 import smallthingz.ui.input.phase.NativeClickPhaseHost
 
 import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost

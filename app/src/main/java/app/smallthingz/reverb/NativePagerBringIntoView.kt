@@ -4,13 +4,14 @@
  */
 package app.smallthingz.reverb
 
+import smallthingz.ui.scroll.NativeBringIntoViewRequest
+
 import smallthingz.ui.foundation.gestures.BringIntoViewSpec
 import smallthingz.ui.runtime.MonotonicFrameClock
 import smallthingz.ui.geometry.Offset
 import smallthingz.ui.geometry.Rect
-import app.smallthingz.reverb.nativeui.NativeBringIntoViewRequestQueue
-import app.smallthingz.reverb.nativeui.NativeContentInViewOwner
-import app.smallthingz.reverb.nativeui.NativeUpdatableScrollAnimation
+import smallthingz.ui.scroll.NativeBringIntoViewRequestQueue
+import smallthingz.ui.animation.UpdatableScrollAnimation
 import kotlin.math.abs
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -77,7 +78,7 @@ internal class NativePagerContentInViewOwner(
     suspend fun bringChildIntoView(bounds: () -> Rect?) {
         if (bounds()?.let { isMaxVisible(it) } != false) return
         suspendCancellableCoroutine { continuation ->
-            if (requests.enqueue(NativeContentInViewOwner.Request(bounds, continuation)) && !isAnimationRunning)
+            if (requests.enqueue(NativeBringIntoViewRequest(bounds, continuation)) && !isAnimationRunning)
                 launchAnimation()
         }
     }
@@ -99,7 +100,7 @@ internal class NativePagerContentInViewOwner(
     private fun launchAnimation(viewportAdjustment: Int = 0) {
         check(!isAnimationRunning)
         @Suppress("DEPRECATION")
-        val animation = NativeUpdatableScrollAnimation(spec.scrollAnimationSpec)
+        val animation = UpdatableScrollAnimation(spec.scrollAnimationSpec)
         nodeScope().launch(frames, start = CoroutineStart.UNDISPATCHED) {
             var cancellation: CancellationException? = null
             val animationJob = coroutineContext.job

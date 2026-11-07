@@ -1,5 +1,8 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.scroll.NativeVerticalNestedHost
+import smallthingz.ui.scroll.NativeVerticalViewport
+
 import smallthingz.ui.text.view.NativeTextSemanticsClip
 import android.content.Context
 import android.view.View

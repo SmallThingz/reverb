@@ -4,7 +4,7 @@ import smallthingz.ui.text.view.NativeSourceAccessibilityNode
 import smallthingz.ui.text.view.NativeTextSemanticsClipPolicy
 import android.view.View
 import android.view.ViewGroup
-import app.smallthingz.reverb.NativeWindowScrollAccessibilityEvents
+import smallthingz.ui.scroll.NativeWindowScrollAccessibilityEvents
 import java.util.IdentityHashMap
 
 /** Finite Settings leases on Main's existing cursor; no second accessibility window owner. */

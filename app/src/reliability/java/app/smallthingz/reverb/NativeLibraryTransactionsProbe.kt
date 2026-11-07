@@ -1,5 +1,8 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.scroll.NativeVerticalNestedHost
+import smallthingz.ui.scroll.NativeVerticalScrollSource
+
 import smallthingz.ui.text.view.ParagraphView
 import android.Manifest
 import android.animation.ValueAnimator
@@ -926,7 +929,7 @@ private class TransactionBoard(
         val views = nativeParityOnMain(i) {
             guard(); check(!compose)
             val descendants = transactionViews(focusRoot())
-            val viewport = descendants.filterIsInstance<app.smallthingz.reverb.nativeui.NativeVerticalViewport>().single()
+            val viewport = descendants.filterIsInstance<smallthingz.ui.scroll.NativeVerticalViewport>().single()
             val target: View = when (part) {
                 "title" -> descendants.filterIsInstance<app.smallthingz.reverb.nativeui.NativeSheetAppContent>().single().titleView
                 "editor" -> descendants.filterIsInstance<android.widget.EditText>().single()

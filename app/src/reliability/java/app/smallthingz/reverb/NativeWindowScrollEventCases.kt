@@ -1,5 +1,10 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.scroll.NativeAccessibilityScrollRange
+import smallthingz.ui.scroll.NativeHorizontalAccessibilityEventRegistration
+import smallthingz.ui.scroll.NativeWindowHorizontalAccessibilityEvents
+import smallthingz.ui.scroll.NativeWindowScrollAccessibilityEvents
+
 import smallthingz.ui.text.view.NativePlainTextViewGeometry
 import smallthingz.ui.text.view.NativeTextSemanticsClip
 import smallthingz.ui.text.view.NativeTextSemanticsClipPolicy

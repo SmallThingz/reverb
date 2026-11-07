@@ -53,10 +53,10 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
-import app.smallthingz.reverb.nativeui.NativeVerticalNestedHost
-import app.smallthingz.reverb.nativeui.NativeVerticalScrollSource
-import app.smallthingz.reverb.nativeui.NativeVerticalScrollState
-import app.smallthingz.reverb.nativeui.NativeVerticalViewport
+import smallthingz.ui.scroll.NativeVerticalNestedHost
+import smallthingz.ui.scroll.NativeVerticalScrollSource
+import smallthingz.ui.scroll.NativeVerticalScrollState
+import smallthingz.ui.scroll.NativeVerticalViewport
 import app.smallthingz.reverb.nativeui.OnboardingIconView
 import app.smallthingz.reverb.nativeui.ReverbGroupLayout
 import app.smallthingz.reverb.nativeui.ReverbIcon

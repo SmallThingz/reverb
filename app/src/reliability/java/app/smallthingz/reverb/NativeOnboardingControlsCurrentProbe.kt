@@ -1,5 +1,7 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.scroll.NativeVerticalViewport
+
 import smallthingz.ui.text.view.ParagraphView
 import android.app.Application
 import android.app.Instrumentation

@@ -12,7 +12,7 @@ import android.view.View
 import android.view.ViewGroup
 import androidx.annotation.MainThread
 import smallthingz.ui.geometry.Rect
-import app.smallthingz.reverb.NativeWindowScrollAccessibilityEvents
+import smallthingz.ui.scroll.NativeWindowScrollAccessibilityEvents
 import kotlinx.coroutines.CoroutineScope
 import java.util.IdentityHashMap
 

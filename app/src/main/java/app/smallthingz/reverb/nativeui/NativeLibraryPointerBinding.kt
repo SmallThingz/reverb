@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.scroll.NativeVerticalViewport
+
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewConfiguration
@@ -13,7 +15,7 @@ import smallthingz.ui.input.phase.NativeDragPointerChange
 import smallthingz.ui.input.phase.NativeDragPointerEvent
 import app.smallthingz.reverb.NativeLibraryEdgeDismiss
 import smallthingz.ui.input.phase.NativePointerPass
-import app.smallthingz.reverb.NativeVerticalPhaseBinding
+import smallthingz.ui.scroll.NativeVerticalPhaseBinding
 import smallthingz.ui.input.phase.NativeViewPhasePointerNode
 import smallthingz.ui.input.phase.NativeViewPointerHitLayout
 import smallthingz.ui.input.phase.NativeWindowPointerCoordinates

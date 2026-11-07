@@ -1,5 +1,8 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.scroll.NativeVerticalScrollState
+import smallthingz.ui.scroll.NativeVerticalViewport
+
 import smallthingz.ui.text.view.NativeTextSemanticsClip
 import smallthingz.ui.text.view.ParagraphView
 import android.content.Context
@@ -7,8 +10,8 @@ import android.graphics.Color
 import android.view.View
 import android.view.ViewGroup
 import smallthingz.ui.geometry.Rect
-import app.smallthingz.reverb.NativeVerticalPhaseBinding
-import app.smallthingz.reverb.NativeVerticalScrollAccessibilityBinding
+import smallthingz.ui.scroll.NativeVerticalPhaseBinding
+import smallthingz.ui.scroll.NativeVerticalScrollAccessibilityBinding
 import smallthingz.ui.input.phase.NativeViewPhasePointerNode
 import smallthingz.ui.input.phase.NativeViewPointerHitLayout
 import app.smallthingz.reverb.R

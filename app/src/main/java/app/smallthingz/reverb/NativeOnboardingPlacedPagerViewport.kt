@@ -1,5 +1,10 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.scroll.NativeBringIntoViewParent
+import smallthingz.ui.scroll.nativeBringIntoViewLocalRect
+import smallthingz.ui.scroll.nativeBringIntoViewSpec
+import smallthingz.ui.scroll.toNativeBringIntoViewRect
+
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Rect

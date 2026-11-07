@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.scroll.NativeVerticalScrollSource
+
 import smallthingz.ui.animation.core.snap
 import smallthingz.ui.animation.core.tween
 import smallthingz.ui.foundation.MutatePriority

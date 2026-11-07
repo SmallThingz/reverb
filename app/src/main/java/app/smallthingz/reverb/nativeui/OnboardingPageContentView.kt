@@ -1,5 +1,9 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.scroll.NativeVerticalNestedHost
+import smallthingz.ui.scroll.NativeVerticalScrollState
+import smallthingz.ui.scroll.NativeVerticalViewport
+
 import smallthingz.ui.text.view.NativeSourceAccessibilityNode
 import smallthingz.ui.text.view.ParagraphView
 import android.content.Context

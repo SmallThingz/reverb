@@ -13,7 +13,7 @@ import androidx.core.graphics.Insets
 import app.smallthingz.reverb.IncidentHistoryUiState
 import app.smallthingz.reverb.NativeIncidentsRenderer
 import app.smallthingz.reverb.NativeIncidentsScreenOwner
-import app.smallthingz.reverb.NativeWindowScrollAccessibilityEvents
+import smallthingz.ui.scroll.NativeWindowScrollAccessibilityEvents
 import app.smallthingz.reverb.incidentsPanelTranslationX
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job

@@ -1,5 +1,7 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.scroll.NativeVerticalPhaseBinding
+
 import smallthingz.ui.input.phase.NativeViewPhasePointerNode
 import smallthingz.ui.input.phase.NativeViewPointerHitLayout
 import smallthingz.ui.input.phase.NativeWindowPointerCoordinates
@@ -45,10 +47,10 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import app.smallthingz.reverb.nativeui.NativeAboutWindowRuntime
-import app.smallthingz.reverb.nativeui.NativeVerticalNestedHost
-import app.smallthingz.reverb.nativeui.NativeVerticalScrollSource
-import app.smallthingz.reverb.nativeui.NativeVerticalScrollState
-import app.smallthingz.reverb.nativeui.NativeVerticalViewport
+import smallthingz.ui.scroll.NativeVerticalNestedHost
+import smallthingz.ui.scroll.NativeVerticalScrollSource
+import smallthingz.ui.scroll.NativeVerticalScrollState
+import smallthingz.ui.scroll.NativeVerticalViewport
 import app.smallthingz.reverb.nativeui.ReverbPalette
 import app.smallthingz.reverb.nativeui.ReverbSpringFineSeekView
 import app.smallthingz.reverb.nativeui.SpringFineSeekBinding

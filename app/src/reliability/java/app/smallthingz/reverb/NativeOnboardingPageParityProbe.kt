@@ -36,9 +36,9 @@ import app.smallthingz.reverb.nativeui.OnboardingPageContentView
 import app.smallthingz.reverb.nativeui.OnboardingPageTypography
 import app.smallthingz.reverb.nativeui.OnboardingPermissionStatus
 import app.smallthingz.reverb.nativeui.NativeWindowTextAccessibilityOwner
-import app.smallthingz.reverb.nativeui.NativeVerticalScrollState
-import app.smallthingz.reverb.nativeui.NativeVerticalScrollSource
-import app.smallthingz.reverb.nativeui.NativeVerticalNestedHost
+import smallthingz.ui.scroll.NativeVerticalScrollState
+import smallthingz.ui.scroll.NativeVerticalScrollSource
+import smallthingz.ui.scroll.NativeVerticalNestedHost
 import app.smallthingz.reverb.nativeui.ReverbPalette
 import app.smallthingz.reverb.nativeui.ReverbParagraphStyles
 import app.smallthingz.reverb.nativeui.ReverbTextRole

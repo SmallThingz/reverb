@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.scroll.NativeVerticalScrollState
+
 import app.smallthingz.reverb.closePreservingPrimaryFailure
 
 import android.view.View

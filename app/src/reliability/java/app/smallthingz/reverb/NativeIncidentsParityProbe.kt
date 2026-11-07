@@ -1,5 +1,7 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.scroll.NativeWindowScrollAccessibilityEvents
+
 import smallthingz.ui.input.phase.NativeClickPhaseHost
 
 import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost

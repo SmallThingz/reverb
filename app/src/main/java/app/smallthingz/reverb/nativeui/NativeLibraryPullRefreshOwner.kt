@@ -4,6 +4,9 @@
  */
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.scroll.NativeVerticalNestedHost
+import smallthingz.ui.scroll.NativeVerticalScrollSource
+
 import smallthingz.ui.animation.core.Animatable
 import smallthingz.ui.runtime.MonotonicFrameClock
 import smallthingz.ui.unit.Density

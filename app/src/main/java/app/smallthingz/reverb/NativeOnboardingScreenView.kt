@@ -1,5 +1,11 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.scroll.NativeVerticalPhaseBinding
+import smallthingz.ui.scroll.NativeVerticalScrollAccessibilityBinding
+import smallthingz.ui.scroll.NativeVerticalScrollState
+import smallthingz.ui.scroll.NativeVerticalViewport
+import smallthingz.ui.scroll.nativeBringIntoViewLocalRect
+
 import smallthingz.ui.input.NativeAndroidInteropHost
 import smallthingz.ui.input.phase.NativeAndroidInteropNode
 import smallthingz.ui.input.phase.NativeClickPhaseEndpoint

@@ -1,5 +1,8 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.scroll.NativeVerticalNestedHost
+import smallthingz.ui.scroll.NativeVerticalScrollSource
+
 import smallthingz.ui.runtime.MonotonicFrameClock
 import kotlinx.coroutines.suspendCancellableCoroutine
 import smallthingz.ui.unit.Density
