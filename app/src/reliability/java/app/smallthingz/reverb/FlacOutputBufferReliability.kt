@@ -105,6 +105,43 @@ internal fun verifyFlacOutputBufferRoundTrip(context: Context, report: StringBui
     check(decodedBytes == original.size && decoded.contentEquals(original)) {
         "FLAC round trip changed PCM frames"
     }
+    // Exercise the shared recording-copy decoder on real Android codec buffers.
+    // Expected samples remain the independent original PCM, not decoder output.
+    var frameCopyCases = 0
+    val checksumSource = File(directory, "frame-copy-checksum-${UUID.randomUUID()}.flac")
+    check(checksumSource.createNewFile())
+    file.inputStream().use { input -> checksumSource.outputStream().use { output -> input.copyTo(output) } }
+    RandomAccessFile(checksumSource, "rw").use {
+        it.seek(26); val value = it.readUnsignedByte(); it.seek(26); it.writeByte(value xor 1)
+    }
+    for (corruptChecksum in listOf(false, true)) for (first in listOf(0L, 221L)) {
+        val actual = java.io.ByteArrayOutputStream()
+        var closes = 0
+        val copyWriter = object : RecordingAudioWriter {
+            override val totalSampleBytesWritten get() = actual.size().toLong()
+            override val totalFileBytesWritten get() = totalSampleBytesWritten
+            override fun write(bytes: ByteArray, offset: Int, count: Int) { actual.write(bytes, offset, count) }
+            override fun close() { closes++ }
+            override fun verify(context: Context, checkCancelled: () -> Unit): StableOutputFingerprint =
+                error("Frame copying must not acquire publication authority")
+        }
+        RandomAccessFile(if (corruptChecksum) checksumSource else file, "r").use { source ->
+            var failure: java.io.IOException? = null
+            try {
+                copyRecordingFrames(source.channel,
+                    WavPcmLayout(sampleRate, channels, PcmSampleFormat.PCM_16, 0, original.size.toLong()),
+                    true, RecordingConversionPlan(first, frames - first, PcmSampleFormat.PCM_16), copyWriter)
+            } catch (error: java.io.IOException) { failure = error }
+            if (corruptChecksum && first == 0L) {
+                check(failure?.message == "Original FLAC audio checksum does not match")
+            } else check(failure == null) { "Shared FLAC copy failed: $failure" }
+            check(source.channel.isOpen)
+        }
+        check(actual.toByteArray().contentEquals(original.copyOfRange(first.toInt() * frameBytes, original.size)))
+        check(closes == 1)
+        frameCopyCases++
+    }
+    report.append("FLAC_FRAME_COPY cases=$frameCopyCases full_checksum_rejected=true selected_pcm_exact=true\n")
     check(fileIdentityMatches(requireNotNull(verified.fileKey), resolveFileIdentity(file))) {
         "FLAC fixture identity changed before evidence retention"
     }
