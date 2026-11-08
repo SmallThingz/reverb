@@ -1,6 +1,7 @@
 package app.smallthingz.reverb
 
 import java.io.Closeable
+import java.io.File
 import kotlinx.coroutines.launch
 
 internal interface CapturePolicySubscription : Closeable {
@@ -132,10 +133,18 @@ internal class CaptureObservationAdmission(private val maximumInFlight: Int = 64
     private val lock = Any()
     private var inFlight = 0
     private var overflowReported = false
+    private class Pending(val root: File, val incident: RecordingIncident)
+    private val pending = mutableSetOf<Pending>()
     init { require(maximumInFlight > 0) }
+
+    fun incidents(root: File): List<RecordingIncident> {
+        val owner = root.absoluteFile
+        return synchronized(lock) { pending.mapNotNull { if (it.root == owner) it.incident else null } }
+    }
 
     fun submit(
         scope: kotlinx.coroutines.CoroutineScope,
+        root: File,
         create: () -> RecordingIncident,
         persist: suspend (RecordingIncident) -> Unit,
         onFailure: (Exception) -> Unit,
@@ -152,15 +161,20 @@ internal class CaptureObservationAdmission(private val maximumInFlight: Int = 64
             return null
         }
         var released = false
+        var registered: Pending? = null
         fun release() = synchronized(lock) {
             if (!released) {
                 released = true
+                registered?.let { pending.remove(it) }
                 inFlight--
                 overflowReported = false
             }
         }
         return try {
             val incident = create()
+            val owner = Pending(root.absoluteFile, incident)
+            // Register before even an undispatched launch can persist; create never holds this lock.
+            synchronized(lock) { registered = owner; pending.add(owner) }
             scope.launch {
                 try { persist(incident) } catch (error: Exception) {
                     if (error is kotlinx.coroutines.CancellationException) throw error

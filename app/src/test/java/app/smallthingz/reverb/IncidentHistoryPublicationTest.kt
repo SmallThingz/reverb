@@ -28,55 +28,116 @@ class IncidentHistoryPublicationTest {
         // API 28/29 never creates the ExitInfo process marker; a stale marker is not live ownership either.
         for (durable in listOf<AppProcessMarker?>(null, AppProcessMarker(42, 80_000L))) {
             Fixture().use { fixture ->
-                val owners = RecordingIncidentReplayOwners(
+                val admission = CaptureObservationAdmission()
+                fun owners() = RecordingIncidentReplayOwners(
                     appProcessPid = durable?.pid ?: 0,
                     appProcessStartedAtMillis = durable?.processStartedAtMillis ?: -1L,
-                    observationProcess = live)
+                    exactIncidents = admission.incidents(fixture.directory))
                 var attempts = 0
                 var waits = 0
+                val failures = mutableListOf<Exception>()
                 fixture.failAfterPublication = 1
-                persistCaptureInputObservation(
-                    persist = {
-                        attempts++
-                        if (attempts == 1) fixture.write(listOf(observation))
-                        else {
-                            val history = fixture.readAuthoritative()
-                            val tombstone = history.singleOrNull { recordingIncidentReferenceMatches(it, observation) }
-                            assertTrue("Unrelated append lost the deleted observation identity", tombstone?.deleted == true)
-                            // Exercise the production retry merge with the identical originally allocated fact.
-                            fixture.write(history.map {
-                                if (it === tombstone) mergeRecordingIncidentEvidence(it, observation) else it
-                            })
-                        }
-                    },
-                    waitBeforeRetry = { millis ->
-                        assertEquals(100L, millis)
-                        waits++
-                        // A real authoritative read confirms the initially visible failed-barrier publication.
-                        val visible = fixture.readAuthoritative().single()
-                        assertEquals(observation, visible)
-                        fixture.write(listOf(visible.copy(acknowledgedAtMillis = Long.MIN_VALUE)))
-                        val compacted = compactRecordingIncidentDeletions(
-                            fixture.readAuthoritative(), unrelated) { owners }
-                        fixture.write(appendRecordingIncidentPreservingDeletions(
-                            compacted, unrelated, MAX_VISIBLE_RECORDING_INCIDENTS))
-                    },
-                    onFailure = { throw AssertionError("Observation retry failed", it) },
-                )
+                checkNotNull(admission.submit(this, fixture.directory, create = { observation }, persist = { fact ->
+                    assertSame(observation, fact)
+                    assertEquals(listOf(fact), admission.incidents(fixture.directory))
+                    persistCaptureInputObservation(
+                        persist = {
+                            attempts++
+                            if (attempts == 1) fixture.write(listOf(fact))
+                            else {
+                                val history = fixture.readAuthoritative()
+                                val tombstone = history.singleOrNull { recordingIncidentReferenceMatches(it, fact) }
+                                assertTrue("Unrelated append lost the deleted observation identity", tombstone?.deleted == true)
+                                fixture.write(history.map {
+                                    if (it === tombstone) mergeRecordingIncidentEvidence(it, fact) else it
+                                })
+                            }
+                        },
+                        waitBeforeRetry = { millis ->
+                            assertEquals(100L, millis)
+                            waits++
+                            val visible = fixture.readAuthoritative().single()
+                            assertEquals(observation, visible)
+                            fixture.write(listOf(visible.copy(acknowledgedAtMillis = Long.MIN_VALUE)))
+                            val compacted = compactRecordingIncidentDeletions(
+                                fixture.readAuthoritative(), unrelated) { owners() }
+                            fixture.write(appendRecordingIncidentPreservingDeletions(
+                                compacted, unrelated, MAX_VISIBLE_RECORDING_INCIDENTS))
+                        },
+                        onFailure = failures::add,
+                    )
+                }, onFailure = failures::add)).join()
+                assertTrue(failures.isEmpty())
                 assertEquals(2, attempts)
                 assertEquals(1, waits)
                 val final = fixture.readAuthoritative()
                 assertEquals(listOf(unrelated), final.filterNot { it.deleted })
                 assertTrue(final.single { recordingIncidentReferenceMatches(it, observation) }.deleted)
-                // A durable marker matching the old process must not retain observations after live ownership changes.
-                for (nextProcess in listOf(AppProcessMarker(43, live.processStartedAtMillis),
-                    AppProcessMarker(live.pid, live.processStartedAtMillis + 1))) {
-                    val retired = owners.copy(appProcessPid = live.pid,
-                        appProcessStartedAtMillis = live.processStartedAtMillis, observationProcess = nextProcess)
-                    assertEquals(listOf(unrelated), compactRecordingIncidentDeletions(final,
-                        unrelated.copy(observationId = 9)) { retired })
-                }
+                assertTrue(admission.incidents(fixture.directory).isEmpty())
+                // Once this exact retry ends, even a durable marker for the live process cannot pin it.
+                val retired = owners().copy(appProcessPid = live.pid,
+                    appProcessStartedAtMillis = live.processStartedAtMillis)
+                assertEquals(listOf(unrelated), compactRecordingIncidentDeletions(final,
+                    unrelated.copy(observationId = 9)) { retired })
             }
+        }
+    }
+
+    @Test
+    fun completedObservationDeletesDoNotExhaustSameProcessHistory() = kotlinx.coroutines.runBlocking {
+        Fixture().use { fixture ->
+            fixture.write(emptyList())
+            val admission = CaptureObservationAdmission()
+            val failures = mutableListOf<Exception>()
+            fun owners() = RecordingIncidentReplayOwners(appProcessPid = 42,
+                appProcessStartedAtMillis = 90_000L, exactIncidents = admission.incidents(fixture.directory))
+            repeat(MAX_RECORDING_INCIDENT_HISTORY_RECORDS + 2) { index ->
+                val observation = RecordingIncident(100_000L + index,
+                    kind = RecordingIncidentKind.CAPTURE_INPUT_OBSERVATION, pid = 42,
+                    processStartedAtMillis = 90_000L, observationId = index + 1L)
+                checkNotNull(admission.submit(this, fixture.directory, { observation }, { fact ->
+                    val retained = compactRecordingIncidentDeletions(fixture.readAuthoritative(), fact) { owners() }
+                    fixture.write(appendRecordingIncidentPreservingDeletions(retained, fact, MAX_VISIBLE_RECORDING_INCIDENTS))
+                }, failures::add)).join()
+                assertTrue("Completed observation $index failed: $failures", failures.isEmpty())
+                assertTrue(admission.incidents(fixture.directory).isEmpty())
+                fixture.write(fixture.readAuthoritative().map {
+                    if (recordingIncidentReferenceMatches(it, observation)) it.copy(acknowledgedAtMillis = Long.MIN_VALUE) else it
+                })
+            }
+            val unrelatedError = RecordingIncident(200_000L, kind = RecordingIncidentKind.UNEXPECTED_ERROR)
+            val compacted = compactRecordingIncidentDeletions(fixture.readAuthoritative(), unrelatedError) { owners() }
+            fixture.write(appendRecordingIncidentPreservingDeletions(compacted, unrelatedError, MAX_VISIBLE_RECORDING_INCIDENTS))
+            assertEquals(listOf(unrelatedError), fixture.readAuthoritative())
+        }
+    }
+
+    @Test
+    fun finishedRetryPendingPayloadIsConfirmedBeforeDeletionAndPruning() = kotlinx.coroutines.runBlocking {
+        Fixture().use { fixture ->
+            val admission = CaptureObservationAdmission()
+            val observation = RecordingIncident(100_000L, kind = RecordingIncidentKind.CAPTURE_INPUT_OBSERVATION,
+                pid = 42, processStartedAtMillis = 90_000L, observationId = 1)
+            val failures = mutableListOf<Exception>()
+            fixture.failAfterPublication = 3
+            checkNotNull(admission.submit(this, fixture.directory, { observation }, { fact ->
+                persistCaptureInputObservation(persist = { fixture.write(listOf(fact)) },
+                    waitBeforeRetry = {}, onFailure = failures::add)
+            }, failures::add)).join()
+            assertEquals(1, failures.size)
+            assertTrue(admission.incidents(fixture.directory).isEmpty())
+            assertEquals(listOf(observation), fixture.readVisible())
+            // Match Store.readHistory: settle the immutable publication before a later mutation/prune.
+            val confirmed = fixture.readAuthoritative().single()
+            assertEquals(observation, confirmed)
+            fixture.write(listOf(confirmed.copy(acknowledgedAtMillis = Long.MIN_VALUE)))
+            val incoming = RecordingIncident(200_000L, kind = RecordingIncidentKind.UNEXPECTED_ERROR)
+            val retained = compactRecordingIncidentDeletions(fixture.readAuthoritative(), incoming) {
+                RecordingIncidentReplayOwners(exactIncidents = admission.incidents(fixture.directory))
+            }
+            fixture.write(appendRecordingIncidentPreservingDeletions(retained, incoming, MAX_VISIBLE_RECORDING_INCIDENTS))
+            fixture.publication.confirmPending(fixture.file, fixture::publish)
+            assertEquals(listOf(incoming), fixture.readAuthoritative())
         }
     }
 

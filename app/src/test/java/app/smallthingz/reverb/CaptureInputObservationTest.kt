@@ -5,11 +5,13 @@ import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.IOException
+import java.io.File
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Test
 
 class CaptureInputObservationTest {
+    private val observationRoot = File("build/tmp/capture-observation-owner").absoluteFile
     @Test fun initialSilencingAndKnownRestorationDefineEpisodes() {
         val episode = CapturePolicyEpisode()
         assertEquals(listOf(false, true, false, false, false, false, true),
@@ -254,22 +256,28 @@ class CaptureInputObservationTest {
         var created = 0
         var started = 0
         val failures = mutableListOf<Exception>()
-        fun submit() = admission.submit(scope, create = { created++; RecordingIncident(created.toLong()) },
-            persist = { started++; gate.await() }, onFailure = failures::add)
+        fun submit() = admission.submit(scope, observationRoot, create = { created++; RecordingIncident(created.toLong()) },
+            persist = { incident ->
+                assertTrue(admission.incidents(observationRoot).contains(incident))
+                started++; gate.await()
+            }, onFailure = failures::add)
         try {
             val first = checkNotNull(submit())
             val second = checkNotNull(submit())
             assertNull(submit()); assertNull(submit())
             assertEquals(2, created); assertEquals(2, started)
+            assertEquals(listOf(1L, 2L), admission.incidents(observationRoot).map { it.occurredAtMillis })
             assertEquals(1, failures.size)
             assertTrue(failures.single().message!!.contains("could not be saved"))
             first.cancel(); first.join()
+            assertEquals(listOf(2L), admission.incidents(observationRoot).map { it.occurredAtMillis })
             val third = checkNotNull(submit())
             assertEquals(3, created)
             assertNull(submit()); assertEquals(2, failures.size)
             gate.complete(Unit); second.join(); third.join()
             checkNotNull(submit()).join()
             assertEquals(4, created)
+            assertTrue(admission.incidents(observationRoot).isEmpty())
         } finally { owner.cancel() }
     }
 
@@ -283,20 +291,26 @@ class CaptureInputObservationTest {
                 get() = throw IllegalStateException("launch unavailable")
         }
         try {
-            assertNull(admission.submit(scope, { throw IOException("fact unavailable") }, {}, failures::add))
-            assertNull(admission.submit(brokenScope, { RecordingIncident(1) }, {}, failures::add))
-            checkNotNull(admission.submit(scope, { RecordingIncident(2) },
+            assertNull(admission.submit(scope, observationRoot, { throw IOException("fact unavailable") }, {}, failures::add))
+            assertTrue(admission.incidents(observationRoot).isEmpty())
+            assertNull(admission.submit(brokenScope, observationRoot, { RecordingIncident(1) }, {}, failures::add))
+            assertTrue(admission.incidents(observationRoot).isEmpty())
+            checkNotNull(admission.submit(scope, observationRoot, { RecordingIncident(2) },
                 { throw IOException("persistence unavailable") }, failures::add)).join()
             assertEquals(listOf("fact unavailable", "launch unavailable", "persistence unavailable"),
                 failures.map { it.message })
             val fatal = LinkageError("fatal factory failure")
             assertSame(fatal, assertThrows(LinkageError::class.java) {
-                admission.submit(scope, { throw fatal }, {}, failures::add)
+                admission.submit(scope, observationRoot, { throw fatal }, {}, failures::add)
             })
             assertEquals(3, failures.size)
+            assertTrue(admission.incidents(observationRoot).isEmpty())
             var persisted = false
-            checkNotNull(admission.submit(scope, { RecordingIncident(3) }, { persisted = true }, failures::add)).join()
+            checkNotNull(admission.submit(scope, observationRoot, { RecordingIncident(3) }, { persisted = true }, failures::add)).join()
             assertTrue(persisted)
+            checkNotNull(admission.submit(scope, observationRoot, { RecordingIncident(4) },
+                { throw IOException("write failed") }, { throw IOException("feedback failed") })).join()
+            assertTrue(admission.incidents(observationRoot).isEmpty())
         } finally { owner.cancel() }
     }
 
@@ -306,14 +320,56 @@ class CaptureInputObservationTest {
         val cancelledScope = kotlinx.coroutines.CoroutineScope(cancelled + kotlinx.coroutines.Dispatchers.Unconfined)
         val failures = mutableListOf<Exception>()
         var ran = false
-        val job = checkNotNull(admission.submit(cancelledScope, { RecordingIncident(1) }, { ran = true }, failures::add))
+        val job = checkNotNull(admission.submit(cancelledScope, observationRoot, { RecordingIncident(1) }, { ran = true }, failures::add))
         job.join()
         assertTrue(job.isCancelled); assertFalse(ran); assertTrue(failures.isEmpty())
+        assertTrue(admission.incidents(observationRoot).isEmpty())
         val owner = kotlinx.coroutines.SupervisorJob()
         try {
             val scope = kotlinx.coroutines.CoroutineScope(owner + kotlinx.coroutines.Dispatchers.Unconfined)
-            checkNotNull(admission.submit(scope, { RecordingIncident(2) }, { ran = true }, failures::add)).join()
+            checkNotNull(admission.submit(scope, observationRoot, { RecordingIncident(2) }, { ran = true }, failures::add)).join()
             assertTrue(ran); assertTrue(failures.isEmpty())
+        } finally { owner.cancel() }
+    }
+
+    @Test fun exactOwnersAreRootScopedAndReleaseOnlyTheirOwnJob() = runBlocking {
+        val admission = CaptureObservationAdmission(3)
+        val owner = kotlinx.coroutines.SupervisorJob()
+        val scope = kotlinx.coroutines.CoroutineScope(owner + kotlinx.coroutines.Dispatchers.Unconfined)
+        val otherRoot = File(observationRoot, "other")
+        val fact = RecordingIncident(1)
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        fun submit(root: File) = checkNotNull(admission.submit(scope, root, { fact }, { gate.await() },
+            { throw AssertionError(it) }))
+        try {
+            val first = submit(observationRoot)
+            val second = submit(observationRoot)
+            val other = submit(otherRoot)
+            val snapshot = admission.incidents(observationRoot)
+            assertEquals(listOf(fact, fact), snapshot)
+            assertEquals(listOf(fact), admission.incidents(otherRoot))
+            first.cancel(); first.join()
+            assertEquals(listOf(fact), admission.incidents(observationRoot))
+            assertEquals(listOf(fact), admission.incidents(otherRoot))
+            assertEquals(listOf(fact, fact), snapshot)
+            gate.complete(Unit); second.join(); other.join()
+            assertTrue(admission.incidents(observationRoot).isEmpty())
+            assertTrue(admission.incidents(otherRoot).isEmpty())
+        } finally { owner.cancel() }
+    }
+
+    @Test fun fatalPersistenceAlsoRetiresExactObservationOwner() = runBlocking {
+        val admission = CaptureObservationAdmission(1)
+        val owner = kotlinx.coroutines.SupervisorJob()
+        val fatal = LinkageError("fatal persistence failure")
+        var reported: Throwable? = null
+        val scope = kotlinx.coroutines.CoroutineScope(owner + kotlinx.coroutines.Dispatchers.Unconfined +
+            kotlinx.coroutines.CoroutineExceptionHandler { _, error -> reported = error })
+        try {
+            checkNotNull(admission.submit(scope, observationRoot, { RecordingIncident(1) }, { throw fatal },
+                { throw AssertionError("Not an ordinary failure", it) })).join()
+            assertSame(fatal, reported)
+            assertTrue(admission.incidents(observationRoot).isEmpty())
         } finally { owner.cancel() }
     }
 }

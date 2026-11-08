@@ -168,7 +168,6 @@ internal data class RecordingIncidentReplayOwners(
     val appProcessPid: Int = 0,
     val appProcessStartedAtMillis: Long = -1L,
     val pendingAppProcesses: List<AppProcessMarker> = emptyList(),
-    val observationProcess: AppProcessMarker? = null,
 )
 
 /** Missing owner proof never authorizes pruning; the caller supplies only a complete snapshot. */
@@ -190,9 +189,7 @@ internal fun retainRecordingIncidentDeletions(
                 incident.occurredAtMillis >= session.captureArmedAtMillis
             }
         }
-        RecordingIncidentKind.CAPTURE_INPUT_OBSERVATION -> owners.observationProcess?.let { process ->
-            incident.pid == process.pid && incident.processStartedAtMillis == process.processStartedAtMillis
-        } == true
+        RecordingIncidentKind.CAPTURE_INPUT_OBSERVATION -> false // Only the exact incoming/pending facts above can replay.
         RecordingIncidentKind.UNEXPECTED_ERROR -> owners.pendingAppProcesses.any { marker ->
             (incident.pid <= 0 || incident.pid == marker.pid) &&
                 (incident.processStartedAtMillis <= 0L ||
@@ -859,7 +856,7 @@ internal object RecordingIncidentStore {
 
     fun recordCaptureInputObservation(context: Context, observedAtMillis: Long, reason: CaptureInputObservationReason) {
         val appContext = context.applicationContext
-        observationAdmission.submit(observationMutationScope, create = {
+        observationAdmission.submit(observationMutationScope, incidentRoot(appContext), create = {
             RecordingIncident(occurredAtMillis = observedAtMillis.coerceAtLeast(1L),
                 kind = RecordingIncidentKind.CAPTURE_INPUT_OBSERVATION, pid = Process.myPid(),
                 processStartedAtMillis = currentAppProcess.processStartedAtMillis, description = reason.description,
@@ -1624,8 +1621,9 @@ internal object RecordingIncidentStore {
         existing: List<RecordingIncident>,
         incoming: RecordingIncident,
     ): List<RecordingIncident> = compactRecordingIncidentDeletions(existing, incoming) {
-            // Every producer of delayed evidence is serialized by the store's monitor. Read all
-            // durable owners before pruning; a failed read is not proof that an owner is absent.
+            // Durable owners are serialized by this store's monitor; observation admission supplies
+            // a bounded exact snapshot without acquiring the store monitor in the reverse direction.
+            // A failed durable read is not proof that an owner is absent.
             val active = readSession(sessionFile(context))?.takeIf { it.armed }
             val pending = readPendingSessions(pendingSessionFile(context))
             val process = readProcessState(AtomicFile(File(context.noBackupFilesDir, PROCESS_FILE_NAME)))
@@ -1634,12 +1632,11 @@ internal object RecordingIncidentStore {
                     incidentWithoutExitEvidence(marker, marker.armedAtMillis)
                 },
                 exactIncidents = pendingCaptureInterruptionRetries.incidents(incidentRoot(context)) +
-                    pendingServiceStopIncidentRetries.incidents(incidentRoot(context)),
+                    pendingServiceStopIncidentRetries.incidents(incidentRoot(context)) +
+                    observationAdmission.incidents(incidentRoot(context)),
                 appProcessPid = process?.current?.pid ?: 0,
                 appProcessStartedAtMillis = process?.current?.processStartedAtMillis ?: -1L,
                 pendingAppProcesses = process?.pending.orEmpty().map { it.marker },
-                // Observation retries belong to this live process even without API 30 exit metadata.
-                observationProcess = currentAppProcess,
             )
     }
 
