@@ -153,4 +153,17 @@ class IncidentPresentationKeyTest {
             assertEquals(key, prepare(incidents).rows.single { it.incident == session }.key)
         }
     }
+    @Test
+    fun observationKeysUseOccurrenceIdentityAcrossEqualClocksAndClockRollback() {
+        val first = session.copy(kind = RecordingIncidentKind.CAPTURE_INPUT_OBSERVATION, observationId = 1)
+        val second = first.copy(observationId = 2)
+        val rollback = first.copy(observationId = 3, occurredAtMillis = 8_000)
+        val otherProcess = first.copy(processStartedAtMillis = 6_000)
+        val incidents = listOf(first, second, rollback, otherProcess)
+        assertEquals(4, prepare(roundTrip(incidents)).rows.map { it.key }.toSet().size)
+        assertFalse(recordingIncidentsShareCaptureSession(first, second))
+        assertFalse(recordingIncidentReferenceMatches(first, second))
+        assertEquals(recordingIncidentPresentationKey(first), recordingIncidentPresentationKey(first.copy(
+            occurredAtMillis = 7_000, acknowledgedAtMillis = 20_000, description = "Detail")))
+    }
 }

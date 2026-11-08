@@ -204,7 +204,7 @@ internal class CaptureIoCoordinator(
             delivered = count
             val endedNanos = System.nanoTime()
             val endedMillis = System.currentTimeMillis()
-            if (count < 0) throw NativeReadFailure(count)
+            if (count < 0) throw NativeReadFailure(count, endedMillis)
             if (count > lease.requestedBytes || count % lease.identity.frameBytes != 0) {
                 throw IOException("AudioRecord returned invalid frame geometry: $count")
             }
@@ -341,4 +341,4 @@ internal class CaptureIoCoordinator(
     }
 }
 
-internal class NativeReadFailure(val status: Int) : IOException("AudioRecord read failed: $status")
+internal class NativeReadFailure(val status: Int, val observedAtMillis: Long = System.currentTimeMillis()) : IOException("AudioRecord read failed: $status")

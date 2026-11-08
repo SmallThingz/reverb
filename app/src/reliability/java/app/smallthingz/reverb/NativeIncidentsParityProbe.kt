@@ -266,6 +266,8 @@ internal class IncidentsParityBoard(
     private val scene: IncidentParityScene,
     private val interactive: Boolean = false,
     private val focusTrace: JSONArray = JSONArray(),
+    private val nativeOnly: Boolean = false,
+    nativeFixtureHistory: IncidentHistoryPresentation? = null,
 ) : AutoCloseable {
     private val configuration = Configuration(host.resources.configuration).apply {
         uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or
@@ -283,7 +285,7 @@ internal class IncidentsParityBoard(
         .getDeclaredField("ReverbTypography").apply { isAccessible = true }.get(null) as Typography
     private val environment = nativeParityEnvironment(context, density,
         ReverbPalette.resolve(context, dark))
-    private val history = incidentParityHistory()
+    private val history = nativeFixtureHistory ?: incidentParityHistory()
     private val expected = IncidentHistoryUiState(
         if (scene == IncidentParityScene.POPULATED || scene == IncidentParityScene.STALE) history
         else IncidentHistoryPresentation(emptyList()),
@@ -294,7 +296,7 @@ internal class IncidentsParityBoard(
         },
     )
     private val access = IncidentsFixtureAccess(scene, history, interactive)
-    private val sourceAccess = if (interactive) IncidentsFixtureAccess(scene, history, true) else null
+    private val sourceAccess = if (interactive && !nativeOnly) IncidentsFixtureAccess(scene, history, true) else null
     private var sourceState by mutableStateOf(expected)
     private var sourceOpen by mutableStateOf(true)
     private var sourceMotion: LegacyIncidentsPanelMotionState? = null
@@ -355,6 +357,8 @@ internal class IncidentsParityBoard(
                 check(root.isFocused)
             }
             val direction = if (dark) View.LAYOUT_DIRECTION_RTL else View.LAYOUT_DIRECTION_LTR
+            check(nativeFixtureHistory == null || (nativeOnly && interactive))
+            if (!nativeOnly) {
             referenceHost.layoutDirection = direction
             reference.layoutDirection = direction
             referenceHost.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -396,6 +400,8 @@ internal class IncidentsParityBoard(
             reference.createComposition(compositionContext)
             referenceHost.addView(reference, FrameLayout.LayoutParams(-1, -1))
 
+            }
+
             val text = NativeWindowTextAccessibilityOwner(host.fixtureRoot,
                 NativeTextSemanticsClipPolicy { NativeTextSemanticsClip.Unclipped })
             windowText = text
@@ -432,7 +438,7 @@ internal class IncidentsParityBoard(
             native = content
             content.layoutDirection = direction
             contentRoot.addView(content, FrameLayout.LayoutParams(-1, -1))
-            show(true)
+            show(!nativeOnly)
         } catch (failure: Throwable) {
             try { close() } catch (cleanup: Throwable) { if (failure !== cleanup) failure.addSuppressed(cleanup) }
             throw failure
@@ -440,6 +446,7 @@ internal class IncidentsParityBoard(
     }
 
     fun show(compose: Boolean): View {
+        check(!nativeOnly || !compose) { "New observation fixture has no historical renderer" }
         check(!closed && host.hasWindowFocus())
         asyncFailure?.let { throw it }
         recordFocus("before-show-${if (compose) "released" else "native"}")
@@ -468,7 +475,7 @@ internal class IncidentsParityBoard(
             await { owner?.state?.status == IncidentHistoryLoadStatus.READY }
             nativeParityOnMain(instrumentation) { access.revisions.value = 1L }
         }
-        await { referenceComposed && (!interactive || sourceState.status == expected.status) && owner?.state?.let {
+        await { (nativeOnly || referenceComposed) && (!interactive || nativeOnly || sourceState.status == expected.status) && owner?.state?.let {
             it.status == expected.status && it.history.rows == expected.history.rows
         } == true }
     }

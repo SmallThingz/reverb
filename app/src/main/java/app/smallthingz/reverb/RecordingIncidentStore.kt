@@ -108,6 +108,7 @@ internal inline fun <T> readIncidentPayloadExact(
 internal enum class RecordingIncidentKind(val storageCode: Byte) {
     UNEXPECTED_SHUTDOWN(1),
     UNEXPECTED_ERROR(2),
+    CAPTURE_INPUT_OBSERVATION(3),
     ;
 
     companion object {
@@ -129,6 +130,7 @@ internal data class RecordingIncident(
     val processStartedAtMillis: Long = -1L,
     val captureArmedAtMillis: Long = -1L,
     val description: String? = null,
+    val observationId: Long = 0L,
 ) {
     // Keep an identity tombstone so delayed exit evidence cannot resurrect user-deleted cards.
     // This sentinel uses the existing signed history field and survives format-compatible reads.
@@ -187,6 +189,8 @@ internal fun retainRecordingIncidentDeletions(
                 incident.occurredAtMillis >= session.captureArmedAtMillis
             }
         }
+        RecordingIncidentKind.CAPTURE_INPUT_OBSERVATION ->
+            incident.pid == owners.appProcessPid && incident.processStartedAtMillis == owners.appProcessStartedAtMillis
         RecordingIncidentKind.UNEXPECTED_ERROR -> owners.pendingAppProcesses.any { marker ->
             (incident.pid <= 0 || incident.pid == marker.pid) &&
                 (incident.processStartedAtMillis <= 0L ||
@@ -296,6 +300,8 @@ internal fun recordingIncidentsShareCaptureSession(
     left: RecordingIncident,
     right: RecordingIncident,
 ): Boolean {
+    if (left.kind == RecordingIncidentKind.CAPTURE_INPUT_OBSERVATION ||
+        right.kind == RecordingIncidentKind.CAPTURE_INPUT_OBSERVATION) return false
     if (left.pid <= 0 || right.pid != left.pid) return false
     if (left.captureArmedAtMillis <= 0L || right.captureArmedAtMillis != left.captureArmedAtMillis) return false
     if (left.processStartedAtMillis > 0L && right.processStartedAtMillis > 0L &&
@@ -315,6 +321,10 @@ internal fun recordingIncidentReferenceMatches(
     reference: RecordingIncident,
 ): Boolean {
     if (candidate.kind != reference.kind) return false
+    if (candidate.kind == RecordingIncidentKind.CAPTURE_INPUT_OBSERVATION) {
+        return candidate.pid == reference.pid && candidate.processStartedAtMillis == reference.processStartedAtMillis &&
+            candidate.observationId > 0L && candidate.observationId == reference.observationId
+    }
     if (recordingIncidentsShareCaptureSession(candidate, reference)) return true
     if (candidate.kind == RecordingIncidentKind.UNEXPECTED_ERROR &&
         ((candidate.pid > 0 && reference.pid > 0 && candidate.pid != reference.pid) ||
@@ -819,7 +829,7 @@ internal object RecordingIncidentStore {
     private const val PROCESS_FORMAT_VERSION = 2
     private const val LEGACY_HISTORY_FORMAT_VERSION = 1
     private const val PREVIOUS_HISTORY_FORMAT_VERSION = 2
-    private const val HISTORY_FORMAT_VERSION = 3
+    private const val HISTORY_FORMAT_VERSION = 4
     private const val MAX_INCIDENTS = MAX_VISIBLE_RECORDING_INCIDENTS
     private const val MAX_DESCRIPTION_CHARS = 384
     private const val SESSION_FILE_NAME = "recording-session.bin"
@@ -832,12 +842,39 @@ internal object RecordingIncidentStore {
     private val mutableHistoryRevision = MutableStateFlow(0L)
     val historyRevision: StateFlow<Long> = mutableHistoryRevision.asStateFlow()
     private val historyMutationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    // Share history ownership while allowing only one observation writer to wait on the store monitor.
+    private val observationMutationScope = CoroutineScope(
+        historyMutationScope.coroutineContext + Dispatchers.IO.limitedParallelism(1))
     private val pendingServiceStopIncidentRetries = PendingProcessIncidentRetries()
     private val pendingCaptureInterruptionRetries = PendingProcessIncidentRetries()
     private val historyPublication = IncidentHistoryPublication()
     private var lastUnexpectedErrorAtMillis = 0L
+    private val observationIds = java.util.concurrent.atomic.AtomicLong()
+    private val observationAdmission = CaptureObservationAdmission()
     private val currentAppProcess by lazy {
         AppProcessMarker(Process.myPid(), currentProcessStartedAtWallClockMillis())
+    }
+
+    fun recordCaptureInputObservation(context: Context, observedAtMillis: Long, reason: CaptureInputObservationReason) {
+        val appContext = context.applicationContext
+        observationAdmission.submit(observationMutationScope, create = {
+            RecordingIncident(occurredAtMillis = observedAtMillis.coerceAtLeast(1L),
+                kind = RecordingIncidentKind.CAPTURE_INPUT_OBSERVATION, pid = Process.myPid(),
+                processStartedAtMillis = currentAppProcess.processStartedAtMillis, description = reason.description,
+                observationId = observationIds.updateAndGet { Math.incrementExact(it) })
+        }, persist = { incident ->
+            persistCaptureInputObservation(
+                persist = { synchronized(this@RecordingIncidentStore) { appendIncident(appContext, incident) } },
+                waitBeforeRetry = { kotlinx.coroutines.delay(it) },
+                onFailure = { reportCaptureObservationWriteFailure(appContext, it) },
+            )
+        }, onFailure = { reportCaptureObservationWriteFailure(appContext, it) })
+    }
+
+    private fun reportCaptureObservationWriteFailure(context: Context, error: Exception) {
+        Log.e("RecordingIncidentStore", "Unable to persist audio input observation", error)
+        AppFeedbackCenter.post(actionableErrorMessage(context,
+            context.getString(R.string.incident_update_failed), error), FeedbackTone.ERROR)
     }
 
     fun recordUnexpectedErrorInBackground(context: Context, source: String, error: Throwable) {
@@ -1828,7 +1865,8 @@ internal object RecordingIncidentStore {
         val incidents = when (val version = input.readUnsignedByte()) {
             LEGACY_HISTORY_FORMAT_VERSION -> readLegacyHistory(input)
             PREVIOUS_HISTORY_FORMAT_VERSION -> readCurrentHistory(input, MAX_INCIDENTS)
-            HISTORY_FORMAT_VERSION -> readCurrentHistory(input, MAX_RECORDING_INCIDENT_HISTORY_RECORDS)
+            3 -> readCurrentHistory(input, MAX_RECORDING_INCIDENT_HISTORY_RECORDS)
+            HISTORY_FORMAT_VERSION -> readCurrentHistory(input, MAX_RECORDING_INCIDENT_HISTORY_RECORDS, hasObservationIds = true)
             else -> throw IOException("Unsupported recording incident history version $version")
         }
         validateRecordingIncidentHistorySize(incidents)
@@ -1844,13 +1882,16 @@ internal object RecordingIncidentStore {
                 val timestamp = input.readLong()
                 val kind = RecordingIncidentKind.fromStorageCode(kindCode)
                     ?: throw IOException("Unknown recording incident kind $kindCode")
+                if (kind == RecordingIncidentKind.CAPTURE_INPUT_OBSERVATION) {
+                    throw IOException("Capture observations require history version 4")
+                }
                 if (timestamp <= 0L) throw IOException("Invalid recording incident timestamp $timestamp")
                 add(RecordingIncident(occurredAtMillis = timestamp, kind = kind))
             }
         }
     }
 
-    private fun readCurrentHistory(input: DataInputStream, maximumRecords: Int): List<RecordingIncident> {
+    private fun readCurrentHistory(input: DataInputStream, maximumRecords: Int, hasObservationIds: Boolean = false): List<RecordingIncident> {
         val count = input.readUnsignedShort()
         if (count > maximumRecords) throw IOException("Incident count $count exceeds $maximumRecords")
         return buildList(count) {
@@ -1868,8 +1909,13 @@ internal object RecordingIncidentStore {
                 val processStartedAtMillis = input.readLong()
                 val captureArmedAtMillis = input.readLong()
                 val description = input.readUTF().takeIf { it.isNotBlank() }?.take(MAX_DESCRIPTION_CHARS)
+                val observationId = if (hasObservationIds) input.readLong() else 0L
                 val kind = RecordingIncidentKind.fromStorageCode(kindCode)
                     ?: throw IOException("Unknown recording incident kind $kindCode")
+                if (observationId < 0L || (kind == RecordingIncidentKind.CAPTURE_INPUT_OBSERVATION &&
+                    (!hasObservationIds || observationId == 0L || pid <= 0 || processStartedAtMillis <= 0L))) {
+                    throw IOException("Invalid capture observation identity $observationId")
+                }
                 if (occurredAtMillis <= 0L) {
                     throw IOException("Invalid recording incident timestamp $occurredAtMillis")
                 }
@@ -1888,6 +1934,7 @@ internal object RecordingIncidentStore {
                         processStartedAtMillis = processStartedAtMillis,
                         captureArmedAtMillis = captureArmedAtMillis,
                         description = description,
+                        observationId = observationId,
                     ),
                 )
             }
@@ -1914,6 +1961,8 @@ internal object RecordingIncidentStore {
         output.writeByte(HISTORY_FORMAT_VERSION)
         output.writeShort(incidents.size)
         incidents.forEach { incident ->
+            if (incident.observationId < 0L || (incident.kind == RecordingIncidentKind.CAPTURE_INPUT_OBSERVATION &&
+                (incident.observationId == 0L || incident.pid <= 0 || incident.processStartedAtMillis <= 0L))) throw IOException("Invalid capture observation identity")
             output.writeByte(incident.kind.storageCode.toInt())
             output.writeLong(incident.occurredAtMillis)
             output.writeLong(incident.resumedAtMillis)
@@ -1927,6 +1976,7 @@ internal object RecordingIncidentStore {
             output.writeLong(incident.processStartedAtMillis)
             output.writeLong(incident.captureArmedAtMillis)
             output.writeUTF(incident.description.orEmpty().take(MAX_DESCRIPTION_CHARS))
+            output.writeLong(incident.observationId)
         }
     }
 

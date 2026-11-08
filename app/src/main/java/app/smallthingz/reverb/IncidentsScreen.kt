@@ -68,6 +68,10 @@ internal fun formatIncidentSummary(
     zone: ZoneId = ZoneId.systemDefault(),
 ): String = when (incident.kind) {
     RecordingIncidentKind.UNEXPECTED_SHUTDOWN -> formatIncidentStopSummary(incident, clockFormatter, zone)
+    RecordingIncidentKind.CAPTURE_INPUT_OBSERVATION -> {
+        val occurredAt = clockFormatter.format(Instant.ofEpochMilli(incident.occurredAtMillis).atZone(zone))
+        "Microphone input issue at $occurredAt"
+    }
     RecordingIncidentKind.UNEXPECTED_ERROR -> {
         val occurredAt = clockFormatter.format(
             Instant.ofEpochMilli(incident.occurredAtMillis).atZone(zone),
@@ -171,6 +175,9 @@ internal fun recordingIncidentPresentationKey(incident: RecordingIncident): Stri
     // Learning a missing process identity may remount a legacy row; a known identity must still
     // distinguish separate process lifetimes that reused a PID and capture-arm timestamp.
     val processStart = incident.processStartedAtMillis.takeIf { it > 0L } ?: 0L
+    if (incident.kind == RecordingIncidentKind.CAPTURE_INPUT_OBSERVATION) {
+        return "$kind:observation:${incident.pid}:$processStart:${incident.observationId}"
+    }
     return if (recordingIncidentHasSessionIdentity(incident)) {
         // Occurrence can move when Android enriches a provisional capture interruption. The
         // session identity survives that update and distinguishes equal-time capture incidents.

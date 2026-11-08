@@ -115,7 +115,7 @@ class RecordingIncidentHistoryCompatibilityTest {
         val deleted = visible.copy(acknowledgedAtMillis = Long.MIN_VALUE)
         assertEquals(listOf(deleted), decodeHistoryPayload(historyBytes(2, listOf(deleted))))
         assertEquals(listOf(deleted), decodeHistoryPayload(historyBytes(3, listOf(deleted))))
-        for ((version, excessiveCount) in listOf(1 to 129, 2 to 129, 3 to (MAX_RECORDING_INCIDENT_HISTORY_RECORDS + 1))) {
+        for ((version, excessiveCount) in listOf(1 to 129, 2 to 129, 3 to (MAX_RECORDING_INCIDENT_HISTORY_RECORDS + 1), 4 to (MAX_RECORDING_INCIDENT_HISTORY_RECORDS + 1))) {
             val header = ByteArrayOutputStream().also { bytes ->
                 DataOutputStream(bytes).use { output ->
                     output.writeInt(0x52494831); output.writeByte(version); output.writeShort(excessiveCount)
@@ -162,13 +162,14 @@ class RecordingIncidentHistoryCompatibilityTest {
                         output.writeLong(incident.processStartedAtMillis)
                         output.writeLong(incident.captureArmedAtMillis)
                         output.writeUTF(incident.description.orEmpty())
+                        if (version >= 4) output.writeLong(incident.observationId)
                     }
                 }
             }
         }.toByteArray()
 
     @Test
-    fun productionEncoderKeepsPublishedV3LayoutAndEveryIncidentField() {
+    fun productionEncoderExtendsPublishedV3FieldsWithV4ObservationIdentity() {
         val original = listOf(
             RecordingIncident(
                 occurredAtMillis = 1_700_000_000_123L,
@@ -188,7 +189,8 @@ class RecordingIncidentHistoryCompatibilityTest {
             1_700_000_005_000L.toIncident(),
         )
         val encoded = encodeCurrent(original)
-        assertArrayEquals(historyBytes(3, original), encoded)
+        assertEquals(original, decodeHistoryPayload(historyBytes(3, original)))
+        assertArrayEquals(historyBytes(4, original), encoded)
         assertEquals(original, decodeHistoryPayload(encoded))
     }
 
@@ -197,7 +199,7 @@ class RecordingIncidentHistoryCompatibilityTest {
         // Literal header emitted by the prior v3 writer; this failed in the RC1 rebuild.
         val bytes = byteArrayOf(0x52, 0x49, 0x48, 0x31, 0x03, 0x00, 0x00)
         assertTrue(decodeHistoryPayload(bytes).isEmpty())
-        assertArrayEquals(bytes, encodeCurrent(emptyList()))
+        assertArrayEquals(byteArrayOf(0x52, 0x49, 0x48, 0x31, 0x04, 0x00, 0x00), encodeCurrent(emptyList()))
     }
 
     @Test
@@ -247,14 +249,30 @@ class RecordingIncidentHistoryCompatibilityTest {
     }
 
     @Test
-    fun readingLegacyHistoryAndRewritingV3PreservesSupportedFields() {
-        for (version in 1..2) {
+    fun readingLegacyHistoryAndRewritingV4PreservesSupportedFields() {
+        for (version in 1..3) {
             val original = listOf(5L.toIncident(), 6L.toIncident().copy(acknowledgedAtMillis = Long.MIN_VALUE))
             val decoded = decodeHistoryPayload(historyBytes(version, original))
             val rewritten = encodeCurrent(decoded)
-            assertEquals(3, rewritten[4].toInt())
+            assertEquals(4, rewritten[4].toInt())
             assertEquals(decoded, decodeHistoryPayload(rewritten))
         }
+    }
+
+    @Test
+    fun observationsRejectLegacyFormatsAndIncompleteV4Identity() {
+        val valid = RecordingIncident(100, kind = RecordingIncidentKind.CAPTURE_INPUT_OBSERVATION,
+            pid = 7, processStartedAtMillis = 50, observationId = 1)
+        for (version in 1..3) assertThrows(IOException::class.java) {
+            decodeHistoryPayload(historyBytes(version, listOf(valid)))
+        }
+        val malformed = listOf(valid.copy(observationId = 0), valid.copy(observationId = -1),
+            valid.copy(pid = 0), valid.copy(processStartedAtMillis = 0))
+        malformed.forEach { incident ->
+            assertThrows(IOException::class.java) { decodeHistoryPayload(historyBytes(4, listOf(incident))) }
+            assertThrows(IOException::class.java) { encodeCurrent(listOf(incident)) }
+        }
+        assertEquals(listOf(valid), decodeHistoryPayload(historyBytes(4, listOf(valid))))
     }
 
     private fun encodeCurrent(incidents: List<RecordingIncident>): ByteArray =

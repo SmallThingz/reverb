@@ -1735,6 +1735,7 @@ open class ReverbService : Service() {
         }
 
         try {
+            registerCapturePolicyObservation(record)
             record.startRecording()
         } catch (error: RuntimeException) {
             Log.e(TAG, "AudioRecord.startRecording failed", error)
@@ -1754,6 +1755,7 @@ open class ReverbService : Service() {
         lastDurabilitySyncRequestNanos = System.nanoTime()
         publishQuickTileSnapshotOnAudioThread(refreshTiles = true, persistDurations = true)
         startQueuedCapture()
+        activateCapturePolicyObservation(record)
     }
 
     private fun armCaptureIncidentTrackingOnAudioThread(continuousRestart: Boolean = false): Boolean {
@@ -1950,7 +1952,59 @@ open class ReverbService : Service() {
         return true
     }
 
+    private val capturePolicySubscriptions = java.util.IdentityHashMap<CaptureAudioInput, CapturePolicySubscription>()
+
+    private fun registerCapturePolicyObservation(record: CaptureAudioInput) {
+        val owner = CaptureInputOperationOwner(record, captureContinuityGeneration.get(), audioRecordReleaseGeneration.get())
+        val subscription = try {
+            record.observeClientSilencing({ silenced, observedAt ->
+                synchronized(listeningIntentLock) {
+                    if (continuingCaptureGeneration(owner) != null && silenced == true) {
+                        RecordingIncidentStore.recordCaptureInputObservation(this, observedAt,
+                            CaptureInputObservationReason.POLICY_SILENCED)
+                    }
+                }
+            }, { error ->
+                synchronized(listeningIntentLock) {
+                    if (continuingCaptureGeneration(owner) != null) reportCapturePolicyObservationFailure(error)
+                }
+            })
+        } catch (error: Exception) {
+            synchronized(listeningIntentLock) {
+                if (continuingCaptureGeneration(owner) != null) reportCapturePolicyObservationFailure(error)
+            }
+            null
+        }
+        if (subscription != null) {
+            val installed = synchronized(listeningIntentLock) {
+                if (!captureInputOwnerMatches(owner) || serviceDestroying) false else {
+                    capturePolicySubscriptions[record] = subscription
+                    true
+                }
+            }
+            if (!installed) try { subscription.close() } catch (error: Exception) {
+                reportCapturePolicyObservationFailure(error)
+            }
+        }
+    }
+
+    private fun activateCapturePolicyObservation(record: CaptureAudioInput) {
+        synchronized(listeningIntentLock) {
+            try { capturePolicySubscriptions[record]?.activate() }
+            catch (error: Exception) { reportCapturePolicyObservationFailure(error) }
+        }
+    }
+
+    private fun reportCapturePolicyObservationFailure(error: Exception) {
+        Log.w(TAG, "Unable to observe Android microphone policy", error)
+        runCatching { AppFeedbackCenter.post(actionableErrorMessage(this,
+            "Unable to observe Android microphone policy", error), FeedbackTone.ERROR) }
+    }
+
     private fun releaseDetachedAudioRecord(record: CaptureAudioInput) {
+        val policy = synchronized(listeningIntentLock) { capturePolicySubscriptions.remove(record) }
+        try { policy?.close() } catch (error: Exception) { reportCapturePolicyObservationFailure(error) }
+
         runCatching { record.stop() }
         runCatching { record.release() }
             .onFailure(::reportAudioRecordReleaseFailure)
@@ -3793,7 +3847,10 @@ open class ReverbService : Service() {
         if (captureIo.currentInput() !== input) return
         val owner = CaptureInputOperationOwner(input.record, input.continuityGeneration, input.releaseGeneration)
         if (error is NativeReadFailure && error.status == AudioRecord.ERROR_DEAD_OBJECT) {
-            recoverAudioRecordOnAudioThread(owner)
+            if (recoverAudioRecordOnAudioThread(owner)) {
+                RecordingIncidentStore.recordCaptureInputObservation(this, error.observedAtMillis,
+                    CaptureInputObservationReason.INPUT_RESTARTED)
+            }
         } else if (input.storage.ring.status().terminal == CapturePcmRing.Terminal.EXHAUSTED) {
             // This event remains visible even if a racing Stop already disarmed the listening marker.
             RecordingIncidentStore.recordUnexpectedErrorInBackground(this, "Capture PCM backlog exhausted", error)
@@ -3867,6 +3924,7 @@ open class ReverbService : Service() {
                 releaseAudioRecordIfOwned(owner)
                 return false
             }
+            registerCapturePolicyObservation(record)
             record.startRecording()
             if (continuingCaptureGeneration(owner) == null) {
                 releaseAudioRecordIfOwned(owner)
@@ -3896,6 +3954,7 @@ open class ReverbService : Service() {
             }
             lastDurabilitySyncRequestNanos = System.nanoTime()
             startQueuedCapture()
+            activateCapturePolicyObservation(record)
             true
         } catch (error: Exception) {
             Log.e(TAG, "Unable to recover AudioRecord", error)

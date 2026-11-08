@@ -204,6 +204,158 @@ internal fun verifyNativeIncidentsInteraction(instrumentation: Instrumentation, 
     report.appendLine("PASS native_incidents_interaction: one finite source/native in-memory flow")
 }
 
+/** New kind-3 native scenario, explicitly outside the historical source/native oracle. */
+internal fun verifyNativeIncidentsObservation(instrumentation: Instrumentation, report: StringBuilder) {
+    val context = instrumentation.targetContext
+    check(context.packageName == "app.smallthingz.reverb.nativeparity.reliability")
+    check(context.applicationContext.javaClass == Application::class.java)
+    check(Build.VERSION.SDK_INT >= 30)
+    val directory = File(context.filesDir, "native-incidents-observation-${System.currentTimeMillis()}")
+    check(directory.mkdir())
+    val states = JSONArray()
+    val result = JSONObject().put("passed", false).put("states", states)
+        .put("scope", "Native-only kind-3 memory history; actual RecyclerView IDs and row actions")
+        .put("historical_parity", false)
+        .put("unqualified", JSONArray(listOf("Physical input", "Live incident storage", "Clipboard", "Historical kind-3 parity")))
+    publishIncidentInteraction(directory, result)
+    var host: NativeParityActivity? = null
+    var windows: NativeParityInteractiveWindows? = null
+    var board: IncidentsParityBoard? = null
+    var failure: Throwable? = null
+    var completed = false
+    try {
+        val windowScope = NativeParityInteractiveWindows.open(instrumentation, result).also { windows = it }
+        val activity = launchNativeParityActivity(instrumentation).also { host = it }
+        awaitNativeParityDraw(instrumentation, activity.fixtureRoot)
+        windowScope.recordHost(instrumentation, activity)
+        val labels = listOf("QA microphone policy observation", "QA microphone restart observation")
+        val incidents = labels.mapIndexed { index, description ->
+            RecordingIncident(1_700_000_000_000, kind = RecordingIncidentKind.CAPTURE_INPUT_OBSERVATION,
+                pid = 73, processStartedAtMillis = 1_699_000_000_000, observationId = 11L + index,
+                description = description)
+        }
+        val keys = listOf("3:observation:73:1699000000000:11", "3:observation:73:1699000000000:12")
+        val summary = "Microphone input issue at 10:13:20 PM"
+        val history = prepareIncidentHistory(incidents, java.util.Locale.US, java.time.ZoneOffset.UTC)
+        check(history.rows.map { it.key }.toSet() == keys.toSet())
+        check(history.rows.all { it.stopSummary == summary })
+        val content = nativeParityOnMain(instrumentation) {
+            IncidentsParityBoard(activity, dark = true, scene = IncidentParityScene.POPULATED,
+                interactive = true, nativeOnly = true, nativeFixtureHistory = history)
+        }.also { board = it }
+        content.awaitReady(instrumentation)
+        awaitNativeParityDraw(instrumentation, activity.fixtureRoot)
+        val pictures = LinkedHashMap<String, File>()
+        fun list() = onboardingViewDescendants(content.interactiveContent(false))
+            .filterIsInstance<androidx.recyclerview.widget.RecyclerView>().single()
+        fun snapshot(stage: String): Map<String, Long> = nativeParityOnMain(instrumentation) {
+            content.requireNoAsyncFailure()
+            val rows = content.interactiveState(false).history.rows
+            val recycler = list()
+            val adapter = checkNotNull(recycler.adapter)
+            check(adapter.hasStableIds() && adapter.itemCount == rows.size && !recycler.isComputingLayout)
+            val ids = rows.indices.associate { rows[it].key to adapter.getItemId(it) }
+            check(ids.size == rows.size && ids.values.toSet().size == rows.size)
+            check(ids.values.none { it == androidx.recyclerview.widget.RecyclerView.NO_ID })
+            states.put(JSONObject().put("stage", stage).put("rows", JSONArray(rows.mapIndexed { index, row ->
+                JSONObject().put("key", row.key).put("stable_id", adapter.getItemId(index))
+                    .put("observation_id", row.incident.observationId).put("acknowledged", row.incident.acknowledged)
+            })))
+            ids
+        }
+        fun reveal(label: String, name: String) {
+            nativeParityOnMain(instrumentation) {
+                val rows = content.interactiveState(false).history.rows
+                list().scrollToPosition(rows.indexOfFirst { it.description == label }.also { check(it >= 0) })
+            }
+            awaitIncidentCondition(instrumentation, activity, "visible exact observation row") {
+                val rows = content.interactiveState(false).history.rows
+                val position = rows.indexOfFirst { it.description == label }
+                val recycler = list()
+                if (recycler.isLayoutRequested || recycler.isComputingLayout) return@awaitIncidentCondition false
+                val holder = recycler.findViewHolderForAdapterPosition(position) ?: return@awaitIncidentCondition false
+                check(holder.itemId == checkNotNull(recycler.adapter).getItemId(position))
+                val visible = onboardingViewDescendants(holder.itemView).mapNotNull { view ->
+                    val info = view.createAccessibilityNodeInfo() ?: return@mapNotNull null
+                    try { info.text?.toString()?.takeIf { info.isVisibleToUser } }
+                    finally { @Suppress("DEPRECATION") info.recycle() }
+                }
+                label in visible && summary in visible
+            }
+            captureIncidentStep(instrumentation, activity, content, false, directory, name, pictures)
+        }
+        fun resubmit(stage: String, expected: Map<String, Long>) {
+            nativeParityOnMain(instrumentation) {
+                // Exercise the actual View/adapter same-state submission, not a reimplemented ID map.
+                onboardingViewDescendants(content.interactiveContent(false))
+                    .filterIsInstance<app.smallthingz.reverb.nativeui.ReverbIncidentsContentView>().single()
+                    .bind(content.interactiveState(false))
+            }
+            awaitNativeParityDraw(instrumentation, activity.fixtureRoot)
+            check(snapshot(stage) == expected)
+        }
+        val initial = snapshot("initial")
+        resubmit("same-initial-submission", initial)
+        for ((index, label) in labels.withIndex()) reveal(label, "initial-$index")
+        for ((index, label) in labels.withIndex()) {
+            reveal(label, "before-ack-$index")
+            incidentAction(instrumentation, activity, content, false, label, longClick = false)
+            awaitIncidentCondition(instrumentation, activity, "acknowledge exact observation") {
+                val rows = content.interactiveState(false).history.rows
+                rows.map { it.key }.toSet() == keys.toSet() && rows.all { row ->
+                    row.incident.acknowledged == (keys.indexOf(row.key) <= index)
+                }
+            }
+            awaitNativeParityDraw(instrumentation, activity.fixtureRoot)
+            check(snapshot("ack-$index") == initial)
+            reveal(label, "acknowledged-$index")
+            if (index == 0) resubmit("same-acknowledged-submission", initial)
+        }
+        reveal(labels[0], "before-delete")
+        val mainWindow = currentIncidentApplicationWindow(instrumentation, activity)
+        incidentAction(instrumentation, activity, content, false, labels[0], longClick = true)
+        val menu = awaitIncidentMenu(instrumentation, activity, mainWindow, JSONObject().also { result.put("menu_readiness", it) })
+        captureIncidentMenu(instrumentation, activity, menu.getInt("window_id"), directory,
+            "observation-menu", pictures, result)
+        clickIncidentMenuDelete(instrumentation, activity, menu.getInt("window_id"))
+        awaitIncidentCondition(instrumentation, activity, "delete exact observation",
+            returningWindows = setOf(mainWindow, menu.getInt("window_id"))) {
+            val rows = content.interactiveState(false).history.rows
+            rows.size == 1 && rows.single().key == keys[1] && rows.single().incident.acknowledged
+        }
+        awaitNativeParityDraw(instrumentation, activity.fixtureRoot)
+        check(snapshot("deleted-first") == mapOf(keys[1] to initial.getValue(keys[1])))
+        reveal(labels[1], "remaining-observation")
+        val expected = listOf("ack:${keys[0]}", "ack:${keys[1]}", "delete:${keys[0]}")
+        check(nativeParityOnMain(instrumentation) { content.interactiveCommands(false) } == expected)
+        result.put("commands", JSONArray(expected)).put("captures", JSONArray(pictures.keys.toList()))
+        completed = true
+    } catch (error: Throwable) {
+        failure = error
+    } finally {
+        fun release(block: () -> Unit) {
+            try { block() } catch (error: Throwable) {
+                if (failure == null) failure = error else if (failure !== error) failure!!.addSuppressed(error)
+            }
+        }
+        release { nativeParityOnMain(instrumentation) { board?.close() } }
+        host?.let { activity ->
+            release { nativeParityOnMain(instrumentation) { activity.fixtureRoot.removeAllViews() } }
+            release { nativeParityOnMain(instrumentation) { activity.finish() } }
+        }
+        release { windows?.close() }
+        result.put("passed", completed && failure == null)
+        failure?.let { result.put("failure", it.stackTraceToString()) }
+        var written = false
+        try { publishIncidentInteraction(directory, result); written = true }
+        catch (error: Throwable) { if (failure == null) failure = error else if (failure !== error) failure!!.addSuppressed(error) }
+        report.appendLine(if (written) "PARITY_EVIDENCE ${directory.name}/result.json"
+            else "PARITY_EVIDENCE_WRITE_FAILED ${directory.name}/result.json")
+    }
+    failure?.let { throw it }
+    report.appendLine("PASS native_incidents_observation: native-only distinct IDs, submissions and row actions")
+}
+
 private fun awaitIncidentCondition(instrumentation: Instrumentation, host: NativeParityActivity,
                                    name: String, returningWindows: Set<Int> = emptySet(),
                                    condition: () -> Boolean) {

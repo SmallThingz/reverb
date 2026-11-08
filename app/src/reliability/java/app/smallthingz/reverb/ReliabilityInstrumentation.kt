@@ -100,7 +100,7 @@ class ReliabilityInstrumentation : Instrumentation() {
                 "native_silence_blob_current", "native_silence_diagnostic_current", "native_blob_feel_current", "native_material_progress_current",
                 "native_onboarding_controls_current", "native_onboarding_permission_entry", "native_onboarding_responsive",
                 "native_library_parity", "native_library_playback", "native_library_transactions", "native_library_menu", "native_library_menu_common_grain", "native_range_parity", "native_content_restoration", "native_legacy_state_parity", "native_icon_clip_parity", "native_retention_keyboard",
-                "native_activity_lifecycle", "native_incidents_parity", "native_onboarding_input_parity", "native_incidents_interaction",
+                "native_activity_lifecycle", "native_incidents_parity", "native_onboarding_input_parity", "native_incidents_interaction", "native_incidents_observation",
                 "native_settings_compression", "native_settings_duration", "native_settings_calibration", "native_fine_seek_leaf",
                 "native_library_fixture_observation",
                 "native_library_fixture_cleanup",
@@ -259,6 +259,9 @@ class ReliabilityInstrumentation : Instrumentation() {
             } else if (requestedTest == "native_settings_calibration") {
                 executed++
                 verifyNativeSettingsCalibrationInteraction(this, report)
+            } else if (requestedTest == "native_incidents_observation") {
+                executed++
+                verifyNativeIncidentsObservation(this, report)
             } else if (requestedTest == "native_incidents_interaction") {
                 executed++
                 verifyNativeIncidentsInteraction(this, report)
@@ -671,6 +674,16 @@ class ReliabilityInstrumentation : Instrumentation() {
                     } catch (error: Throwable) {
                         failures++
                         report.append("FAIL header_cache_safety\n").append(Log.getStackTraceString(error)).append('\n')
+                    }
+                }
+                if (requestedTest == "capture_input_observations") {
+                    executed++
+                    try {
+                        verifyCaptureInputObservations(targetContext, report)
+                        report.append("PASS capture_input_observations\n")
+                    } catch (error: Throwable) {
+                        failures++
+                        report.append("FAIL capture_input_observations\n").append(Log.getStackTraceString(error)).append('\n')
                     }
                 }
                 if (requestedTest == null || requestedTest == "capture_restart_failure") {

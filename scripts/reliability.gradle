@@ -172,7 +172,7 @@ allprojects {
                     }
                     // Namespace seams and explicit published-policy exceptions reconstruct historical source only.
                     // Pin actual compiled inputs, invert only declared seams, then apply every original release hash.
-                    if (splitSha256(backendSourceMapFile.bytes) != '2165b2a8c6c204114381d5a14f62f9eb2ef733ce49da75ee0a9bd94b94c29e30') {
+                    if (splitSha256(backendSourceMapFile.bytes) != 'aee2fce6dd8f87f35b59da9b98061d9a9f962b81f2a1e37e5cb17c73c45caff2') {
                         throw new GradleException('Native backend source manifest changed')
                     }
                     def backendNormalizedBytes = [:]

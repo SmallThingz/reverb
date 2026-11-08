@@ -15,6 +15,7 @@ internal interface CaptureAudioInput {
     fun lastReadStartedAtNanos(readEndedAtNanos: Long): Long? = null
     /** Framework policy, not PCM amplitude. Queried only by calibration. */
     fun isClientSilenced(): Boolean = false
+    fun observeClientSilencing(onState: (Boolean?, Long) -> Unit, onFailure: (Exception) -> Unit): CapturePolicySubscription? = null
     fun stop()
     fun release()
 }
@@ -51,6 +52,11 @@ internal class AndroidCaptureAudioInput(private val record: AudioRecord, private
                 record.sampleRate)?.takeIf { it <= readEndedAtNanos }
         } catch (_: Exception) { null }
     }
+    override fun observeClientSilencing(
+        onState: (Boolean?, Long) -> Unit,
+        onFailure: (Exception) -> Unit,
+    ): CapturePolicySubscription? = if (android.os.Build.VERSION.SDK_INT >= 29)
+        AndroidCapturePolicySubscription(record, onState, onFailure) else null
     override fun stop() = record.stop()
     override fun isClientSilenced(): Boolean = android.os.Build.VERSION.SDK_INT >= 29 &&
         record.activeRecordingConfiguration?.isClientSilenced == true
@@ -69,4 +75,41 @@ internal fun captureReadStartNanos(
         Math.addExact(timestampNanos, Math.addExact(Math.multiplyExact(seconds, 1_000_000_000L),
             remainder * 1_000_000_000L / sampleRate))
     } catch (_: ArithmeticException) { null }
+}
+
+/** Callback payload witnesses are admitted before returning to the framework callback. */
+@androidx.annotation.RequiresApi(29)
+private class AndroidCapturePolicySubscription(
+    private val record: AudioRecord,
+    onState: (Boolean?, Long) -> Unit,
+    onFailure: (Exception) -> Unit,
+) : CapturePolicySubscription {
+    private val retired = java.util.concurrent.atomic.AtomicBoolean()
+    private val witnesses = CapturePolicyWitnesses(
+        execute = { worker.execute(it) },
+        snapshot = { record.activeRecordingConfiguration?.isClientSilenced to System.currentTimeMillis() },
+        deliver = { onState(true, it) }, failed = onFailure,
+    )
+    private val callback = object : android.media.AudioManager.AudioRecordingCallback() {
+        override fun onRecordingConfigChanged(configs: MutableList<android.media.AudioRecordingConfiguration>) {
+            try {
+                val owned = configs.singleOrNull { it.clientAudioSessionId == record.audioSessionId }
+                witnesses.observe(owned?.isClientSilenced, System.currentTimeMillis())
+            } catch (error: Exception) { witnesses.report(error) }
+        }
+    }
+    init { record.registerAudioRecordingCallback(java.util.concurrent.Executor { it.run() }, callback) }
+    override fun activate() = witnesses.activate()
+    override fun close() {
+        if (!retired.compareAndSet(false, true)) return
+        witnesses.close()
+        record.unregisterAudioRecordingCallback(callback)
+    }
+    companion object {
+        private val worker = java.util.concurrent.ThreadPoolExecutor(
+            1, 1, 0L, java.util.concurrent.TimeUnit.MILLISECONDS,
+            java.util.concurrent.ArrayBlockingQueue<Runnable>(64),
+            java.util.concurrent.ThreadFactory { task -> Thread(task, "Reverb-input-policy").apply { isDaemon = true } },
+        )
+    }
 }

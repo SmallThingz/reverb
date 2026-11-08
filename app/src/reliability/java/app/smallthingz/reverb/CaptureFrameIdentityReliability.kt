@@ -104,7 +104,7 @@ internal data class FrameFixtureAdmission(
     val replacementInput: AtomicReference<FrameReplacementInput?> = AtomicReference(),
     val retentionSyncBarrier: AtomicReference<(() -> Unit)?> = AtomicReference(),
 )
-internal class FrameReplacementInput(val input: PipelineInput) {
+internal class FrameReplacementInput(val input: CaptureAudioInput) {
     val entered = CountDownLatch(1)
     val proceed = CountDownLatch(1)
 }

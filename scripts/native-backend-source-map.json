@@ -3,6 +3,31 @@
   "purpose": "Finite inverse namespace/symbol, QA-only helper extraction, and explicit approved reference exceptions; original release expected bytes unchanged",
   "frozen_source_commit": "536c10ab104f3624c61e132eac6ea23b546db8e9",
   "normalizations": {
+    "src/main/java/app/smallthingz/reverb/IncidentsScreen.kt": {
+      "compiled_sha256": "12beb84f39533b51bae846f614a92123cdc7063f5054e06391f96524680caae2",
+      "normalized_sha256": "a2827638f5aab388d473a31d51f437a04c143bace15c3b57b24cfb3583ba6b2b",
+      "inverse": [
+        {
+          "from": "    RecordingIncidentKind.CAPTURE_INPUT_OBSERVATION -> {\n        val occurredAt = clockFormatter.format(Instant.ofEpochMilli(incident.occurredAtMillis).atZone(zone))\n        \"Microphone input issue at $occurredAt\"\n    }\n",
+          "to": "",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "    if (incident.kind == RecordingIncidentKind.CAPTURE_INPUT_OBSERVATION) {\n        return \"$kind:observation:${incident.pid}:$processStart:${incident.observationId}\"\n    }\n",
+          "to": "",
+          "count": 1,
+          "word": false
+        }
+      ],
+      "intentional_policy_exception": {
+        "kind": "Intentional new behavior; exact source-only historical reconstruction, not semantic equivalence",
+        "base_source_commit": "2f4c37bde7842633044f731fdbc5aa1f0fb2e253",
+        "scope": "Capture-input observation (kind 3) summary and process/event identity key. Historical incident renderer and prior kinds remain pinned; no legacy parity claim for new observation behavior.",
+        "prior_compiled_sha256": "a2827638f5aab388d473a31d51f437a04c143bace15c3b57b24cfb3583ba6b2b",
+        "policy_inverse_count": 2
+      }
+    },
     "src/main/java/app/smallthingz/reverb/AppFeedback.kt": {
       "compiled_sha256": "b04fde9fcbc3ddf6c88bb834a128f3cbaf8027af3c2ec26acaf329937326824b",
       "normalized_sha256": "34ff15a7da52a5ce7cedbf8ae917ec6e0617a8628788cd501764cfea6d690041",
