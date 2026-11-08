@@ -80,13 +80,16 @@ import org.json.JSONObject
 
 /** QA-owned files only. Every storage mutation is the same visible action in the released screen. */
 internal fun verifyNativeLibraryTransactions(instrumentation: Instrumentation, report: StringBuilder,
-                                             menuOnly: Boolean = false) {
+                                             menuOnly: Boolean = false, commonGrainInput: Boolean = false) {
     check(Build.VERSION.SDK_INT >= 31) // Exact current physical-phone fixture; no software fallback.
     val context = instrumentation.targetContext
     requireTransactionIdentity(context)
-    val selector = if (menuOnly) "native_library_menu" else "native_library_transactions"
+    check(!commonGrainInput || menuOnly)
+    val selector = if (commonGrainInput) "native_library_menu_common_grain"
+        else if (menuOnly) "native_library_menu" else "native_library_transactions"
     val directory = File(context.filesDir,
-        (if (menuOnly) "native-library-menu-" else "native-library-transactions-") + System.currentTimeMillis())
+        (if (commonGrainInput) "native-library-menu-common-grain-"
+            else if (menuOnly) "native-library-menu-" else "native-library-transactions-") + System.currentTimeMillis())
     check(directory.mkdir())
     val preferences = getRecorderPreferences(context).all.toMap()
     val feedback = AppFeedbackCenter.events.value.toList()
@@ -98,6 +101,9 @@ internal fun verifyNativeLibraryTransactions(instrumentation: Instrumentation, r
         .put("passed", false)
     result.put("selector", selector)
     if (menuOnly) result.put("scope", "One Light/LTR landscape/touch recording menu per renderer; same QA-owned MediaStore fixtures, no recording action; native typed audio-choice popup selection")
+    if (commonGrainInput) result.put("reference_input_override",
+        "Supplemental common-grain input only; original raw menu parity remains separate and unchanged")
+    var commonGrain: NativeParityCommonGrainSession? = null
     val cases = JSONArray()
     result.put("cases", cases)
     val windowTransitions = JSONArray().also { result.put("window_transitions", it) }
@@ -132,6 +138,7 @@ internal fun verifyNativeLibraryTransactions(instrumentation: Instrumentation, r
     }
     try {
         transactionWrite(directory, result, null) // Durable false before any route/operation is mounted.
+        if (commonGrainInput) commonGrain = NativeParityCommonGrainSession(expectedReferenceLoads = 1)
         if (menuOnly) recoverEmptyTransactionJournal(context, result) { transactionWrite(directory, result, null) }
         val activity = launchNativeParityActivity(instrumentation)
         host = activity
@@ -164,7 +171,7 @@ internal fun verifyNativeLibraryTransactions(instrumentation: Instrumentation, r
             ledger.admit()
             val records = ledger.create()
             val current = nativeParityOnMain(instrumentation) {
-                TransactionBoard(activity, compose, records, windowTransitions) { board = it }
+                TransactionBoard(activity, compose, records, windowTransitions, commonGrain) { board = it }
             }
             current.awaitReady(instrumentation, records.map { it.id }.toSet())
             fun capture(name: String, settle: Boolean = true) {
@@ -344,6 +351,8 @@ internal fun verifyNativeLibraryTransactions(instrumentation: Instrumentation, r
             check(AppFeedbackCenter.events.value == feedback) { "Unexpected passive feedback; preserved" }
             check(recordingMutations.activeIds.value.isEmpty())
         }
+        commonGrain?.verifyReferenceLoads()
+        commonGrain?.verifyNativeReady()
         val comparisons = JSONArray()
         result.put("comparisons", comparisons)
         for ((name, files) in captures) {
@@ -388,6 +397,7 @@ internal fun verifyNativeLibraryTransactions(instrumentation: Instrumentation, r
         cleanup { check(getRecorderPreferences(context).all == preferences) { "QA preferences changed" } }
         cleanup { check(AppFeedbackCenter.events.value == feedback) { "QA feedback baseline changed; preserved" } }
         cleanup { check(recordingMutations.activeIds.value.isEmpty()) { "QA operation remains active" } }
+        cleanup { commonGrain?.let { result.put("common_grain", it.evidence()) } }
         result.put("passed", primary == null).put("completed_flow_entries", cases.length())
         primary?.let { result.put("terminal_error", android.util.Log.getStackTraceString(it)) }
         var evidenceWritten = false
@@ -402,7 +412,7 @@ internal fun verifyNativeLibraryTransactions(instrumentation: Instrumentation, r
             .append(directory.name).append("/result.json\n")
     }
     primary?.let { throw it }
-    report.append(if (menuOnly) "PASS native_library_menu flows=3 exact_app_viewport_scenes=1 audio_choice_cases=1\n"
+    report.append(if (menuOnly) "PASS $selector flows=3 exact_app_viewport_scenes=1 audio_choice_cases=1\n"
         else "PASS native_library_transactions flows=8 exact_app_viewport_scenes=8\n")
 }
 
@@ -595,6 +605,7 @@ private class TransactionBoard(
     private val compose: Boolean,
     private val records: List<RecordingEntity>,
     private val windowTransitions: JSONArray,
+    private val commonGrain: NativeParityCommonGrainSession? = null,
     onOwned: (TransactionBoard) -> Unit,
 ) : AutoCloseable {
     private val configuration = Configuration(host.resources.configuration).apply {
@@ -651,7 +662,7 @@ private class TransactionBoard(
             reference.setContent {
                 CompositionLocalProvider(
                     LocalContext provides context, LocalConfiguration provides configuration,
-                    LocalResources provides context.resources, LocalDensity provides density,
+                    LocalResources provides (commonGrain?.referenceResources(context.resources) ?: context.resources), LocalDensity provides density,
                     LocalLayoutDirection provides LayoutDirection.Ltr, LocalLifecycleOwner provides lifecycle,
                     LocalOnBackPressedDispatcherOwner provides host,
                 ) {

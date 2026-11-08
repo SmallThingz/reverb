@@ -99,7 +99,7 @@ class ReliabilityInstrumentation : Instrumentation() {
                 "native_settings_library_selectors", "native_theme_matrix", "current_media_delete_consent", "native_settings_back_guard", "native_settings_calibration_current", "native_settings_calibration_live",
                 "native_silence_blob_current", "native_silence_diagnostic_current", "native_blob_feel_current", "native_material_progress_current",
                 "native_onboarding_controls_current", "native_onboarding_permission_entry", "native_onboarding_responsive",
-                "native_library_parity", "native_library_playback", "native_library_transactions", "native_library_menu", "native_range_parity", "native_content_restoration", "native_legacy_state_parity", "native_icon_clip_parity", "native_retention_keyboard",
+                "native_library_parity", "native_library_playback", "native_library_transactions", "native_library_menu", "native_library_menu_common_grain", "native_range_parity", "native_content_restoration", "native_legacy_state_parity", "native_icon_clip_parity", "native_retention_keyboard",
                 "native_activity_lifecycle", "native_incidents_parity", "native_onboarding_input_parity", "native_incidents_interaction",
                 "native_settings_compression", "native_settings_duration", "native_settings_calibration", "native_fine_seek_leaf",
                 "native_library_fixture_observation",
@@ -352,9 +352,10 @@ class ReliabilityInstrumentation : Instrumentation() {
             } else if (requestedTest == "native_library_transactions") {
                 executed++
                 verifyNativeLibraryTransactions(this, report)
-            } else if (requestedTest == "native_library_menu") {
+            } else if (requestedTest == "native_library_menu" || requestedTest == "native_library_menu_common_grain") {
                 executed++
-                verifyNativeLibraryTransactions(this, report, menuOnly = true)
+                verifyNativeLibraryTransactions(this, report, menuOnly = true,
+                    commonGrainInput = requestedTest == "native_library_menu_common_grain")
             } else if (requestedTest == "native_library_playback") {
                 executed++
                 verifyNativeLibraryPlayback(this, report)

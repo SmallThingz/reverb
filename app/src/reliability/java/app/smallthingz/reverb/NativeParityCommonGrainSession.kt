@@ -23,7 +23,7 @@ import org.json.JSONObject
  * Neither the original PNG nor either renderer is edited. Callers override only LocalResources,
  * before the reference's first composition, and retain their ordinary full-frame comparisons.
  */
-internal class NativeParityCommonGrainSession {
+internal class NativeParityCommonGrainSession(private val expectedReferenceLoads: Int = 2) {
     private val generated = generateNoisePixels()
     private val generatedHash = nativeParityPixelHash(generated)
     private val suppliedPng: ByteArray
@@ -83,8 +83,8 @@ internal class NativeParityCommonGrainSession {
     /** A seed-only global reference cache must be cold for both background and top-bar phases. */
     @Synchronized
     fun verifyReferenceLoads() {
-        check(loads.length() == 2) {
-            "Expected exactly two cold reference grain loads; observed ${loads.length()}. Warmed or bypassed reference cache is not a common-grain pass."
+        check(loads.length() == expectedReferenceLoads) {
+            "Expected exactly $expectedReferenceLoads cold reference grain loads; observed ${loads.length()}. Warmed or bypassed reference cache is not a common-grain pass."
         }
         referenceVerified = true
     }
@@ -121,6 +121,7 @@ internal class NativeParityCommonGrainSession {
         .put("generator_argb_sha256", generatedHash)
         .put("decoded_argb_sha256", decodedHash)
         .put("actual_native_shader_argb_sha256", nativeHash ?: JSONObject.NULL)
+        .put("expected_interception_count", expectedReferenceLoads)
         .put("interception_count", loads.length()).put("loads", JSONArray(loads.toString()))
         .put("reference_cache_verified", referenceVerified)
         .put("native_tile_verified", nativeHash != null)
