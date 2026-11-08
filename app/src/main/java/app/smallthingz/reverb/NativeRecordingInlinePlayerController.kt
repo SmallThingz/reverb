@@ -923,7 +923,7 @@ internal class NativeRecordingInlinePlayerController(
                     }
                 }
             }
-            val playing = isPlaying
+            val playing = trimMode && isPlaying
             val scrubbing = isScrubbing
             if (!progressEffectInitialized || progressEffectPlaying != playing || progressEffectScrubbing != scrubbing) {
                 progressEffectInitialized = true

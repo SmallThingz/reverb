@@ -551,44 +551,138 @@ internal class LibraryParityBoard(
         var previousNativePresentation: NativeInlinePlayerPresentation? = null
         fun state() = nativeParityOnMain(instrumentation) { playbackState(compose) }
         fun record(name: String) {
-            val observed = state()
-            if (!compose) nativeParityOnMain(instrumentation) {
-                playbackGuard()
-                val current = checkNotNull(native?.activePlayerLeases()?.singleOrNull()?.currentPresentation)
-                val previous = previousNativePresentation
-                if (previous != null) {
-                    check(previous.state.recordingRevisionKey == current.state.recordingRevisionKey)
-                    check(previous.actions === current.actions) { "Revision-stable player actions were rebuilt" }
-                    val before = previous.fineSeek
-                    val after = current.fineSeek
-                    check(before.onTogglePlayback === after.onTogglePlayback &&
-                        before.onInteractionStart === after.onInteractionStart &&
-                        before.onBeginFineAdjust === after.onBeginFineAdjust &&
-                        before.onFineAdjust === after.onFineAdjust &&
-                        before.onUpdateFineAdjustShuttle === after.onUpdateFineAdjustShuttle &&
-                        before.onEndFineAdjust === after.onEndFineAdjust &&
-                        before.onCancelFineAdjust === after.onCancelFineAdjust) {
-                        "Revision-stable fine-seek callbacks were rebuilt"
+            val (observed, current) = nativeParityOnMain(instrumentation) {
+                val observed = playbackState(compose)
+                val current = if (compose) null else
+                    checkNotNull(native?.activePlayerLeases()?.singleOrNull()?.currentPresentation)
+                if (current != null) {
+                    // Ordinary preparation remains controllable; a pending trim start already offers Pause.
+                    val expectedPlaying = current.state.isPlaying || (current.state.trimMode && current.state.preparing)
+                    val expectedEnabled = (current.state.prepared || !current.state.trimMode) && !current.state.trimSaving
+                    val expectedDurationBits = (current.state.durationMillis.toFloat() / 1000f).toRawBits()
+                    observed.put("native_binding", JSONObject().put("prepared", current.state.prepared)
+                        .put("trim_mode", current.state.trimMode).put("trim_saving", current.state.trimSaving)
+                        .put("state_playing", current.state.isPlaying).put("preparing", current.state.preparing)
+                        .put("playing_expected", expectedPlaying).put("playing_actual", current.fineSeek.isPlaying)
+                        .put("enabled_expected", expectedEnabled).put("enabled_actual", current.fineSeek.enabled)
+                        .put("duration_ms", current.state.durationMillis)
+                        .put("duration_bits_expected", expectedDurationBits)
+                        .put("duration_bits_actual", current.fineSeek.durationSeconds.toRawBits()))
+                    val previous = previousNativePresentation
+                    val checks = JSONObject().put("has_previous", previous != null)
+                        .put("playing_matches", current.fineSeek.isPlaying == expectedPlaying)
+                        .put("enabled_matches", current.fineSeek.enabled == expectedEnabled)
+                        .put("duration_matches", current.fineSeek.durationSeconds.toRawBits() == expectedDurationBits)
+                    if (previous != null) {
+                        val before = previous.fineSeek
+                        val next = current.fineSeek
+                        checks.put("revision_key_matches", previous.state.recordingRevisionKey == current.state.recordingRevisionKey)
+                            .put("actions_same", previous.actions === current.actions)
+                            .put("toggle_same", before.onTogglePlayback === next.onTogglePlayback)
+                            .put("interaction_start_same", before.onInteractionStart === next.onInteractionStart)
+                            .put("begin_adjust_same", before.onBeginFineAdjust === next.onBeginFineAdjust)
+                            .put("adjust_same", before.onFineAdjust === next.onFineAdjust)
+                            .put("update_shuttle_same", before.onUpdateFineAdjustShuttle === next.onUpdateFineAdjustShuttle)
+                            .put("end_adjust_same", before.onEndFineAdjust === next.onEndFineAdjust)
+                            .put("cancel_adjust_same", before.onCancelFineAdjust === next.onCancelFineAdjust)
+                            .put("interaction_key_reused", before.interactionKey != next.interactionKey ||
+                                before.interactionKey === next.interactionKey)
                     }
-                    if (before.interactionKey == after.interactionKey) {
-                        check(before.interactionKey === after.interactionKey) { "Unchanged interaction key was rebuilt" }
+                    observed.put("native_checks", checks).put("presentation_checks_passed", false)
+                }
+                observed to current
+            }
+            checkpoint(name, observed)
+            if (current != null) {
+                val checks = observed.getJSONObject("native_checks")
+                if (checks.getBoolean("has_previous")) {
+                    for (key in listOf("revision_key_matches", "actions_same", "toggle_same", "interaction_start_same",
+                        "begin_adjust_same", "adjust_same", "update_shuttle_same", "end_adjust_same",
+                        "cancel_adjust_same", "interaction_key_reused")) {
+                        check(checks.getBoolean(key)) { "Revision-stable presentation check failed: $key; $checks" }
                     }
                     observed.put("stable_callback_identity", true)
                 }
-                check(current.fineSeek.isPlaying == current.state.isPlaying &&
-                    current.fineSeek.enabled == (current.state.prepared && !current.state.trimSaving) &&
-                    current.fineSeek.durationSeconds.toRawBits() ==
-                    (current.state.durationMillis.toFloat() / 1000f).toRawBits()) {
-                    "Cached callbacks hid changed presentation values"
+                check(checks.getBoolean("playing_matches") && checks.getBoolean("enabled_matches") &&
+                    checks.getBoolean("duration_matches")) {
+                    "Fine-seek presentation mismatch: ${observed.getJSONObject("native_binding")}; $checks"
                 }
+                observed.put("presentation_checks_passed", true)
                 previousNativePresentation = current
             }
-            checkpoint(name, observed)
         }
         fun capture(name: String) {
             val bitmap = captureNativeParityContent(instrumentation, host) { show(compose) }
             try { saveNativeParityBitmap(directory, "$renderer-$name.png", bitmap) }
             finally { bitmap.recycle() }
+        }
+        fun seekPaused(fraction: Float, inputCheckpoint: String) {
+            require(fraction in 0f..1f)
+            // The source waveform has no semantic node. Its bounds come from the current two
+            // time labels and the released 128dp waveform / 2dp gap, checked against the concrete
+            // native waveform View before dispatch. No screenshot-derived or stale screen position.
+            nativeParityOnMain(instrumentation) {
+                playbackGuard()
+                check(!isPlaying(compose))
+                val bounds = waveformBounds(compose)
+                val other = waveformBounds(!compose)
+                check(kotlin.math.abs(bounds.left - other.left) <= 1f &&
+                    kotlin.math.abs(bounds.top - other.top) <= 1f &&
+                    kotlin.math.abs(bounds.right - other.right) <= 1f &&
+                    kotlin.math.abs(bounds.bottom - other.bottom) <= 1f) {
+                    "Released/native logical waveform bounds differ: $bounds / $other"
+                }
+                val result = JSONObject().put("bounds", bounds.toString()).put("peer_bounds", other.toString())
+                    .put("down_handled", JSONObject.NULL).put("up_handled", JSONObject.NULL)
+                // The checkpoint retains this object, so terminal failure serialization includes
+                // any observed partial dispatch without claiming an uncertain action was absent.
+                checkpoint(inputCheckpoint, result)
+                val time = SystemClock.uptimeMillis()
+                val origin = IntArray(2).also(host.fixtureRoot::getLocationOnScreen)
+                for (action in listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP)) {
+                    playbackGuard()
+                    check(waveformBounds(compose) == bounds) { "Waveform moved during the owned tap" }
+                    val x = bounds.left + bounds.width() * fraction
+                    val y = bounds.centerY()
+                    check(x >= 0f && y >= 0f && x < host.fixtureRoot.width && y < host.fixtureRoot.height)
+                    val properties = arrayOf(MotionEvent.PointerProperties().apply {
+                        id = 0; toolType = MotionEvent.TOOL_TYPE_FINGER
+                    })
+                    val coordinates = arrayOf(MotionEvent.PointerCoords().apply {
+                        this.x = x + origin[0]; this.y = y + origin[1]
+                        pressure = if (action == MotionEvent.ACTION_UP) 0f else 1f; size = 1f
+                    })
+                    val event = MotionEvent.obtain(time, SystemClock.uptimeMillis(), action, 1, properties,
+                        coordinates, 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0)
+                    event.offsetLocation(-origin[0].toFloat(), -origin[1].toFloat())
+                    try {
+                        val handled = host.fixtureRoot.dispatchTouchEvent(event)
+                        result.put(if (action == MotionEvent.ACTION_DOWN) "down_handled" else "up_handled", handled)
+                        result.put(if (action == MotionEvent.ACTION_DOWN) "after_down" else "after_up", playbackState(compose))
+                        check(handled) { "Owned waveform tap was not handled: $action" }
+                    } finally { event.recycle() }
+                }
+            }
+            val expectedSeek = formatPlaybackTime((records.first().durationMillis * fraction.toDouble()).toInt())
+            awaitCondition(instrumentation, "$inputCheckpoint paused waveform seek") {
+                !isPlaying(compose) && transportTexts(compose).first() == expectedSeek &&
+                    (compose || fraction != 0f || run {
+                        val current = checkNotNull(native?.activePlayerLeases()?.singleOrNull()?.currentPresentation)
+                        val ordinary = RecordingPlayback.state.value
+                        current.state.positionMillis == 0 && ordinary.matches(records.first()) &&
+                            ordinary.positionMillis == 0 && !ordinary.playing && !ordinary.wantsPlayback
+                    })
+            }
+            if (!compose && fraction == 0f) nativeParityOnMain(instrumentation) {
+                val observed = playbackState(false)
+                val ordinary = RecordingPlayback.state.value
+                observed.put("service_position_ms", ordinary.positionMillis)
+                    .put("service_playing", ordinary.playing).put("service_wants_playback", ordinary.wantsPlayback)
+                    .put("service_matches_fixture", ordinary.matches(records.first()))
+                checkpoint("trim-origin-service", observed)
+                check(observed.getInt("native_position_ms") == 0 && ordinary.positionMillis == 0 &&
+                    ordinary.matches(records.first()) && !ordinary.playing && !ordinary.wantsPlayback)
+            }
         }
         record("prepared-first-attachment")
         capture("prepared-first-attachment")
@@ -625,57 +719,12 @@ internal class LibraryParityBoard(
             awaitNativeParityDraw(instrumentation, host.fixtureRoot)
             check(state().getJSONArray("transport_text").getString(0) == pausedText)
         }
-        // The source waveform has no semantic node. Its bounds come from the current two
-        // time labels and the released 128dp waveform / 2dp gap, checked against the concrete
-        // native waveform View before dispatch. No screenshot-derived or stale screen position.
-        nativeParityOnMain(instrumentation) {
-            playbackGuard()
-            check(!isPlaying(compose))
-            val bounds = waveformBounds(compose)
-            val other = waveformBounds(!compose)
-            check(kotlin.math.abs(bounds.left - other.left) <= 1f &&
-                kotlin.math.abs(bounds.top - other.top) <= 1f &&
-                kotlin.math.abs(bounds.right - other.right) <= 1f &&
-                kotlin.math.abs(bounds.bottom - other.bottom) <= 1f) {
-                "Released/native logical waveform bounds differ: $bounds / $other"
-            }
-            val result = JSONObject().put("bounds", bounds.toString()).put("peer_bounds", other.toString())
-                .put("down_handled", JSONObject.NULL).put("up_handled", JSONObject.NULL)
-            // The checkpoint retains this object, so terminal failure serialization includes
-            // any observed partial dispatch without claiming an uncertain action was absent.
-            checkpoint("seek-input", result)
-            val time = SystemClock.uptimeMillis()
-            val origin = IntArray(2).also(host.fixtureRoot::getLocationOnScreen)
-            for (action in listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP)) {
-                playbackGuard()
-                check(waveformBounds(compose) == bounds) { "Waveform moved during the owned tap" }
-                val x = bounds.left + bounds.width() * .75f
-                val y = bounds.centerY()
-                check(x >= 0f && y >= 0f && x < host.fixtureRoot.width && y < host.fixtureRoot.height)
-                val properties = arrayOf(MotionEvent.PointerProperties().apply {
-                    id = 0; toolType = MotionEvent.TOOL_TYPE_FINGER
-                })
-                val coordinates = arrayOf(MotionEvent.PointerCoords().apply {
-                    this.x = x + origin[0]; this.y = y + origin[1]
-                    pressure = if (action == MotionEvent.ACTION_UP) 0f else 1f; size = 1f
-                })
-                val event = MotionEvent.obtain(time, SystemClock.uptimeMillis(), action, 1, properties,
-                    coordinates, 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0)
-                event.offsetLocation(-origin[0].toFloat(), -origin[1].toFloat())
-                try {
-                    val handled = host.fixtureRoot.dispatchTouchEvent(event)
-                    result.put(if (action == MotionEvent.ACTION_DOWN) "down_handled" else "up_handled", handled)
-                    result.put(if (action == MotionEvent.ACTION_DOWN) "after_down" else "after_up", playbackState(compose))
-                    check(handled) { "Owned waveform tap was not handled: $action" }
-                } finally { event.recycle() }
-            }
-        }
-        val expectedSeek = formatPlaybackTime((records.first().durationMillis * .75).toInt())
-        awaitCondition(instrumentation, "paused interior waveform seek") {
-            !isPlaying(compose) && transportTexts(compose).first() == expectedSeek
-        }
+        seekPaused(.75f, "seek-input")
         settle(instrumentation)
         record("seek-paused"); capture("seek-paused")
+        // Start Trim from the same explicit ordinary position in both ownership models.
+        seekPaused(0f, "trim-origin-input")
+        record("trim-origin-paused")
         val menuEvidence = JSONObject().put("action_submitted", false)
         checkpoint("menu-readiness", menuEvidence)
         val menuTransition = nativeParityOnMain(instrumentation) {
@@ -706,7 +755,7 @@ internal class LibraryParityBoard(
         checkpoint("trim", nativeParityOnMain(instrumentation) {
             JSONObject().put("playing", isPlaying(compose)).put("labels", JSONArray(playbackTexts(compose)))
         })
-        record("trim-callbacks")
+        if (!compose) record("trim-callbacks")
         capture("trim")
         nativeParityOnMain(instrumentation) { clickPlaybackText(compose, context.getString(R.string.cancel)) }
         awaitCondition(instrumentation, "Trim Cancel leaves paused player") {
@@ -715,9 +764,105 @@ internal class LibraryParityBoard(
         }
         settle(instrumentation)
         record("trim-cancelled"); capture("trim-cancelled")
+        if (!compose) verifyNativeTrimProgressRetirement(instrumentation, checkpoint)
         nativeParityOnMain(instrumentation) {
             if (compose) sourceLifecycle.pause() else nativeLifecycle.pause()
             assertNoPlayback()
+        }
+    }
+
+    private fun verifyNativeTrimProgressRetirement(
+        instrumentation: Instrumentation,
+        checkpoint: (String, JSONObject) -> Unit,
+    ) {
+        val evidence = JSONObject().put("passed", false)
+            .put("takeover", "injected ordinary snapshot; actual retirement/reconciliation in one Main turn")
+        checkpoint("same-recording-trim-takeover", evidence)
+        fun field(owner: Any, name: String): Any? = owner.javaClass.getDeclaredField(name).run {
+            isAccessible = true; get(owner)
+        }
+        val lease = nativeParityOnMain(instrumentation) { checkNotNull(native).activePlayerLeases().single() }
+        val controller = nativeParityOnMain(instrumentation) { checkNotNull(field(lease, "controller")) }
+        val session = nativeParityOnMain(instrumentation) { checkNotNull(field(controller, "session")) }
+        fun invoke(name: String): Any? = session.javaClass.getDeclaredMethod(name).run {
+            isAccessible = true; invoke(session)
+        }
+        fun presentation(): NativeInlinePlayerPresentation {
+            check(checkNotNull(native).activePlayerLeases().single() === lease)
+            check(field(lease, "controller") === controller && field(controller, "session") === session)
+            return checkNotNull(lease.currentPresentation)
+        }
+        var failure: Throwable? = null
+        try {
+            nativeParityOnMain(instrumentation) {
+                playbackGuard()
+                check(!presentation().state.isPlaying && !presentation().state.trimMode)
+                check(invoke("enterTrimMode") == true)
+            }
+            awaitCondition(instrumentation, "owned trim preview prepared") {
+                presentation().state.let { it.trimMode && it.prepared && !it.isPlaying }
+            }
+            nativeParityOnMain(instrumentation) { playbackGuard(); presentation().fineSeek.onTogglePlayback() }
+            awaitCondition(instrumentation, "owned trim progress job active") {
+                presentation().state.let { it.trimMode && it.isPlaying } &&
+                    (field(session, "progressEffect") as? Job)?.isActive == true
+            }
+            nativeParityOnMain(instrumentation) {
+                playbackGuard()
+                val progress = checkNotNull(field(session, "progressEffect") as? Job)
+                check(progress.isActive && presentation().state.let { it.trimMode && it.isPlaying })
+                @Suppress("UNCHECKED_CAST")
+                val playback = field(RecordingPlayback, "mutableState") as
+                    kotlinx.coroutines.flow.MutableStateFlow<RecordingPlaybackState>
+                val previous = playback.value
+                check(!previous.playing && !previous.wantsPlayback)
+                evidence.put("trim_job_active_before_takeover", true)
+                var transitionFailure: Throwable? = null
+                try {
+                    // No Handler, MediaPlayer completion, or progress callback can interleave this Main turn.
+                    playback.value = previous.copy(recording = records.first(), prepared = true,
+                        playing = false, wantsPlayback = true, positionMillis = 0,
+                        durationMillis = records.first().durationMillis.toInt())
+                    invoke("leaveTrimMode")
+                    val adopted = invoke("presentation") as NativeInlinePlayerPresentation
+                    check(!adopted.state.trimMode && adopted.state.isPlaying)
+                    invoke("reconcileEffects")
+                    val retained = field(session, "progressEffect")
+                    evidence.put("trim_job_cancelled", progress.isCancelled)
+                        .put("trim_job_active", progress.isActive).put("trim_job_retained", retained != null)
+                    check(progress.isCancelled && !progress.isActive && retained == null) {
+                        "Ordinary playback retained the retired trim progress job"
+                    }
+                    evidence.put("passed", true)
+                } catch (error: Throwable) {
+                    transitionFailure = error
+                    throw error
+                } finally {
+                    var cleanup: Throwable? = null
+                    fun release(action: () -> Unit) { try { action() } catch (error: Throwable) {
+                        if (cleanup == null) cleanup = error else if (cleanup !== error) cleanup!!.addSuppressed(error)
+                    } }
+                    release { playback.value = previous }
+                    release { invoke("preemptPreview") }
+                    evidence.put("playback_snapshot_restored", playback.value == previous)
+                    release { check(playback.value == previous) }
+                    cleanup?.let {
+                        if (transitionFailure == null) throw it
+                        if (transitionFailure !== it) transitionFailure!!.addSuppressed(it)
+                    }
+                }
+            }
+        } catch (error: Throwable) {
+            failure = error
+            throw error
+        } finally {
+            try {
+                nativeParityOnMain(instrumentation) { invoke("preemptPreview") }
+                awaitCondition(instrumentation, "owned trim preview stopped") { !presentation().state.isPlaying }
+            } catch (cleanup: Throwable) {
+                if (failure == null) throw cleanup
+                if (failure !== cleanup) failure!!.addSuppressed(cleanup)
+            }
         }
     }
 

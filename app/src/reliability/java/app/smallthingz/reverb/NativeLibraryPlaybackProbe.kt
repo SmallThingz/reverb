@@ -14,8 +14,8 @@ internal fun verifyNativeLibraryPlayback(instrumentation: Instrumentation, repor
     val cases = JSONArray()
     val comparisons = JSONArray()
     val result = JSONObject().put("baseline", "3e16f8ddb78dca15df4b436d34d330801ce83ffd")
-        .put("scope", "One Light/LTR pair: prepared expanded player, initial autoplay, explicit Play/progress/Pause, paused waveform seek, actual menu Trim and Cancel")
-        .put("limits", "Visible progress plus native presentation; no audible-output measurement, exact scheduler timing, first-display-frame claim, native detached-bind order claim, Save or capture. Settled seek/Trim/Cancel pixels compared exactly.")
+        .put("scope", "One Light/LTR pair: prepared expanded player, initial autoplay, explicit Play/progress/Pause, paused 75% waveform seek, witnessed zero-position waveform reset before actual menu Trim and Cancel; native controlled same-recording ordinary snapshot retires the real trim progress Job")
+        .put("limits", "Visible progress plus native presentation; no audible-output measurement, exact scheduler timing, first-display-frame claim, native detached-bind order claim, Save or capture. Settled seek/Trim/Cancel pixels compared exactly from equivalent positions. Nonzero ordinary-position preservation through Trim Cancel is not qualified. Takeover injects ordinary state and invokes actual controller retirement/reconciliation in one Main turn; no external transport runtime or released-renderer parity claim.")
         .put("cases", cases).put("comparisons", comparisons).put("player_preparation", JSONArray()).put("passed", false)
     fun persist() = writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
         output.write(result.toString(2).toByteArray(Charsets.UTF_8))
@@ -29,6 +29,7 @@ internal fun verifyNativeLibraryPlayback(instrumentation: Instrumentation, repor
     var matches = 0
     try {
         fixtures.requireEmptyBaseline()
+        recoverEmptyLibraryFixtureJournal(context, result, ::persist)
         val records = fixtures.create()
         check(records.first().durationMillis == 3_000L) { "Unexpected existing fixture order/duration" }
         val activity = launchNativeParityActivity(instrumentation)

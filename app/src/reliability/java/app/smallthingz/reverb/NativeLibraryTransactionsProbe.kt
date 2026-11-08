@@ -139,7 +139,7 @@ internal fun verifyNativeLibraryTransactions(instrumentation: Instrumentation, r
     try {
         transactionWrite(directory, result, null) // Durable false before any route/operation is mounted.
         if (commonGrainInput) commonGrain = NativeParityCommonGrainSession(expectedReferenceLoads = 1)
-        if (menuOnly) recoverEmptyTransactionJournal(context, result) { transactionWrite(directory, result, null) }
+        if (menuOnly) recoverEmptyLibraryFixtureJournal(context, result) { transactionWrite(directory, result, null) }
         val activity = launchNativeParityActivity(instrumentation)
         host = activity
         awaitNativeParityDraw(instrumentation, activity.fixtureRoot)
@@ -443,7 +443,7 @@ internal fun verifyNativeRenameEditorCurrent(
     fun persist() = transactionWrite(directory, result, null)
     try {
         persist()
-        recoverEmptyTransactionJournal(context, result, ::persist)
+        recoverEmptyLibraryFixtureJournal(context, result, ::persist)
         val windowScope = NativeParityInteractiveWindows.open(instrumentation, result).also { windows = it }
         val activity = launchCurrentUiSmokeActivity(instrumentation).also { host = it }
         awaitNativeParityDraw(instrumentation, activity.fixtureRoot)
@@ -1427,7 +1427,7 @@ private fun transactionWrite(directory: File, result: JSONObject, primary: Throw
 }
 private fun transactionDigest(bytes: ByteArray) = MessageDigest.getInstance("SHA-256").digest(bytes)
     .toHexString()
-private fun recoverEmptyTransactionJournal(context: Context, result: JSONObject, persist: () -> Unit) {
+internal fun recoverEmptyLibraryFixtureJournal(context: Context, result: JSONObject, persist: () -> Unit) {
     // Plain Application intentionally skips ReverbApplication's startup recovery. Run the real
     // empty QA journal recovery; never synthesize readiness or adopt existing pending saves.
     val journal = durableSaveJournalRoot(context)
