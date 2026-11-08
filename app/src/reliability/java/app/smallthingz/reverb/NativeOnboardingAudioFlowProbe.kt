@@ -84,7 +84,8 @@ internal fun verifyNativeOnboardingAudioFlow(instrumentation: Instrumentation, r
                         val scrollIdle = descendants.filterIsInstance<NativeVerticalViewport>()
                             .all { !it.state.isScrollInProgress }
                         val audioReady = intendedPage != 2 || (
-                            descendants.filterIsInstance<OnboardingAudioRow>().size == 2 &&
+                            descendants.filterIsInstance<SettingsOutputCompressionView>().size == 1 &&
+                            descendants.filterIsInstance<SettingsSilenceView>().size == 1 &&
                             f.compression().isEnabled && f.silence().isEnabled)
                         pageReady && !f.view.isLayoutRequested && scrollIdle && audioReady
                     }
@@ -189,7 +190,8 @@ internal fun verifyNativeOnboardingAudioFlow(instrumentation: Instrumentation, r
             continueTo(2)
             main {
                 check(!current().state.outputCompression && !current().state.skipSilence)
-                check(onboardingViewDescendants(current().view).filterIsInstance<OnboardingAudioRow>().size == 2)
+                check(onboardingViewDescendants(current().view).filterIsInstance<SettingsOutputCompressionView>().size == 1)
+                check(onboardingViewDescendants(current().view).filterIsInstance<SettingsSilenceView>().size == 1)
                 check(footer(R.string.onboarding_get_started).isEnabled)
                 check(current().settledPages.last() == 2 && current().finishRequests == 0)
             }
@@ -351,8 +353,12 @@ private class OnboardingAudioQaFixture(
         }
     }
     private fun update(next: OnboardingPageContentState) { state = next; view.bind(next) }
-    fun compression() = onboardingAudioQaRow(view, view.context.getString(R.string.output_compression)) as OnboardingAudioRow
-    fun silence() = onboardingAudioQaRow(view, view.context.getString(R.string.silence_title)) as OnboardingAudioRow
+    fun compression() = onboardingAudioQaRow(
+        onboardingViewDescendants(view).filterIsInstance<SettingsOutputCompressionView>().single(),
+        view.context.getString(R.string.output_compression)) as SettingsToggleRowView
+    fun silence() = onboardingAudioQaRow(
+        onboardingViewDescendants(view).filterIsInstance<SettingsSilenceView>().single(),
+        view.context.getString(R.string.silence_title)) as SettingsToggleRowView
     fun footer(label: String) = onboardingAudioQaRow(
         onboardingViewDescendants(view).filterIsInstance<OnboardingFooterView>().single(), label)
     fun evidence(): JSONObject = JSONObject().put("output_compression", state.outputCompression)
