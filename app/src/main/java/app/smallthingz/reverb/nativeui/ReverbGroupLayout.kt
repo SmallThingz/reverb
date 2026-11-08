@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.geometry.roundedGroupGeometry
+
 import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
 import android.content.Context
 import android.content.res.Configuration
@@ -43,7 +45,7 @@ internal class ReverbGroupLayout(
     private val borderPaint = Paint(GROUP_PAINT_FLAGS).apply { style = Paint.Style.STROKE }
     private val bounds = RectF()
     private val borderBounds = RectF()
-    private var geometry = reverbGroupGeometry(0f, 0f, resources.displayMetrics.density, cornerRadiusDp)
+    private var geometry = roundedGroupGeometry(0f, 0f, resources.displayMetrics.density, cornerRadiusDp)
     private val content = ReverbClippedGroupContent(context)
     private var recordingEdges: ReverbRecordingGroupEdges? = null
     private var recordingShape: ReverbRecordingGroupShape? = null
@@ -141,7 +143,7 @@ internal class ReverbGroupLayout(
     }
 
     private fun updateShape() {
-        geometry = reverbGroupGeometry(width.toFloat(), height.toFloat(), resources.displayMetrics.density, cornerRadiusDp)
+        geometry = roundedGroupGeometry(width.toFloat(), height.toFloat(), resources.displayMetrics.density, cornerRadiusDp)
         bounds.set(0f, 0f, geometry.width, geometry.height)
         borderBounds.set(bounds)
         borderBounds.inset(geometry.strokeWidth / 2f, geometry.strokeWidth / 2f)
@@ -449,57 +451,6 @@ private class GroupDividerForeground(
 
     @Suppress("DEPRECATION")
     override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
-}
-
-/** Pure geometry kept independent of Android objects for density/RTL/corner regression coverage. */
-internal data class ReverbGroupGeometry(
-    val width: Float,
-    val height: Float,
-    val radius: Float,
-    val strokeWidth: Float,
-    val strokeRadius: Float,
-    val fillBorder: Boolean,
-) {
-    fun contains(x: Float, y: Float): Boolean {
-        if (x < 0f || y < 0f || x >= width || y >= height || !x.isFinite() || !y.isFinite()) return false
-        val dx = x - x.coerceIn(radius, width - radius)
-        val dy = y - y.coerceIn(radius, height - radius)
-        return dx * dx + dy * dy <= radius * radius
-    }
-
-    fun acceptsPointer(x: Float, y: Float, touch: Boolean, minimumTarget: Float): Boolean {
-        if (contains(x, y)) return true
-        if (!touch || width <= 0f || height <= 0f || !x.isFinite() || !y.isFinite() ||
-            (width >= minimumTarget && height >= minimumTarget)
-        ) return false
-        // NodeCoordinator permits touch-only near hits for undersized clipped layouts. Native
-        // parents still need a TouchDelegate if a future caller needs delivery outside View bounds;
-        // Settings groups already exceed the minimum in both dimensions.
-        val horizontal = ((minimumTarget - width) / 2f).coerceAtLeast(0f)
-        val vertical = ((minimumTarget - height) / 2f).coerceAtLeast(0f)
-        return x >= -horizontal && x <= width + horizontal &&
-            y >= -vertical && y <= height + vertical
-    }
-}
-
-internal fun reverbGroupGeometry(
-    width: Float,
-    height: Float,
-    density: Float,
-    cornerRadiusDp: Float = 16f,
-): ReverbGroupGeometry {
-    val minimum = min(width, height).coerceAtLeast(0f)
-    val radius = min(cornerRadiusDp * density, minimum / 2f)
-    // Compose BorderModifierNode rounds a non-hairline dp stroke up to device pixels.
-    val stroke = min(ceil(density), ceil(minimum / 2f))
-    return ReverbGroupGeometry(
-        width = width,
-        height = height,
-        radius = radius,
-        strokeWidth = stroke,
-        strokeRadius = (radius - stroke / 2f).coerceAtLeast(0f),
-        fillBorder = stroke * 2f > minimum,
-    )
 }
 
 internal fun reverbGroupStartDividerX(width: Float, rtl: Boolean): Float =

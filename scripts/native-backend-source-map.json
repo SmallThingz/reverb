@@ -4,9 +4,15 @@
   "frozen_source_commit": "536c10ab104f3624c61e132eac6ea23b546db8e9",
   "normalizations": {
     "src/main/java/app/smallthingz/reverb/AppFeedback.kt": {
-      "compiled_sha256": "e34e2169a4391c6532b49864e0cd46befaccd30bbfb6426404174e07f67434f8",
+      "compiled_sha256": "b04fde9fcbc3ddf6c88bb834a128f3cbaf8027af3c2ec26acaf329937326824b",
       "normalized_sha256": "34ff15a7da52a5ce7cedbf8ae917ec6e0617a8628788cd501764cfea6d690041",
       "inverse": [
+        {
+          "from": "    try {\n        awaitVisibleFrame()\n        if (!canDisplay()) return\n        val originalTimeoutMillis = if (event.tone == FeedbackTone.ERROR)\n            (event.message.length.toLong() * 50L).coerceIn(4_500L, 20_000L) else 2_800L\n        // The queued host renders text-only cards, without icons or action buttons.\n        val timeoutMillis = recommendedFeedbackTimeoutMillis(\n            accessibilityManager = accessibilityManager,\n",
+          "to": "    try {\n        awaitVisibleFrame()\n        if (!canDisplay()) return\n        val originalTimeoutMillis = if (event.tone == FeedbackTone.ERROR) 4_500L else 2_800L\n        // The queued host renders text-only cards, without icons or action buttons.\n        val timeoutMillis = recommendedFeedbackTimeoutMillis(\n            accessibilityManager = accessibilityManager,\n",
+          "count": 1,
+          "word": false
+        },
         {
           "from": "    val result = ArrayList<FeedbackEvent>(maxEvents)\n    result.add(head)\n    val tail = pending.listIterator(pending.size - (maxEvents - 2))\n    while (tail.hasNext()) result.add(tail.next())\n    result.add(event)\n    return result",
           "to": "    return listOf(head) + (pending.drop(1) + event).takeLast(maxEvents - 1)",
@@ -25,7 +31,14 @@
           "count": 1,
           "word": false
         }
-      ]
+      ],
+      "released_policy_exception": {
+        "kind": "Intentional published behavior difference; source-only historical reconstruction, not semantic equivalence",
+        "release_commit": "5cb854754a88fb7d62be32fccceba48ed7449ef4",
+        "scope": "Adaptive error reading time, bounded 4500–20000 ms.",
+        "prior_compiled_sha256": "e34e2169a4391c6532b49864e0cd46befaccd30bbfb6426404174e07f67434f8",
+        "policy_inverse_count": 1
+      }
     },
     "src/main/java/app/smallthingz/reverb/IncidentsBackMotion.kt": {
       "compiled_sha256": "d7879a706a22388312213bad950330b55a7d0e7e71ee821b68b9ba2bd9d60c0b",
@@ -100,9 +113,33 @@
       ]
     },
     "src/main/java/app/smallthingz/reverb/RangeExportEditor.kt": {
-      "compiled_sha256": "dd0e0625631a5ebc7838256d38c4d9e1a533464373229cf18a621e841d74aad3",
+      "compiled_sha256": "3906a80bcef3450bb498d6ef03d00bc50a19f4820e9cb657d50e5c1cccd33140",
       "normalized_sha256": "b8cec9f92e76daa2d333fa3d1dee063540f0391f813708b906d25780720fbac6",
       "inverse": [
+        {
+          "from": "        }\n    }\n\n    /** Retain the rendered selection while its source lease transfers to the save owner. */\n    fun detachSnapshotPresentation() {\n        setPlaybackAllowed(false)\n        invalidateSelectionDurationCommit()\n        snapshot = null\n    }\n\n    fun resetWaveformConstruction() {\n        coarseWaveform = FloatArray(RANGE_WAVEFORM_COARSE_BUCKETS)\n        coarseWaveformBuiltCount = 0\n",
+          "to": "        }\n    }\n\n    fun resetWaveformConstruction() {\n        coarseWaveform = FloatArray(RANGE_WAVEFORM_COARSE_BUCKETS)\n        coarseWaveformBuiltCount = 0\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "        beginScrubPlaybackHandoff()\n        fineAdjustShuttleActive = true\n        snapshot?.let { readySnapshot ->\n            RecordingPlayback.pauseCurrent()\n            previewController.startShuttle(\n                snapshot = readySnapshot,\n                atSeconds = targetValue(lastTarget).toDouble(),\n",
+          "to": "        beginScrubPlaybackHandoff()\n        fineAdjustShuttleActive = true\n        snapshot?.let { readySnapshot ->\n            previewController.startShuttle(\n                snapshot = readySnapshot,\n                atSeconds = targetValue(lastTarget).toDouble(),\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "        previewStarting = false\n        isPlaying = false\n        isScrubbing = false\n        RecordingPlayback.pauseCurrent()\n        previewStarting = previewController.play(\n            snapshot = readySnapshot,\n            fromSeconds = window.startSeconds.toDouble(),\n",
+          "to": "        previewStarting = false\n        isPlaying = false\n        isScrubbing = false\n        previewStarting = previewController.play(\n            snapshot = readySnapshot,\n            fromSeconds = window.startSeconds.toDouble(),\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "        val now = SystemClock.elapsedRealtime()\n        if (!force && now - lastAuditionAtMillis < 55L) return\n        lastAuditionAtMillis = now\n        RecordingPlayback.pauseCurrent()\n        previewController.audition(readySnapshot, targetValue(lastTarget).toDouble())\n    }\n\n",
+          "to": "        val now = SystemClock.elapsedRealtime()\n        if (!force && now - lastAuditionAtMillis < 55L) return\n        lastAuditionAtMillis = now\n        previewController.audition(readySnapshot, targetValue(lastTarget).toDouble())\n    }\n\n",
+          "count": 1,
+          "word": false
+        },
         {
           "from": "    val available = availableSeconds.takeIf { it.isFinite() }?.coerceAtLeast(0.0) ?: return null\n    if (!startSeconds.isFinite() || !endSeconds.isFinite() || available <= 0.0) return null\n    val start = rangeSnapshotStartSeconds(available, startSeconds, endSeconds)\n    val end = rangeSnapshotEndSeconds(available, startSeconds, endSeconds)\n    val requestedSelectionMillis = ((end - start) * 1_000.0).roundToLong()\n    if (requestedSelectionMillis <= 0L) return null\n",
           "to": "    val available = availableSeconds.takeIf { it.isFinite() }?.coerceAtLeast(0.0) ?: return null\n    if (!startSeconds.isFinite() || !endSeconds.isFinite() || available <= 0.0) return null\n    val start = startSeconds.toDouble().coerceIn(0.0, available)\n    val end = endSeconds.toDouble().coerceIn(start, available)\n    val requestedSelectionMillis = ((end - start) * 1_000.0).roundToLong()\n    if (requestedSelectionMillis <= 0L) return null\n",
@@ -194,6 +231,13 @@
         "prior_compiled_source_commit": "1036704c4d44e9ba7fe465e08c8cc9b6f4e17452",
         "prior_compiled_sha256": "07f72d1ae044509baaaa51f44002237d338a9a60fddd13c3aaca7f30d4813e82",
         "scope": "Pin actual current compiled helper bytes; reverse only the reviewed endpoint changes before applying unchanged frozen renderer reconstruction. No compiled renderer/reference replacement or relaxed hash/count checks."
+      },
+      "released_policy_exception": {
+        "kind": "Intentional published behavior difference; source-only historical reconstruction, not semantic equivalence",
+        "release_commit": "5cb854754a88fb7d62be32fccceba48ed7449ef4",
+        "scope": "Snapshot presentation lease transfer and recording playback exclusion before preview.",
+        "prior_compiled_sha256": "dd0e0625631a5ebc7838256d38c4d9e1a533464373229cf18a621e841d74aad3",
+        "policy_inverse_count": 4
       }
     },
     "src/main/java/app/smallthingz/reverb/RecordingInlinePlayer.kt": {
@@ -221,9 +265,21 @@
       ]
     },
     "src/main/java/app/smallthingz/reverb/SettingsSilenceCalibration.kt": {
-      "compiled_sha256": "26d886106f039fa25db2d41327592b85af5b91611d732a843928c762704ba086",
+      "compiled_sha256": "b549d5136570470864b34af29327dc18e87560403e583558e9487a7a855f848c",
       "normalized_sha256": "b2eeb8250473b8e127ff1d152946de4868527833f4161421fcb86c6eb2480702",
       "inverse": [
+        {
+          "from": "                // Both this live admission read and the draft callback execute on Main without\n                // suspension. Undo, input changes and Back revoke ownership before recomposition.\n                if (isCurrent()) {\n                    val fitted = result.copy(points = sampledSilenceCurve(result.peaks,\n                        minOf(SILENCE_MAX_HZ, result.sampleRate / 2), config.clearanceDb))\n                    measured = fitted\n                    onCalibrated(config.copy(points = fitted.points),\n                        SilenceCalibrationHistogram(input, result.sampleRate, result.peaks.toList()))\n                }\n            } catch (cancelled: CancellationException) {\n",
+          "to": "                // Both this live admission read and the draft callback execute on Main without\n                // suspension. Undo, input changes and Back revoke ownership before recomposition.\n                if (isCurrent()) {\n                    measured = result\n                    onCalibrated(config.copy(points = result.points),\n                        SilenceCalibrationHistogram(input, result.sampleRate, result.peaks.toList()))\n                }\n            } catch (cancelled: CancellationException) {\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "                    is SilenceCalibrationTooLoud -> context.getString(R.string.silence_calibration_too_loud)\n                    is SilenceCalibrationTooShort -> context.getString(R.string.silence_calibration_too_short)\n                    is SilenceCalibrationTimedOut -> context.getString(R.string.silence_calibration_timeout)\n                    is SilenceCalibrationUnavailable -> failure.message ?: context.getString(R.string.silence_sample_failed)\n                    else -> actionableErrorMessage(context, context.getString(R.string.silence_sample_failed), failure)\n                }\n            } finally {\n                if (request == generation) {\n",
+          "to": "                    is SilenceCalibrationTooLoud -> context.getString(R.string.silence_calibration_too_loud)\n                    is SilenceCalibrationTooShort -> context.getString(R.string.silence_calibration_too_short)\n                    is SilenceCalibrationTimedOut -> context.getString(R.string.silence_calibration_timeout)\n                    else -> failure.message ?: context.getString(R.string.silence_sample_failed)\n                }\n            } finally {\n                if (request == generation) {\n",
+          "count": 1,
+          "word": false
+        },
         {
           "from": "smallthingz.ui",
           "to": "app.smallthingz.nativeui",
@@ -236,12 +292,25 @@
           "count": 4,
           "word": false
         }
-      ]
+      ],
+      "released_policy_exception": {
+        "kind": "Intentional published behavior difference; source-only historical reconstruction, not semantic equivalence",
+        "release_commit": "5cb854754a88fb7d62be32fccceba48ed7449ef4",
+        "scope": "Calibration clearance fitting and actionable failure reporting.",
+        "prior_compiled_sha256": "26d886106f039fa25db2d41327592b85af5b91611d732a843928c762704ba086",
+        "policy_inverse_count": 2
+      }
     },
     "src/reliability/java/app/smallthingz/reverb/CaptureScreenRenderers.kt": {
-      "compiled_sha256": "c53243a042c4a4f570d85d06bbfc60c5f84362560617e88c8d96cc2d65f14052",
+      "compiled_sha256": "6f4876eccc1fee4638dcde606cd804c45d6aef08f8213190adc4bbaa257ddc89",
       "normalized_sha256": "0bf912d0759ec78331eff2acd35e2356639b69bdaee6555f4562ead4b01b7ea2",
       "inverse": [
+        {
+          "from": "        )\n    }\n\n    val selectedBufferState = androidx.compose.runtime.rememberUpdatedState(selectedBuffer)\n    val visualizationCallback = remember {\n        ReverbService.VisualizationCallback { frame ->\n            when (frame.bufferSlot) {\n                ReverbService.BufferSlot.ONE_SHOT -> {\n                    latestBlobActivity[0] = frame.activity.coerceIn(0f, 1f)\n                    oneShotBlobController.submit(frame)\n",
+          "to": "        )\n    }\n\n    val activeBufferState = androidx.compose.runtime.rememberUpdatedState(activeBuffer)\n    val selectedBufferState = androidx.compose.runtime.rememberUpdatedState(selectedBuffer)\n    val visualizationCallback = remember {\n        ReverbService.VisualizationCallback { frame ->\n            when (activeBufferState.value) {\n                ReverbService.BufferSlot.ONE_SHOT -> {\n                    latestBlobActivity[0] = frame.activity.coerceIn(0f, 1f)\n                    oneShotBlobController.submit(frame)\n",
+          "count": 1,
+          "word": false
+        },
         {
           "from": "legacyDismissSavedFeedbackAfterTimeout",
           "to": "dismissSavedFeedbackAfterTimeout",
@@ -254,12 +323,25 @@
           "count": 1,
           "word": true
         }
-      ]
+      ],
+      "released_policy_exception": {
+        "kind": "Intentional published behavior difference; source-only historical reconstruction, not semantic equivalence",
+        "release_commit": "5cb854754a88fb7d62be32fccceba48ed7449ef4",
+        "scope": "Visualization routed by frame buffer slot.",
+        "prior_compiled_sha256": "c53243a042c4a4f570d85d06bbfc60c5f84362560617e88c8d96cc2d65f14052",
+        "policy_inverse_count": 1
+      }
     },
     "src/reliability/java/app/smallthingz/reverb/FilesScreenRenderer.kt": {
-      "compiled_sha256": "66c2c365a3bc107cf57387ca802101d5279f282cc90b56fa5c9b706383899fe5",
+      "compiled_sha256": "0f50a592a4929927baaa8d1d5849b13b6e0370f71b90a6e7ce1df95ab48ab432",
       "normalized_sha256": "2e8bd369cf290d3d7653c788a615c872f8ee63e15ca3465b49aa5e2b11599656",
       "inverse": [
+        {
+          "from": "                    ) {\n                        itemsIndexed(listItems, key = { _, item -> libraryListItemKey(item) }) { index, item ->\n                            when (item) {\n                                // This reference uses only buildLibraryListItems(recordings), never pending-job rows.\n                                is LibraryListItem.Pending,\n                                LibraryListItem.RetryFailedSaves,\n                                is LibraryListItem.SaveRecoveryStatus -> error(\"Unexpected durable-save row in the released Library reference\")\n                                is LibraryListItem.Header -> HeaderItem(item.dateLabel, compactTop = index == 0)\n                                is LibraryListItem.Recording -> {\n                                    val recording = item.recording\n",
+          "to": "                    ) {\n                        itemsIndexed(listItems, key = { _, item -> libraryListItemKey(item) }) { index, item ->\n                            when (item) {\n                                is LibraryListItem.Header -> HeaderItem(item.dateLabel, compactTop = index == 0)\n                                is LibraryListItem.Recording -> {\n                                    val recording = item.recording\n",
+          "count": 1,
+          "word": false
+        },
         {
           "from": "legacyRunLibraryUndoDeadline",
           "to": "runLibraryUndoDeadline",
@@ -278,7 +360,14 @@
           "count": 1,
           "word": true
         }
-      ]
+      ],
+      "released_policy_exception": {
+        "kind": "Intentional published behavior difference; source-only historical reconstruction, not semantic equivalence",
+        "release_commit": "5cb854754a88fb7d62be32fccceba48ed7449ef4",
+        "scope": "Exhaustive rejection of durable-save rows absent from recordings-only reference input.",
+        "prior_compiled_sha256": "66c2c365a3bc107cf57387ca802101d5279f282cc90b56fa5c9b706383899fe5",
+        "policy_inverse_count": 1
+      }
     },
     "src/reliability/java/app/smallthingz/reverb/IncidentsBackMotionCompose.kt": {
       "compiled_sha256": "27445d8b83873090bbcccb9b95f1661a3c35043b1d4e119a590fd2ac2a29a7aa",
@@ -528,9 +617,33 @@
       ]
     },
     "src/main/java/app/smallthingz/reverb/FilesScreen.kt": {
-      "compiled_sha256": "e507f04b2d3b0f6a4f58ad539be26e7ad228610ed1f6205b1bbacf9d1fd15c70",
+      "compiled_sha256": "459347791038fd2412afecd1f2c76a1a52da2d76d9bdc69426a60d014f383189",
       "normalized_sha256": "f73be342e5ecf7585ef9fd697b3aa3a232831ddceb5cdd4812872b8b906dee68",
       "inverse": [
+        {
+          "from": "internal class RenameUiCallbackGate(\n    private var onRenamed: ((RecordingEntity) -> Unit)?,\n    private var onRejected: (() -> Unit)?,\n    private var onUncertain: ((Throwable) -> Unit)?,\n    private var onHiddenTerminal: (() -> Unit)?,\n    isVisible: () -> Boolean,\n) {\n",
+          "to": "internal class RenameUiCallbackGate(\n    private var onRenamed: ((RecordingEntity) -> Unit)?,\n    private var onRejected: (() -> Unit)?,\n    private var onUncertain: (() -> Unit)?,\n    private var onHiddenTerminal: (() -> Unit)?,\n    isVisible: () -> Boolean,\n) {\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "\n    fun rejected(): Boolean = deliverVisible { onRejected?.invoke() }\n\n    fun uncertain(failure: Throwable): Boolean = deliverVisible { onUncertain?.invoke(failure) }\n\n    private inline fun deliverVisible(deliver: () -> Unit): Boolean {\n        if (!attached) return false\n",
+          "to": "\n    fun rejected(): Boolean = deliverVisible { onRejected?.invoke() }\n\n    fun uncertain(): Boolean = deliverVisible { onUncertain?.invoke() }\n\n    private inline fun deliverVisible(deliver: () -> Unit): Boolean {\n        if (!attached) return false\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "internal class RenameResultReceiver(\n    onRenamed: (RecordingEntity) -> Unit,\n    onRejected: () -> Unit,\n    onUncertain: (Throwable) -> Unit,\n    onHiddenTerminal: () -> Unit,\n    isUiVisible: () -> Boolean,\n    private val onDetachedSuccess: (RecordingEntity) -> Unit,\n    private val onDetachedFailure: (Throwable?) -> Unit,\n    private val onTerminal: (RenameResultReceiver) -> Unit,\n) {\n    private val uiCallbacks = RenameUiCallbackGate(\n",
+          "to": "internal class RenameResultReceiver(\n    onRenamed: (RecordingEntity) -> Unit,\n    onRejected: () -> Unit,\n    onUncertain: () -> Unit,\n    onHiddenTerminal: () -> Unit,\n    isUiVisible: () -> Boolean,\n    private val onDetachedSuccess: (RecordingEntity) -> Unit,\n    private val onDetachedFailure: () -> Unit,\n    private val onTerminal: (RenameResultReceiver) -> Unit,\n) {\n    private val uiCallbacks = RenameUiCallbackGate(\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "                        } else {\n                            deliverVisibleTerminalOrFallback(\n                                deliverVisible = uiCallbacks::rejected,\n                                fallback = { onDetachedFailure(null) },\n                            )\n                        }\n                    },\n                    onFailure = { failure ->\n                        deliverVisibleTerminalOrFallback(\n                            deliverVisible = { uiCallbacks.uncertain(failure) },\n                            fallback = { onDetachedFailure(failure) },\n                        )\n                    },\n                )\n",
+          "to": "                        } else {\n                            deliverVisibleTerminalOrFallback(\n                                deliverVisible = uiCallbacks::rejected,\n                                fallback = onDetachedFailure,\n                            )\n                        }\n                    },\n                    onFailure = {\n                        deliverVisibleTerminalOrFallback(\n                            deliverVisible = uiCallbacks::uncertain,\n                            fallback = onDetachedFailure,\n                        )\n                    },\n                )\n",
+          "count": 1,
+          "word": false
+        },
         {
           "from": "    isVisible: () -> Boolean,\n) {\n    private var isVisibleCallback: (() -> Boolean)? = isVisible\n",
           "to": "    private val isVisible: () -> Boolean,\n) {\n",
@@ -561,12 +674,157 @@
         "review": "clean-window48/review-20-fix.json",
         "peer": "clean-window48/review-20-peer.json",
         "scope": "Detach rename visibility callback; preserve frozen49/released oracle source reconstruction and terminal EOF byte. No renderer modification."
+      },
+      "released_policy_exception": {
+        "kind": "Intentional published behavior difference; source-only historical reconstruction, not semantic equivalence",
+        "release_commit": "5cb854754a88fb7d62be32fccceba48ed7449ef4",
+        "scope": "Rename failure propagation through visible and detached callbacks.",
+        "prior_compiled_sha256": "e507f04b2d3b0f6a4f58ad539be26e7ad228610ed1f6205b1bbacf9d1fd15c70",
+        "policy_inverse_count": 4
       }
     },
     "src/main/java/app/smallthingz/reverb/AudioBlobView.kt": {
-      "compiled_sha256": "efeae55a15c3d92b9dbff01276b826284220de81ff52abc34677cdc2126e0291",
+      "compiled_sha256": "59101a8f7e832da037a46e64c4a90ff5ca57c4598fbaf2b95c7f7b0c0617985e",
       "normalized_sha256": "85baca91d5e481a8d49d8c6d40d70797c25920755b0d2b03ea50e975d0318de8",
       "inverse": [
+        {
+          "from": "\nimport android.content.Context\nimport android.graphics.Canvas\nimport android.graphics.ComposeShader\nimport android.graphics.LinearGradient\nimport android.graphics.Paint\nimport android.graphics.Path\nimport android.graphics.PorterDuff\nimport android.graphics.RadialGradient\nimport android.graphics.RuntimeShader\nimport android.graphics.Shader\nimport android.os.Build\nimport android.view.Choreographer\nimport android.view.View\nimport androidx.annotation.RequiresApi\nimport smallthingz.ui.animation.view.ViewColorTransition\nimport kotlin.math.PI\nimport kotlin.math.cos\nimport kotlin.math.max\n",
+          "to": "\nimport android.content.Context\nimport android.graphics.Canvas\nimport android.graphics.LinearGradient\nimport android.graphics.Paint\nimport android.graphics.Path\nimport android.graphics.RuntimeShader\nimport android.graphics.Shader\nimport android.os.Build\nimport android.view.Choreographer\nimport android.view.View\nimport androidx.annotation.RequiresApi\nimport kotlin.math.PI\nimport kotlin.math.cos\nimport kotlin.math.max\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "    private var active = false\n    private var enabledState = true\n    private var saving = false\n    private var skipSilenceEnabled = false\n    private var silenceSuppressed = false\n    private var currentSilence = 0f\n    private var currentPresence = 0f\n    private val targetPresence: Float get() = if (active && !saving) 1f else 0f\n    var onReadoutAppearanceChanged: ((Boolean, Boolean, Boolean) -> Unit)? = null\n        set(value) { field = value; lastReadoutAppearance = -1; publishReadoutAppearance() }\n    private var lastReadoutAppearance = -1\n    private var materialTransitionOwnsPalette = false\n    private var materialPrimary = 0\n    private var materialTertiary = 0\n    private var materialPaused = 0\n    private var readoutRadiusPixels = 0f\n    private var readoutBackground = 0\n    private var readoutAgslMin = 0f\n    private var readoutAgslMax = 1f\n    private var readoutFallbackMin = 0f\n    private var readoutFallbackMax = 1f\n\n    fun updateReadoutGeometry(radiusPixels: Float, background: Int, agslMin: Float = 0f, agslMax: Float = 1f,\n        fallbackMin: Float = 0f, fallbackMax: Float = 1f) {\n        if (readoutRadiusPixels == radiusPixels && readoutBackground == background &&\n            readoutAgslMin == agslMin && readoutAgslMax == agslMax &&\n            readoutFallbackMin == fallbackMin && readoutFallbackMax == fallbackMax) return\n        readoutRadiusPixels = radiusPixels\n        readoutBackground = background\n        readoutAgslMin = agslMin\n        readoutAgslMax = agslMax\n        readoutFallbackMin = fallbackMin\n        readoutFallbackMax = fallbackMax\n        publishReadoutAppearance()\n    }\n\n    fun readoutNeedsSupport(darkInk: Boolean): Boolean {\n        val size = minOf(width, height).toFloat()\n        if (size <= 0f || readoutRadiusPixels <= 0f) return true\n        val radius = readoutRadiusPixels / size\n        val base = currentBaseRadiusFraction()\n        val low = currentBands[0] * .34f + currentBands[1] * .30f + currentBands[2] * .21f + currentBands[3] * .15f\n        val high = currentBands[4] * .34f + currentBands[5] * .30f + currentBands[6] * .21f + currentBands[7] * .15f\n        val energy = audioBlobMotionEnergy(currentActivity, low, high, currentSilence) * currentLife * currentPresence\n        val fold = energy * (.043f + .035f * low + .018f * high)\n        val minimumBody = base - fold - .008f * currentLife * currentPresence\n        val covered = radius <= minimumBody - .012f\n        val fallback = renderer is FallbackRenderer\n        return audioBlobInkNeedsSupport(materialPrimary, materialTertiary, materialPaused,\n            currentLife, currentPresence, currentSilence, fallback, darkInk,\n            (radius / base).coerceIn(0f, 1f),\n            covered, readoutBackground, if (fallback) readoutFallbackMin else readoutAgslMin,\n            if (fallback) readoutFallbackMax else readoutAgslMax)\n    }\n    // The frame includes the recorder's applied enabled state. UI preference hydration is not authority.\n    private val targetSilence: Float\n        get() = if (active && !saving && silenceSuppressed) 1f else 0f\n    private var renderingVisible = true\n    private var framePosted = false\n    private var shaderTimeSeconds = 0f\n",
+          "to": "    private var active = false\n    private var enabledState = true\n    private var saving = false\n    private var renderingVisible = true\n    private var framePosted = false\n    private var shaderTimeSeconds = 0f\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "    } else {\n        FallbackRenderer()\n    }\n    private var paletteMotion: ViewColorTransition? = null\n    private fun publishPalette() {\n        val colors = paletteMotion ?: return\n        setMaterialPalette(colors.color(0), colors.color(1), colors.color(2))\n        invalidate()\n    }\n\n    private fun setMaterialPalette(primary: Int, tertiary: Int, paused: Int) {\n        materialPrimary = audioBlobMaterialColor(primary)\n        materialTertiary = audioBlobMaterialColor(tertiary)\n        materialPaused = paused\n        renderer.setPalette(materialPrimary, materialTertiary, paused)\n        publishReadoutAppearance()\n    }\n\n    fun readoutUsesDarkInk(): Boolean = resolveReadoutInkAndSupport() and 1 != 0\n\n    private fun resolveReadoutInkAndSupport(): Int {\n        var darkInk = audioBlobUsesDarkInk(materialPrimary, materialTertiary, materialPaused, currentLife,\n            currentPresence, currentSilence, renderer is FallbackRenderer)\n        var supportNeeded = readoutNeedsSupport(darkInk)\n        if (supportNeeded && !readoutNeedsSupport(!darkInk)) {\n            darkInk = !darkInk\n            supportNeeded = false\n        }\n        return (if (darkInk) 1 else 0) or (if (supportNeeded) 4 else 0)\n    }\n\n    private fun publishReadoutAppearance() {\n        val listener = onReadoutAppearanceChanged ?: return\n        val resolvedInk = resolveReadoutInkAndSupport()\n        val geometryTransition = currentPresence != targetPresence || currentLife != targetLife\n        if (geometryTransition) materialTransitionOwnsPalette = true\n        // A palette tail may extend an owned capture transition, but idle theme changes\n        // must not create a new readout support field around the small resting body.\n        val transitioning = geometryTransition ||\n            (materialTransitionOwnsPalette && paletteMotion?.isInterpolating == true)\n        if (!transitioning) materialTransitionOwnsPalette = false\n        val appearance = resolvedInk or (if (transitioning) 2 else 0)\n        if (appearance == lastReadoutAppearance) return\n        lastReadoutAppearance = appearance\n        listener(appearance and 1 != 0, transitioning, appearance and 4 != 0)\n    }\n\n    private val frameCallback = Choreographer.FrameCallback { frameTimeNanos ->\n        framePosted = false\n        if (!shouldAnimate()) {\n            lastFrameNanos = 0L\n            return@FrameCallback\n        }\n        val dtSeconds = if (lastFrameNanos == 0L) {\n            initialFrameDeltaSeconds()\n        } else {\n",
+          "to": "    } else {\n        FallbackRenderer()\n    }\n\n    private val frameCallback = Choreographer.FrameCallback { frameTimeNanos ->\n        framePosted = false\n        if (!shouldAnimate()) return@FrameCallback\n        val dtSeconds = if (lastFrameNanos == 0L) {\n            initialFrameDeltaSeconds()\n        } else {\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "\n    fun submitFrame(frame: ReverbService.VisualizationFrame) {\n        val hadRecentSignal = hasRecentAudioSignal()\n        silenceSuppressed = frame.silenceSuppressed\n        targetActivity = frame.activity.coerceIn(0f, 1f)\n        val source = frame.bins\n        var hasSignal = targetActivity > SIGNAL_ACTIVITY_THRESHOLD\n",
+          "to": "\n    fun submitFrame(frame: ReverbService.VisualizationFrame) {\n        val hadRecentSignal = hasRecentAudioSignal()\n        targetActivity = frame.activity.coerceIn(0f, 1f)\n        val source = frame.bins\n        var hasSignal = targetActivity > SIGNAL_ACTIVITY_THRESHOLD\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "    }\n\n    fun clearFrame() {\n        silenceSuppressed = false\n        currentSilence = 0f\n        targetActivity = 0f\n        targetBands.fill(0f)\n        currentActivity = 0f\n",
+          "to": "    }\n\n    fun clearFrame() {\n        targetActivity = 0f\n        targetBands.fill(0f)\n        currentActivity = 0f\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "        primary: Int,\n        tertiary: Int,\n        paused: Int,\n        skipSilenceEnabled: Boolean = false,\n    ) {\n        val stateChanged = this.active != active ||\n            enabledState != enabled || this.saving != saving || renderingVisible != visible ||\n            this.skipSilenceEnabled != skipSilenceEnabled\n        this.active = active\n        enabledState = enabled\n        this.saving = saving\n        this.skipSilenceEnabled = skipSilenceEnabled\n        renderingVisible = visible\n        targetLife = when {\n            !enabled -> DISABLED_LIFE\n            active && !saving -> 1f\n            else -> COLLAPSED_LIFE\n        }\n        val colors = paletteMotion ?: ViewColorTransition(this, intArrayOf(primary, tertiary, paused),\n            { publishPalette() }).also {\n            paletteMotion = it\n            setMaterialPalette(primary, tertiary, paused)\n        }\n        if (visible) colors.retarget(primary, tertiary, paused) else colors.snap(primary, tertiary, paused)\n        if (!active || saving) {\n            silenceSuppressed = false\n            targetActivity = 0f\n            targetBands.fill(0f)\n            lastAudioSignalNanos = 0L\n",
+          "to": "        primary: Int,\n        tertiary: Int,\n        paused: Int,\n    ) {\n        val stateChanged = this.active != active ||\n            enabledState != enabled || this.saving != saving || renderingVisible != visible\n        this.active = active\n        enabledState = enabled\n        this.saving = saving\n        renderingVisible = visible\n        targetLife = when {\n            !enabled -> DISABLED_LIFE\n            active && !saving -> 1f\n            else -> COLLAPSED_LIFE\n        }\n        val paletteChanged = renderer.setPalette(primary, tertiary, paused)\n        if (!active || saving) {\n            targetActivity = 0f\n            targetBands.fill(0f)\n            lastAudioSignalNanos = 0L\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "            }\n            ensureAnimationState()\n        }\n        if (stateChanged) invalidate()\n        publishReadoutAppearance()\n    }\n\n    override fun onDraw(canvas: Canvas) {\n",
+          "to": "            }\n            ensureAnimationState()\n        }\n        if (stateChanged || paletteChanged) invalidate()\n    }\n\n    override fun onDraw(canvas: Canvas) {\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "            activity = currentActivity,\n            bands = currentBands,\n            life = currentLife,\n            active = currentPresence,\n            silence = currentSilence,\n        )\n    }\n\n    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {\n        super.onSizeChanged(w, h, oldw, oldh)\n        renderer.resize(w, h)\n        publishReadoutAppearance()\n    }\n\n    override fun onAttachedToWindow() {\n",
+          "to": "            activity = currentActivity,\n            bands = currentBands,\n            life = currentLife,\n            active = active && !saving,\n        )\n    }\n\n    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {\n        super.onSizeChanged(w, h, oldw, oldh)\n        renderer.resize(w, h)\n    }\n\n    override fun onAttachedToWindow() {\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "\n    private fun shouldAnimate(): Boolean =\n        renderingVisible && isAttachedToWindow && isShown && hasWindowFocus() && enabledState &&\n            (hasRecentAudioSignal() || hasResidualAudio() || silenceMoving() || currentPresence != targetPresence ||\n                kotlin.math.abs(currentLife - targetLife) > LIFE_EPSILON)\n\n    private fun silenceMoving(): Boolean = kotlin.math.abs(currentSilence - targetSilence) > SILENCE_EPSILON\n\n    private fun ensureAnimationState() {\n        if (shouldAnimate()) {\n",
+          "to": "\n    private fun shouldAnimate(): Boolean =\n        renderingVisible && isAttachedToWindow && isShown && hasWindowFocus() && enabledState &&\n            (hasRecentAudioSignal() || hasResidualAudio() || kotlin.math.abs(currentLife - targetLife) > LIFE_EPSILON)\n\n    private fun ensureAnimationState() {\n        if (shouldAnimate()) {\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "        } else {\n            stopFrames()\n            if (!renderingVisible) {\n                currentSilence = targetSilence\n                currentActivity = 0f\n                currentBands.fill(0f)\n                currentLife = COLLAPSED_LIFE\n                currentPresence = targetPresence\n            } else if (!active || saving) {\n                currentSilence = 0f\n                currentActivity = 0f\n                currentBands.fill(0f)\n                currentLife = targetLife\n                currentPresence = targetPresence\n            }\n            invalidate()\n            publishReadoutAppearance()\n        }\n    }\n\n    private fun postNextFrame(immediate: Boolean = false) {\n        if (framePosted) return\n        if (!shouldAnimate()) {\n            lastFrameNanos = 0L\n            return\n        }\n        framePosted = true\n        val audioResponsive = hasHotAudio() || hasRecentAudioSignal()\n        val lifeMoving = kotlin.math.abs(currentLife - targetLife) > LIFE_EPSILON\n        if (immediate || lifeMoving || silenceMoving() || currentPresence != targetPresence || audioResponsive) {\n            // Choreographer already limits us to the display cadence. Do not add a fixed 16 ms\n            // timer on top of vsync: on high-refresh panels that halves the response rate, and on\n            // 60 Hz panels it can miss the very next frame depending on phase.\n",
+          "to": "        } else {\n            stopFrames()\n            if (!renderingVisible) {\n                currentActivity = 0f\n                currentBands.fill(0f)\n                currentLife = COLLAPSED_LIFE\n            } else if (!active || saving) {\n                currentActivity = 0f\n                currentBands.fill(0f)\n                currentLife = targetLife\n            }\n            invalidate()\n        }\n    }\n\n    private fun postNextFrame(immediate: Boolean = false) {\n        if (framePosted || !shouldAnimate()) return\n        framePosted = true\n        val audioResponsive = hasHotAudio() || hasRecentAudioSignal()\n        val lifeMoving = kotlin.math.abs(currentLife - targetLife) > LIFE_EPSILON\n        if (immediate || lifeMoving || audioResponsive) {\n            // Choreographer already limits us to the display cadence. Do not add a fixed 16 ms\n            // timer on top of vsync: on high-refresh panels that halves the response rate, and on\n            // 60 Hz panels it can miss the very next frame depending on phase.\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "    }\n\n    private fun advance(dtSeconds: Float) {\n        val normalized = (dtSeconds * 30f).coerceIn(0f, 3f)\n        val activityRate = if (targetActivity > currentActivity) 0.72f else 0.16f\n        val activityMix = 1f - (1f - activityRate).pow(normalized)\n        currentActivity += (targetActivity - currentActivity) * activityMix\n",
+          "to": "    }\n\n    private fun advance(dtSeconds: Float) {\n        val normalized = (dtSeconds * 30f).coerceIn(0.25f, 3f)\n        val activityRate = if (targetActivity > currentActivity) 0.72f else 0.16f\n        val activityMix = 1f - (1f - activityRate).pow(normalized)\n        currentActivity += (targetActivity - currentActivity) * activityMix\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "        val lifeMix = 1f - (1f - lifeRate).pow(normalized)\n        currentLife += (targetLife - currentLife) * lifeMix\n        if (kotlin.math.abs(currentLife - targetLife) <= LIFE_EPSILON) currentLife = targetLife\n        currentSilence = advanceSilenceBlob(currentSilence, targetSilence, dtSeconds)\n        currentPresence = advanceBlobPresence(currentPresence, targetPresence, dtSeconds)\n        publishReadoutAppearance()\n    }\n\n    private interface Renderer {\n",
+          "to": "        val lifeMix = 1f - (1f - lifeRate).pow(normalized)\n        currentLife += (targetLife - currentLife) * lifeMix\n        if (kotlin.math.abs(currentLife - targetLife) <= LIFE_EPSILON) currentLife = targetLife\n    }\n\n    private interface Renderer {\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "            activity: Float,\n            bands: FloatArray,\n            life: Float,\n            active: Float,\n            silence: Float,\n        )\n    }\n\n",
+          "to": "            activity: Float,\n            bands: FloatArray,\n            life: Float,\n            active: Boolean,\n        )\n    }\n\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "        private var lastActivity = Float.NaN\n        private var lastLife = Float.NaN\n        private var lastActive = Float.NaN\n        private var lastSkipSilence = Float.NaN\n        private val lastBands = FloatArray(BAND_COUNT) { Float.NaN }\n\n        override fun resize(width: Int, height: Int) {\n",
+          "to": "        private var lastActivity = Float.NaN\n        private var lastLife = Float.NaN\n        private var lastActive = Float.NaN\n        private val lastBands = FloatArray(BAND_COUNT) { Float.NaN }\n\n        override fun resize(width: Int, height: Int) {\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "            activity: Float,\n            bands: FloatArray,\n            life: Float,\n            active: Float,\n            silence: Float,\n        ) {\n            if (width <= 0 || height <= 0) return\n            shader.setFloatUniform(\"time\", timeSeconds)\n",
+          "to": "            activity: Float,\n            bands: FloatArray,\n            life: Float,\n            active: Boolean,\n        ) {\n            if (width <= 0 || height <= 0) return\n            shader.setFloatUniform(\"time\", timeSeconds)\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "                shader.setFloatUniform(\"life\", life)\n                lastLife = life\n            }\n            val activeValue = active\n            if (activeValue != lastActive) {\n                shader.setFloatUniform(\"active\", activeValue)\n                lastActive = activeValue\n            }\n            val skipValue = silence\n            if (skipValue != lastSkipSilence) {\n                shader.setFloatUniform(\"skipSilence\", skipValue)\n                lastSkipSilence = skipValue\n            }\n            if (bands[0] != lastBands[0] || bands[1] != lastBands[1] ||\n                bands[2] != lastBands[2] || bands[3] != lastBands[3]\n",
+          "to": "                shader.setFloatUniform(\"life\", life)\n                lastLife = life\n            }\n            val activeValue = if (active) 1f else 0f\n            if (activeValue != lastActive) {\n                shader.setFloatUniform(\"active\", activeValue)\n                lastActive = activeValue\n            }\n            if (bands[0] != lastBands[0] || bands[1] != lastBands[1] ||\n                bands[2] != lastBands[2] || bands[3] != lastBands[3]\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "    private class FallbackRenderer : Renderer {\n        override val idleFrameDelayMillis = 33L\n        private val paint = Paint(Paint.ANTI_ALIAS_FLAG)\n        private val pausedPaint = Paint(Paint.ANTI_ALIAS_FLAG)\n        private val silencePaint = Paint(Paint.ANTI_ALIAS_FLAG)\n        private val path = Path()\n        private val x = FloatArray(FALLBACK_POINTS)\n        private val y = FloatArray(FALLBACK_POINTS)\n",
+          "to": "    private class FallbackRenderer : Renderer {\n        override val idleFrameDelayMillis = 33L\n        private val paint = Paint(Paint.ANTI_ALIAS_FLAG)\n        private val path = Path()\n        private val x = FloatArray(FALLBACK_POINTS)\n        private val y = FloatArray(FALLBACK_POINTS)\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "            activity: Float,\n            bands: FloatArray,\n            life: Float,\n            active: Float,\n            silence: Float,\n        ) {\n            if (width <= 0 || height <= 0) return\n            val minSize = minOf(width, height).toFloat()\n            val cx = width * 0.5f\n            val cy = height * 0.5f\n            val base = minSize * (0.095f + life * (0.235f + activity * 0.018f))\n            val low = bands[0] * .34f + bands[1] * .30f + bands[2] * .21f + bands[3] * .15f\n            val high = bands[4] * .34f + bands[5] * .30f + bands[6] * .21f + bands[7] * .15f\n            val energy = audioBlobMotionEnergy(activity, low, high, silence) * life * active\n            for (index in 0 until FALLBACK_POINTS) {\n                val angle = angles[index]\n                val idle = if (active > 0f) {\n                    (sin(angle * 3f + timeSeconds * .78f) * .0056f +\n                        sin(angle * 7f - timeSeconds * .39f + 1.8f) * .0024f) * minSize * life * active\n                } else 0f\n                val fold = audioBlobFold(angle, timeSeconds, energy, low, high) * minSize\n                val radius = base + fold + idle\n                x[index] = cx + cosines[index] * radius\n                y[index] = cy + sines[index] * radius\n            }\n",
+          "to": "            activity: Float,\n            bands: FloatArray,\n            life: Float,\n            active: Boolean,\n        ) {\n            if (width <= 0 || height <= 0) return\n            val minSize = minOf(width, height).toFloat()\n            val cx = width * 0.5f\n            val cy = height * 0.5f\n            val base = minSize * (0.095f + life * (0.235f + activity * 0.018f))\n            for (index in 0 until FALLBACK_POINTS) {\n                val angle = angles[index]\n                val band = bands[index * BAND_COUNT / FALLBACK_POINTS]\n                val idle = if (active) {\n                    sin(angle * 3f + timeSeconds * 0.8f) * minSize * 0.005f +\n                        sin(angle * 5f - timeSeconds * 0.55f) * minSize * 0.0025f\n                } else 0f\n                val radius = base + if (active) band * minSize * 0.105f + idle else 0f\n                x[index] = cx + cosines[index] * radius\n                y[index] = cy + sines[index] * radius\n            }\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "            }\n            path.close()\n\n            val state = if (active == 0f) 0 else 1\n            if (gradientState != state) {\n                paint.shader = if (active > 0f) {\n                    val baseGradient = LinearGradient(0f, 0f, width.toFloat(), height.toFloat(), primary, tertiary, Shader.TileMode.CLAMP)\n                    val mutedGradient = LinearGradient(0f, 0f, width.toFloat(), height.toFloat(),\n                        silenceBlobMutedColor(primary), silenceBlobMutedColor(tertiary), Shader.TileMode.CLAMP)\n                    val drainMask = RadialGradient(cx, cy, minSize * .33f,\n                        intArrayOf(silenceBlobDrainMaskColor(0f), silenceBlobDrainMaskColor(.175f),\n                            silenceBlobDrainMaskColor(.35f), silenceBlobDrainMaskColor(.525f),\n                            silenceBlobDrainMaskColor(.7f), silenceBlobDrainMaskColor(1f)),\n                        floatArrayOf(0f, .175f, .35f, .525f, .7f, 1f), Shader.TileMode.CLAMP)\n                    silencePaint.shader = ComposeShader(mutedGradient, drainMask, PorterDuff.Mode.DST_IN)\n                    baseGradient\n                } else {\n                    null\n                }\n                paint.color = if (active > 0f) primary else paused\n                gradientState = state\n            }\n            pausedPaint.color = paused\n            canvas.drawPath(path, pausedPaint)\n            paint.alpha = (audioBlobColorLife(life, active) * 255f).toInt()\n            canvas.drawPath(path, paint)\n            if (active > 0f && silence > 0f) {\n                // Drain the rim around a small color core using cached shaders and the same geometry.\n                silencePaint.alpha = (silence.coerceIn(0f, 1f) * active * 255f).toInt()\n                canvas.drawPath(path, silencePaint)\n            }\n        }\n    }\n\n",
+          "to": "            }\n            path.close()\n\n            val state = if (active) 1 else 0\n            if (gradientState != state) {\n                paint.shader = if (active) {\n                    LinearGradient(0f, 0f, width.toFloat(), height.toFloat(), primary, tertiary, Shader.TileMode.CLAMP)\n                } else {\n                    null\n                }\n                paint.color = if (active) primary else paused\n                gradientState = state\n            }\n            canvas.drawPath(path, paint)\n        }\n    }\n\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "        private const val COLLAPSED_LIFE = 0.38f\n        private const val DISABLED_LIFE = 0.36f\n        private const val LIFE_EPSILON = 0.006f\n        private const val SILENCE_EPSILON = 0.002f\n\n        private const val SHADER_SOURCE = \"\"\"\n            uniform float2 resolution;\n",
+          "to": "        private const val COLLAPSED_LIFE = 0.38f\n        private const val DISABLED_LIFE = 0.36f\n        private const val LIFE_EPSILON = 0.006f\n\n        private const val SHADER_SOURCE = \"\"\"\n            uniform float2 resolution;\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "            uniform float activity;\n            uniform float life;\n            uniform float active;\n            uniform float skipSilence;\n            uniform float4 bands0;\n            uniform float4 bands1;\n            layout(color) uniform half4 primaryColor;\n",
+          "to": "            uniform float activity;\n            uniform float life;\n            uniform float active;\n            uniform float4 bands0;\n            uniform float4 bands1;\n            layout(color) uniform half4 primaryColor;\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "                float high = dot(bands1, float4(0.34, 0.30, 0.21, 0.15));\n                float h3 = sin(angle * 3.0 + time * 0.78);\n                float h7 = sin(angle * 7.0 - time * 0.39 + 1.8);\n                float energy = sqrt(clamp(max(activity, low * 0.9 + high * 0.7), 0.0, 1.0)) *\n                    (1.0 - 0.92 * skipSilence) * active * life;\n                float fold = energy * (h3 * (0.035 + 0.035 * low) + h7 * (0.008 + 0.018 * high));\n\n                float idle = h3 * 0.0056 + h7 * 0.0024;\n                float liveRadius = 0.330 + activity * 0.018;\n                float baseRadius = mix(0.095, liveRadius, life);\n                float blobRadius = baseRadius + active * life * idle + fold;\n                float distanceToEdge = radius - blobRadius;\n\n                float body = smoothstep(0.012, -0.006, distanceToEdge);\n",
+          "to": "                float high = dot(bands1, float4(0.34, 0.30, 0.21, 0.15));\n                float h3 = sin(angle * 3.0 + time * 0.78);\n                float h7 = sin(angle * 7.0 - time * 0.39 + 1.8);\n                float audioWave = h3 * low * 0.66 + h7 * high * 0.44;\n\n                float idle = h3 * 0.0056 + h7 * 0.0024;\n                float liveRadius = 0.330 + activity * 0.018;\n                float baseRadius = mix(0.095, liveRadius, life);\n                float blobRadius = baseRadius + active * life *\n                    (idle + audioWave * (0.105 + activity * 0.030));\n                float distanceToEdge = radius - blobRadius;\n\n                float body = smoothstep(0.012, -0.006, distanceToEdge);\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "\n                float gradientMix = clamp(0.46 + p.x * 0.9 - p.y * 0.55, 0.0, 1.0);\n                half4 activeColor = mix(primaryColor, tertiaryColor, half(gradientMix));\n                float colorLife = smoothstep(0.36, 0.86, life) * active;\n                half4 bodyColor = mix(pausedColor, activeColor, half(colorLife));\n                float drain = skipSilence * active * colorLife *\n                    (0.35 + 0.65 * smoothstep(0.0, 0.7, radius / baseRadius));\n                half luminance = dot(bodyColor.rgb, half3(0.2126, 0.7152, 0.0722));\n                half3 mutedColor = mix(bodyColor.rgb, half3(luminance), half(0.42)) * half(0.72);\n                bodyColor.rgb = mix(bodyColor.rgb, mutedColor, half(drain));\n                half4 glowColor = mix(primaryColor, tertiaryColor, half(0.58));\n\n                float alpha = body + glow;\n",
+          "to": "\n                float gradientMix = clamp(0.46 + p.x * 0.9 - p.y * 0.55, 0.0, 1.0);\n                half4 activeColor = mix(primaryColor, tertiaryColor, half(gradientMix));\n                float colorLife = smoothstep(0.36, 0.86, life);\n                half4 bodyColor = mix(pausedColor, activeColor, half(colorLife));\n                half4 glowColor = mix(primaryColor, tertiaryColor, half(0.58));\n\n                float alpha = body + glow;\n",
+          "count": 1,
+          "word": false
+        },
         {
           "from": "        private val sines = FloatArray(FALLBACK_POINTS) { sin(angles[it]) }\n",
           "to": "        private val sines = FloatArray(FALLBACK_POINTS) { sin(angles[it]) }\n        private var width = 0\n        private var height = 0\n",
@@ -603,7 +861,14 @@
           "count": 1,
           "word": false
         }
-      ]
+      ],
+      "released_policy_exception": {
+        "kind": "Intentional published behavior difference; source-only historical reconstruction, not semantic equivalence",
+        "release_commit": "5cb854754a88fb7d62be32fccceba48ed7449ef4",
+        "scope": "Intentional blob appearance, motion, readout, silence and presence changes, including shader and fallback rendering.",
+        "prior_compiled_sha256": "efeae55a15c3d92b9dbff01276b826284220de81ff52abc34677cdc2126e0291",
+        "policy_inverse_count": 23
+      }
     },
     "src/reliability/java/app/smallthingz/reverb/ReleasedMainScreenParityOracle.kt": {
       "compiled_sha256": "d9fea75a0477ae83a31e57417f3bdb8f3af45a35b567954d03dc3bc7992d8dac",
@@ -726,9 +991,51 @@
       ]
     },
     "src/main/java/app/smallthingz/reverb/CaptureScreen.kt": {
-      "compiled_sha256": "6fb19ed4b31be817ac07fd31d7857c2d919a0f473b285c523242599408cc5013",
+      "compiled_sha256": "87bf1e015046b78c8fb99aeddf0f44d73eb97b4850eeb891e66df2614cacf371",
       "normalized_sha256": "c5f8077047f1328a616f5c9f65411aa58b230af8ff6e8097db7481c55c138dbf",
       "inverse": [
+        {
+          "from": "    }\n\n    override fun fileFailed(message: String, error: Throwable?) {\n        val normalized = normalizedCaptureSaveFailureMessage(\n            message = message,\n            fallback = appContext.getString(R.string.save_failed),\n        )\n        val text = if (normalized == appContext.getString(R.string.save_failed))\n            actionableErrorMessage(appContext, normalized, error) else normalized\n        AppFeedbackCenter.post(text, FeedbackTone.ERROR)\n        backgroundRecordingResultScope.launch {\n            if (\n",
+          "to": "    }\n\n    override fun fileFailed(message: String, error: Throwable?) {\n        val text = normalizedCaptureSaveFailureMessage(\n            message = message,\n            fallback = appContext.getString(R.string.save_failed),\n        )\n        AppFeedbackCenter.post(text, FeedbackTone.ERROR)\n        backgroundRecordingResultScope.launch {\n            if (\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "\nfun buildCaptureNotification(context: Context, recording: RecordingEntity): Notification {\n    ensureCaptureResultNotificationChannel(context)\n    val intent = RecordingPlaybackRequest.intentFor(context, recording)\n    val pendingIntent = PendingIntent.getActivity(\n        context,\n        0,\n",
+          "to": "\nfun buildCaptureNotification(context: Context, recording: RecordingEntity): Notification {\n    ensureCaptureResultNotificationChannel(context)\n    val intent = RecordingOpenActivity.intentFor(context, recording).apply {\n        action = recordingSavedPendingIntentAction(\n            context.packageName,\n            recording.id,\n            recording.fileIdentity,\n        )\n    }\n    val pendingIntent = PendingIntent.getActivity(\n        context,\n        0,\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "    exporting: Boolean,\n    receiverAttached: Boolean,\n    status: CaptureSaveStatus?,\n    cancellable: Boolean = true,\n): CaptureSaveStatus? = when {\n    exporting && status == null -> CaptureSaveStatus.Saving(cancellable = cancellable)\n    exporting && status is CaptureSaveStatus.Saving && status.cancellable && !cancellable -> status.copy(cancellable = false)\n    !exporting && !receiverAttached && status is CaptureSaveStatus.Saving -> null\n    else -> status\n}\n",
+          "to": "    exporting: Boolean,\n    receiverAttached: Boolean,\n    status: CaptureSaveStatus?,\n): CaptureSaveStatus? = when {\n    exporting && status == null -> CaptureSaveStatus.Saving(cancellable = true)\n    !exporting && !receiverAttached && status is CaptureSaveStatus.Saving -> null\n    else -> status\n}\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "        return\n    }\n    setSaving(true)\n    onStatus(CaptureSaveStatus.Saving(cancellable = false))\n    val appContext = context.applicationContext\n    val receiver = SaveResultReceiver(\n        context = appContext,\n",
+          "to": "        return\n    }\n    setSaving(true)\n    onStatus(CaptureSaveStatus.Saving(cancellable = true))\n    val appContext = context.applicationContext\n    val receiver = SaveResultReceiver(\n        context = appContext,\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "        savedCallback = null\n    }\n\n    fun queued() {\n        if (!attached) return\n        try {\n            setSavingCallback?.invoke(false)\n            statusCallback?.invoke(null)\n            savedCallback?.invoke()\n        } finally {\n            detach()\n        }\n    }\n\n    fun saved(recording: RecordingEntity): Boolean {\n        if (!attached) return false\n        val visible = canDisplayCallback?.invoke() == true\n",
+          "to": "        savedCallback = null\n    }\n\n    fun saved(recording: RecordingEntity): Boolean {\n        if (!attached) return false\n        val visible = canDisplayCallback?.invoke() == true\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "    )\n\n    private val terminalDelivered = AtomicBoolean(false)\n    private val queuedDelivered = AtomicBoolean(false)\n    private val uiRetired = AtomicBoolean(false)\n\n    fun detachUi() = uiCallbacks.detach()\n\n    override fun saveQueued(jobId: String) {\n        if (terminalDelivered.get() || !queuedDelivered.compareAndSet(false, true)) return\n        // Admission ends this UI lease. Encoding keeps only process-owned terminal delivery.\n        deliverTerminalResult(deliver = { uiCallbacks.queued() }, finish = ::finish)\n    }\n\n    override fun fileReady(recording: RecordingEntity) {\n        if (!terminalDelivered.compareAndSet(false, true)) return\n",
+          "to": "    )\n\n    private val terminalDelivered = AtomicBoolean(false)\n\n    fun detachUi() = uiCallbacks.detach()\n\n    override fun fileReady(recording: RecordingEntity) {\n        if (!terminalDelivered.compareAndSet(false, true)) return\n",
+          "count": 1,
+          "word": false
+        },
+        {
+          "from": "\n    private fun finish() {\n        uiCallbacks.detach()\n        if (uiRetired.compareAndSet(false, true)) onTerminal(this)\n    }\n}\n\n",
+          "to": "\n    private fun finish() {\n        uiCallbacks.detach()\n        onTerminal(this)\n    }\n}\n\n",
+          "count": 1,
+          "word": false
+        },
         {
           "from": "): ExportRange {\n    val available = availableSeconds.takeIf { it.isFinite() }?.coerceAtLeast(0.0) ?: 0.0\n    val exactStart = rangeSnapshotStartSeconds(available, requestedStartSeconds, requestedEndSeconds)\n    val exactEnd = rangeSnapshotEndSeconds(available, requestedStartSeconds, requestedEndSeconds)\n    val start = exactStart.toFloat()\n    val end = exactEnd.toFloat()\n    val maxDuration = exportDurationLimitExactSeconds(\n        exportConfig.format,\n",
           "to": "): ExportRange {\n    val available = availableSeconds.takeIf { it.isFinite() }?.coerceAtLeast(0.0) ?: 0.0\n    val start = requestedStartSeconds.toDouble().coerceIn(0.0, available).toFloat()\n    val end = requestedEndSeconds.toDouble().coerceIn(start.toDouble(), available).toFloat()\n    val maxDuration = exportDurationLimitExactSeconds(\n        exportConfig.format,\n",
@@ -754,6 +1061,44 @@
         "prior_compiled_source_commit": "1036704c4d44e9ba7fe465e08c8cc9b6f4e17452",
         "prior_compiled_sha256": "c5f8077047f1328a616f5c9f65411aa58b230af8ff6e8097db7481c55c138dbf",
         "scope": "Pin actual current compiled helper bytes; reverse only the reviewed endpoint changes before applying unchanged frozen renderer reconstruction. No compiled renderer/reference replacement or relaxed hash/count checks."
+      },
+      "released_policy_exception": {
+        "kind": "Intentional published behavior difference; source-only historical reconstruction, not semantic equivalence",
+        "release_commit": "5cb854754a88fb7d62be32fccceba48ed7449ef4",
+        "scope": "Durable save status, queued UI retirement, terminal delivery, notification playback and actionable errors.",
+        "prior_compiled_sha256": "6fb19ed4b31be817ac07fd31d7857c2d919a0f473b285c523242599408cc5013",
+        "policy_inverse_count": 7
+      }
+    },
+    "src/main/java/app/smallthingz/reverb/RangeDurationWheelView.kt": {
+      "compiled_sha256": "55dd8e66ec47c8b93fad5a461e7482f0c4dbc2ecf5100dbc9865321820b996aa",
+      "normalized_sha256": "fb2b3b433e5ce481f84d17d2206408bb8db7593d78bf484abf7e9fb7870ab62a",
+      "inverse": [
+        {
+          "to": "import kotlin.math.min\nimport kotlin.math.round\nimport kotlin.math.sin\n\ninternal fun rangeDurationWheelInputAllowed(\n    enabled: Boolean,\n",
+          "count": 1,
+          "word": false,
+          "from": "import kotlin.math.min\nimport kotlin.math.round\nimport kotlin.math.sin\nimport smallthingz.ui.animation.view.ViewColorTransition\n\ninternal fun rangeDurationWheelInputAllowed(\n    enabled: Boolean,\n"
+        },
+        {
+          "to": "    @ColorInt private var mutedColor = Color.GRAY\n    @ColorInt private var borderColor = Color.DKGRAY\n    @ColorInt private var errorColor = Color.RED\n\n    private var maximumDurationSecondsExact = 0.0\n    private var maximumWholeSeconds = 0\n",
+          "count": 1,
+          "word": false,
+          "from": "    @ColorInt private var mutedColor = Color.GRAY\n    @ColorInt private var borderColor = Color.DKGRAY\n    @ColorInt private var errorColor = Color.RED\n    private var paletteMotion:ViewColorTransition?=null\n\n    private var maximumDurationSecondsExact = 0.0\n    private var maximumWholeSeconds = 0\n"
+        },
+        {
+          "to": "        @ColorInt border: Int,\n        @ColorInt error: Int,\n    ) {\n        if (\n            inkColor == ink && mutedColor == muted && borderColor == border && errorColor == error\n        ) return\n        inkColor = ink\n        mutedColor = muted\n        borderColor = border\n",
+          "count": 1,
+          "word": false,
+          "from": "        @ColorInt border: Int,\n        @ColorInt error: Int,\n    ) {\n        val motion=paletteMotion ?: ViewColorTransition(this,intArrayOf(ink,muted,border,error),{\n            paletteMotion?.let {applyPalette(it.color(0),it.color(1),it.color(2),it.color(3))}\n        }).also {paletteMotion=it;applyPalette(ink,muted,border,error)}\n        motion.retarget(ink,muted,border,error)\n    }\n\n    private fun applyPalette(ink:Int,muted:Int,border:Int,error:Int) {\n        inkColor = ink\n        mutedColor = muted\n        borderColor = border\n"
+        }
+      ],
+      "released_policy_exception": {
+        "kind": "Intentional published behavior difference; source-only historical reconstruction, not semantic equivalence",
+        "release_commit": "5cb854754a88fb7d62be32fccceba48ed7449ef4",
+        "scope": "Animate duration-wheel palette transitions instead of immediate color changes.",
+        "prior_compiled_sha256": "fb2b3b433e5ce481f84d17d2206408bb8db7593d78bf484abf7e9fb7870ab62a",
+        "policy_inverse_count": 3
       }
     }
   },

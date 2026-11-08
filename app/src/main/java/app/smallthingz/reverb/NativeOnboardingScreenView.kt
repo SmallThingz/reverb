@@ -1,5 +1,7 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.geometry.roundedGroupGeometry
+
 import smallthingz.ui.scroll.NativeVerticalPhaseBinding
 import smallthingz.ui.scroll.NativeVerticalScrollAccessibilityBinding
 import smallthingz.ui.scroll.NativeVerticalScrollState
@@ -637,9 +639,9 @@ private class OnboardingPointerGeometry(private val environment: ReverbViewEnvir
                 target is NativePointerLayerShape -> target.containsPointerLayer(local.x, local.y)
                 target is ReverbGroupLayout -> target.containsVisualPoint(local.x, local.y)
                 target is SettingsOutputCompressionView || target is SettingsSilenceView -> true // One outer group clips both consecutive controls.
-                target.parent is ReverbGroupLayout -> reverbGroupGeometry(width, height, environment.textDensity.density, 20f)
+                target.parent is ReverbGroupLayout -> roundedGroupGeometry(width, height, environment.textDensity.density, 20f)
                     .contains(local.x, local.y)
-                root.isFooterButton(target) -> reverbGroupGeometry(width, height, environment.textDensity.density,
+                root.isFooterButton(target) -> roundedGroupGeometry(width, height, environment.textDensity.density,
                     minOf(width, height) / (2f * environment.textDensity.density)).contains(local.x, local.y)
                 else -> true // The remaining released Column/Box/page/body boundaries have no clip.
             }

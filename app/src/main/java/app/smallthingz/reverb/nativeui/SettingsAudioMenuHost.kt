@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativePopupMenu
+import smallthingz.ui.components.NativeMenuChoices
 import smallthingz.ui.scroll.NativeVerticalScrollState
 
 import app.smallthingz.reverb.closePreservingPrimaryFailure
@@ -29,9 +31,7 @@ internal class SettingsAudioMenuHost(
 ) : SettingsAudioPopupHost, AutoCloseable {
     private class Session(
         val anchor: View,
-        val content: SettingsMenuContent,
-        val input: SettingsMenuPointerBinding,
-        val window: SettingsMenuWindow,
+        val window: NativePopupMenu<ReverbIcon>,
     ) : AutoCloseable {
         override fun close() = window.close()
     }
@@ -65,20 +65,16 @@ internal class SettingsAudioMenuHost(
         }
         if (previous != null) retire(kind, previous)
         val scroll = scrollStates.getOrPut(kind) { NativeVerticalScrollState() }
-        lateinit var input: SettingsMenuPointerBinding
-        val menu = SettingsMenuContent(anchor.context, density, style, resolver, palette, scroll, frames, scope) {
-            event -> input.interestedParent(event)
-        }
-        input = SettingsMenuPointerBinding(menu, density)
         lateinit var session: Session
-        val window = SettingsMenuWindow(
-            anchor,menu,density,frames,scope,input,
+        val window = NativePopupMenu(
+            anchor, density, reverbDefaultTextStyle().merge(style), resolver, palette.menuColors(),
+            scroll, frames, scope, ReverbMenuIcons,
             onDismissRequest = { dismiss(kind) },
             onTerminal = {
                 if (sessions[kind] === session) retire(kind, session)
             },
         )
-        session = Session(anchor, menu, input, window)
+        session = Session(anchor, window)
         sessions[kind] = session
         try {
             bindSession(kind, session, content, onSelected)
@@ -116,12 +112,11 @@ internal class SettingsAudioMenuHost(
         content: SettingsDropdownContent<T>,
         select: (T) -> Unit,
     ) {
-        session.content.bind(content,palette) { value ->
+        session.window.bindChoices(NativeMenuChoices(content.selected, content.options, content.optionLabel), palette.menuColors()) { value ->
             select(value)
             // A callback that throws deliberately does not run the following source statement.
             if (sessions[kind] === session) dismiss(kind)
         }
-        session.input.refreshRows()
     }
 
     /** The panel's released active=false effect closes menus, preserving each retained scroll. */

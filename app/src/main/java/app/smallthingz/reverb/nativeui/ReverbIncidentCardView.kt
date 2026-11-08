@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.geometry.roundedGroupGeometry
+
 import smallthingz.ui.interaction.view.NativeClickBinding
 import smallthingz.ui.interaction.view.NativeClickEnvironment
 import smallthingz.ui.interaction.view.RowIndication
@@ -111,7 +113,7 @@ internal class ReverbIncidentCardView(
     private val outerClip = Path()
     private val outerBounds = RectF()
 
-    override fun containsPointerLayer(x: Float, y: Float): Boolean = reverbGroupGeometry(
+    override fun containsPointerLayer(x: Float, y: Float): Boolean = roundedGroupGeometry(
         width.toFloat(), height.toFloat(), appearance.density.density, cornerRadiusDp = 18f,
     ).contains(x, y)
 
@@ -258,7 +260,7 @@ internal class ReverbIncidentCardView(
             override val minimumTouchHeightPx get() = minimumTouchWidthPx
             override fun admitDown(event: MotionEvent): Boolean {
                 if (checkbox) return body.checkTarget.acceptsPointer(event)
-                return reverbGroupGeometry(target.width.toFloat(), target.height.toFloat(),
+                return roundedGroupGeometry(target.width.toFloat(), target.height.toFloat(),
                     appearance.density.density, cornerRadiusDp = 18f).acceptsPointer(
                     event.x, event.y, event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER, minimumTouchWidthPx)
             }
@@ -521,7 +523,7 @@ private class IncidentCheckTarget(
     private var tint = 0
     private val glyph = OnboardingIconView(context, ReverbIcon.Unchecked, tint)
     private var clickLabel: String? = null
-    private var hitGeometry = reverbGroupGeometry(0f, 0f, density, cornerRadiusDp = 23f)
+    private var hitGeometry = roundedGroupGeometry(0f, 0f, density, cornerRadiusDp = 23f)
     override val mergedRowAccessibility = MergedRowAccessibility(this, NativeMergedRowRole.BUTTON, {
         NativeMergedRowAccessibilityState(true, null, clickLabel,
             if (glyph.contentDescription != null) listOf(glyph) else emptyList(),
@@ -579,7 +581,7 @@ private class IncidentCheckTarget(
     }
 
     private fun updateGeometry() {
-        hitGeometry = reverbGroupGeometry(width.toFloat(), height.toFloat(), density, cornerRadiusDp = 23f)
+        hitGeometry = roundedGroupGeometry(width.toFloat(), height.toFloat(), density, cornerRadiusDp = 23f)
         invalidateOutline()
     }
 

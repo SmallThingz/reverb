@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.geometry.roundedGroupGeometry
+
 import smallthingz.ui.scroll.NativeVerticalNestedHost
 import smallthingz.ui.scroll.NativeVerticalScrollSource
 import smallthingz.ui.scroll.NativeVerticalScrollState
@@ -579,7 +581,7 @@ private class AboutRepositoryRow(context: Context, private var appearance: About
         override val nativeInputRoot: View? get() = this@AboutRepositoryRow.nativeInputRoot
         override val minimumTouchWidthPx get() = 48f * appearance.density.density
         override val minimumTouchHeightPx get() = minimumTouchWidthPx
-        override fun admitDown(event: MotionEvent) = reverbGroupGeometry(width.toFloat(), height.toFloat(), appearance.density.density, 20f)
+        override fun admitDown(event: MotionEvent) = roundedGroupGeometry(width.toFloat(), height.toFloat(), appearance.density.density, 20f)
             .acceptsPointer(event.x, event.y, event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER, minimumTouchWidthPx)
         override fun interestedParent(event: MotionEvent) = false // Shared touch phases supply actual vertical interest.
         override fun longPressOwnershipChanged(owns: Boolean) = Unit
@@ -739,7 +741,7 @@ private class AboutInputGeometry(private val density: Float) : AutoCloseable {
             dx * dx + dy * dy <= radius * radius
         }
         val repositoryHit = Hit(repository, listOf(repositoryNode), emptyList()) { p ->
-            reverbGroupGeometry(repository.width.toFloat(), repository.height.toFloat(), density, 20f)
+            roundedGroupGeometry(repository.width.toFloat(), repository.height.toFloat(), density, 20f)
                 .contains(p.x, p.y)
         }
         val viewport = surface.viewport

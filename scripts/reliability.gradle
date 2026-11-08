@@ -104,6 +104,7 @@ allprojects {
             }
         }
         if (parityOnly) {
+            def oracleProjectDirectory = layout.projectDirectory.asFile
             def oracleCheck = tasks.register('verifyNativeParityOracle') {
                 def settingsSource = file('src/main/java/app/smallthingz/reverb/SettingsScreen.kt')
                 def chromeSource = file('src/reliability/java/app/smallthingz/reverb/AppSurfaceStyle.kt')
@@ -169,15 +170,15 @@ allprojects {
                     if (splitSha256(splitSourceMapFile.bytes) != '217991dba2629efe2f61b69aa506dcdd055c2ddc67b9167740ecc91dad5ef16d') {
                         throw new GradleException('Native renderer split manifest changed')
                     }
-                    // Native backends change namespaces; approved Incidents reference exceptions are explicit.
+                    // Namespace seams and explicit published-policy exceptions reconstruct historical source only.
                     // Pin actual compiled inputs, invert only declared seams, then apply every original release hash.
-                    if (splitSha256(backendSourceMapFile.bytes) != '059bda6b50e1c827eb9445cbcd196368aabda78d8f4e974935fe44872da4bdd3') {
+                    if (splitSha256(backendSourceMapFile.bytes) != '2165b2a8c6c204114381d5a14f62f9eb2ef733ce49da75ee0a9bd94b94c29e30') {
                         throw new GradleException('Native backend source manifest changed')
                     }
                     def backendNormalizedBytes = [:]
                     def nativeBackendBytes = { relative ->
                         if (!backendNormalizedBytes.containsKey(relative)) {
-                            byte[] bytes = file(relative).bytes
+                            byte[] bytes = new File(oracleProjectDirectory, relative as String).bytes
                             def definition = backendSourceMap.normalizations[relative] ?:
                                 backendSourceMap.references[relative]
                             if (definition != null) {

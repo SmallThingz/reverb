@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.geometry.roundedGroupGeometry
+
 import smallthingz.ui.interaction.view.NativeClickBinding
 import smallthingz.ui.interaction.view.NativeClickEnvironment
 import smallthingz.ui.interaction.view.RowIndication
@@ -343,7 +345,7 @@ private class ReverbTopBarActionLeaf(
         override val nativeInputRoot: View = inputRoot
         override val minimumTouchWidthPx get() = 48f * environment.textDensity.density
         override val minimumTouchHeightPx get() = minimumTouchWidthPx
-        override fun admitDown(event: MotionEvent) = reverbGroupGeometry(width.toFloat(), height.toFloat(),
+        override fun admitDown(event: MotionEvent) = roundedGroupGeometry(width.toFloat(), height.toFloat(),
             environment.textDensity.density, 15f).acceptsPointer(event.x, event.y,
             event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER, minimumTouchWidthPx)
         override fun interestedParent(event: MotionEvent) = false
@@ -351,7 +353,7 @@ private class ReverbTopBarActionLeaf(
     }, RowIndicationSink(indication) { x, y, point -> point.set(x, y) })
     override val nativeClickEndpoint: NativeClickPhaseEndpoint = ViewClickPhaseEndpoint(controller)
     override fun containsPointerLayer(x: Float, y: Float) =
-        reverbGroupGeometry(width.toFloat(), height.toFloat(), environment.textDensity.density, 15f).contains(x, y)
+        roundedGroupGeometry(width.toFloat(), height.toFloat(), environment.textDensity.density, 15f).contains(x, y)
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
         // Source role-less Surface has no description; its actual Icon child owns it.
@@ -447,7 +449,7 @@ private class ReverbTopBarBrandAction(context: Context, private var environment:
         override val nativeInputRoot: View = inputRoot
         override val minimumTouchWidthPx get() = 48f * environment.textDensity.density
         override val minimumTouchHeightPx get() = minimumTouchWidthPx
-        override fun admitDown(event: MotionEvent) = reverbGroupGeometry(width.toFloat(), height.toFloat(),
+        override fun admitDown(event: MotionEvent) = roundedGroupGeometry(width.toFloat(), height.toFloat(),
             environment.textDensity.density, min(width, height) / (2f * environment.textDensity.density))
             .acceptsPointer(event.x, event.y, event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER, minimumTouchWidthPx)
         override fun interestedParent(event: MotionEvent) = false
@@ -455,7 +457,7 @@ private class ReverbTopBarBrandAction(context: Context, private var environment:
     }, RowIndicationSink(indication) { x, y, point -> point.set(x, y) })
     override val nativeClickEndpoint: NativeClickPhaseEndpoint = ViewClickPhaseEndpoint(controller)
     override fun containsPointerLayer(x: Float, y: Float) =
-        reverbGroupGeometry(width.toFloat(), height.toFloat(), environment.textDensity.density,
+        roundedGroupGeometry(width.toFloat(), height.toFloat(), environment.textDensity.density,
             min(width, height) / (2f * environment.textDensity.density)).contains(x, y)
     init {
         isClickable = true

@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.geometry.roundedGroupGeometry
+
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -8,7 +10,7 @@ import org.junit.Test
 class ReverbRecordingGroupGeometryTest {
     @Test fun recordingBorderRetainsRawDensityInsteadOfSettingsCeil() {
         val recording = reverbRecordingGroupGeometry(300f, 180f, 2.625f, ReverbRecordingGroupEdges(true, true))
-        val settings = reverbGroupGeometry(300f, 180f, 2.625f)
+        val settings = roundedGroupGeometry(300f, 180f, 2.625f)
         assertEquals(2.625f, recording.strokeWidth, 0f)
         assertEquals(3f, settings.strokeWidth, 0f)
         assertEquals(1.3125f, recording.strokeInset, 0f)

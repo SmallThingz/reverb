@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.geometry.roundedGroupGeometry
+
 import smallthingz.ui.interaction.view.ButtonElevationInteraction
 import smallthingz.ui.interaction.view.ButtonElevationToken
 import smallthingz.ui.interaction.view.NativeClickBinding
@@ -100,7 +102,7 @@ private class OnboardingNativeInteractions(
         override fun admitDown(event: MotionEvent): Boolean {
             val density = inputHost.resources.displayMetrics.density
             val radius = if (capsule) min(inputHost.width, inputHost.height) / (2f * density) else 0f
-            return reverbGroupGeometry(inputHost.width.toFloat(), inputHost.height.toFloat(), density, radius)
+            return roundedGroupGeometry(inputHost.width.toFloat(), inputHost.height.toFloat(), density, radius)
                 .acceptsPointer(event.x, event.y, event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER, minimumTouchWidthPx)
         }
         // Standalone fixture fallback; native root phase delivery supplies per-change interest.

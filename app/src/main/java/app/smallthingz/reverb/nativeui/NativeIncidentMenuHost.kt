@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeMenuAction
+
 import smallthingz.ui.runtime.MonotonicFrameClock
 import app.smallthingz.reverb.R
 import kotlinx.coroutines.CoroutineScope
@@ -12,12 +14,12 @@ internal class NativeIncidentMenuHost(
 ) : IncidentCardMenuHost, AutoCloseable {
     private val host = ReverbActionMenuHost(environment, frames, scope)
     private val requests = java.util.IdentityHashMap<IncidentCardMenuIdentity, IncidentCardMenuRequest>()
-    private fun actions(request: IncidentCardMenuRequest): List<ReverbMenuAction> = buildList {
+    private fun actions(request: IncidentCardMenuRequest): List<NativeMenuAction<ReverbIcon>> = buildList {
         val context = request.anchor.context
         val palette = environment.palette
-        add(ReverbMenuAction(context.getString(R.string.incident_copy), ReverbIcon.Copy,
+        add(NativeMenuAction(context.getString(R.string.incident_copy), ReverbIcon.Copy,
             palette.onSurface, palette.onSurfaceVariant, onClick = request.copy))
-        if (request.canDelete) add(ReverbMenuAction(context.getString(R.string.delete_recording),
+        if (request.canDelete) add(NativeMenuAction(context.getString(R.string.delete_recording),
             ReverbIcon.Delete, palette.error, palette.error, onClick = request.delete))
     }
     override fun show(request: IncidentCardMenuRequest) {

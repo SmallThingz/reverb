@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.geometry.roundedGroupGeometry
+
 import smallthingz.ui.text.view.MergedRowAccessibility
 import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
 import smallthingz.ui.text.view.NativeMergedRowAccessibilityState
@@ -245,7 +247,7 @@ private class ButtonSurface(context:Context,private val host:NativeMaterialButto
         if(densityChanged)requestLayout()
     }
     private fun dp(value:Float)=(value*environment.textDensity.density).roundToInt()
-    override fun containsPointerLayer(x:Float,y:Float)=reverbGroupGeometry(width.toFloat(),height.toFloat(),
+    override fun containsPointerLayer(x:Float,y:Float)=roundedGroupGeometry(width.toFloat(),height.toFloat(),
         environment.textDensity.density,min(width,height)/(2f*environment.textDensity.density)).contains(x,y)
     override fun onMeasure(w:Int,h:Int) {
         content.measure(w,h);setMeasuredDimension(content.measuredWidth,content.measuredHeight)

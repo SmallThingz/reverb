@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.geometry.roundedGroupGeometry
+
 import smallthingz.ui.interaction.view.NativeClickBinding
 import smallthingz.ui.interaction.view.NativeClickEnvironment
 import smallthingz.ui.interaction.view.NativeClickIndication
@@ -91,7 +93,7 @@ private class WakeLockRow(
         override val nativeInputRoot:View? get()=inputRoot()
         override val minimumTouchWidthPx:Float get()=48f*environment.textDensity.density
         override val minimumTouchHeightPx:Float get()=minimumTouchWidthPx
-        override fun admitDown(event:MotionEvent)=reverbGroupGeometry(width.toFloat(),height.toFloat(),
+        override fun admitDown(event:MotionEvent)=roundedGroupGeometry(width.toFloat(),height.toFloat(),
             environment.textDensity.density,0f).acceptsPointer(event.x,event.y,
                 event.getToolType(0)==MotionEvent.TOOL_TYPE_FINGER,minimumTouchWidthPx)
         override fun interestedParent(event:MotionEvent)=false

@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.geometry.roundedGroupGeometry
+
 import smallthingz.ui.interaction.view.NativeClickBinding
 import smallthingz.ui.interaction.view.NativeClickEnvironment
 import smallthingz.ui.interaction.view.RowIndication
@@ -53,7 +55,7 @@ internal class ReverbIncidentBackView(
         override val nativeInputRoot get() = pointerInputRoot
         override val minimumTouchWidthPx get() = 48f * resources.displayMetrics.density
         override val minimumTouchHeightPx get() = minimumTouchWidthPx
-        override fun admitDown(event: MotionEvent): Boolean = reverbGroupGeometry(
+        override fun admitDown(event: MotionEvent): Boolean = roundedGroupGeometry(
             width.toFloat(), height.toFloat(), resources.displayMetrics.density,
             min(width, height) / (2f * resources.displayMetrics.density),
         ).acceptsPointer(event.x, event.y, event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER, minimumTouchWidthPx)
@@ -63,7 +65,7 @@ internal class ReverbIncidentBackView(
 
     override val nativeClickEndpoint = ViewClickPhaseEndpoint(controller)
 
-    override fun containsPointerLayer(x: Float, y: Float): Boolean = reverbGroupGeometry(
+    override fun containsPointerLayer(x: Float, y: Float): Boolean = roundedGroupGeometry(
         width.toFloat(), height.toFloat(), resources.displayMetrics.density,
         min(width, height) / (2f * resources.displayMetrics.density),
     ).contains(x, y)

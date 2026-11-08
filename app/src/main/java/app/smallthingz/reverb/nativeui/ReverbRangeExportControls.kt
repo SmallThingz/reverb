@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.geometry.roundedGroupGeometry
+
 import smallthingz.ui.interaction.view.NativeClickBinding
 import smallthingz.ui.interaction.view.NativeClickEnvironment
 import smallthingz.ui.interaction.view.RowIndication
@@ -211,12 +213,12 @@ internal class ExportContent(
         override val minimumTouchHeightPx get() = minimumTouchWidthPx
         override fun interestedParent(event: MotionEvent) = false
         override fun longPressOwnershipChanged(owns: Boolean) = Unit
-        override fun admitDown(event: MotionEvent) = reverbGroupGeometry(width.toFloat(), height.toFloat(),
+        override fun admitDown(event: MotionEvent) = roundedGroupGeometry(width.toFloat(), height.toFloat(),
             environment.textDensity.density, 20f).acceptsPointer(event.x, event.y,
             event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER, minimumTouchWidthPx)
     }, RowIndicationSink(indication) { x, y, point -> point.set(x, y) })
     override val nativeClickEndpoint = ViewClickPhaseEndpoint(controller)
-    override fun containsPointerLayer(x: Float, y: Float) = reverbGroupGeometry(
+    override fun containsPointerLayer(x: Float, y: Float) = roundedGroupGeometry(
         width.toFloat(), height.toFloat(), environment.textDensity.density, 20f).contains(x, y)
 
     init {

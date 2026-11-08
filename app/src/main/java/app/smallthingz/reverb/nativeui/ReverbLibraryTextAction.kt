@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.geometry.roundedGroupGeometry
+
 import smallthingz.ui.interaction.view.NativeClickBinding
 import smallthingz.ui.interaction.view.NativeClickEnvironment
 import smallthingz.ui.interaction.view.RowIndication
@@ -88,7 +90,7 @@ private class LibraryTextActionSurface(context: Context, private var environment
         override val nativeInputRoot: View = inputRoot
         override val minimumTouchWidthPx get() = 48f * environment.textDensity.density
         override val minimumTouchHeightPx get() = minimumTouchWidthPx
-        override fun admitDown(event: MotionEvent) = reverbGroupGeometry(width.toFloat(), height.toFloat(),
+        override fun admitDown(event: MotionEvent) = roundedGroupGeometry(width.toFloat(), height.toFloat(),
             environment.textDensity.density, min(width, height) / (2f * environment.textDensity.density))
             .acceptsPointer(event.x, event.y, event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER, minimumTouchWidthPx)
         override fun interestedParent(event: MotionEvent): Boolean = false
@@ -108,7 +110,7 @@ private class LibraryTextActionSurface(context: Context, private var environment
     override fun addChildrenForAccessibility(outChildren: ArrayList<View>) =
         mergedRowAccessibility.addChildrenForAccessibility(outChildren)
     override fun containsPointerLayer(x: Float, y: Float) =
-        reverbGroupGeometry(width.toFloat(), height.toFloat(), environment.textDensity.density,
+        roundedGroupGeometry(width.toFloat(), height.toFloat(), environment.textDensity.density,
             min(width, height) / (2f * environment.textDensity.density)).contains(x, y)
     init {
         isClickable = true

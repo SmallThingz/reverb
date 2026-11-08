@@ -97,7 +97,7 @@ internal fun verifyNativeLibraryTransactions(instrumentation: Instrumentation, r
         .put("limits", "Semantic/View actions, not physical keyboard/IME or full MediaPlayer playback; no Share, Trim, import, permissions or production store")
         .put("passed", false)
     result.put("selector", selector)
-    if (menuOnly) result.put("scope", "One Light/LTR landscape/touch recording menu per renderer; same QA-owned MediaStore fixtures, no menu action")
+    if (menuOnly) result.put("scope", "One Light/LTR landscape/touch recording menu per renderer; same QA-owned MediaStore fixtures, no recording action; native typed audio-choice popup selection")
     val cases = JSONArray()
     result.put("cases", cases)
     val windowTransitions = JSONArray().also { result.put("window_transitions", it) }
@@ -132,6 +132,7 @@ internal fun verifyNativeLibraryTransactions(instrumentation: Instrumentation, r
     }
     try {
         transactionWrite(directory, result, null) // Durable false before any route/operation is mounted.
+        if (menuOnly) recoverEmptyTransactionJournal(context, result) { transactionWrite(directory, result, null) }
         val activity = launchNativeParityActivity(instrumentation)
         host = activity
         awaitNativeParityDraw(instrumentation, activity.fixtureRoot)
@@ -183,6 +184,10 @@ internal fun verifyNativeLibraryTransactions(instrumentation: Instrumentation, r
                     entry.put("menu_labels", JSONArray(expected)).put("actual_menu_labels", JSONArray(actual))
                     check(actual == expected) { "Menu label/order/enabled mismatch" }
                     capture("menu")
+                    ledger.requireUnchanged()
+                }
+                if (!compose) recordCase(renderer, "audio-choice") { entry ->
+                    current.verifyAudioChoiceMenu(instrumentation, directory, entry)
                     ledger.requireUnchanged()
                 }
                 closeBoard()
@@ -367,7 +372,7 @@ internal fun verifyNativeLibraryTransactions(instrumentation: Instrumentation, r
                 } finally { native.recycle() }
             } finally { source.recycle() }
         }
-        check(cases.length() == (if (menuOnly) 2 else 8) && captures.size == (if (menuOnly) 1 else 8))
+        check(cases.length() == (if (menuOnly) 3 else 8) && captures.size == (if (menuOnly) 1 else 8))
     } catch (error: Throwable) {
         primary = error
         result.put("terminal_error", android.util.Log.getStackTraceString(error))
@@ -397,7 +402,7 @@ internal fun verifyNativeLibraryTransactions(instrumentation: Instrumentation, r
             .append(directory.name).append("/result.json\n")
     }
     primary?.let { throw it }
-    report.append(if (menuOnly) "PASS native_library_menu flows=2 exact_app_viewport_scenes=1\n"
+    report.append(if (menuOnly) "PASS native_library_menu flows=3 exact_app_viewport_scenes=1 audio_choice_cases=1\n"
         else "PASS native_library_transactions flows=8 exact_app_viewport_scenes=8\n")
 }
 
@@ -428,29 +433,7 @@ internal fun verifyNativeRenameEditorCurrent(
     fun persist() = transactionWrite(directory, result, null)
     try {
         persist()
-        // Plain Application intentionally skips ReverbApplication's startup recovery. Run the real
-        // empty QA journal recovery; never synthesize readiness or adopt existing pending saves.
-        val journal = durableSaveJournalRoot(context)
-        val journalState = storagePathState(journal)
-        check(journal.parentFile?.canonicalFile == context.noBackupFilesDir.canonicalFile)
-        check(journalState == StoragePathState.MISSING ||
-            (journalState == StoragePathState.PRESENT &&
-                java.nio.file.Files.isDirectory(journal.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS) &&
-                journal.listFiles()?.isEmpty() == true)) { "Existing or unavailable QA save journal requires separate disposition" }
-        check(DurableSaveJobs.state.value.isEmpty()) { "Existing QA save publications require separate disposition" }
-        val recovery = JSONObject().put("journal", journal.absolutePath).put("journal_before", journalState.name)
-            .put("loaded_before", DurableSaveJobs.readiness.value.loaded)
-        result.put("save_recovery", recovery)
-        persist()
-        val coordinator = DurableSaveCoordinator.get(context)
-        check(coordinator.pendingCount() == 0) { "Existing QA coordinator work requires separate disposition" }
-        val handles = coordinator.recover()
-        val readiness = DurableSaveJobs.readiness.value
-        recovery.put("returned_handles", handles.size).put("pending_count", coordinator.pendingCount())
-            .put("loaded_after", readiness.loaded).put("recovery_failure", readiness.recoveryFailure ?: JSONObject.NULL)
-        persist()
-        check(handles.isEmpty() && coordinator.pendingCount() == 0 && DurableSaveJobs.state.value.isEmpty())
-        check(readiness.loaded && readiness.recoveryFailure == null) { "Empty QA save recovery did not finish" }
+        recoverEmptyTransactionJournal(context, result, ::persist)
         val windowScope = NativeParityInteractiveWindows.open(instrumentation, result).also { windows = it }
         val activity = launchCurrentUiSmokeActivity(instrumentation).also { host = it }
         awaitNativeParityDraw(instrumentation, activity.fixtureRoot)
@@ -844,6 +827,117 @@ private class TransactionBoard(
             allowInitialTooltipReadiness = action == context.getString(R.string.rename_recording))
         return evidence
     }
+    /** Actual Settings choice owner on this QA window; typed callbacks never write preferences. */
+    fun verifyAudioChoiceMenu(i: Instrumentation, evidence: File, entry: JSONObject) {
+        check(!compose)
+        data class Choice(val id: Int, val label: String)
+        val options = listOf(Choice(1, "Same choice"), Choice(2, "Same choice"), Choice(3, "Other choice"))
+        val callbacks = JSONArray().also { entry.put("callback_order", it) }
+        var selected: Choice? = null
+        var owner: SettingsAudioMenuHost? = null
+        var anchor: ParagraphView? = null
+        var failure: Throwable? = null
+        try {
+            nativeParityOnMain(i) {
+                guard()
+                check(focusRoot() !== host.window.decorView)
+                val transition = beginWindowTransition("audio-choice-dismiss-recording-menu")
+                val root = focusRoot()
+                check(root.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN,
+                    android.view.KeyEvent.KEYCODE_ESCAPE)))
+                check(root.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP,
+                    android.view.KeyEvent.KEYCODE_ESCAPE)))
+                transition.put("action_submitted", true)
+            }
+            awaitActivity(i)
+            nativeParityOnMain(i) {
+                guard()
+                val ownedScope = checkNotNull(nativeScope)
+                anchor = ParagraphView(context, ReverbParagraphStyles[ReverbTextRole.LABEL_LARGE],
+                    environment.textDensity, environment.sharedFontResolver, environment.palette.ink).also {
+                    it.setText("QA audio choice")
+                    val scale = environment.textDensity.density
+                    host.fixtureRoot.addView(it, FrameLayout.LayoutParams((160 * scale).toInt(),
+                        (48 * scale).toInt(), android.view.Gravity.TOP or android.view.Gravity.START).apply {
+                        leftMargin = (24 * scale).toInt(); topMargin = (24 * scale).toInt()
+                    })
+                }
+                owner = SettingsAudioMenuHost(ReverbParagraphStyles[ReverbTextRole.LABEL_LARGE],
+                    environment.textDensity, environment.sharedFontResolver,
+                    checkNotNull(ownedScope.coroutineContext[MonotonicFrameClock]), ownedScope,
+                    environment.palette, expandedChanged = { kind, expanded ->
+                        check(kind == SettingsAudioChoice.CHANNELS)
+                        callbacks.put("expanded:$expanded")
+                    })
+            }
+            awaitNativeParityDraw(i, host.fixtureRoot)
+            nativeParityOnMain(i) {
+                guard()
+                check(checkNotNull(anchor).isShown && checkNotNull(anchor).isLaidOut)
+                val transition = beginWindowTransition("audio-choice-open")
+                checkNotNull(owner).open(SettingsAudioChoice.CHANNELS, checkNotNull(anchor),
+                    SettingsDropdownContent("QA audio choice", options[1], options, Choice::label)) {
+                    selected = it
+                    callbacks.put("selected:${it.id}")
+                }
+                transition.put("action_submitted", true)
+            }
+            await(i, "actual audio choice popup") {
+                focusRoot() !== host.window.decorView && nativeParagraphs().map { it.getText().toString() } == options.map { it.label }
+            }
+            val rows = nativeParityOnMain(i) {
+                guard()
+                val root = focusRoot()
+                val metadata = JSONArray().also { entry.put("choice_metadata", it) }
+                nativeParagraphs().mapIndexed { index, text ->
+                    var row: View = text
+                    while (!row.isClickable) row = checkNotNull(row.parent as? View)
+                    check(row.rootView === root && row.isShown && row.isEnabled)
+                    val full = Rect(); check(row.getGlobalVisibleRect(full))
+                    check(full.width() == row.width && full.height() == row.height)
+                    val node = checkNotNull(row.createAccessibilityNodeInfo())
+                    try {
+                        metadata.put(JSONObject().put("index", index).put("label", text.getText().toString())
+                            .put("selected", node.isSelected).put("enabled", node.isEnabled)
+                            .put("bounds", full.flattenToString()).put("identity", System.identityHashCode(row)))
+                        check(node.isSelected == (index == 1) && node.isEnabled)
+                    } finally { node.recycle() }
+                    row
+                }.also { check(it.size == 3 && it.distinct().size == 3) }
+            }
+            val observation = JSONObject().also { entry.put("capture", it) }
+            val image = capture(i, evidence, "native-audio-choice", true, observation,
+                observeMenu = false, requireLandscapeTouch = true)
+            entry.put("capture_path", image.name)
+            nativeParityOnMain(i) {
+                guard()
+                val row = rows[0]
+                check(row.rootView === focusRoot() && row.isShown && row.isEnabled)
+                val bounds = Rect(); check(row.getGlobalVisibleRect(bounds))
+                check(bounds.width() == row.width && bounds.height() == row.height)
+                val transition = beginWindowTransition("audio-choice-select")
+                check(row.performAccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, null))
+                transition.put("action_submitted", true)
+                check(selected === options[0])
+                check(callbacks.toString() == JSONArray(listOf("expanded:true", "selected:1", "expanded:false")).toString())
+            }
+            awaitActivity(i)
+            entry.put("selected_id", selected?.id).put("typed_duplicate_identity", true)
+        } catch (error: Throwable) { failure = error; throw error }
+        finally {
+            fun cleanup(action: () -> Unit) {
+                try { nativeParityOnMain(i, action) } catch (error: Throwable) {
+                    if (failure == null) failure = error else if (failure !== error) failure!!.addSuppressed(error)
+                }
+            }
+            cleanup { owner?.close() }
+            cleanup { anchor?.let(host.fixtureRoot::removeView) }
+            if (failure != null && !entry.has("selected_id")) entry.put("choice_failure", failure!!.stackTraceToString())
+            // The caller records the original exception; cleanup-only failure must also fail the case.
+            failure?.let { throw it }
+        }
+    }
+
     fun clickLabels(i: Instrumentation): List<String> = nativeParityOnMain(i) {
         guard()
         if (compose) nodes().filter { it.config.getOrNull(SemanticsActions.OnClick)?.action != null &&
@@ -1292,6 +1386,32 @@ private fun transactionWrite(directory: File, result: JSONObject, primary: Throw
 }
 private fun transactionDigest(bytes: ByteArray) = MessageDigest.getInstance("SHA-256").digest(bytes)
     .toHexString()
+private fun recoverEmptyTransactionJournal(context: Context, result: JSONObject, persist: () -> Unit) {
+    // Plain Application intentionally skips ReverbApplication's startup recovery. Run the real
+    // empty QA journal recovery; never synthesize readiness or adopt existing pending saves.
+    val journal = durableSaveJournalRoot(context)
+    val journalState = storagePathState(journal)
+    check(journal.parentFile?.canonicalFile == context.noBackupFilesDir.canonicalFile)
+    check(journalState == StoragePathState.MISSING ||
+        (journalState == StoragePathState.PRESENT &&
+            java.nio.file.Files.isDirectory(journal.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS) &&
+            journal.listFiles()?.isEmpty() == true)) { "Existing or unavailable QA save journal requires separate disposition" }
+    check(DurableSaveJobs.state.value.isEmpty()) { "Existing QA save publications require separate disposition" }
+    val recovery = JSONObject().put("journal", journal.absolutePath).put("journal_before", journalState.name)
+        .put("loaded_before", DurableSaveJobs.readiness.value.loaded)
+    result.put("save_recovery", recovery)
+    persist()
+    val coordinator = DurableSaveCoordinator.get(context)
+    check(coordinator.pendingCount() == 0) { "Existing QA coordinator work requires separate disposition" }
+    val handles = coordinator.recover()
+    val readiness = DurableSaveJobs.readiness.value
+    recovery.put("returned_handles", handles.size).put("pending_count", coordinator.pendingCount())
+        .put("loaded_after", readiness.loaded).put("recovery_failure", readiness.recoveryFailure ?: JSONObject.NULL)
+    persist()
+    check(handles.isEmpty() && coordinator.pendingCount() == 0 && DurableSaveJobs.state.value.isEmpty())
+    check(readiness.loaded && readiness.recoveryFailure == null) { "Empty QA save recovery did not finish" }
+}
+
 private fun requireTransactionIdentity(context: Context, currentUiRename: Boolean = false) {
     check(context.packageName == if (currentUiRename) "app.smallthingz.reverb.uitheme.reliability"
         else "app.smallthingz.reverb.nativeparity.reliability")

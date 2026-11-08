@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativePopupMenu
+import smallthingz.ui.components.NativeMenuAction
 import smallthingz.ui.scroll.NativeVerticalScrollState
 
 import android.view.View
@@ -22,9 +24,7 @@ internal class ReverbActionMenuHost(
     }
     private class Session(
         val anchor: View,
-        val content: SettingsMenuContent,
-        val input: SettingsMenuPointerBinding,
-        val window: SettingsMenuWindow,
+        val window: NativePopupMenu<ReverbIcon>,
     ) : AutoCloseable {
         var onDismissRequest: () -> Unit = {}
         override fun close() = window.close()
@@ -36,7 +36,7 @@ internal class ReverbActionMenuHost(
         environment = ReverbViewEnvironment(environment.textDensity, environment.sharedFontResolver, palette)
     }
 
-    fun show(identity: Any, anchor: View, actions: List<ReverbMenuAction>, background: Int,
+    fun show(identity: Any, anchor: View, actions: List<NativeMenuAction<ReverbIcon>>, background: Int,
              onDismissRequest: () -> Unit = {}) {
         if (closed) return
         val entry = entries.getOrPut(identity) { Entry() }
@@ -48,13 +48,10 @@ internal class ReverbActionMenuHost(
             return
         }
         if (prior != null) retire(entry, prior)
-        lateinit var input: SettingsMenuPointerBinding
-        val content = SettingsMenuContent(anchor.context, environment.textDensity,
-            ReverbParagraphStyles[ReverbTextRole.LABEL_LARGE], environment.sharedFontResolver,
-            environment.palette, entry.scroll, frames, scope) { event -> input.interestedParent(event) }
-        input = SettingsMenuPointerBinding(content, environment.textDensity)
         lateinit var session: Session
-        val window = SettingsMenuWindow(anchor, content, environment.textDensity, frames, scope, input,
+        val window = NativePopupMenu(anchor, environment.textDensity,
+            reverbDefaultTextStyle().merge(ReverbParagraphStyles[ReverbTextRole.LABEL_LARGE]),
+            environment.sharedFontResolver, environment.palette.menuColors(), entry.scroll, frames, scope, ReverbMenuIcons,
             onDismissRequest = {
                 if (entries[identity] === entry && entry.session === session) {
                     session.onDismissRequest()
@@ -62,7 +59,7 @@ internal class ReverbActionMenuHost(
                 }
             },
             onTerminal = { if (entry.session === session) retire(entry, session) })
-        session = Session(anchor, content, input, window)
+        session = Session(anchor, window)
         session.onDismissRequest = onDismissRequest
         entry.session = session
         try {
@@ -75,7 +72,7 @@ internal class ReverbActionMenuHost(
         }
     }
 
-    fun update(identity: Any, anchor: View, actions: List<ReverbMenuAction>, background: Int,
+    fun update(identity: Any, anchor: View, actions: List<NativeMenuAction<ReverbIcon>>, background: Int,
                onDismissRequest: () -> Unit = {}) {
         if (closed) return
         val entry = entries[identity] ?: return
@@ -86,8 +83,8 @@ internal class ReverbActionMenuHost(
     }
 
     private fun bind(identity: Any, entry: Entry, session: Session,
-                     actions: List<ReverbMenuAction>, background: Int) {
-        session.content.bindActions(actions.map { action ->
+                     actions: List<NativeMenuAction<ReverbIcon>>, background: Int) {
+        session.window.bindActions(actions.map { action ->
             action.copy(onClick = {
                 if (!closed && entries[identity] === entry && entry.session === session) {
                     // Both source Incidents and Library assign expanded=false BEFORE the action.
@@ -95,8 +92,7 @@ internal class ReverbActionMenuHost(
                     action.onClick()
                 }
             })
-        }, environment.palette, background)
-        session.input.refreshRows()
+        }, environment.palette.menuColors(), background)
     }
 
     /** Source expanded=false keeps ScrollState/menuCreated until its row is actually disposed. */

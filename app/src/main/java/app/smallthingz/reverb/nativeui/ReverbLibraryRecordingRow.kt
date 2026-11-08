@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.geometry.roundedGroupGeometry
+
 import smallthingz.ui.interaction.view.NativeClickBinding
 import smallthingz.ui.interaction.view.NativeClickEnvironment
 import smallthingz.ui.interaction.view.RowIndication
@@ -298,7 +300,7 @@ internal class ReverbLibraryRecordingRow(
             override val nativeInputRoot: View get() = this@ReverbLibraryRecordingRow.nativeInputRoot
             override val minimumTouchWidthPx get() = 48f * environment.textDensity.density
             override val minimumTouchHeightPx get() = minimumTouchWidthPx
-            override fun admitDown(event: MotionEvent): Boolean = reverbGroupGeometry(
+            override fun admitDown(event: MotionEvent): Boolean = roundedGroupGeometry(
                 target.width.toFloat(), target.height.toFloat(), environment.textDensity.density, 0f,
             ).acceptsPointer(event.x, event.y, event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER,
                 minimumTouchWidthPx)

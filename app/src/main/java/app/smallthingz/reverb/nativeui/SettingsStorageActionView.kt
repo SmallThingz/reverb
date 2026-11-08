@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.geometry.roundedGroupGeometry
+
 import smallthingz.ui.interaction.view.NativeClickBinding
 import smallthingz.ui.interaction.view.NativeClickEnvironment
 import smallthingz.ui.interaction.view.RowIndication
@@ -48,7 +50,7 @@ internal class SettingsStorageActionView(
         override val nativeInputRoot:View? get()=inputRoot()
         override val minimumTouchWidthPx get()=48f*environment.textDensity.density
         override val minimumTouchHeightPx get()=minimumTouchWidthPx
-        override fun admitDown(event:MotionEvent)=reverbGroupGeometry(content.width.toFloat(),content.height.toFloat(),
+        override fun admitDown(event:MotionEvent)=roundedGroupGeometry(content.width.toFloat(),content.height.toFloat(),
             environment.textDensity.density,radius).acceptsPointer(event.x,event.y,
                 event.getToolType(0)==MotionEvent.TOOL_TYPE_FINGER,minimumTouchWidthPx)
         override fun interestedParent(event:MotionEvent)=false
@@ -103,7 +105,7 @@ internal class SettingsStorageActionView(
         }}
         private val semanticChild:View get()=label?:requireNotNull(glyph)
         override val nativeClickEndpoint:NativeClickPhaseEndpoint get()=endpoint
-        override fun containsPointerLayer(x:Float,y:Float)=reverbGroupGeometry(width.toFloat(),height.toFloat(),
+        override fun containsPointerLayer(x:Float,y:Float)=roundedGroupGeometry(width.toFloat(),height.toFloat(),
             environment.textDensity.density,radius).contains(x,y)
         override val mergedRowAccessibility=run {
             val children=listOf(semanticChild)

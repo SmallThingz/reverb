@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.geometry.roundedGroupGeometry
+
 import smallthingz.ui.interaction.view.NativeClickBinding
 import smallthingz.ui.interaction.view.NativeClickEnvironment
 import smallthingz.ui.interaction.view.RowIndication
@@ -240,7 +242,7 @@ internal abstract class HomeClickable(
         override val minimumTouchHeightPx get() = minimumTouchWidthPx
         override fun interestedParent(event: MotionEvent) = false // Cluster is outside swipe Box.
         override fun longPressOwnershipChanged(owns: Boolean) = Unit
-        override fun admitDown(event: MotionEvent): Boolean = reverbGroupGeometry(
+        override fun admitDown(event: MotionEvent): Boolean = roundedGroupGeometry(
             width.toFloat(), height.toFloat(), currentEnvironment.textDensity.density,
             radiusDp ?: min(width, height) / (2f * currentEnvironment.textDensity.density),
         ).acceptsPointer(event.x, event.y,
@@ -258,7 +260,7 @@ internal abstract class HomeClickable(
             override val nodes = listOf(node)
             override val childrenInHitOrder = emptyList<NativeViewPointerHitLayout>()
             override fun screenToLocal(screen: Offset) = coordinates.coordinates(this@HomeClickable).local(screen)
-            override fun withinLayerBounds(local: Offset) = reverbGroupGeometry(
+            override fun withinLayerBounds(local: Offset) = roundedGroupGeometry(
                 width.toFloat(), height.toFloat(), currentEnvironment.textDensity.density,
                 radiusDp ?: min(width, height) / (2f * currentEnvironment.textDensity.density),
             ).contains(local.x, local.y)

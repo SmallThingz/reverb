@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeMenuAction
+
 import smallthingz.ui.scroll.NativeVerticalNestedHost
 import smallthingz.ui.scroll.NativeVerticalViewport
 
@@ -340,7 +342,7 @@ internal class ReverbLibraryScreenContent(
         val busy = recording.id in value.list.activeMutationIds || recording.id in value.list.localOperationBusyIds
         val ink = environment.palette.ink
         fun item(label: Int, icon: ReverbIcon, enabled: Boolean = !busy, color: Int = ink, action: () -> Unit) =
-            ReverbMenuAction(context.getString(label), icon, color, color, enabled, action)
+            NativeMenuAction(context.getString(label), icon, color, color, enabled, action)
         menus.show(lifetime.identity, anchor, listOf(
             item(R.string.rename_recording, ReverbIcon.Edit) { owner.rename(recording) },
             item(R.string.recording_info, ReverbIcon.Info) { owner.info(recording) },
