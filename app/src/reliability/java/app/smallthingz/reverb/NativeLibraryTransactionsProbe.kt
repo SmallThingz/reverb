@@ -893,22 +893,52 @@ private class TransactionBoard(
                 }
                 transition.put("action_submitted", true)
             }
+            fun choiceRows(): List<View> = nativeParagraphs().map { text ->
+                var row: View = text
+                while (!row.isClickable) row = checkNotNull(row.parent as? View)
+                row
+            }
             await(i, "actual audio choice popup") {
-                focusRoot() !== host.window.decorView && nativeParagraphs().map { it.getText().toString() } == options.map { it.label }
+                val root = focusRoot()
+                if (root === host.window.decorView ||
+                    nativeParagraphs().map { it.getText().toString() } != options.map { it.label }) false
+                else {
+                    val geometry = JSONArray().also { entry.put("choice_last_geometry", it) }
+                    val ready = choiceRows().map { row ->
+                        val full = Rect()
+                        val visible = row.getGlobalVisibleRect(full)
+                        val ancestors = JSONArray()
+                        var settled = true
+                        var ancestor: View? = row
+                        while (ancestor != null) {
+                            ancestors.put(JSONObject().put("identity", System.identityHashCode(ancestor))
+                                .put("scale_x", ancestor.scaleX).put("scale_y", ancestor.scaleY)
+                                .put("alpha", ancestor.alpha))
+                            settled = settled && ancestor.scaleX == 1f && ancestor.scaleY == 1f && ancestor.alpha == 1f
+                            ancestor = ancestor.parent as? View
+                        }
+                        geometry.put(JSONObject().put("identity", System.identityHashCode(row))
+                            .put("width", row.width).put("height", row.height)
+                            .put("visible", visible).put("bounds", full.flattenToString())
+                            .put("ancestors", ancestors))
+                        row.rootView === root && row.isShown && row.isEnabled && settled && visible &&
+                            row.width > 0 && row.height > 0 && full.width() == row.width && full.height() == row.height
+                    }
+                    ready.size == 3 && ready.all { it }
+                }
             }
             val rows = nativeParityOnMain(i) {
                 guard()
                 val root = focusRoot()
                 val metadata = JSONArray().also { entry.put("choice_metadata", it) }
-                nativeParagraphs().mapIndexed { index, text ->
-                    var row: View = text
-                    while (!row.isClickable) row = checkNotNull(row.parent as? View)
+                val labels = nativeParagraphs().map { it.getText().toString() }
+                choiceRows().mapIndexed { index, row ->
                     check(row.rootView === root && row.isShown && row.isEnabled)
                     val full = Rect(); check(row.getGlobalVisibleRect(full))
                     check(full.width() == row.width && full.height() == row.height)
                     val node = checkNotNull(row.createAccessibilityNodeInfo())
                     try {
-                        metadata.put(JSONObject().put("index", index).put("label", text.getText().toString())
+                        metadata.put(JSONObject().put("index", index).put("label", labels[index])
                             .put("selected", node.isSelected).put("enabled", node.isEnabled)
                             .put("bounds", full.flattenToString()).put("identity", System.identityHashCode(row)))
                         check(node.isSelected == (index == 1) && node.isEnabled)
