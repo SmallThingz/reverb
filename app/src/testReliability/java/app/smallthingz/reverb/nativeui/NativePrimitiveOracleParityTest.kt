@@ -1,5 +1,9 @@
 package app.smallthingz.reverb.nativeui
 
+import androidx.compose.ui.graphics.colorspace.connect as oracleConnect
+import androidx.compose.ui.graphics.colorspace.RenderIntent as OracleRenderIntent
+import smallthingz.ui.graphics.colorspace.connect as nativeConnect
+import smallthingz.ui.graphics.colorspace.RenderIntent as NativeRenderIntent
 import androidx.compose.ui.geometry.Offset as OracleOffset
 import androidx.compose.ui.geometry.Rect as OracleRect
 import androidx.compose.ui.geometry.Size as OracleSize
@@ -116,6 +120,36 @@ class NativePrimitiveOracleParityTest {
                 assertEquals("y=$index/$limit", expected.y.toRawBits(), actual.y.toRawBits())
             }
             if (index % 37 == 0) { oracle.resetTracking(); native.resetTracking() }
+        }
+    }
+
+    @Test fun everyNamedColorPairAndIntentMatchesPinnedIndependentBinary() {
+        val expectedSpaces = listOf(OracleColorSpaces.Srgb, OracleColor.Unspecified.colorSpace, OracleColorSpaces.Oklab)
+        val actualSpaces = listOf(NativeColorSpaces.Srgb, NativeColor.Unspecified.colorSpace, NativeColorSpaces.Oklab)
+        val packedIds = intArrayOf(0, 16, 19)
+        val expectedIntents = listOf(OracleRenderIntent.Perceptual, OracleRenderIntent.Relative,
+            OracleRenderIntent.Saturation, OracleRenderIntent.Absolute)
+        val actualIntents = listOf(NativeRenderIntent.Perceptual, NativeRenderIntent.Relative,
+            NativeRenderIntent.Saturation, NativeRenderIntent.Absolute)
+        val random = Random(0x4e414d4544434f4cL)
+        for (source in actualSpaces.indices) repeat(256) {
+            val raw = (random.nextLong().toULong() and 0x3fUL.inv()) or packedIds[source].toULong()
+            val expectedColor = OracleColor(raw)
+            val actualColor = NativeColor(raw)
+            for (target in actualSpaces.indices) {
+                val expectedPacked = runCatching { expectedColor.convert(expectedSpaces[target]).value }
+                val actualPacked = runCatching { actualColor.convert(actualSpaces[target]).value }
+                assertEquals(expectedPacked.getOrNull(), actualPacked.getOrNull())
+                assertEquals(expectedPacked.exceptionOrNull()?.javaClass, actualPacked.exceptionOrNull()?.javaClass)
+                for (intent in actualIntents.indices) {
+                    val expected = expectedSpaces[source].oracleConnect(expectedSpaces[target], expectedIntents[intent])
+                        .transform(floatArrayOf(expectedColor.red, expectedColor.green, expectedColor.blue))
+                    val actual = actualSpaces[source].nativeConnect(actualSpaces[target], actualIntents[intent])
+                        .transform(floatArrayOf(actualColor.red, actualColor.green, actualColor.blue))
+                    for (channel in 0..2) assertEquals("named=$source/$target/$intent/$channel",
+                        expected[channel].toBits(), actual[channel].toBits())
+                }
+            }
         }
     }
 }
