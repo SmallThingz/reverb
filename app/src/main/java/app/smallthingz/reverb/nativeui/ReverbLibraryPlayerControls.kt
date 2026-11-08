@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.interaction.view.isNativeClickActivationKey
+
 import smallthingz.ui.geometry.roundedGroupGeometry
 
 import smallthingz.ui.interaction.view.NativeClickBinding
@@ -216,8 +218,8 @@ private class PlayerTrimActionRow(context: Context, private var environment: Rev
         indication.onMeasured(width, height, environment.textDensity.density)
     }
     override fun onTouchEvent(event: MotionEvent) = input.touch(event)
-    override fun onKeyDown(code: Int, event: KeyEvent): Boolean = if (activationKey(code)) input.key(event) else super.onKeyDown(code, event)
-    override fun onKeyUp(code: Int, event: KeyEvent): Boolean = if (activationKey(code)) input.key(event) else super.onKeyUp(code, event)
+    override fun onKeyDown(code: Int, event: KeyEvent): Boolean = if (isNativeClickActivationKey(code)) input.key(event) else super.onKeyDown(code, event)
+    override fun onKeyUp(code: Int, event: KeyEvent): Boolean = if (isNativeClickActivationKey(code)) input.key(event) else super.onKeyUp(code, event)
     override fun onHoverEvent(event: MotionEvent): Boolean { val handled = super.onHoverEvent(event); return input.hover(event) || handled }
     override fun onFocusChanged(gain: Boolean, direction: Int, rect: Rect?) { super.onFocusChanged(gain, direction, rect); input.focusChanged(gain) }
     override fun onAttachedToWindow() { super.onAttachedToWindow(); input.attached(); bindInput() }
@@ -247,7 +249,3 @@ private class PlayerGlyph(context: Context, private var environment: ReverbViewE
 private fun libraryPlayerControlsExact(value: Int) = View.MeasureSpec.makeMeasureSpec(value.coerceAtLeast(0), View.MeasureSpec.EXACTLY)
 private fun libraryPlayerControlsAtMost(value: Int) = View.MeasureSpec.makeMeasureSpec(value.coerceAtLeast(0), View.MeasureSpec.AT_MOST)
 private fun Int.toAtMost(): Int = if (View.MeasureSpec.getMode(this) == View.MeasureSpec.UNSPECIFIED) this else libraryPlayerControlsAtMost(View.MeasureSpec.getSize(this))
-private fun activationKey(code: Int): Boolean = when (code) {
-    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER, KeyEvent.KEYCODE_SPACE -> true
-    else -> false
-}

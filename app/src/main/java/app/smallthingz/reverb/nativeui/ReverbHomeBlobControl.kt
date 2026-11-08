@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.interaction.view.isNativeClickActivationKey
+
 import smallthingz.ui.interaction.view.NativeClickBinding
 import smallthingz.ui.interaction.view.NativeClickEnvironment
 import smallthingz.ui.interaction.view.NativeClickIndication
@@ -286,9 +288,9 @@ internal class ReverbHomeBlobControl(
     /** Parent Final-pass adapter may cancel a click after a source-consumed horizontal movement. */
     fun cancelGesture() = click.cancel()
     override fun onKeyDown(code: Int, event: KeyEvent): Boolean =
-        if (isHomeActivationKey(code)) click.key(event) else super.onKeyDown(code, event)
+        if (isNativeClickActivationKey(code)) click.key(event) else super.onKeyDown(code, event)
     override fun onKeyUp(code: Int, event: KeyEvent): Boolean =
-        if (isHomeActivationKey(code)) click.key(event) else super.onKeyUp(code, event)
+        if (isNativeClickActivationKey(code)) click.key(event) else super.onKeyUp(code, event)
     override fun onHoverEvent(event: MotionEvent): Boolean {
         val platformHandled = super.onHoverEvent(event)
         return click.hover(event) || platformHandled

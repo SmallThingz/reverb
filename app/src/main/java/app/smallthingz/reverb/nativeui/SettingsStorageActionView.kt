@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.interaction.view.isNativeClickActivationKey
+
 import smallthingz.ui.geometry.roundedGroupGeometry
 
 import smallthingz.ui.interaction.view.NativeClickBinding
@@ -156,8 +158,8 @@ internal class SettingsStorageActionView(
             indication.onMeasured(width,height,environment.textDensity.density)
         }
         override fun onTouchEvent(event:MotionEvent)=controller.touch(event)
-        override fun onKeyDown(code:Int,event:KeyEvent)=if(activation(code))controller.key(event)else super.onKeyDown(code,event)
-        override fun onKeyUp(code:Int,event:KeyEvent)=if(activation(code))controller.key(event)else super.onKeyUp(code,event)
+        override fun onKeyDown(code:Int,event:KeyEvent)=if(isNativeClickActivationKey(code))controller.key(event)else super.onKeyDown(code,event)
+        override fun onKeyUp(code:Int,event:KeyEvent)=if(isNativeClickActivationKey(code))controller.key(event)else super.onKeyUp(code,event)
         override fun onHoverEvent(event:MotionEvent):Boolean {val native=super.onHoverEvent(event);return controller.hover(event)||native}
         override fun onFocusChanged(gain:Boolean,direction:Int,old:Rect?) {super.onFocusChanged(gain,direction,old);controller.focusChanged(gain)}
         override fun onAttachedToWindow() {
@@ -166,7 +168,5 @@ internal class SettingsStorageActionView(
         }
         override fun onDetachedFromWindow() {controller.detached();super.onDetachedFromWindow()}
         override fun onCancelPendingInputEvents() {super.onCancelPendingInputEvents();controller.cancel()}
-        private fun activation(code:Int)=code==KeyEvent.KEYCODE_DPAD_CENTER||code==KeyEvent.KEYCODE_ENTER||
-            code==KeyEvent.KEYCODE_NUMPAD_ENTER||code==KeyEvent.KEYCODE_SPACE
     }
 }

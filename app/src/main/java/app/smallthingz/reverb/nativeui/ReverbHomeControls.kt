@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.interaction.view.isNativeClickActivationKey
+
 import smallthingz.ui.geometry.roundedGroupGeometry
 
 import smallthingz.ui.interaction.view.NativeClickBinding
@@ -307,10 +309,11 @@ internal abstract class HomeClickable(
         invalidateOutline()
     }
     override fun onTouchEvent(event: MotionEvent) = input.touch(event)
+    // Declined repeat DOWN/unmatched UP must not fall through to stock View click handling.
     override fun onKeyDown(code: Int, event: KeyEvent): Boolean =
-        if (isHomeActivationKey(code)) input.key(event) else super.onKeyDown(code, event)
+        if (isNativeClickActivationKey(code)) input.key(event) else super.onKeyDown(code, event)
     override fun onKeyUp(code: Int, event: KeyEvent): Boolean =
-        if (isHomeActivationKey(code)) input.key(event) else super.onKeyUp(code, event)
+        if (isNativeClickActivationKey(code)) input.key(event) else super.onKeyUp(code, event)
     override fun onHoverEvent(event: MotionEvent): Boolean {
         val platform = super.onHoverEvent(event)
         return input.hover(event) || platform
@@ -539,12 +542,4 @@ private class HomeGlyph(context: Context, private var environment: ReverbViewEnv
         super.onRtlPropertiesChanged(direction); drawable.layoutDirection = direction; invalidate()
     }
     override fun onDraw(canvas: Canvas) { drawable.draw(canvas) }
-}
-
-
-// Declined repeat DOWN/unmatched UP must not fall through to stock View click handling.
-internal fun isHomeActivationKey(code: Int): Boolean = when (code) {
-    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER,
-    KeyEvent.KEYCODE_NUMPAD_ENTER, KeyEvent.KEYCODE_SPACE -> true
-    else -> false
 }

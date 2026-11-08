@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.interaction.view.isNativeClickActivationKey
+
 import smallthingz.ui.geometry.roundedGroupGeometry
 
 import smallthingz.ui.interaction.view.NativeClickBinding
@@ -285,9 +287,9 @@ internal class ExportContent(
     override fun onCancelPendingInputEvents() { super.onCancelPendingInputEvents(); controller.cancel() }
     override fun onTouchEvent(event: MotionEvent) = controller.touch(event)
     override fun onKeyDown(code: Int, event: KeyEvent) =
-        if (activation(code)) controller.key(event) else super.onKeyDown(code, event)
+        if (isNativeClickActivationKey(code)) controller.key(event) else super.onKeyDown(code, event)
     override fun onKeyUp(code: Int, event: KeyEvent) =
-        if (activation(code)) controller.key(event) else super.onKeyUp(code, event)
+        if (isNativeClickActivationKey(code)) controller.key(event) else super.onKeyUp(code, event)
     override fun onHoverEvent(event: MotionEvent): Boolean {
         val platform = super.onHoverEvent(event); return controller.hover(event) || platform
     }
@@ -305,8 +307,6 @@ internal class ExportContent(
         else info.removeAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_CLICK)
     }
     private fun dp(value: Int) = (value * environment.textDensity.density).roundToInt()
-    private fun activation(code: Int) = code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER ||
-        code == KeyEvent.KEYCODE_NUMPAD_ENTER || code == KeyEvent.KEYCODE_SPACE
 }
 
 private fun rangeControlExact(size: Int) = View.MeasureSpec.makeMeasureSpec(size, View.MeasureSpec.EXACTLY)

@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.interaction.view.isNativeClickActivationKey
+
 import smallthingz.ui.text.view.MergedRowAccessibility
 import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
 import smallthingz.ui.text.view.NativeMergedRowAccessibilityState
@@ -92,8 +94,8 @@ internal class SettingsToggleRowView(
     override fun onTouchEvent(event:MotionEvent)=interactions.touch(event)
     override fun addChildrenForAccessibility(outChildren:ArrayList<View>) =
         mergedRowAccessibility.addChildrenForAccessibility(outChildren)
-    override fun onKeyDown(code:Int,event:KeyEvent)=if(activationKey(code))interactions.key(event)else super.onKeyDown(code,event)
-    override fun onKeyUp(code:Int,event:KeyEvent)=if(activationKey(code))interactions.key(event)else super.onKeyUp(code,event)
+    override fun onKeyDown(code:Int,event:KeyEvent)=if(isNativeClickActivationKey(code))interactions.key(event)else super.onKeyDown(code,event)
+    override fun onKeyUp(code:Int,event:KeyEvent)=if(isNativeClickActivationKey(code))interactions.key(event)else super.onKeyUp(code,event)
     override fun onHoverEvent(event:MotionEvent):Boolean {val native=super.onHoverEvent(event);return interactions.hover(event)||native}
     override fun onFocusChanged(gain:Boolean,direction:Int,previous:Rect?) {super.onFocusChanged(gain,direction,previous);interactions.focusChanged(gain)}
     override fun onAttachedToWindow() {super.onAttachedToWindow();interactions.attached()}
@@ -101,6 +103,4 @@ internal class SettingsToggleRowView(
     override fun onCancelPendingInputEvents() {super.onCancelPendingInputEvents();interactions.cancel()}
     override fun close() {changed=null;interactions.cancel()}
     private fun dp(v:Int)=(v*environment.textDensity.density).roundToInt()
-    private fun activationKey(code:Int)=code==KeyEvent.KEYCODE_DPAD_CENTER||code==KeyEvent.KEYCODE_ENTER||
-        code==KeyEvent.KEYCODE_NUMPAD_ENTER||code==KeyEvent.KEYCODE_SPACE
 }

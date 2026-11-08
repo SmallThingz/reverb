@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.interaction.view.isNativeClickActivationKey
+
 import smallthingz.ui.geometry.roundedGroupGeometry
 
 import smallthingz.ui.interaction.view.NativeClickBinding
@@ -158,8 +160,8 @@ private class WakeLockRow(
         view.layout(x,y,x+view.measuredWidth,y+view.measuredHeight)
     }
     override fun onTouchEvent(event:MotionEvent)=input.touch(event)
-    override fun onKeyDown(code:Int,event:KeyEvent)=if(activationKey(code))input.key(event)else super.onKeyDown(code,event)
-    override fun onKeyUp(code:Int,event:KeyEvent)=if(activationKey(code))input.key(event)else super.onKeyUp(code,event)
+    override fun onKeyDown(code:Int,event:KeyEvent)=if(isNativeClickActivationKey(code))input.key(event)else super.onKeyDown(code,event)
+    override fun onKeyUp(code:Int,event:KeyEvent)=if(isNativeClickActivationKey(code))input.key(event)else super.onKeyUp(code,event)
     override fun onHoverEvent(event:MotionEvent):Boolean {val native=super.onHoverEvent(event);return input.hover(event)||native}
     override fun onFocusChanged(gain:Boolean,direction:Int,previous:Rect?) {super.onFocusChanged(gain,direction,previous);input.focusChanged(gain)}
     override fun onAttachedToWindow() {super.onAttachedToWindow();input.attached();if(changed!=null)input.bind(NativeClickBinding(this,true,{performClick()}))}
@@ -167,8 +169,6 @@ private class WakeLockRow(
     override fun onCancelPendingInputEvents() {super.onCancelPendingInputEvents();input.cancel()}
     override fun close() {changed=null;input.bind(null);switch.close()}
     private fun dp(v:Int)=(v*environment.textDensity.density).roundToInt()
-    private fun activationKey(code:Int)=code==KeyEvent.KEYCODE_DPAD_CENTER||code==KeyEvent.KEYCODE_ENTER||
-        code==KeyEvent.KEYCODE_NUMPAD_ENTER||code==KeyEvent.KEYCODE_SPACE
 }
 
 /** Dp state is retained until layout rounding; all four released animateAsState channels are separate. */

@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.interaction.view.isNativeClickActivationKey
+
 import smallthingz.ui.geometry.roundedGroupGeometry
 
 import smallthingz.ui.interaction.view.NativeClickBinding
@@ -179,18 +181,12 @@ private class LibraryTextActionSurface(context: Context, private var environment
     }
     override fun onTouchEvent(event: MotionEvent) = controller.touch(event)
     override fun onKeyDown(code: Int, event: KeyEvent): Boolean =
-        if (isActivationKey(code)) controller.key(event) else super.onKeyDown(code, event)
+        if (isNativeClickActivationKey(code)) controller.key(event) else super.onKeyDown(code, event)
     override fun onKeyUp(code: Int, event: KeyEvent): Boolean =
-        if (isActivationKey(code)) controller.key(event) else super.onKeyUp(code, event)
+        if (isNativeClickActivationKey(code)) controller.key(event) else super.onKeyUp(code, event)
     override fun onHoverEvent(event: MotionEvent): Boolean { val handled = super.onHoverEvent(event); return controller.hover(event) || handled }
     override fun onFocusChanged(focused: Boolean, direction: Int, rect: Rect?) { super.onFocusChanged(focused, direction, rect); controller.focusChanged(focused) }
     override fun onAttachedToWindow() { super.onAttachedToWindow(); controller.attached(); bindInput() }
     override fun onDetachedFromWindow() { controller.detached(); super.onDetachedFromWindow() }
     override fun getAccessibilityClassName(): CharSequence = "android.view.View"
-}
-
-private fun isActivationKey(code: Int): Boolean = when (code) {
-    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER,
-    KeyEvent.KEYCODE_NUMPAD_ENTER, KeyEvent.KEYCODE_SPACE -> true
-    else -> false
 }

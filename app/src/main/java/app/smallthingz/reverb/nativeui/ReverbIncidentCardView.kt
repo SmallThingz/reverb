@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.interaction.view.isNativeClickActivationKey
+
 import smallthingz.ui.geometry.roundedGroupGeometry
 
 import smallthingz.ui.interaction.view.NativeClickBinding
@@ -474,10 +476,10 @@ private class IncidentBody(
     override fun onTouchEvent(event: MotionEvent): Boolean = input?.touch(event) == true
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean =
-        if (isIncidentActivationKey(keyCode)) input?.key(event) == true else super.onKeyDown(keyCode, event)
+        if (isNativeClickActivationKey(keyCode)) input?.key(event) == true else super.onKeyDown(keyCode, event)
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean =
-        if (isIncidentActivationKey(keyCode)) input?.key(event) == true else super.onKeyUp(keyCode, event)
+        if (isNativeClickActivationKey(keyCode)) input?.key(event) == true else super.onKeyUp(keyCode, event)
 
     override fun onHoverEvent(event: MotionEvent): Boolean {
         val accessibilityHandled = super.onHoverEvent(event)
@@ -593,10 +595,10 @@ private class IncidentCheckTarget(
     override fun onTouchEvent(event: MotionEvent): Boolean = input?.touch(event) == true
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean =
-        if (isIncidentActivationKey(keyCode)) input?.key(event) == true else super.onKeyDown(keyCode, event)
+        if (isNativeClickActivationKey(keyCode)) input?.key(event) == true else super.onKeyDown(keyCode, event)
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean =
-        if (isIncidentActivationKey(keyCode)) input?.key(event) == true else super.onKeyUp(keyCode, event)
+        if (isNativeClickActivationKey(keyCode)) input?.key(event) == true else super.onKeyUp(keyCode, event)
 
     override fun onHoverEvent(event: MotionEvent): Boolean {
         val accessibilityHandled = super.onHoverEvent(event)
@@ -658,9 +660,3 @@ private class IncidentDivider(context: Context) : View(context) {
 
 private fun replaceAlpha(color: Int, alpha: Float): Int =
     (color and 0x00ffffff) or (((alpha * 255f + 0.5f).toInt().coerceIn(0, 255)) shl 24)
-
-private fun isIncidentActivationKey(key: Int): Boolean = when (key) {
-    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER,
-    KeyEvent.KEYCODE_NUMPAD_ENTER, KeyEvent.KEYCODE_SPACE -> true
-    else -> false
-}

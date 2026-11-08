@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.interaction.view.isNativeClickActivationKey
+
 import smallthingz.ui.geometry.roundedGroupGeometry
 
 import smallthingz.ui.interaction.view.NativeClickBinding
@@ -426,9 +428,9 @@ private abstract class RecordingRowInputTarget(context: Context) : ViewGroup(con
     }
     override fun onTouchEvent(event: MotionEvent): Boolean = input?.touch(event) == true
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean =
-        if (isRecordingActivationKey(keyCode)) input?.key(event) == true else super.onKeyDown(keyCode, event)
+        if (isNativeClickActivationKey(keyCode)) input?.key(event) == true else super.onKeyDown(keyCode, event)
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean =
-        if (isRecordingActivationKey(keyCode)) input?.key(event) == true else super.onKeyUp(keyCode, event)
+        if (isNativeClickActivationKey(keyCode)) input?.key(event) == true else super.onKeyUp(keyCode, event)
     override fun onHoverEvent(event: MotionEvent): Boolean {
         val accessibilityHandled = super.onHoverEvent(event)
         return input?.hover(event) == true || accessibilityHandled
@@ -652,6 +654,3 @@ private class RecordingRowLeading(context: Context, initial: ReverbViewEnvironme
         layoutRole()
     }
 }
-
-private fun isRecordingActivationKey(code: Int): Boolean = code == KeyEvent.KEYCODE_DPAD_CENTER ||
-    code == KeyEvent.KEYCODE_ENTER || code == KeyEvent.KEYCODE_NUMPAD_ENTER || code == KeyEvent.KEYCODE_SPACE

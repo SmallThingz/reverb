@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.interaction.view.isNativeClickActivationKey
+
 import smallthingz.ui.geometry.roundedGroupGeometry
 
 import smallthingz.ui.interaction.view.NativeClickBinding
@@ -412,9 +414,9 @@ private class ReverbTopBarActionLeaf(
     override fun onRtlPropertiesChanged(layoutDirection: Int) { super.onRtlPropertiesChanged(layoutDirection); icon.layoutDirection = layoutDirection }
     override fun onTouchEvent(event: MotionEvent) = controller.touch(event)
     override fun onKeyDown(code: Int, event: KeyEvent): Boolean =
-        if (isActivationKey(code)) controller.key(event) else super.onKeyDown(code, event)
+        if (isNativeClickActivationKey(code)) controller.key(event) else super.onKeyDown(code, event)
     override fun onKeyUp(code: Int, event: KeyEvent): Boolean =
-        if (isActivationKey(code)) controller.key(event) else super.onKeyUp(code, event)
+        if (isNativeClickActivationKey(code)) controller.key(event) else super.onKeyUp(code, event)
     // The new non-interactive semantics child must not intercept the parent's hover observer.
     override fun dispatchHoverEvent(event: MotionEvent): Boolean {
         val handled = super.dispatchHoverEvent(event)
@@ -512,9 +514,9 @@ private class ReverbTopBarBrandAction(context: Context, private var environment:
     }
     override fun onTouchEvent(event: MotionEvent) = controller.touch(event)
     override fun onKeyDown(code: Int, event: KeyEvent): Boolean =
-        if (isActivationKey(code)) controller.key(event) else super.onKeyDown(code, event)
+        if (isNativeClickActivationKey(code)) controller.key(event) else super.onKeyDown(code, event)
     override fun onKeyUp(code: Int, event: KeyEvent): Boolean =
-        if (isActivationKey(code)) controller.key(event) else super.onKeyUp(code, event)
+        if (isNativeClickActivationKey(code)) controller.key(event) else super.onKeyUp(code, event)
     // The new non-interactive semantics child must not intercept the parent's hover observer.
     override fun dispatchHoverEvent(event: MotionEvent): Boolean {
         val handled = super.dispatchHoverEvent(event)
@@ -616,9 +618,3 @@ private fun topBarClipBounds(view: View): NativeTextSemanticsClip = NativeTextSe
     smallthingz.ui.geometry.Rect(0f, 0f, view.width.toFloat(), view.height.toFloat()))
 
 private fun appTopBarExact(value: Int) = View.MeasureSpec.makeMeasureSpec(value.coerceAtLeast(0), View.MeasureSpec.EXACTLY)
-
-private fun isActivationKey(code: Int): Boolean = when (code) {
-    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER,
-    KeyEvent.KEYCODE_NUMPAD_ENTER, KeyEvent.KEYCODE_SPACE -> true
-    else -> false
-}

@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.interaction.view.isNativeClickActivationKey
+
 import smallthingz.ui.geometry.roundedGroupGeometry
 
 import smallthingz.ui.text.view.MergedRowAccessibility
@@ -261,8 +263,8 @@ private class ButtonSurface(context:Context,private val host:NativeMaterialButto
     override fun createAccessibilityNodeInfo():AccessibilityNodeInfo?=if(mergedRowAccessibility.isNodePresent())super.createAccessibilityNodeInfo()else null
     override fun addChildrenForAccessibility(out:ArrayList<View>)=mergedRowAccessibility.addChildrenForAccessibility(out)
     override fun onTouchEvent(event:MotionEvent)=interactions.touch(event)
-    override fun onKeyDown(code:Int,event:KeyEvent)=if(activation(code))interactions.key(event)else super.onKeyDown(code,event)
-    override fun onKeyUp(code:Int,event:KeyEvent)=if(activation(code))interactions.key(event)else super.onKeyUp(code,event)
+    override fun onKeyDown(code:Int,event:KeyEvent)=if(isNativeClickActivationKey(code))interactions.key(event)else super.onKeyDown(code,event)
+    override fun onKeyUp(code:Int,event:KeyEvent)=if(isNativeClickActivationKey(code))interactions.key(event)else super.onKeyUp(code,event)
     override fun onHoverEvent(event:MotionEvent):Boolean{val handled=super.onHoverEvent(event);return interactions.hover(event)||handled}
     override fun onFocusChanged(focused:Boolean,direction:Int,rect:Rect?){super.onFocusChanged(focused,direction,rect);interactions.focusChanged(focused)}
     override fun onAttachedToWindow(){super.onAttachedToWindow();interactions.attached();interactions.focusChanged(isFocused)}
@@ -283,6 +285,5 @@ private class ButtonSurface(context:Context,private val host:NativeMaterialButto
         failure?.let{throw it}
     }
 }
-private fun activation(code:Int)=code==KeyEvent.KEYCODE_DPAD_CENTER||code==KeyEvent.KEYCODE_ENTER||code==KeyEvent.KEYCODE_NUMPAD_ENTER||code==KeyEvent.KEYCODE_SPACE
 private fun sheetButtonExact(value:Int)=View.MeasureSpec.makeMeasureSpec(value.coerceAtLeast(0),View.MeasureSpec.EXACTLY)
 private fun sheetButtonAtMost(value:Int)=View.MeasureSpec.makeMeasureSpec(value.coerceAtLeast(0),View.MeasureSpec.AT_MOST)

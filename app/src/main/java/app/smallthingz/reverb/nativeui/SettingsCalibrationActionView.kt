@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.interaction.view.isNativeClickActivationKey
+
 import smallthingz.ui.geometry.roundedGroupGeometry
 
 import smallthingz.ui.text.view.MergedRowAccessibility
@@ -275,8 +277,8 @@ private class CalibrationActionSurface(
         }
     }
     override fun onTouchEvent(event:MotionEvent)=interactions.touch(event)
-    override fun onKeyDown(code:Int,event:KeyEvent)=if(isActivation(code))interactions.key(event)else super.onKeyDown(code,event)
-    override fun onKeyUp(code:Int,event:KeyEvent)=if(isActivation(code))interactions.key(event)else super.onKeyUp(code,event)
+    override fun onKeyDown(code:Int,event:KeyEvent)=if(isNativeClickActivationKey(code))interactions.key(event)else super.onKeyDown(code,event)
+    override fun onKeyUp(code:Int,event:KeyEvent)=if(isNativeClickActivationKey(code))interactions.key(event)else super.onKeyUp(code,event)
     override fun onHoverEvent(event:MotionEvent):Boolean {val native=super.onHoverEvent(event);return interactions.hover(event)||native}
     override fun onFocusChanged(focused:Boolean,direction:Int,old:Rect?) {super.onFocusChanged(focused,direction,old);interactions.focusChanged(focused)}
     override fun onAttachedToWindow() {super.onAttachedToWindow();interactions.attached();updateMotion()}
@@ -292,6 +294,4 @@ private class CalibrationActionSurface(
     override fun onCancelPendingInputEvents() {super.onCancelPendingInputEvents();interactions.cancel()}
     override fun close() {closed=true;stopMotion();action=null;interactions.cancel();colors.close()}
     private fun dp(value:Int)=(value*environment.textDensity.density).roundToInt()
-    private fun isActivation(code:Int)=code==KeyEvent.KEYCODE_DPAD_CENTER||code==KeyEvent.KEYCODE_ENTER||
-        code==KeyEvent.KEYCODE_NUMPAD_ENTER||code==KeyEvent.KEYCODE_SPACE
 }
