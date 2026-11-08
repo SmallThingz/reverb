@@ -168,6 +168,7 @@ internal data class RecordingIncidentReplayOwners(
     val appProcessPid: Int = 0,
     val appProcessStartedAtMillis: Long = -1L,
     val pendingAppProcesses: List<AppProcessMarker> = emptyList(),
+    val observationProcess: AppProcessMarker? = null,
 )
 
 /** Missing owner proof never authorizes pruning; the caller supplies only a complete snapshot. */
@@ -189,8 +190,9 @@ internal fun retainRecordingIncidentDeletions(
                 incident.occurredAtMillis >= session.captureArmedAtMillis
             }
         }
-        RecordingIncidentKind.CAPTURE_INPUT_OBSERVATION ->
-            incident.pid == owners.appProcessPid && incident.processStartedAtMillis == owners.appProcessStartedAtMillis
+        RecordingIncidentKind.CAPTURE_INPUT_OBSERVATION -> owners.observationProcess?.let { process ->
+            incident.pid == process.pid && incident.processStartedAtMillis == process.processStartedAtMillis
+        } == true
         RecordingIncidentKind.UNEXPECTED_ERROR -> owners.pendingAppProcesses.any { marker ->
             (incident.pid <= 0 || incident.pid == marker.pid) &&
                 (incident.processStartedAtMillis <= 0L ||
@@ -1636,6 +1638,8 @@ internal object RecordingIncidentStore {
                 appProcessPid = process?.current?.pid ?: 0,
                 appProcessStartedAtMillis = process?.current?.processStartedAtMillis ?: -1L,
                 pendingAppProcesses = process?.pending.orEmpty().map { it.marker },
+                // Observation retries belong to this live process even without API 30 exit metadata.
+                observationProcess = currentAppProcess,
             )
     }
 

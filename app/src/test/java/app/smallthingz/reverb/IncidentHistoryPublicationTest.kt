@@ -18,6 +18,69 @@ import org.junit.Test
 
 class IncidentHistoryPublicationTest {
     @Test
+    fun deletedObservationSurvivesRetryWithoutCurrentDurableProcessMarker() = kotlinx.coroutines.runBlocking {
+        val live = AppProcessMarker(pid = 42, processStartedAtMillis = 90_000L)
+        val observation = RecordingIncident(occurredAtMillis = 100_000L,
+            kind = RecordingIncidentKind.CAPTURE_INPUT_OBSERVATION, pid = live.pid,
+            processStartedAtMillis = live.processStartedAtMillis, observationId = 7,
+            description = CaptureInputObservationReason.INPUT_RESTARTED.description)
+        val unrelated = observation.copy(occurredAtMillis = 100_001L, observationId = 8)
+        // API 28/29 never creates the ExitInfo process marker; a stale marker is not live ownership either.
+        for (durable in listOf<AppProcessMarker?>(null, AppProcessMarker(42, 80_000L))) {
+            Fixture().use { fixture ->
+                val owners = RecordingIncidentReplayOwners(
+                    appProcessPid = durable?.pid ?: 0,
+                    appProcessStartedAtMillis = durable?.processStartedAtMillis ?: -1L,
+                    observationProcess = live)
+                var attempts = 0
+                var waits = 0
+                fixture.failAfterPublication = 1
+                persistCaptureInputObservation(
+                    persist = {
+                        attempts++
+                        if (attempts == 1) fixture.write(listOf(observation))
+                        else {
+                            val history = fixture.readAuthoritative()
+                            val tombstone = history.singleOrNull { recordingIncidentReferenceMatches(it, observation) }
+                            assertTrue("Unrelated append lost the deleted observation identity", tombstone?.deleted == true)
+                            // Exercise the production retry merge with the identical originally allocated fact.
+                            fixture.write(history.map {
+                                if (it === tombstone) mergeRecordingIncidentEvidence(it, observation) else it
+                            })
+                        }
+                    },
+                    waitBeforeRetry = { millis ->
+                        assertEquals(100L, millis)
+                        waits++
+                        // A real authoritative read confirms the initially visible failed-barrier publication.
+                        val visible = fixture.readAuthoritative().single()
+                        assertEquals(observation, visible)
+                        fixture.write(listOf(visible.copy(acknowledgedAtMillis = Long.MIN_VALUE)))
+                        val compacted = compactRecordingIncidentDeletions(
+                            fixture.readAuthoritative(), unrelated) { owners }
+                        fixture.write(appendRecordingIncidentPreservingDeletions(
+                            compacted, unrelated, MAX_VISIBLE_RECORDING_INCIDENTS))
+                    },
+                    onFailure = { throw AssertionError("Observation retry failed", it) },
+                )
+                assertEquals(2, attempts)
+                assertEquals(1, waits)
+                val final = fixture.readAuthoritative()
+                assertEquals(listOf(unrelated), final.filterNot { it.deleted })
+                assertTrue(final.single { recordingIncidentReferenceMatches(it, observation) }.deleted)
+                // A durable marker matching the old process must not retain observations after live ownership changes.
+                for (nextProcess in listOf(AppProcessMarker(43, live.processStartedAtMillis),
+                    AppProcessMarker(live.pid, live.processStartedAtMillis + 1))) {
+                    val retired = owners.copy(appProcessPid = live.pid,
+                        appProcessStartedAtMillis = live.processStartedAtMillis, observationProcess = nextProcess)
+                    assertEquals(listOf(unrelated), compactRecordingIncidentDeletions(final,
+                        unrelated.copy(observationId = 9)) { retired })
+                }
+            }
+        }
+    }
+
+    @Test
     fun visibleCheckWithFailedBarrier_recoversWithoutReapplyingToggle() {
         Fixture().use { fixture ->
             fixture.failAfterPublication = 1
