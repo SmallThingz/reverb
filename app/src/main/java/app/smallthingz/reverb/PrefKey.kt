@@ -187,7 +187,9 @@ internal fun SharedPreferences.requireDurableStringSet(key: PrefKey): Set<String
         absent = emptySet(),
         label = key.name,
     ) {
-        boundedDurableStringSet(getStringSet(key, emptySet()) ?: emptySet(), key.name)
+        val entries = getStringSet(key, null)
+            ?: throw IllegalStateException("Unreadable durable preference ${key.name}: null string set")
+        boundedDurableStringSet(entries, key.name)
     }
 
 internal inline fun commitDurablePreferenceOrRestoreInMemory(

@@ -316,22 +316,21 @@ internal fun requiresLegacyPublicStoragePermission(sdkInt: Int = Build.VERSION.S
 internal fun configuredExportTreePreferenceIsUsable(raw: String?): Boolean =
     raw == null || documentTreeIdIsValid(raw)
 
-private fun configuredExportTreePreferenceRaw(context: Context): String? {
-    val preferences = getRecorderPreferences(context)
-    return requireDurablePreference(
+internal fun configuredExportTreePreferenceId(preferences: android.content.SharedPreferences): String? {
+    val raw = requireDurablePreference(
         present = preferences.contains(PrefKey.EXPORT_DIRECTORY_URI),
         absent = null,
         label = PrefKey.EXPORT_DIRECTORY_URI.name,
     ) {
         preferences.getString(PrefKey.EXPORT_DIRECTORY_URI, null)
-    }
-}
-
-fun getConfiguredExportTreeUri(context: Context): Uri? {
-    val raw = configuredExportTreePreferenceRaw(context) ?: return null
-    return canonicalDocumentTreeId(raw)?.toUri()
+            ?: throw IllegalStateException("Unreadable durable export tree authority: null string")
+    } ?: return null
+    return canonicalDocumentTreeId(raw)
         ?: throw IllegalStateException("Unreadable durable export tree authority")
 }
+
+fun getConfiguredExportTreeUri(context: Context): Uri? =
+    configuredExportTreePreferenceId(getRecorderPreferences(context))?.toUri()
 
 internal fun getConfiguredExportTreeUriForSettings(context: Context): Uri? {
     val raw = getRecorderPreferences(context).safeString(PrefKey.EXPORT_DIRECTORY_URI) ?: return null
