@@ -7,12 +7,19 @@ import java.nio.channels.FileChannel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
-import kotlin.math.roundToLong
 
 private const val TRIM_TAG = "RecordingTrim"
 
 internal fun recordingHasStableTrimIdentity(recording: RecordingEntity): Boolean =
     recording.fileIdentity.isNotBlank()
+
+internal fun recordingTrimFrameRounding(
+    format: ExportFormat,
+    displayName: String,
+    sourceIsFlac: Boolean = false,
+): RecordingFrameRounding = if (
+    format == ExportFormat.FLAC || displayName.endsWith(".flac", ignoreCase = true) || sourceIsFlac
+) RecordingFrameRounding.FLOOR else RecordingFrameRounding.NEAREST
 
 // Discovery identifies containers by their bytes, so trim must use the same rule.
 // A null layout delegates FLAC decoding to the conversion path, which validates it fully.
@@ -93,7 +100,7 @@ private fun writeTrimmedRecordingCopy(
     endMillis: Int,
 ): RecordingEntity {
     val format = getConfiguredOutputFormat(context)
-    if (format == ExportFormat.FLAC || recording.displayName.endsWith(".flac", ignoreCase = true)) {
+    if (recordingTrimFrameRounding(format, recording.displayName) == RecordingFrameRounding.FLOOR) {
         return writeConvertedRecordingCopy(context, recording, format, getConfiguredFlacCompression(context),
             startMillis.toLong(), endMillis.toLong(), " trim")
     }
@@ -103,9 +110,9 @@ private fun writeTrimmedRecordingCopy(
     if (startMillis < 0 || endMillis <= startMillis) throw IOException("Invalid trim range")
     val trimmedWav = withRecordingWavChannelIdentityGuard(context, recording, RecordingReadCleanup.Propagate) { source, sourceStillCurrent ->
         val layout = readWavTrimLayoutOrNull(source) ?: return@withRecordingWavChannelIdentityGuard null
-        val startFrame = millisToFrame(startMillis, layout.sampleRate)
+        val startFrame = recordingFrameAtMillis(startMillis.toLong(), layout.sampleRate, RecordingFrameRounding.NEAREST)
             .coerceIn(0L, layout.frameCount - 1L)
-        val endFrame = millisToFrame(endMillis, layout.sampleRate)
+        val endFrame = recordingFrameAtMillis(endMillis.toLong(), layout.sampleRate, RecordingFrameRounding.NEAREST)
             .coerceIn(startFrame + 1L, layout.frameCount)
         val selectedFrames = endFrame - startFrame
         if (selectedFrames <= 0L) throw IOException("Trim range contains no audio")
@@ -146,6 +153,3 @@ internal fun recordingTimestampWithOffset(
         startedAtMillis + offsetMillis
     }
 }
-
-private fun millisToFrame(millis: Int, sampleRate: Int): Long =
-    (millis.toDouble() * sampleRate.toDouble() / 1000.0).roundToLong()

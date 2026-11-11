@@ -240,13 +240,6 @@ internal fun rangeBlobMorphStartScaleY(blobDiameterPx: Float, timelineHeightPx: 
 internal fun rangeBlobMorphTranslation(progress: Float, sourceCenterPx: Float, targetCenterPx: Float): Float =
     (sourceCenterPx - targetCenterPx) * (1f - progress.coerceIn(0f, 1f))
 
-internal fun rangeTimelineDragDeltaPx(
-    initialMarkerCenterPx: Float,
-    currentMarkerCenterPx: Float,
-    downLocalX: Float,
-    currentLocalX: Float,
-): Float = (currentMarkerCenterPx + currentLocalX) - (initialMarkerCenterPx + downLocalX)
-
 // At long offsets the 50 ms gap can round to zero. Repair only collapsed results,
 // preserving the intended fixed endpoint where a neighbouring Float is available.
 private fun ensurePositiveRangeSelection(
@@ -658,6 +651,10 @@ internal class RangeExportEditorState(
         private set
     var isPlaying by rangeUiState(mutableStateOf(false), notifyNativeUiChanged)
         private set
+    var playbackAnchor by rangeUiState(mutableStateOf<PlaybackPositionAnchor?>(null), notifyNativeUiChanged)
+        private set
+    private val previewClockIdentity = Any()
+    private var previewClockEpoch = 0L
     var isScrubbing by rangeUiState(mutableStateOf(false), notifyNativeUiChanged)
         private set
     var selectionDurationInteraction by rangeUiState(mutableStateOf(RangeDurationWheelInteraction()), notifyNativeUiChanged)
@@ -853,6 +850,8 @@ internal class RangeExportEditorState(
     }
 
     private fun beginScrubPlaybackHandoff() {
+        previewClockEpoch++
+        playbackAnchor = null
         resumeAfterScrub = isPlaying || previewStarting
         if (isPlaying || previewStarting) {
             previewStarting = false
@@ -894,6 +893,8 @@ internal class RangeExportEditorState(
                 snapshot = readySnapshot,
                 atSeconds = targetValue(lastTarget).toDouble(),
                 rate = shuttleRate,
+                fromSeconds = startSeconds.toDouble(),
+                untilSeconds = endSeconds.toDouble(),
             )
         }
     }
@@ -909,6 +910,8 @@ internal class RangeExportEditorState(
                 durationSeconds = durationSeconds,
             ),
             rate = shuttleRate,
+            fromSeconds = startSeconds.toDouble(),
+            untilSeconds = endSeconds.toDouble(),
         )
     }
 
@@ -936,10 +939,16 @@ internal class RangeExportEditorState(
     }
 
     fun togglePreview() {
-        if (isPlaying || previewStarting) pausePreview() else startPreview()
+        if ((isPlaying || previewStarting) && previewController.playbackActive) pausePreview() else startPreview()
     }
 
     fun pausePreview() {
+        previewClockEpoch++
+        val now = SystemClock.elapsedRealtime()
+        playbackAnchor = playbackAnchor?.let { previous ->
+            previous.copy(positionMillis = previous.positionAt(now), sampledAtElapsedRealtimeMillis = now,
+                playing = false, epoch = previewClockEpoch)
+        }
         fineSeekPosition.reset()
         previewStarting = false
         resumeAfterScrub = false
@@ -971,6 +980,11 @@ internal class RangeExportEditorState(
             endSeconds = endSeconds,
             endBoundaryActive = lastTarget == RangeEditTarget.END,
         )
+        val epoch = ++previewClockEpoch
+        val startMillis = (window.startSeconds * 1_000.0).toInt()
+        val endMillis = (window.endSeconds * 1_000.0).toInt()
+        playbackAnchor = PlaybackPositionAnchor(startMillis, SystemClock.elapsedRealtime(), false,
+            endMillis, epoch, previewClockIdentity, startMillis)
         previewStarting = false
         isPlaying = false
         isScrubbing = false
@@ -986,11 +1000,26 @@ internal class RangeExportEditorState(
             onFinished = {
                 previewStarting = false
                 isPlaying = false
+                playbackAnchor = PlaybackPositionAnchor(endMillis, SystemClock.elapsedRealtime(), false,
+                    endMillis, epoch, previewClockIdentity, startMillis)
             },
             onError = { error ->
                 previewStarting = false
                 isPlaying = false
+                val now = SystemClock.elapsedRealtime()
+                playbackAnchor = playbackAnchor?.let { previous ->
+                    previous.copy(positionMillis = previous.positionAt(now), sampledAtElapsedRealtimeMillis = now,
+                        playing = false)
+                }
                 onPreviewFailure(error)
+            },
+            onClockSample = { sample ->
+                if (epoch == previewClockEpoch) {
+                    val position = (sample.positionSeconds * 1_000.0).toInt().coerceIn(startMillis, endMillis)
+                    playbackAnchor = PlaybackPositionAnchor(position, sample.sampledAtElapsedRealtimeMillis, true,
+                        (sample.queuedUntilSeconds * 1_000.0).toInt().coerceIn(position, endMillis),
+                        epoch, previewClockIdentity, startMillis)
+                }
             },
         )
     }
@@ -1002,7 +1031,8 @@ internal class RangeExportEditorState(
         if (!force && now - lastAuditionAtMillis < 55L) return
         lastAuditionAtMillis = now
         RecordingPlayback.pauseCurrent()
-        previewController.audition(readySnapshot, targetValue(lastTarget).toDouble())
+        previewController.audition(readySnapshot, targetValue(lastTarget).toDouble(),
+            startSeconds.toDouble(), endSeconds.toDouble())
     }
 
     private fun targetValue(target: RangeEditTarget): Float = when (target) {

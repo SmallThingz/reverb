@@ -233,5 +233,8 @@
     <string name="audio_read_access_allowed">Audio access: allowed</string>
     <string name="audio_read_access_not_allowed">Audio access: not allowed</string>
     <string name="audio_read_access_settings">Review audio access</string>
+    <string name="settings_all_files_optional">All files access (optional)</string>
+    <string name="settings_audio_read_missing">Audio access needed</string>
+    <string name="settings_manage_access">Manage</string>
     <string name="audio_read_access_body">Without all files access, open Permissions and allow audio or storage access to let Reverb find recordings. Renaming or deleting files may still need your approval.</string>
 </resources>

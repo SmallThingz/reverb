@@ -1,6 +1,18 @@
 package app.smallthingz.reverb
 
 import java.io.IOException
+import kotlin.math.roundToLong
+
+internal enum class RecordingFrameRounding { FLOOR, NEAREST }
+
+/** Preserve each durable save path's existing frame quantization in preview as well. */
+internal fun recordingFrameAtMillis(millis: Long, sampleRate: Int, rounding: RecordingFrameRounding): Long {
+    val frames = millis.toDouble() * sampleRate.toDouble() / 1000.0
+    return when (rounding) {
+        RecordingFrameRounding.FLOOR -> frames.toLong()
+        RecordingFrameRounding.NEAREST -> frames.roundToLong()
+    }
+}
 
 internal class RecordingOutputCapacityException(
     val format: ExportFormat,
@@ -27,9 +39,9 @@ internal inline fun <T> withAdmittedRecordingConversion(
 ): T {
     require(startMillis >= 0L && (endMillis == null || endMillis > startMillis))
     require(layout.sampleRate > 0 && layout.frameCount > 0L && maximumOutputFrames >= 0L)
-    val first = (startMillis.toDouble() * layout.sampleRate / 1000).toLong()
+    val first = recordingFrameAtMillis(startMillis, layout.sampleRate, RecordingFrameRounding.FLOOR)
         .coerceIn(0L, layout.frameCount - 1L)
-    val end = endMillis?.let { (it.toDouble() * layout.sampleRate / 1000).toLong() }
+    val end = endMillis?.let { recordingFrameAtMillis(it, layout.sampleRate, RecordingFrameRounding.FLOOR) }
         ?.coerceIn(first + 1L, layout.frameCount) ?: layout.frameCount
     return withAdmittedRecordingFrameRange(layout, format, first, end - first, maximumOutputFrames, convert)
 }

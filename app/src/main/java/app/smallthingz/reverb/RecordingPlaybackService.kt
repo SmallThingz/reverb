@@ -22,6 +22,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
@@ -51,6 +52,8 @@ class RecordingPlaybackService : Service() {
     private var playing = false
     private var position = 0
     private var duration = 0
+    private var clockEpoch = 0L
+    private var clockIdentity = instanceToken
     private var foreground = false
     private var destroyed = false
     private var retainedPause = false
@@ -73,7 +76,6 @@ class RecordingPlaybackService : Service() {
         override fun run() {
             if (destroyed || !playing || !RecordingPlayback.positionObserved()) return
             guarded {
-                if (!ownership.seeks.pending) position = player?.currentPosition ?: position
                 publish(updateNotification = false)
             }
             if (playing && RecordingPlayback.positionObserved()) main.postDelayed(this, 250L)
@@ -151,6 +153,8 @@ class RecordingPlaybackService : Service() {
         position = requestedPosition?.coerceAtLeast(0) ?: 0
         duration = next.durationMillis.coerceIn(1L, Int.MAX_VALUE.toLong()).toInt()
         val token = ownership.replace()
+        clockIdentity = "$instanceToken:$token"
+        clockEpoch++
         // Establish the exact token before rendering controls, still before opening any source.
         if (promote) ensureForeground()
         publish()
@@ -235,6 +239,7 @@ class RecordingPlaybackService : Service() {
     }
 
     private fun queueExternalTransport(command: () -> Unit) = guarded {
+        clockEpoch++
         quietStart?.cancel()
         quietStart = null
         quietStartPending = false
@@ -324,6 +329,7 @@ class RecordingPlaybackService : Service() {
         if (recording?.let { samePlaybackRecording(it, expected) } == true) pauseCurrent()
     }
     internal fun pauseCurrent() = guarded {
+        clockEpoch++
         externalCommandPending = false
         ownership.pause()
         pauseTransport(releaseFocus = true)
@@ -339,8 +345,8 @@ class RecordingPlaybackService : Service() {
         quietStart = null
         quietStartPending = false
         if (playing && prepared) {
-            if (!ownership.seeks.pending) position = player?.currentPosition ?: position
             player?.pause()
+            if (!ownership.seeks.pending) position = player?.currentPosition ?: position
         }
         playing = false
         main.removeCallbacks(progress)
@@ -350,6 +356,7 @@ class RecordingPlaybackService : Service() {
     }
     internal fun seekMatching(expected: RecordingEntity, target: Int, resume: Boolean) = guarded {
         if (recording?.let { samePlaybackRecording(it, expected) } != true) return@guarded
+        clockEpoch++
         quietStart?.cancel()
         quietStart = null
         quietStartPending = false
@@ -444,9 +451,13 @@ class RecordingPlaybackService : Service() {
 
     private fun publish(updateNotification: Boolean = true) {
         if (destroyed) return
+        val advancing = playing && prepared && !ownership.seeks.pending && !quietStartPending && !externalCommandPending
+        if (advancing) position = (player?.currentPosition ?: position).coerceIn(0, duration.coerceAtLeast(0))
+        val anchor = PlaybackPositionAnchor(position, SystemClock.elapsedRealtime(), advancing, duration,
+            clockEpoch, clockIdentity)
         RecordingPlayback.publish(this, RecordingPlaybackState(recording, prepared && !externalCommandPending && !quietStartPending, playing,
             position, duration, ownership.generation, wantsPlayback = ownership.wantsPlayback,
-            transportIntentRevision = ownership.transportIntentRevision))
+            transportIntentRevision = ownership.transportIntentRevision, playbackAnchor = anchor))
         if (!updateNotification) return
         session.setMetadata(MediaMetadata.Builder()
             .putString(MediaMetadata.METADATA_KEY_TITLE, recording?.displayName.orEmpty())

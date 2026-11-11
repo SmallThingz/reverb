@@ -2,12 +2,34 @@ package app.smallthingz.reverb
 
 /** One instance per physical AudioTrack; only the caller holds the native track. */
 internal class PreviewTrackQuietOwner(private val coordinator: PreviewQuietCoordinator) {
+    val observationIdentity = Any()
     private val stateLock = Any()
     // Only audio/cleanup workers may acquire this gate. retire() never touches it.
     private val audioGate = Any()
+    private val writeGate = Any()
     private var terminal = false
     private var releaseClaimed = false
     private var ticket: PreviewQuietCoordinator.Ticket? = null
+    private var quietAttempted = false
+    private var quietSucceeded = false
+    private var quietFailure: Throwable? = null
+    private var cleanupDispatched = false
+    @Volatile var nativeReleaseSucceeded = false
+        private set
+
+    fun claimCleanupDispatch(): Boolean = synchronized(stateLock) {
+        if (cleanupDispatched) false else { cleanupDispatched = true; true }
+    }
+
+    /** Pause may interrupt a blocking write; terminal release waits for its return. */
+    fun write(action: () -> Int): Int? = synchronized(writeGate) {
+        if (synchronized(stateLock) { terminal }) null else action()
+    }
+
+    /** Native position sampling shares the terminal lifetime fence with writes. */
+    fun <T> read(action: () -> T): T? = synchronized(writeGate) {
+        if (synchronized(stateLock) { terminal }) null else action()
+    }
 
     /** Called synchronously at UI retirement, before enqueueing native cleanup. */
     fun retire(): PreviewQuietCoordinator.Ticket = synchronized(stateLock) {
@@ -27,6 +49,28 @@ internal class PreviewTrackQuietOwner(private val coordinator: PreviewQuietCoord
      */
     fun cleanupRejected() { coordinator.failed(retire()) }
 
+    /** The control worker never waits for terminal native release on another track. */
+    fun silence(pause: () -> Unit, flush: () -> Unit): Boolean {
+        val retiring = retire()
+        return synchronized(audioGate) {
+            if (!quietAttempted) {
+                quietAttempted = true
+                fun attempt(block: () -> Unit): Boolean = try {
+                    block(); true
+                } catch (error: Throwable) {
+                    val prior = quietFailure
+                    if (prior == null) quietFailure = error else if (prior !== error) prior.addSuppressed(error)
+                    false
+                }
+                val paused = attempt(pause)
+                val flushed = attempt(flush)
+                quietSucceeded = paused && flushed
+                if (quietSucceeded) coordinator.quiet(retiring)
+            }
+            quietSucceeded
+        }
+    }
+
     /**
      * Worker-only; duplicate callers share retirement and only one touches the native resource.
      * AudioTrack.stop is deliberately absent: streaming stop can drain queued samples.
@@ -38,7 +82,8 @@ internal class PreviewTrackQuietOwner(private val coordinator: PreviewQuietCoord
             if (releaseClaimed) false else { releaseClaimed = true; true }
         }
         if (!claimed) return false
-        var failure: Throwable? = null
+        val silenced = silence(pause, flush)
+        var failure: Throwable? = synchronized(audioGate) { quietFailure }
         fun attempt(block: () -> Unit): Boolean = try {
             block(); true
         } catch (error: Throwable) {
@@ -46,14 +91,8 @@ internal class PreviewTrackQuietOwner(private val coordinator: PreviewQuietCoord
             if (prior == null) failure = error else if (prior !== error) prior.addSuppressed(error)
             false
         }
-        val silenced = synchronized(audioGate) {
-            val paused = attempt(pause)
-            val flushed = attempt(flush)
-            paused && flushed
-        }
-        // Once paused and flushed, expensive native release need not delay new playback.
-        if (silenced) coordinator.quiet(retiring)
-        val released = attempt(release)
+        val released = synchronized(writeGate) { attempt(release) }
+        nativeReleaseSucceeded = released
         if (released) coordinator.quiet(retiring)
         else if (!silenced) coordinator.failed(retiring)
         failure?.let(onFailure)

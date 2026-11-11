@@ -75,11 +75,14 @@ class ReliabilityInstrumentation : Instrumentation() {
             if (currentUiSmoke) {
                 check(targetContext.applicationContext.javaClass == android.app.Application::class.java &&
                     requestedTest in setOf("native_rename_editor_current", "native_click_ripple_current", "native_retention_input_parity", "native_retention_keyboard", "native_icon_parity", "native_settings_library_selectors", "native_theme_matrix", "native_settings_calibration_current", "current_media_delete_consent",
-                        "native_silence_blob_current", "native_silence_diagnostic_current", "native_blob_feel_current", "native_material_progress_current", "native_library_admission")) {
+                        "native_silence_blob_current", "native_silence_diagnostic_current", "native_blob_feel_current", "native_material_progress_current", "native_library_admission",
+                        "range_preview_short_end", "range_preview_short_controls", "range_preview_short_retirement", "native_ui_consistency_current")) {
                     "Current UI smoke accepts only explicit current UI selectors with plain Application"
                 }
                 report.appendLine(if (requestedTest == "native_icon_parity")
                     "MODE current-ui-smoke; isolated icon-only released-vector oracle, not full screen parity"
+                else if (requestedTest?.startsWith("range_preview_short_") == true)
+                    "MODE current-QA; isolated synthetic PCM preview, no microphone or capture service"
                 else "MODE current-ui-smoke; isolated current UI only, not released-renderer parity")
             }
             val parityOnly = targetContext.applicationContext.javaClass == android.app.Application::class.java
@@ -105,8 +108,10 @@ class ReliabilityInstrumentation : Instrumentation() {
                 "native_library_fixture_observation",
                 "native_library_fixture_cleanup",
                 "native_transaction_fixture_recovery",
+                "range_preview_short_end", "range_preview_short_controls", "range_preview_short_retirement",
+                "native_ui_consistency_current",
             )) {
-                "The native-parity APK requires an explicit UI-only fixture"
+                "The native-parity APK requires an explicit isolated fixture"
             }
             if (requestedTest == "native_text_backend" || requestedTest == "native_motion_spline") {
                 requireNativeMathProbeHost(targetContext.packageName, parityOnly)
@@ -251,6 +256,12 @@ class ReliabilityInstrumentation : Instrumentation() {
             } else if (requestedTest == "range_preview_continuity") {
                 executed++
                 verifyRangePreviewContinuity(this, report)
+            } else if (requestedTest in setOf("range_preview_short_end", "range_preview_short_controls", "range_preview_short_retirement")) {
+                executed++
+                verifyShortRangePreview(this, report, checkNotNull(requestedTest))
+            } else if (requestedTest == "native_ui_consistency_current") {
+                executed++
+                verifyNativeUiConsistencyCurrent(this, report)
             } else if (requestedTest == "capture_preview_concurrency") {
                 executed++
                 verifyCapturePreviewConcurrency(this, report)

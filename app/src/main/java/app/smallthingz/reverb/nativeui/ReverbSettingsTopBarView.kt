@@ -47,7 +47,7 @@ internal data class SettingsTopBarBinding(
 }
 
 /**
- * Released Settings CenterAlignedTopAppBar with null scrollBehavior.
+ * Settings CenterAlignedTopAppBar geometry with the shared app toolbar action surfaces.
  *
  * The root supplies the remaining systemBars.union(displayCutout) horizontal/top insets after
  * ancestor consumption. It also owns Settings' existing Initial-pass/focus/hide gate; do not
@@ -55,7 +55,7 @@ internal data class SettingsTopBarBinding(
  * toolbar, elevation, title ellipsis, title maxLines or new text is introduced.
  *
  * Parent inserts [touchShieldNode] on this outer box and the two visual NativeClickPhaseHosts
- * into its existing source hit path. IconButton's inner circular node uses float48dp near hits.
+ * into its existing source hit path. Shared rounded actions retain 48dp near hits and wrappers.
  */
 internal class ReverbSettingsTopBarView(
     context: Context,
@@ -77,8 +77,8 @@ internal class ReverbSettingsTopBarView(
     private val hintColorMotion=colorTransition(hintColor) {hintColor=it;paintHint(hintStrength)}
     private var hintStrength = 0f
     val title: ParagraphView get() = content.title
-    val navigation: ReverbStandardIconButtonView get() = content.navigation
-    val done: ReverbStandardIconButtonView get() = content.done
+    val navigation: ReverbTopBarIconAction get() = content.navigation
+    val done: ReverbTopBarIconAction get() = content.done
     val contentClipView: View get() = content
     val touchShieldNode = object : NativeViewPhasePointerNode {
         override val view: View get() = this@ReverbSettingsTopBarView
@@ -154,7 +154,7 @@ internal class ReverbSettingsTopBarView(
     fun sourceClip(view: View): NativeTextSemanticsClip? = when (view) {
         content -> NativeTextSemanticsClip.Rectangle(ComposeRect(0f, 0f, content.width.toFloat(), content.height.toFloat()))
         this -> NativeTextSemanticsClip.Unclipped
-        else -> null
+        else -> navigation.sourceClip(view) ?: done.sourceClip(view)
     }
 
     fun bindAccessibility(
@@ -194,10 +194,12 @@ internal class ReverbSettingsTopBarView(
         private var environment: ReverbViewEnvironment,
         inputRoot: () -> View?,
     ) : ViewGroup(context) {
-        val navigation = ReverbStandardIconButtonView(context, environment, inputRoot)
+        val navigation = ReverbTopBarIconAction(context, environment, inputRoot, ReverbIcon.Back,
+            R.string.onboarding_back, selectionWrapper = true, rolePresent = true)
         val title = environment.paragraph(context, context.getString(R.string.settings_title),
             ReverbTextRole.TITLE_LARGE, environment.palette.onSurface)
-        val done = ReverbStandardIconButtonView(context, environment, inputRoot)
+        val done = ReverbTopBarIconAction(context, environment, inputRoot, ReverbIcon.Check,
+            R.string.done, selectionWrapper = true, rolePresent = true)
         private var logicalHeight = 0
         private var titleWrapperWidth = 0
         private var navigationWrapperWidth = 0
@@ -216,13 +218,10 @@ internal class ReverbSettingsTopBarView(
             val colors = value.palette
             value.bindParagraphStyle(title, ReverbTextRole.TITLE_LARGE, colors.onSurface)
             title.setText(context.getString(R.string.settings_title))
-            navigation.bind(value, if (state.hasUnsavedChanges) ReverbIcon.Undo else ReverbIcon.Back,
-                context.getString(if (state.hasUnsavedChanges) R.string.undo else R.string.onboarding_back),
-                enabled = true, iconTint = colors.onSurface, inheritedContentColor = colors.onSurface,
-                onClick = state.onNavigation)
-            done.bind(value, ReverbIcon.Check, context.getString(R.string.done), state.doneEnabled,
-                iconTint = if (state.hasUnsavedChanges) colors.onSurface else reverbColorWithAlpha(colors.onSurface, .38f),
-                inheritedContentColor = colors.onSurfaceVariant, onClick = state.onDone)
+            navigation.bindIcon(if (state.hasUnsavedChanges) ReverbIcon.Undo else ReverbIcon.Back,
+                context.getString(if (state.hasUnsavedChanges) R.string.undo else R.string.onboarding_back))
+            navigation.bind(value, true, colors.muted, colors.border, state.onNavigation)
+            done.bind(value, state.doneEnabled, colors.muted, colors.border, state.onDone)
         }
         private fun dp(value: Float) = (value * environment.textDensity.density).roundToInt()
         override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {

@@ -124,10 +124,12 @@ private class SliderBody(
     }
     private fun targetColors(enabled:Boolean):IntArray {
         val palette=environment.palette
+        val secondary=if(enabled)palette.secondaryContainer else Color(palette.onSurface).copy(alpha=.12f).toArgb()
         return intArrayOf(
             if(enabled)palette.primary else Color(palette.onSurface).copy(alpha=.38f).toArgb(),
-            if(enabled)palette.secondaryContainer else Color(palette.onSurface).copy(alpha=.12f).toArgb(),
-            if(enabled)palette.primary else Color(palette.onSurface).copy(alpha=.38f).compositeOver(Color(palette.surface)).toArgb())
+            if(enabled)Color.Black.copy(alpha=.18f).compositeOver(Color(secondary)).toArgb() else secondary,
+            if(enabled)palette.primary else Color(palette.onSurface).copy(alpha=.38f).compositeOver(Color(palette.surface)).toArgb(),
+            secondary)
     }
     private fun requestLevel(value:Float) {
         val next=value.roundToInt().coerceIn(0,8)
@@ -157,14 +159,14 @@ private class SliderBody(
         val save=canvas.save()
         try {
             canvas.translate(g.trackX.toFloat(),(g.trackY-g.visualTop).toFloat())
-            drawTrack(canvas,g,primary,secondary)
+            drawTrack(canvas,g,primary,secondary,colorMotion.color(3))
         }finally{canvas.restoreToCount(save)}
         paint.color=thumbColor
         val x=g.thumbX.toFloat();val y=(g.thumbY-g.visualTop).toFloat()
         val radius=minOf(g.thumbWidth,g.thumbHeight)/2f
         canvas.drawRoundRect(x,y,x+g.thumbWidth,y+g.thumbHeight,radius,radius,paint)
     }
-    private fun drawTrack(canvas:Canvas,g:CompressionSliderGeometry,active:Int,inactive:Int) {
+    private fun drawTrack(canvas:Canvas,g:CompressionSliderGeometry,active:Int,inactive:Int,activeTick:Int) {
         val density=environment.textDensity.density
         val width=g.trackWidth.toFloat()
         val height=g.trackHeight.toFloat()
@@ -191,7 +193,7 @@ private class SliderBody(
             val center=lerp(corner,width-corner,index/8f)
             if(center>=end-gap&&center<=end+gap)continue
             circle(canvas,if(rtl)width-center else center,height/2f,2f*density,
-                if(center>=0f&&center<=activeEnd)inactive else active)
+                if(center>=0f&&center<=activeEnd)activeTick else active)
         }
     }
     private fun shape(canvas:Canvas,x:Float,y:Float,width:Float,height:Float,left:Float,right:Float,color:Int) {

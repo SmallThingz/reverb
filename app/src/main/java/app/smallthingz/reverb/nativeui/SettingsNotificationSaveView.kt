@@ -1,5 +1,6 @@
 package app.smallthingz.reverb.nativeui
 
+import android.animation.ValueAnimator
 import android.content.Context
 import android.os.Bundle
 import android.view.KeyEvent
@@ -15,6 +16,24 @@ import app.smallthingz.reverb.RangeDurationWheelView
 import app.smallthingz.reverb.R
 import app.smallthingz.reverb.notificationDurationStepSeconds
 import kotlin.math.roundToInt
+import smallthingz.ui.interaction.view.readCachedAnimatorDurationScale
+
+/** A denied optional cache initialization is retried only for a new animation target. */
+internal class SettingsAnimatorDurationScale(private val context: Context) {
+    private var target: Float? = null
+    private var denied = false
+    fun target(next: Float): Float {
+        if (target != next) { target = next; denied = false }
+        return read()
+    }
+    fun read(): Float {
+        if (!ValueAnimator.areAnimatorsEnabled()) return 0f
+        if (denied) return 1f
+        val scale = try { readCachedAnimatorDurationScale(context) }
+        catch (_: SecurityException) { denied = true; 1f }
+        return if (scale.isFinite() && scale >= 0f) scale else 1f
+    }
+}
 
 internal data class SettingsNotificationSaveState(
     val enabled:Boolean,
@@ -24,7 +43,7 @@ internal data class SettingsNotificationSaveState(
     val editRevision:Long,
 )
 
-/** NotificationSaveSettings39–214:conditional existing native wheel; no expansion animation. */
+/** The notification row expands in place and retains its disabled wheel through the reverse motion. */
 internal class SettingsNotificationSaveView(
     context:Context,
     initial:SettingsNotificationSaveState,
@@ -47,6 +66,9 @@ internal class SettingsNotificationSaveView(
         initial.enabled,initial.interactionReady,environment,inputRoot,false,onEnabledChange)
     private var onInteractionChanged:()->Unit={}
     private var wheel:NativeNotificationDurationWheel?=null
+    private val expansion=ReleasedSpringValue.float(if(initial.enabled)1f else 0f)
+    private val durationScale=SettingsAnimatorDurationScale(context)
+    private var expansionDriver:ViewSpringDriver<Float,smallthingz.ui.animation.core.AnimationVector1D>?=null
     private var closed=false
     init {
         importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -54,6 +76,7 @@ internal class SettingsNotificationSaveView(
     }
     fun bind(next:SettingsNotificationSaveState,colors:ReverbViewEnvironment) {
         check(!closed)
+        val wasEnabled=state.enabled
         state=next;environment=colors
         row.bind(next.enabled,next.interactionReady,colors)
         if(next.enabled) {
@@ -63,11 +86,34 @@ internal class SettingsNotificationSaveView(
                     readEditRevision()?.let { NotificationDurationCommit(seconds,it) }
                 },interactionChanged={onInteractionChanged()}).also {wheel=it;addView(it.view)}
             current.bind(next.seconds,next.maximumSeconds,next.interactionReady,next.editRevision,colors)
-        } else wheel?.let { old->
-            wheel=null
-            try {old.close()} finally {removeView(old.view)}
+        } else wheel?.let {
+            it.bind(next.seconds,next.maximumSeconds,false,next.editRevision,colors)
+            if(wasEnabled)it.cancelInteraction()
+        }
+        val target=if(next.enabled)1f else 0f
+        if(durationScale.target(target)==0f||!isAttachedToWindow) {
+            expansion.snapTo(target)
+            publishExpansion()
+        } else {
+            val driver=expansionDriver?:ViewSpringDriver(this,expansion,{publishExpansion()},
+                durationScale::read).also {expansionDriver=it}
+            driver.retarget(target)
         }
         requestLayout()
+    }
+    private fun publishExpansion() {
+        wheel?.view?.let {
+            it.alpha=expansion.value.coerceIn(0f,1f)
+            it.importantForAccessibility=if(state.enabled)IMPORTANT_FOR_ACCESSIBILITY_AUTO
+                else IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+        }
+        if(!state.enabled&&!expansion.isRunning)retireWheel()
+        requestLayout()
+    }
+    private fun retireWheel() {
+        val old=wheel?:return
+        wheel=null
+        try {old.close()} finally {removeView(old.view)}
     }
     fun callbacks(onSeconds:(Int)->Unit,owner:()->Long?,interactionChanged:()->Unit={}) {
         onSecondsChange=onSeconds;readEditRevision=owner;onInteractionChanged=interactionChanged
@@ -76,7 +122,7 @@ internal class SettingsNotificationSaveView(
         val width=MeasureSpec.getSize(w)
         row.measure(exact(width),unspecified())
         wheel?.view?.measure(exact((width-2*dp(14)).coerceAtLeast(0)),exact(dp(160)))
-        val extra=wheel?.let {2*dp(8)+it.view.measuredHeight}?:0
+        val extra=wheel?.let {((2*dp(8)+it.view.measuredHeight)*expansion.value.coerceIn(0f,1f)).roundToInt()}?:0
         setMeasuredDimension(resolveSize(width,w),resolveSize(row.measuredHeight+extra,h))
     }
     override fun onLayout(changed:Boolean,l:Int,t:Int,r:Int,b:Int) {
@@ -86,10 +132,17 @@ internal class SettingsNotificationSaveView(
             view.layout(dp(14),y,width-dp(14),y+view.measuredHeight)
         }
     }
+    override fun onDetachedFromWindow() {
+        expansionDriver?.close();expansionDriver=null
+        expansion.snapTo(if(state.enabled)1f else 0f)
+        publishExpansion()
+        super.onDetachedFromWindow()
+    }
     override fun close() {
         if(closed)return
         closed=true;row.close()
-        wheel?.close();wheel=null
+        expansionDriver?.close();expansionDriver=null
+        retireWheel()
     }
     private fun dp(v:Int)=(v*environment.textDensity.density).roundToInt()
 }

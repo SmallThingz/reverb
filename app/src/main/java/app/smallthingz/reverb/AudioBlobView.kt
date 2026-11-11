@@ -1,5 +1,6 @@
 package app.smallthingz.reverb
 
+import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.ComposeShader
@@ -15,6 +16,7 @@ import android.view.Choreographer
 import android.view.View
 import androidx.annotation.RequiresApi
 import smallthingz.ui.animation.view.ViewColorTransition
+import smallthingz.ui.interaction.view.readCachedAnimatorDurationScale
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.max
@@ -25,7 +27,10 @@ import kotlin.math.sin
  * Lightweight visualizer surface. Audio analysis is pushed in at a low rate and this view
  * interpolates it independently, so rendering never drives microphone or disk I/O cadence.
  */
-internal class AudioBlobView(context: Context) : View(context) {
+internal class AudioBlobView(
+    context: Context,
+    private val durationScale: () -> Float = { readCachedAnimatorDurationScale(context) },
+) : View(context) {
     private val targetBands = FloatArray(BAND_COUNT)
     private val currentBands = FloatArray(BAND_COUNT)
     private var targetActivity = 0f
@@ -93,6 +98,7 @@ internal class AudioBlobView(context: Context) : View(context) {
     private var framePosted = false
     private var shaderTimeSeconds = 0f
     private var lastFrameNanos = 0L
+    private var scaleReadDenied = false
     private var lastAudioSignalNanos = 0L
     private val choreographer = Choreographer.getInstance()
 
@@ -147,6 +153,12 @@ internal class AudioBlobView(context: Context) : View(context) {
 
     private val frameCallback = Choreographer.FrameCallback { frameTimeNanos ->
         framePosted = false
+        val scale = motionDurationScale()
+        if (scale == 0f) {
+            stopFrames()
+            snapPresentationToTargets()
+            return@FrameCallback
+        }
         if (!shouldAnimate()) {
             lastFrameNanos = 0L
             return@FrameCallback
@@ -157,8 +169,9 @@ internal class AudioBlobView(context: Context) : View(context) {
             ((frameTimeNanos - lastFrameNanos) / 1_000_000_000f).coerceIn(0.001f, 0.1f)
         }
         lastFrameNanos = frameTimeNanos
-        shaderTimeSeconds += dtSeconds
-        advance(dtSeconds)
+        val motionSeconds = dtSeconds / scale
+        shaderTimeSeconds += motionSeconds
+        advance(motionSeconds)
         invalidate()
         postNextFrame()
     }
@@ -251,6 +264,7 @@ internal class AudioBlobView(context: Context) : View(context) {
             lastAudioSignalNanos = 0L
         }
         if (stateChanged) {
+            scaleReadDenied = false
             // A silent/residual frame may already be queued on the 33 ms idle cadence.
             // Do not let a new expand/collapse request inherit that stale delay.
             if (framePosted) {
@@ -312,6 +326,11 @@ internal class AudioBlobView(context: Context) : View(context) {
     private fun silenceMoving(): Boolean = kotlin.math.abs(currentSilence - targetSilence) > SILENCE_EPSILON
 
     private fun ensureAnimationState() {
+        if (motionDurationScale() == 0f) {
+            stopFrames()
+            snapPresentationToTargets()
+            return
+        }
         if (shouldAnimate()) {
             postNextFrame(immediate = true)
         } else {
@@ -335,6 +354,11 @@ internal class AudioBlobView(context: Context) : View(context) {
     }
 
     private fun postNextFrame(immediate: Boolean = false) {
+        if (motionDurationScale() == 0f) {
+            stopFrames()
+            snapPresentationToTargets()
+            return
+        }
         if (framePosted) return
         if (!shouldAnimate()) {
             lastFrameNanos = 0L
@@ -350,6 +374,40 @@ internal class AudioBlobView(context: Context) : View(context) {
             choreographer.postFrameCallback(frameCallback)
         } else {
             choreographer.postFrameCallbackDelayed(frameCallback, renderer.idleFrameDelayMillis)
+        }
+    }
+
+    private fun motionDurationScale(): Float {
+        if (!ValueAnimator.areAnimatorsEnabled()) return 0f
+        if (scaleReadDenied) return 1f
+        val scale = try { durationScale() } catch (_: SecurityException) {
+            // Optional setting access must not interrupt live visualization. Retry on state change.
+            scaleReadDenied = true
+            1f
+        }
+        return if (scale.isFinite() && scale >= 0f) scale else 1f
+    }
+
+    /** Disabled decoration still presents each newly received audio frame without an animation loop. */
+    private fun snapPresentationToTargets() {
+        val activity = if (renderingVisible) targetActivity else 0f
+        val life = if (renderingVisible) targetLife else COLLAPSED_LIFE
+        val silence = targetSilence
+        val presence = targetPresence
+        var changed = currentActivity != activity || currentLife != life ||
+            currentSilence != silence || currentPresence != presence
+        currentActivity = activity
+        currentLife = life
+        currentSilence = silence
+        currentPresence = presence
+        for (index in currentBands.indices) {
+            val band = if (renderingVisible) targetBands[index] else 0f
+            if (currentBands[index] != band) changed = true
+            currentBands[index] = band
+        }
+        if (changed) {
+            invalidate()
+            publishReadoutAppearance()
         }
     }
 

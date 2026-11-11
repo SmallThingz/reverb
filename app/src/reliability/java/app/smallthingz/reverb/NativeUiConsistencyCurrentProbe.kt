@@ -1,0 +1,282 @@
+package app.smallthingz.reverb
+
+import android.app.Application
+import android.app.Instrumentation
+import android.content.res.Configuration
+import android.graphics.Rect
+import android.view.View
+import android.view.ViewGroup
+import android.view.accessibility.AccessibilityNodeInfo
+import android.widget.FrameLayout
+import androidx.compose.ui.unit.Density
+import app.smallthingz.reverb.nativeui.*
+import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
+import smallthingz.ui.text.view.NativePlainTextViewGeometry
+import smallthingz.ui.text.view.NativeSourceAccessibilityNode
+import smallthingz.ui.text.view.NativeTextSemanticsClip
+import smallthingz.ui.text.view.NativeTextSemanticsClipPolicy
+import smallthingz.ui.text.view.nativeMergedRoleBoundsInScreen
+import smallthingz.ui.geometry.Offset
+import smallthingz.ui.geometry.Rect as ComposeRect
+import java.io.File
+import java.util.Locale
+import org.json.JSONArray
+import org.json.JSONObject
+
+/** Current rendered permission rows and Library selection actions; all callbacks are forbidden. */
+internal fun verifyNativeUiConsistencyCurrent(instrumentation: Instrumentation, report: StringBuilder) {
+    val context = instrumentation.targetContext
+    check(context.packageName == "app.smallthingz.reverb.uitheme.reliability")
+    check(context.applicationContext.javaClass == Application::class.java)
+    val preferences = getRecorderPreferences(context).all.toMap()
+    val directory = File(context.filesDir, "native-ui-consistency-current-${System.currentTimeMillis()}")
+    check(directory.mkdir())
+    val scenes = JSONArray()
+    val result = JSONObject().put("selector", "native_ui_consistency_current")
+        .put("passed", false).put("historical_parity_claim", false).put("scenes", scenes)
+        .put("unqualified", JSONArray(listOf("physical touch", "TalkBack delivery", "system permission dialogs",
+            "compact Save-tile/notification wheel; owner initialization reads capacity preferences")))
+    writeQaEvidenceAtomically(File(directory, "result.json")) { it.write(result.toString(2).toByteArray()) }
+    val host = launchCurrentUiSmokeActivity(instrumentation)
+    val runtime = NativeAboutWindowRuntime(host).apply { setStarted(true) }
+    var failure: Throwable? = null
+    fun <T> main(action: () -> T): T = nativeParityOnMain(instrumentation, action)
+    fun descendants(root: View): Sequence<View> = sequence {
+        yield(root)
+        if (root is ViewGroup) for (index in 0 until root.childCount) yieldAll(descendants(root.getChildAt(index)))
+    }
+    fun capture(name: String, root: View, dark: Boolean) {
+        awaitNativeParityDraw(instrumentation, root)
+        val bitmap = captureNativeParityContent(instrumentation, host) { root }
+        try { saveNativeParityBitmap(directory, "$name.png", bitmap) } finally { bitmap.recycle() }
+        scenes.put(JSONObject().put("name", name).put("png", "$name.png")
+            .put("dark", dark).put("width_dp", 320).put("font_scale", 1.3))
+    }
+    try {
+        awaitNativeParityDraw(instrumentation, host.fixtureRoot)
+        val densityPx = context.resources.displayMetrics.density
+        val width = (320 * densityPx).toInt()
+        check(width <= main { host.fixtureRoot.width }) { "Native parity host is narrower than 320dp" }
+        val storageMeasurements = JSONArray()
+        result.put("storage_measurements", storageMeasurements)
+        for (widthDp in listOf(220, 320)) for (scale in listOf(1f, 1.3f, 2f)) for (rtl in listOf(false, true)) {
+            main {
+                val config = Configuration(context.resources.configuration).apply {
+                    setLocale(Locale.ENGLISH)
+                    fontScale = scale
+                }
+                val themed = context.createConfigurationContext(config)
+                val density = Density(themed.resources.displayMetrics.density, scale)
+                val palette = ReverbPalette.resolve(themed, false)
+                val environment = nativeParityEnvironment(themed, density, palette)
+                val forbidden = { error("Storage measurement invoked an application action") }
+                val section = SettingsStorageSection(themed, SettingsStorageState(
+                    pathText = "/recordings", hasCustomDirectory = false, canMove = false,
+                    settingsPersisting = false, allFilesAvailable = true, allFilesAllowed = false,
+                    audioReadAvailable = true, audioReadAllowed = false), environment,
+                    { host.fixtureRoot }, forbidden, forbidden, forbidden, forbidden, forbidden)
+                try {
+                    val expectedDirection = if (rtl) View.LAYOUT_DIRECTION_RTL else View.LAYOUT_DIRECTION_LTR
+                    section.layoutDirection = expectedDirection
+                    host.fixtureRoot.addView(section, FrameLayout.LayoutParams((widthDp * density.density).toInt(), -2))
+                    section.measure(View.MeasureSpec.makeMeasureSpec((widthDp * density.density).toInt(), View.MeasureSpec.EXACTLY),
+                        View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED))
+                    section.layout(0, 0, section.measuredWidth, section.measuredHeight)
+                    for (label in listOf(R.string.settings_audio_read_missing, R.string.settings_all_files_optional)) {
+                        val title = descendants(section).filterIsInstance<smallthingz.ui.text.view.ParagraphView>()
+                            .single { it.getText().toString() == themed.getString(label) }
+                        val row = title.parent as ViewGroup
+                        val action = (0 until row.childCount).map(row::getChildAt)
+                            .filterIsInstance<SettingsCalibrationActionView>().single()
+                        val entry = JSONObject().put("width_dp", widthDp).put("font_scale", scale)
+                            .put("rtl", rtl).put("label", title.getText().toString())
+                            .put("title_width_px", title.width).put("title_height_px", title.height)
+                            .put("title_intrinsic_width_px", title.maxIntrinsicTextWidth())
+                            .put("action_width_px", action.width).put("action_height_px", action.height)
+                            .put("row_direction", row.layoutDirection).put("title_direction", title.layoutDirection)
+                            .put("action_direction", action.layoutDirection).put("action_label_direction", action.textView.layoutDirection)
+                            .put("stacked", action.top >= title.bottom)
+                        storageMeasurements.put(entry)
+                        check(section.isAttachedToWindow && row.isAttachedToWindow && title.isAttachedToWindow && action.isAttachedToWindow) {
+                            "Storage measurement must use the attached native hierarchy: $entry"
+                        }
+                        check(listOf(section, row, title, action, action.textView).all { it.layoutDirection == expectedDirection }) {
+                            "Permission descendants did not resolve the requested direction: $entry"
+                        }
+                        check(title.width > 0 && title.height > 0) { "Missing permission title: $entry" }
+                        check(title.left >= 0 && title.right <= row.width && title.top >= 0 && title.bottom <= row.height) {
+                            "Permission title outside its row: $entry"
+                        }
+                        check(action.width >= 48 * density.density - 1 && action.height >= 48 * density.density - 1) {
+                            "Permission action below 48dp: $entry"
+                        }
+                        check(action.left >= 0 && action.right <= row.width && action.top >= 0 && action.bottom <= row.height) {
+                            "Permission action outside its row: $entry"
+                        }
+                        check(action.top >= title.bottom || action.right <= title.left || title.right <= action.left) {
+                            "Permission title and action overlap: $entry"
+                        }
+                        if (widthDp == 320 && scale == 1.3f) check(action.top < title.bottom) {
+                            "Ordinary compact permission row was unnecessarily stacked: $entry"
+                        }
+                    }
+                } finally {
+                    try { section.close() } finally { host.fixtureRoot.removeView(section) }
+                }
+            }
+        }
+        for (dark in listOf(false, true)) {
+            val config = Configuration(context.resources.configuration).apply {
+                uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or
+                    if (dark) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
+                fontScale = 1.3f
+            }
+            val themed = context.createConfigurationContext(config)
+            val density = Density(themed.resources.displayMetrics.density, config.fontScale)
+            val palette = ReverbPalette.resolve(themed, dark)
+            val environment = nativeParityEnvironment(themed, density, palette)
+            val forbidden = { error("Current UI fixture invoked a forbidden application action") }
+
+            val permissionState = OnboardingPageContentState(
+                permissions = OnboardingPermissionStatus(
+                    microphoneAllowed = true, storageRequired = true, storageAllowed = false,
+                    recoveryRequired = true, recoveryAllowed = false,
+                    notificationPermissionRequired = true, notificationsAllowed = true,
+                    batteryOptimizationAllowed = true, interactionEnabled = true,
+                    allFilesAvailable = true, allFilesAllowed = false,
+                ),
+                oneShotEnabled = true, loopingEnabled = true, outputCompression = true,
+                skipSilence = false, compressionAvailable = true, silenceValid = true,
+                controlsEnabled = true, interactionEnabled = true,
+            )
+            lateinit var permissionScreen: NativeOnboardingScreenView
+            main {
+                host.fixtureRoot.setBackgroundColor(palette.background)
+                permissionScreen = NativeOnboardingScreenView.create(themed, environment, permissionState,
+                    host, OnboardingPageActions(
+                        requestPermission = { forbidden() }, oneShotChanged = { forbidden() },
+                        loopingChanged = { forbidden() }, compressionChanged = { forbidden() },
+                        skipSilenceChanged = { forbidden() }, pageChanged = {},
+                        compressionLevelChanged = { forbidden() }), forbidden, runtime.scope,
+                    host.onBackPressedDispatcher,
+                    restored = NativeOnboardingViewportSavedState(page = 0), observeWindowInsets = false)
+                host.fixtureRoot.addView(permissionScreen, FrameLayout.LayoutParams(width, -1))
+            }
+            awaitNativeParityDraw(instrumentation, permissionScreen)
+            val viewport = main { descendants(permissionScreen).filterIsInstance<smallthingz.ui.scroll.NativeVerticalViewport>().first() }
+            repeat(4) {
+                main { viewport.performAccessibilityAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD, null) }
+                awaitNativeParityDraw(instrumentation, permissionScreen)
+            }
+            val permissionLabels = main {
+                descendants(permissionScreen).filterIsInstance<smallthingz.ui.text.view.ParagraphView>()
+                    .filter { it.isShown && it.getGlobalVisibleRect(Rect()) }.map { it.getText().toString() }.toSet()
+            }
+            check(themed.getString(R.string.storage_settings_title) in permissionLabels)
+            check(themed.getString(R.string.settings_audio_read_missing) in permissionLabels)
+            check(themed.getString(R.string.settings_all_files_optional) in permissionLabels)
+            capture("${if (dark) "dark" else "light"}-missing-permissions", permissionScreen, dark)
+            main { permissionScreen.close(); host.fixtureRoot.removeView(permissionScreen) }
+
+            val storageSection = main {
+                SettingsStorageSection(themed, SettingsStorageState(
+                    pathText = "/recordings", hasCustomDirectory = false, canMove = false,
+                    settingsPersisting = false, allFilesAvailable = true, allFilesAllowed = false,
+                    audioReadAvailable = true, audioReadAllowed = false), environment,
+                    { host.fixtureRoot }, forbidden, forbidden, forbidden, forbidden, forbidden)
+            }
+            val storageFrame = main {
+                FrameLayout(themed).apply {
+                    setBackgroundColor(palette.background)
+                    addView(storageSection, FrameLayout.LayoutParams(width, -2))
+                    host.fixtureRoot.addView(this, FrameLayout.LayoutParams(width, -2))
+                }
+            }
+            awaitNativeParityDraw(instrumentation, storageFrame)
+            val storageLabels = main {
+                descendants(storageFrame).filterIsInstance<smallthingz.ui.text.view.ParagraphView>()
+                    .map { it.getText().toString() }.toSet()
+            }
+            check(themed.getString(R.string.settings_audio_read_missing) in storageLabels)
+            check(themed.getString(R.string.settings_all_files_optional) in storageLabels)
+            capture("${if (dark) "dark" else "light"}-settings-storage-missing", storageFrame, dark)
+            main { storageSection.close(); host.fixtureRoot.removeView(storageFrame) }
+
+            val toolbar = main {
+                ReverbLibraryToolbarView(themed, environment, host.fixtureRoot).apply {
+                    bind(LibraryToolbarState(selectedCount = 3, selectionHasBusyMutation = false,
+                        acceptsDeletions = true, hasIncidents = false),
+                        LibraryToolbarActions(forbidden, forbidden, forbidden, forbidden,
+                            forbidden, forbidden, forbidden))
+                }.also { host.fixtureRoot.addView(it, FrameLayout.LayoutParams(width,
+                    (66 * density.density).toInt())) }
+            }
+            awaitNativeParityDraw(instrumentation, toolbar)
+            val textOwner = main {
+                NativeWindowTextAccessibilityOwner(host.fixtureRoot,
+                    NativeTextSemanticsClipPolicy { NativeTextSemanticsClip.Unclipped })
+            }
+            val clipPolicy = NativeTextSemanticsClipPolicy { NativeTextSemanticsClip.Unclipped }
+            val geometry = main { textOwner.contentGeometry(toolbar, clipPolicy) }
+            fun sourceNode(view: View): NativeSourceAccessibilityNode {
+                if (!view.isAttachedToWindow || !view.isShown || !view.isLaidOut) return NativeSourceAccessibilityNode.absent()
+                val mapped = geometry.capture(view, Offset.Zero,
+                    ComposeRect(0f, 0f, view.width.toFloat(), view.height.toFloat()))
+                    ?: return NativeSourceAccessibilityNode.absent()
+                return NativeSourceAccessibilityNode(true, false, true,
+                    nativeMergedRoleBoundsInScreen(mapped, view.isLaidOut))
+            }
+            val toolbarAccessibility = main {
+                descendants(toolbar).filterIsInstance<ReverbTopBarIconAction>()
+                    .map { it.bindAccessibility(textOwner.textWindow, geometry, ::sourceNode) }.toList()
+            }
+            val actionNodes = main {
+                descendants(toolbar).mapNotNull { view ->
+                    if (view !is NativeMergedRowAccessibilityHost) return@mapNotNull null
+                    val info = view.createAccessibilityNodeInfo() ?: return@mapNotNull null
+                    try {
+                        val label = (info.contentDescription ?: info.text)?.toString().orEmpty()
+                        if (label !in setOf(themed.getString(R.string.share_recording),
+                                themed.getString(R.string.delete_recording))) return@mapNotNull null
+                        val bounds = Rect().also(info::getBoundsInScreen)
+                        JSONObject().put("label", label).put("clickable", info.isClickable)
+                            .put("enabled", info.isEnabled).put("bounds", bounds.toShortString())
+                            .put("width_dp", bounds.width() / density.density)
+                            .put("height_dp", bounds.height() / density.density)
+                    } finally { @Suppress("DEPRECATION") info.recycle() }
+                }.toList()
+            }
+            check(actionNodes.size == 2) { "Expected separately exposed Share and Delete nodes: $actionNodes" }
+            for (node in actionNodes) {
+                check(node.getBoolean("clickable") && node.getBoolean("enabled"))
+                check(node.getDouble("width_dp") >= 48.0 && node.getDouble("height_dp") >= 48.0) { "Selection action below 48dp: $node" }
+            }
+            scenes.put(JSONObject().put("name", "${if (dark) "dark" else "light"}-grouped-selection")
+                .put("png", "${if (dark) "dark" else "light"}-grouped-selection.png")
+                .put("dark", dark).put("width_dp", 320).put("font_scale", 1.3)
+                .put("separate_action_nodes", JSONArray(actionNodes)))
+            val bitmap = captureNativeParityContent(instrumentation, host) { toolbar }
+            try { saveNativeParityBitmap(directory, "${if (dark) "dark" else "light"}-grouped-selection.png", bitmap) }
+            finally { bitmap.recycle() }
+            main {
+                toolbarAccessibility.asReversed().forEach(AutoCloseable::close)
+                toolbar.bind(LibraryToolbarState(0, false, true, false),
+                    LibraryToolbarActions(forbidden, forbidden, forbidden, forbidden, forbidden, forbidden, forbidden))
+                host.fixtureRoot.removeView(toolbar)
+            }
+        }
+        check(getRecorderPreferences(context).all == preferences) { "Probe changed QA preferences" }
+        result.put("passed", true)
+    } catch (error: Throwable) {
+        failure = error
+        result.put("error", android.util.Log.getStackTraceString(error))
+    } finally {
+        try { nativeParityOnMain(instrumentation) { runtime.close(); host.finish() } }
+        catch (cleanup: Throwable) { if (failure == null) failure = cleanup else failure?.addSuppressed(cleanup) }
+        result.put("passed", result.getBoolean("passed") && failure == null)
+            .put("failure", failure?.stackTraceToString() ?: JSONObject.NULL)
+        writeQaEvidenceAtomically(File(directory, "result.json")) { it.write(result.toString(2).toByteArray()) }
+    }
+    failure?.let { throw it }
+    report.appendLine("PASS native_ui_consistency_current isolated rendered UI; evidence ${directory.absolutePath}")
+}

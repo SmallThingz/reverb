@@ -39,6 +39,7 @@ private data class PermissionRowState(
     val body: String?,
     val allowed: Boolean,
     val canRequest: Boolean,
+    val icon: ReverbIcon? = null,
 )
 
 /** Native permission rows; Activity launchers, refresh and durable Finish remain screen-owned. */
@@ -78,15 +79,16 @@ internal class OnboardingPermissionGroup(
             add(PermissionRowState(OnboardingPermission.MICROPHONE, "●",
                 context.getString(R.string.onboarding_microphone_title), context.getString(R.string.onboarding_microphone_body),
                 status.microphoneAllowed, status.interactionEnabled))
-            if (status.storageRequired) add(PermissionRowState(OnboardingPermission.STORAGE, "S",
-                context.getString(R.string.storage_settings_title), context.getString(R.string.onboarding_storage_body),
-                status.storageAllowed, status.interactionEnabled))
-            if (status.allFilesAvailable) add(PermissionRowState(OnboardingPermission.ALL_FILES, "F",
-                context.getString(R.string.all_files_access_title), context.getString(R.string.all_files_access_body),
-                status.allFilesAllowed, status.interactionEnabled))
-            if (status.recoveryRequired) add(PermissionRowState(OnboardingPermission.RECOVERY, "R",
-                context.getString(R.string.recording_recovery_title), context.getString(R.string.onboarding_recovery_body),
-                status.recoveryAllowed, status.interactionEnabled))
+            if (status.storageRequired && !status.storageAllowed) add(PermissionRowState(OnboardingPermission.STORAGE, "S",
+                context.getString(R.string.storage_settings_title), null,
+                false, status.interactionEnabled, ReverbIcon.Folder))
+            if (status.recoveryRequired && !status.recoveryAllowed && !status.allFilesAllowed)
+                add(PermissionRowState(OnboardingPermission.RECOVERY, "R",
+                    context.getString(R.string.settings_audio_read_missing), null,
+                    false, status.interactionEnabled, ReverbIcon.AudioFile))
+            if (status.allFilesAvailable && !status.allFilesAllowed) add(PermissionRowState(OnboardingPermission.ALL_FILES, "F",
+                context.getString(R.string.settings_all_files_optional), null,
+                false, status.interactionEnabled, ReverbIcon.Folder))
             add(PermissionRowState(OnboardingPermission.NOTIFICATIONS, "N",
                 context.getString(R.string.onboarding_notifications_title), context.getString(R.string.onboarding_notifications_body),
                 status.notificationsAllowed, status.interactionEnabled && status.notificationPermissionRequired))
@@ -100,7 +102,7 @@ internal class OnboardingPermissionGroup(
         }
         states.forEach { state ->
             rows.getOrPut(state.kind) {
-                PermissionRow(context, typography, density, resolver, interactions, state.marker, ::request)
+                PermissionRow(context, typography, density, resolver, interactions, state.marker, state.icon, ::request)
             }.bind(state, palette)
         }
         val desiredOrder = states.map { it.kind }
@@ -144,13 +146,16 @@ private class PermissionRow(
     resolver: FontFamily.Resolver,
     interactions: OnboardingNativeInteractionsFactory,
     private val markerText: String,
+    icon: ReverbIcon?,
     request: (OnboardingPermission) -> Unit,
 ) : OnboardingCardView(context, typography, density, resolver,
-    OnboardingMarker(context, typography.titleMedium, density, resolver, marker = markerText),
+    OnboardingMarker(context, typography.titleMedium, density, resolver, icon = icon, marker = markerText),
     OnboardingIconView(context, ReverbIcon.Unchecked, 0), 24, 24, interactions) {
     private var state: PermissionRowState? = null
     private val allowLabel = context.getString(R.string.allow)
-    override val accessibilityClickLabel: CharSequence get() = allowLabel
+    override val accessibilityClickLabel: CharSequence get() =
+        if (state?.kind == OnboardingPermission.ALL_FILES) context.getString(R.string.all_files_access_settings)
+        else allowLabel
     val canRequestNow: Boolean get() = state?.let { it.canRequest && !it.allowed } == true
 
     init { onActivate = { state?.takeIf { canRequestNow }?.let { request(it.kind) } } }
@@ -158,12 +163,14 @@ private class PermissionRow(
     fun bind(value: PermissionRowState, palette: ReverbPalette) {
         state = value
         (trailing as OnboardingIconView).bind(
-            if (value.allowed) ReverbIcon.Checked else ReverbIcon.Unchecked,
+            if (value.kind == OnboardingPermission.ALL_FILES) ReverbIcon.Settings
+            else if (value.allowed) ReverbIcon.Checked else ReverbIcon.Unchecked,
             if (value.allowed) palette.primary else palette.onSurfaceVariant,
         )
         bindCard(value.title, value.body, canRequestNow, palette)
-        trailing.contentDescription = context.getString(
-            if (value.allowed) R.string.onboarding_allowed else R.string.allow)
+        trailing.contentDescription = if (value.kind == OnboardingPermission.ALL_FILES)
+            context.getString(R.string.all_files_access_settings)
+        else context.getString(if (value.allowed) R.string.onboarding_allowed else R.string.allow)
         trailing.importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
         trailing.isScreenReaderFocusable = false
     }

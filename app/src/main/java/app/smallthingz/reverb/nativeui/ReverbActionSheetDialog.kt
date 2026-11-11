@@ -23,6 +23,7 @@ import android.view.ViewGroup
 import android.view.ViewOutlineProvider
 import android.view.Window
 import android.view.WindowManager
+import android.view.inputmethod.InputMethodManager
 import androidx.activity.BackEventCompat
 import androidx.activity.ComponentDialog
 import androidx.activity.OnBackPressedCallback
@@ -302,6 +303,23 @@ internal class ReverbActionSheetDialog(
             try {block()}catch(error:Throwable) {
                 val first=failure
                 if(first==null)failure=error else if(first!==error)first.addSuppressed(error)
+            }
+        }
+        // Accepted retirement releases only this dialog's input; either failure still removes its Window.
+        release {
+            window?.decorView?.let { decor ->
+                (decor as? ViewGroup)?.descendantFocusability=ViewGroup.FOCUS_BLOCK_DESCENDANTS
+                decor.findFocus()?.clearFocus()
+            }
+        }
+        release {
+            window?.decorView?.let { decor ->
+                if(decor.isAttachedToWindow&&decor.hasWindowFocus()) {
+                    decor.windowToken?.let { token ->
+                        (context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
+                            ?.hideSoftInputFromWindow(token,0)
+                    }
+                }
             }
         }
         // Released DisposableEffect removes its own dialog Window before disposing its content.

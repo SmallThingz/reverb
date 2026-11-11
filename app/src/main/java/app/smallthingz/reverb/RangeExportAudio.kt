@@ -16,6 +16,7 @@ import java.util.WeakHashMap
 import java.util.concurrent.Executor
 import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingDeque
+import java.util.concurrent.Semaphore
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
@@ -473,6 +474,8 @@ internal class TimelineAudioPreviewController(
 ) : Closeable {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val generation = AtomicLong(0L)
+    private val playbackRuns = PreviewPlaybackRuns()
+    val playbackActive: Boolean get() = !closed && playbackRuns.active(generation.get())
     private val executor = ThreadPoolExecutor(
         1,
         1,
@@ -488,6 +491,13 @@ internal class TimelineAudioPreviewController(
     private val releaseExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "Reverb-range-preview-release").apply { isDaemon = true }
     }
+    private val controlExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "Reverb-range-preview-control").apply { isDaemon = true }
+    }
+    private companion object {
+        val trackSlots = Semaphore(3)
+        val failedTrackReleases = java.util.concurrent.atomic.AtomicInteger()
+    }
     private val trackLock = Any()
     private val trackQuietOwners = WeakHashMap<AudioTrack, PreviewTrackQuietOwner>()
 
@@ -502,6 +512,8 @@ internal class TimelineAudioPreviewController(
             startSeconds: Double,
             endSeconds: Double,
             targetSampleRate: Int,
+            selectedStartSeconds: Double,
+            selectedEndSeconds: Double,
         ): ByteArray?
     }
 
@@ -515,6 +527,8 @@ internal class TimelineAudioPreviewController(
             startSeconds: Double,
             endSeconds: Double,
             targetSampleRate: Int,
+            selectedStartSeconds: Double,
+            selectedEndSeconds: Double,
         ): ByteArray? {
             val lease = snapshot.acquireRange(startSeconds, endSeconds) ?: return null
             val expectedBytes = ((endSeconds - startSeconds).coerceAtLeast(0.0) *
@@ -527,6 +541,8 @@ internal class TimelineAudioPreviewController(
                     targetSampleRate = targetSampleRate,
                     targetChannelCount = channelCount,
                     targetSampleFormat = PcmSampleFormat.PCM_16,
+                    maximumOutputFrames = Long.MAX_VALUE,
+                    allowOutsideRangeContext = false,
                 ) { array, offset, count ->
                     raw.write(array, offset, count)
                     count
@@ -541,11 +557,10 @@ internal class TimelineAudioPreviewController(
     }
 
     private class RecordingShuttlePcmSource(
-        context: Context,
-        recording: RecordingEntity,
-        cleanup: RecordingReadCleanup,
+        private val reader: RecordingPcm16Reader,
+        private val ownsReader: Boolean,
+        private val trimRounding: RecordingFrameRounding,
     ) : ShuttlePcmSource {
-        private val reader = RecordingPcm16Reader.open(context, recording, cleanup)
         override val durationSeconds: Double get() = reader.durationSeconds
         override val channelCount: Int get() = reader.channelCount
 
@@ -553,14 +568,144 @@ internal class TimelineAudioPreviewController(
             startSeconds: Double,
             endSeconds: Double,
             targetSampleRate: Int,
+            selectedStartSeconds: Double,
+            selectedEndSeconds: Double,
         ): ByteArray? =
-            reader.readRange(startSeconds, endSeconds, targetSampleRate)
+            reader.readRange(startSeconds, endSeconds, targetSampleRate,
+                recordingShuttleFrameRange(selectedStartSeconds, selectedEndSeconds,
+                    reader.layout.sampleRate, reader.layout.frameCount, trimRounding))
                 .takeIf { it.isNotEmpty() }
 
-        override fun close() = reader.close()
+        override fun close() { if (ownsReader) reader.close() }
     }
 
-    private data class ShuttleCommand(val positionSeconds: Double, val rate: Float)
+    private data class ShuttleCommand(
+        val positionSeconds: Double,
+        val rate: Float,
+        val admission: ShuttlePlaybackAdmission,
+    ) {
+        val startSeconds: Double get() = admission.startSeconds
+        val endSeconds: Double get() = admission.endSeconds
+    }
+
+    private interface PreviewPcmStream : Closeable {
+        val sampleRate: Int
+        val channelCount: Int
+        val startSeconds: Double
+        val endSeconds: Double
+        fun read(write: (ByteArray, Int, Int) -> Int): Long
+    }
+
+    private var preparedRecording: RecordingEntity? = null
+    private var preparedReader: RecordingPcm16Reader? = null
+    private var preparedReaderCleanup: ((Throwable) -> Unit)? = null
+
+    fun prepareRecording(
+        context: Context,
+        recording: RecordingEntity,
+        onPrepared: (Int) -> Unit,
+        onError: (Throwable) -> Unit,
+        onSourceCloseFailure: (Throwable) -> Unit,
+    ) {
+        if (closed) return
+        cancelCurrent()
+        val token = generation.incrementAndGet()
+        val appContext = context.applicationContext
+        enqueueLatest {
+            try {
+                checkCurrent(token)
+                if (preparedRecording?.let { samePlaybackRecording(it, recording) } != true) {
+                    closePreparedReader()
+                    preparedReader = RecordingPcm16Reader.open(appContext, recording, RecordingReadCleanup(onSourceCloseFailure))
+                    preparedRecording = recording
+                    preparedReaderCleanup = onSourceCloseFailure
+                }
+                val millis = (checkNotNull(preparedReader).durationSeconds * 1_000.0).toLong()
+                    .coerceIn(1L, Int.MAX_VALUE.toLong()).toInt()
+                postIfCurrent(token) { onPrepared(millis) }
+            } catch (_: PreviewCancelled) {
+                Unit
+            } catch (error: Exception) {
+                postIfCurrent(token) { onError(error) }
+            }
+        }
+    }
+
+    private fun closePreparedReader() {
+        val reader = preparedReader
+        val cleanup = preparedReaderCleanup ?: {}
+        preparedReader = null
+        preparedRecording = null
+        preparedReaderCleanup = null
+        runCleanupReportingThrowable({ reader?.close() }, cleanup)
+    }
+
+    fun playRecording(
+        context: Context,
+        recording: RecordingEntity,
+        fromMillis: Int,
+        untilMillis: Int,
+        onProgress: (PreviewPlaybackSample) -> Unit,
+        onStarted: () -> Unit,
+        onFinished: () -> Unit,
+        onError: (Throwable) -> Unit,
+    ): Boolean {
+        if (closed || untilMillis <= fromMillis) return false
+        cancelCurrent()
+        val token = generation.incrementAndGet()
+        playbackRuns.start(token)
+        val appContext = context.applicationContext
+        return enqueueLatest {
+            stream(token, sourceFactory = {
+                check(preparedRecording?.let { samePlaybackRecording(it, recording) } == true)
+                val reader = checkNotNull(preparedReader)
+                val rounding = recordingTrimFrameRounding(getConfiguredOutputFormat(appContext), recording.displayName, reader.isFlac)
+                val range = previewFrameRange(fromMillis, untilMillis, reader.layout.sampleRate, reader.layout.frameCount, rounding)
+                check(range.frameCount > 0L) { "No audio available for preview" }
+                object : PreviewPcmStream {
+                    override val sampleRate = reader.layout.sampleRate
+                    override val channelCount = reader.channelCount
+                    override val startSeconds = range.first.toDouble() / sampleRate
+                    override val endSeconds = range.endExclusive.toDouble() / sampleRate
+                    override fun read(write: (ByteArray, Int, Int) -> Int): Long = streamBoundedPcmFrames(
+                        // Source identity checks amortize over250ms; the sink still admits
+                        // and writes at most50ms at a time, checking its epoch before each write.
+                        range, pcm16FrameBytes(channelCount), (sampleRate / 4).coerceAtLeast(1),
+                        { checkCurrent(token) }, reader::readFramesPcm16, write,
+                    )
+                    override fun close() = Unit
+                }
+            }, volume = 1f, samplePlaybackHead = true, onProgress = null,
+                onStarted = onStarted, onFinished = onFinished, onError = onError,
+                onClockSample = onProgress)
+        }.also { accepted -> if (!accepted) playbackRuns.finish(token) }
+    }
+
+    private fun timelineStream(
+        snapshot: ReverbService.TimelineSnapshot,
+        start: Double,
+        end: Double,
+    ): PreviewPcmStream {
+        val child = snapshot.acquireRange(start, end) ?: throw IOException("No audio available for preview")
+        return try { object : PreviewPcmStream {
+            override val sampleRate = PREVIEW_SAMPLE_RATE
+            override val channelCount = child.maximumChannelCount()
+            override val startSeconds = start
+            override val endSeconds = end
+            override fun read(write: (ByteArray, Int, Int) -> Int): Long = child.readNormalized(
+                targetSampleRate = sampleRate, targetChannelCount = channelCount,
+                targetSampleFormat = PcmSampleFormat.PCM_16,
+                maximumOutputFrames = Long.MAX_VALUE,
+                maximumOutputBatchBytes = PREVIEW_FRAMES_PER_BATCH * pcm16FrameBytes(channelCount),
+                allowOutsideRangeContext = false,
+                consumer = { array, offset, count -> write(array, offset, count) },
+            ).sampleBytes / pcm16FrameBytes(channelCount)
+            override fun close() = snapshot.releaseChildRangeBestEffort(child)
+        } } catch (error: Throwable) {
+            snapshot.releaseChildRangeBestEffort(child)
+            throw error
+        }
+    }
 
     private data class ShuttlePcmWindow(
         val startSeconds: Double,
@@ -569,14 +714,32 @@ internal class TimelineAudioPreviewController(
     )
 
     private val shuttleCommand = AtomicReference<ShuttleCommand?>(null)
+    private var restartShuttle: ((ShuttleCommand) -> Unit)? = null
 
     private val activeShuttleToken = AtomicLong(0L)
 
     @Volatile
     private var activeTrack: AudioTrack? = null
+    private var activeTrackEpoch = 0L
 
     @Volatile
     private var closed = false
+
+    /** Read on an observation worker: native reads share the terminal-release lifetime fence. */
+    fun observeTrack(): PreviewTrackObservation? {
+        val owned = synchronized(trackLock) { activeTrack?.let { it to activeTrackEpoch } } ?: return null
+        val (track, epoch) = owned
+        val owner = quietOwner(track)
+        val sample = owner.read {
+            PreviewTrackObservation(epoch, owner.observationIdentity,
+                track.playbackHeadPosition.toLong() and 0xffff_ffffL, track.underrunCount, track.playState,
+                track.sampleRate, track.channelCount, track.bufferSizeInFrames,
+                track.bufferCapacityInFrames, track.audioSessionId)
+        } ?: return null
+        return sample.takeIf { isCurrent(epoch) && synchronized(trackLock) {
+            activeTrack === track && activeTrackEpoch == epoch
+        } }
+    }
 
     fun play(
         snapshot: ReverbService.TimelineSnapshot,
@@ -586,6 +749,7 @@ internal class TimelineAudioPreviewController(
         onStarted: () -> Unit,
         onFinished: () -> Unit,
         onError: (Throwable) -> Unit,
+        onClockSample: ((PreviewPlaybackSample) -> Unit)? = null,
     ): Boolean {
         if (closed) return false
         cancelCurrent()
@@ -593,36 +757,37 @@ internal class TimelineAudioPreviewController(
         val start = fromSeconds.coerceIn(0.0, snapshot.durationSeconds)
         val end = untilSeconds.coerceIn(start, snapshot.durationSeconds)
         if (end <= start) return false
+        playbackRuns.start(token)
         return enqueueLatest {
             stream(
                 token = token,
-                snapshot = snapshot,
-                startSeconds = start,
-                endSeconds = end,
+                sourceFactory = { timelineStream(snapshot, start, end) },
                 volume = 1f,
                 samplePlaybackHead = true,
                 onProgress = onProgress,
                 onStarted = onStarted,
                 onFinished = onFinished,
                 onError = onError,
+                onClockSample = onClockSample,
             )
-        }
+        }.also { accepted -> if (!accepted) playbackRuns.finish(token) }
     }
 
-    fun audition(snapshot: ReverbService.TimelineSnapshot, atSeconds: Double) {
+    fun audition(snapshot: ReverbService.TimelineSnapshot, atSeconds: Double,
+                 fromSeconds: Double = 0.0, untilSeconds: Double = snapshot.durationSeconds) {
         if (closed) return
         cancelCurrent()
         val token = generation.incrementAndGet()
-        val center = atSeconds.coerceIn(0.0, snapshot.durationSeconds)
-        val start = (center - SCRUB_AUDITION_LEAD_SECONDS).coerceAtLeast(0.0)
-        val end = (center + SCRUB_AUDITION_SECONDS).coerceAtMost(snapshot.durationSeconds)
+        val lower = fromSeconds.coerceIn(0.0, snapshot.durationSeconds)
+        val upper = untilSeconds.coerceIn(lower, snapshot.durationSeconds)
+        val center = atSeconds.coerceIn(lower, upper)
+        val start = (center - SCRUB_AUDITION_LEAD_SECONDS).coerceAtLeast(lower)
+        val end = (center + SCRUB_AUDITION_SECONDS).coerceAtMost(upper)
         if (end <= start) return
         enqueueLatest {
             stream(
                 token = token,
-                snapshot = snapshot,
-                startSeconds = start,
-                endSeconds = end,
+                sourceFactory = { timelineStream(snapshot, start, end) },
                 volume = 0.72f,
                 samplePlaybackHead = false,
                 onProgress = null,
@@ -637,10 +802,14 @@ internal class TimelineAudioPreviewController(
         snapshot: ReverbService.TimelineSnapshot,
         atSeconds: Double,
         rate: Float,
+        fromSeconds: Double = 0.0,
+        untilSeconds: Double = snapshot.durationSeconds,
     ) {
         startShuttleInternal(
             atSeconds = atSeconds.coerceIn(0.0, snapshot.durationSeconds),
             rate = rate,
+            fromSeconds = fromSeconds,
+            untilSeconds = untilSeconds,
             sourceFactory = { TimelineShuttlePcmSource(snapshot) },
             onStarted = null,
             onFailureAfterStart = null,
@@ -656,6 +825,8 @@ internal class TimelineAudioPreviewController(
         onStarted: () -> Unit = {},
         onFailureAfterStart: () -> Unit = {},
         onSourceCloseFailure: ((Throwable) -> Unit)? = null,
+        fromSeconds: Double = 0.0,
+        untilSeconds: Double = Double.POSITIVE_INFINITY,
     ) {
         val appContext = context.applicationContext
         val reportSourceCloseFailure: (Throwable) -> Unit = onSourceCloseFailure ?: { error ->
@@ -676,7 +847,16 @@ internal class TimelineAudioPreviewController(
             // authoritative upper bound, avoiding a wrong first grain then an audible jump.
             atSeconds = sanitizedShuttlePositionSeconds(atSeconds),
             rate = rate,
-            sourceFactory = { RecordingShuttlePcmSource(appContext, recording, sourceCleanup) },
+            fromSeconds = fromSeconds,
+            untilSeconds = untilSeconds,
+            sourceFactory = {
+                // Read the current save policy on this admission, never from a cached preparation.
+                val trimFormat = getConfiguredOutputFormat(appContext)
+                val cached = preparedReader.takeIf { preparedRecording?.let { samePlaybackRecording(it, recording) } == true }
+                val reader = cached ?: RecordingPcm16Reader.open(appContext, recording, sourceCleanup)
+                RecordingShuttlePcmSource(reader, cached == null,
+                    recordingTrimFrameRounding(trimFormat, recording.displayName, reader.isFlac))
+            },
             onStarted = onStarted,
             onFailureAfterStart = onFailureAfterStart,
             onSourceCloseFailure = reportSourceCloseFailure,
@@ -686,6 +866,8 @@ internal class TimelineAudioPreviewController(
     private fun startShuttleInternal(
         atSeconds: Double,
         rate: Float,
+        fromSeconds: Double,
+        untilSeconds: Double,
         sourceFactory: () -> ShuttlePcmSource,
         onStarted: (() -> Unit)?,
         onFailureAfterStart: (() -> Unit)?,
@@ -699,8 +881,16 @@ internal class TimelineAudioPreviewController(
             ShuttleCommand(
                 positionSeconds = sanitizedShuttlePositionSeconds(atSeconds),
                 rate = sanitizedShuttleSourceRate(rate),
+                admission = ShuttlePlaybackAdmission(0.0, 0.0, 0).updated(
+                    fromSeconds.coerceAtLeast(0.0), untilSeconds.coerceAtLeast(fromSeconds),
+                    sanitizedShuttleSourceRate(rate),
+                ),
             ),
         )
+        restartShuttle = { command ->
+            startShuttleInternal(command.positionSeconds, command.rate, command.startSeconds, command.endSeconds,
+                sourceFactory, onStarted, onFailureAfterStart, onSourceCloseFailure)
+        }
         enqueueLatest {
             if (!isCurrent(token)) return@enqueueLatest
             val source = try {
@@ -719,15 +909,22 @@ internal class TimelineAudioPreviewController(
         }
     }
 
-    fun updateShuttle(atSeconds: Double, rate: Float) {
+    fun updateShuttle(atSeconds: Double, rate: Float,
+                      fromSeconds: Double = 0.0, untilSeconds: Double = Double.POSITIVE_INFINITY) {
         val token = activeShuttleToken.get()
         if (closed || token == 0L || generation.get() != token) return
-        shuttleCommand.set(
-            ShuttleCommand(
-                positionSeconds = sanitizedShuttlePositionSeconds(atSeconds),
-                rate = sanitizedShuttleSourceRate(rate),
-            ),
+        val previous = shuttleCommand.get()
+        val boundedRate = sanitizedShuttleSourceRate(rate)
+        val admission = (previous?.admission ?: ShuttlePlaybackAdmission(0.0, 0.0, 0)).updated(
+            fromSeconds.coerceAtLeast(0.0), untilSeconds.coerceAtLeast(fromSeconds), boundedRate,
         )
+        val next = ShuttleCommand(sanitizedShuttlePositionSeconds(atSeconds), boundedRate, admission)
+        if (previous != null && admission.requiresRetirementOf(previous.admission)) {
+            // Expanding the range preserves every queued source frame. Only exclusion or a
+            // direction reversal (including through zero) retires the physical queue.
+            // A blocked old write may return, but that track can never play again.
+            restartShuttle?.invoke(next)
+        } else shuttleCommand.set(next)
     }
 
     fun stopShuttle() {
@@ -744,8 +941,12 @@ internal class TimelineAudioPreviewController(
         if (closed) return
         closed = true
         cancelCurrent()
-        executor.shutdownNow()
-        releaseExecutor.shutdown()
+        executeIfAccepted(executor, Runnable {
+            closePreparedReader()
+            executeIfAccepted(controlExecutor, Runnable { releaseExecutor.shutdown() })
+            controlExecutor.shutdown()
+        })
+        executor.shutdown()
     }
 
     private fun enqueueLatest(block: () -> Unit): Boolean {
@@ -757,38 +958,37 @@ internal class TimelineAudioPreviewController(
 
     private fun cancelCurrent() {
         generation.incrementAndGet()
+        playbackRuns.cancel()
         activeShuttleToken.set(0L)
         shuttleCommand.set(null)
+        restartShuttle = null
         executor.queue.clear()
         val track = synchronized(trackLock) {
             activeTrack.also { track ->
                 track?.let { quietOwner(it).retire() }
                 activeTrack = null
+                activeTrackEpoch = 0L
             }
         }
         if (track != null) {
-            val releaseQueued = !releaseExecutor.isShutdown && executeIfAccepted(
-                releaseExecutor,
-                Runnable { releaseTrackOnce(track) },
+            retireTrack(track)
+        }
+    }
+
+    private fun retireTrack(track: AudioTrack) {
+        val owner = quietOwner(track)
+        owner.retire()
+        if (!owner.claimCleanupDispatch()) return
+        fun dispatch(executor: Executor, name: String, action: () -> Unit) {
+            if (executeIfAccepted(executor, Runnable(action))) return
+            runCleanupReportingThrowable(
+                { Thread(action, name).apply { isDaemon = true }.start() },
+                { error -> owner.cleanupRejected(); reportTrackReleaseFailure(error) },
             )
-            if (!releaseQueued) {
-                // shutdown can race the isShutdown observation. Never fall back to releasing
-                // AudioTrack on the UI caller: AudioFlinger teardown can block. A one-shot
-                // daemon keeps this rare shutdown race off-thread; duplicate release is guarded.
-                runCleanupReportingThrowable(
-                    cleanup = {
-                        Thread(
-                            { releaseTrackOnce(track) },
-                            "Reverb-range-preview-release-fallback",
-                        ).apply { isDaemon = true }.start()
-                    },
-                    onFailure = { error ->
-                        quietOwner(track).cleanupRejected()
-                        Log.e("ReverbRangeAudio", "Unable to start AudioTrack release fallback", error)
-                        onTrackReleaseFailure(error)
-                    },
-                )
-            }
+        }
+        dispatch(controlExecutor, "Reverb-range-preview-control-fallback") {
+            owner.silence({ track.pause() }, { track.flush() })
+            dispatch(releaseExecutor, "Reverb-range-preview-release-fallback") { releaseTrackOnce(track) }
         }
     }
 
@@ -821,6 +1021,7 @@ internal class TimelineAudioPreviewController(
                     SHUTTLE_GRAIN_OUTPUT_SECONDS * sampleRate.toDouble() * frameBytes
                 ).roundToInt()
                 createTrack(
+                    token = token,
                     volume = 0.82f,
                     channelCount = channelCount,
                     minimumBufferBytes = grainBufferBytes,
@@ -834,8 +1035,8 @@ internal class TimelineAudioPreviewController(
             synchronized(trackLock) {
                 checkCurrent(token)
                 activeTrack = shuttleTrack
+                activeTrackEpoch = token
             }
-            if (!quietOwner(shuttleTrack).play { shuttleTrack.play() }) throw PreviewCancelled()
             val overlapFrames = (SHUTTLE_CROSSFADE_SECONDS * shuttleSampleRate.toDouble())
                 .roundToInt()
                 .coerceAtLeast(1)
@@ -849,12 +1050,11 @@ internal class TimelineAudioPreviewController(
                 var offset = 0
                 while (offset < bytes.size) {
                     checkCurrent(token)
-                    val written = shuttleTrack.write(
-                        bytes,
-                        offset,
-                        bytes.size - offset,
-                        AudioTrack.WRITE_BLOCKING,
-                    )
+                    val written = quietOwner(shuttleTrack).write {
+                        checkCurrent(token)
+                        shuttleTrack.write(bytes, offset, bytes.size - offset,
+                            if (startedCallbackSent) AudioTrack.WRITE_BLOCKING else AudioTrack.WRITE_NON_BLOCKING)
+                    } ?: throw PreviewCancelled()
                     if (written <= 0) throw IOException("Audio shuttle write failed: $written")
                     offset += written
                     // Do not pause the normal Library player until shuttle audio is actually
@@ -862,7 +1062,11 @@ internal class TimelineAudioPreviewController(
                     // before the first successful write creates a silent handoff gap on slow I/O.
                     if (!startedCallbackSent) {
                         startedCallbackSent = true
-                        if (onStarted != null) postIfCurrent(token, onStarted)
+                        // Prime one grain, then acknowledge the normal-player pause before
+                        // this track can sound. A delayed UI callback cannot mix both owners.
+                        if (onStarted != null) awaitMainHandoff(token, onStarted)
+                        checkCurrent(token)
+                        if (!quietOwner(shuttleTrack).play { shuttleTrack.play() }) throw PreviewCancelled()
                     }
                 }
             }
@@ -873,7 +1077,8 @@ internal class TimelineAudioPreviewController(
                 previousTail = ByteArray(0)
             }
 
-            fun readGrain(startSeconds: Double, endSeconds: Double, anchorSeconds: Double): ByteArray? {
+            fun readGrain(startSeconds: Double, endSeconds: Double, anchorSeconds: Double,
+                          lower: Double, upper: Double): ByteArray? {
                 val toleranceSeconds = 0.5 / shuttleSampleRate.toDouble()
                 var window = sourceWindow
                 if (
@@ -882,14 +1087,15 @@ internal class TimelineAudioPreviewController(
                     endSeconds > window.endSeconds + toleranceSeconds
                 ) {
                     val cacheStart = (anchorSeconds - SHUTTLE_CACHE_HALF_SPAN_SECONDS)
-                        .coerceAtLeast(0.0)
+                        .coerceAtLeast(lower)
                     val cacheEnd = (anchorSeconds + SHUTTLE_CACHE_HALF_SPAN_SECONDS)
-                        .coerceAtMost(source.durationSeconds)
+                        .coerceAtMost(upper)
                     checkCurrent(token)
                     val pcm = source.readPcm16(
                         cacheStart,
                         cacheEnd,
                         shuttleSampleRate,
+                        lower, upper,
                     ) ?: return null
                     checkCurrent(token)
                     val actualDuration = pcm.size.toDouble() /
@@ -925,7 +1131,9 @@ internal class TimelineAudioPreviewController(
                 }
 
                 val direction = if (rate >= 0f) 1 else -1
-                val target = command.positionSeconds.coerceIn(0.0, source.durationSeconds)
+                val lower = command.startSeconds.coerceIn(0.0, source.durationSeconds)
+                val upper = command.endSeconds.coerceIn(lower, source.durationSeconds)
+                val target = command.positionSeconds.coerceIn(lower, upper)
                 if (previousDirection != 0 && previousDirection != direction) {
                     // Crossing direction at arbitrary waveform phase sounds like chorus when the
                     // two unrelated tails are mixed. End the old grain cleanly and restart from
@@ -952,12 +1160,10 @@ internal class TimelineAudioPreviewController(
                 }
 
                 val sourceDuration = shuttleSourceGrainSeconds(rate)
-                val start = if (rate >= 0f) anchor else (anchor - sourceDuration).coerceAtLeast(0.0)
-                val end = if (rate >= 0f) {
-                    (anchor + sourceDuration).coerceAtMost(source.durationSeconds)
-                } else {
-                    anchor
-                }
+                val start = if (rate >= 0f) minOf(anchor, upper - sourceDuration).coerceAtLeast(lower)
+                    else (anchor - sourceDuration).coerceAtLeast(lower)
+                val end = if (rate >= 0f) (start + sourceDuration).coerceAtMost(upper)
+                    else maxOf(anchor, lower + sourceDuration).coerceAtMost(upper)
                 if (end <= start) {
                     finishPendingTail()
                     previousAnchorSeconds = null
@@ -965,7 +1171,7 @@ internal class TimelineAudioPreviewController(
                     continue
                 }
 
-                val grain = readGrain(start, end, anchor)
+                val grain = readGrain(start, end, anchor, lower, upper)
                 if (grain == null) {
                     finishPendingTail()
                     previousAnchorSeconds = null
@@ -976,8 +1182,8 @@ internal class TimelineAudioPreviewController(
                 val accelerated = transformShuttlePcm16(grain, rate, channelCount)
                 val acceleratedFrames = accelerated.size / frameBytes
                 val completedAnchor = shuttleAnchorAfterGrain(
-                    anchor, start, end, source.durationSeconds, rate,
-                )
+                    anchor - lower, start - lower, end - lower, upper - lower, rate,
+                ) + lower
                 if (acceleratedFrames <= 2) {
                     finishPendingTail()
                     write(windowShuttlePcm16(accelerated, acceleratedFrames / 2, channelCount))
@@ -997,7 +1203,7 @@ internal class TimelineAudioPreviewController(
                 previousTail = blended.tail
                 previousAnchorSeconds = completedAnchor
                 write(blended.output)
-                if (completedAnchor != anchor) {
+                if (completedAnchor != anchor || rate >= 0f && end >= upper || rate < 0f && start <= lower) {
                     // This grain consumed the remaining source. Emit its tail once and
                     // remember the boundary so later endpoint updates cannot replay it.
                     finishPendingTail()
@@ -1018,9 +1224,9 @@ internal class TimelineAudioPreviewController(
             activeShuttleToken.compareAndSet(token, 0L)
             if (track != null) {
                 synchronized(trackLock) {
-                    if (activeTrack === track) activeTrack = null
+                    if (activeTrack === track) { activeTrack = null; activeTrackEpoch = 0L }
                 }
-                releaseTrackOnce(track)
+                retireTrack(track)
             }
             runCleanupReportingThrowable(
                 cleanup = source::close,
@@ -1031,60 +1237,83 @@ internal class TimelineAudioPreviewController(
 
     private fun stream(
         token: Long,
-        snapshot: ReverbService.TimelineSnapshot,
-        startSeconds: Double,
-        endSeconds: Double,
+        sourceFactory: () -> PreviewPcmStream,
         volume: Float,
         samplePlaybackHead: Boolean,
         onProgress: ((Double) -> Unit)?,
         onStarted: () -> Unit,
         onFinished: () -> Unit,
         onError: ((Throwable) -> Unit)?,
+        onClockSample: ((PreviewPlaybackSample) -> Unit)? = null,
     ) {
-        var child: PersistentAudioChunkStore.RangeLease? = null
+        var source: PreviewPcmStream? = null
         var track: AudioTrack? = null
         var playbackFailure: Throwable? = null
         var trackReleaseFailure: Throwable? = null
         var startedCallbackSent = false
         try {
             checkCurrent(token)
-            child = snapshot.acquireRange(startSeconds, endSeconds)
-                ?: throw IOException("No audio available for preview")
+            val opened = sourceFactory()
+            source = opened
             checkCurrent(token)
-            val channelCount = child.maximumChannelCount()
+            val channelCount = opened.channelCount
+            val sampleRate = opened.sampleRate
+            val startSeconds = opened.startSeconds
+            val endSeconds = opened.endSeconds
             val frameBytes = pcm16FrameBytes(channelCount)
-            val batchBytes = PREVIEW_FRAMES_PER_BATCH * frameBytes
+            val batchBytes = (sampleRate / 20).coerceAtLeast(1) * frameBytes
             track = createTrack(
-                volume,
+                token, volume,
                 channelCount = channelCount,
+                sampleRate = sampleRate,
+                minimumBufferBytes = batchBytes,
+                lowLatency = true,
                 onConfigurationReleaseFailure = { trackReleaseFailure = it },
             )
             check(runBlocking { previewQuietCoordinator.awaitQuiet() }) { "Previous audio preview could not be silenced" }
             synchronized(trackLock) {
                 checkCurrent(token)
                 activeTrack = track
+                activeTrackEpoch = token
             }
             if (!quietOwner(track).play { track.play() }) throw PreviewCancelled()
             val playbackHead = PlaybackHeadFrameCounter()
 
             var lastProgressAt = 0L
-            val readResult = child.readNormalized(
-                targetSampleRate = PREVIEW_SAMPLE_RATE,
-                targetChannelCount = channelCount,
-                targetSampleFormat = PcmSampleFormat.PCM_16,
-                maximumOutputFrames = Long.MAX_VALUE,
-                // Feed each 50 ms quantum before converting the next, rather than letting
-                // a 64 KiB conversion burst exhaust the playing track's queued audio.
-                maximumOutputBatchBytes = batchBytes,
-            ) { array, offset, count ->
+            var submittedFrames = 0L
+            val latestProgress = AtomicReference<PreviewPlaybackSample?>(null)
+            val progressPosted = java.util.concurrent.atomic.AtomicBoolean(false)
+            fun publishPosition(played: Long) {
+                val sample = PreviewPlaybackSample(
+                    (startSeconds + played.toDouble() / sampleRate).coerceAtMost(endSeconds),
+                    SystemClock.elapsedRealtime(),
+                    (startSeconds + submittedFrames.toDouble() / sampleRate).coerceAtMost(endSeconds),
+                )
+                latestProgress.set(sample)
+                if (progressPosted.compareAndSet(false, true)) postIfCurrent(token) {
+                    // Reopen posting first: a concurrent terminal sample is consumed here
+                    // or queues its own delivery before the worker posts onFinished.
+                    progressPosted.set(false)
+                    val latest = latestProgress.getAndSet(null)
+                    if (latest != null) {
+                        onProgress?.invoke(latest.positionSeconds)
+                        onClockSample?.invoke(latest)
+                    }
+                }
+            }
+            val targetFrames = opened.read { array, offset, count ->
                 var position = offset
                 val limit = offset + count
                 while (position < limit) {
                     checkCurrent(token)
                     val requested = minOf(batchBytes, limit - position)
-                    val written = track.write(array, position, requested, AudioTrack.WRITE_BLOCKING)
+                    val written = quietOwner(track).write {
+                        checkCurrent(token)
+                        track.write(array, position, requested, AudioTrack.WRITE_BLOCKING)
+                    } ?: throw PreviewCancelled()
                     if (written <= 0) throw IOException("Audio preview write failed: $written")
                     position += written
+                    submittedFrames += written / frameBytes
                     if (!startedCallbackSent) {
                         startedCallbackSent = true
                         postIfCurrent(token, onStarted)
@@ -1094,28 +1323,23 @@ internal class TimelineAudioPreviewController(
                         if (now - lastProgressAt >= PREVIEW_PROGRESS_INTERVAL_MILLIS) {
                             lastProgressAt = now
                             // Long playback must unwrap the head even without a progress observer.
-                            val played = playbackHead.update(track.playbackHeadPosition)
-                            if (onProgress != null) {
-                                postIfCurrent(token) {
-                                    onProgress(
-                                        (startSeconds + played.toDouble() / PREVIEW_SAMPLE_RATE.toDouble())
-                                            .coerceAtMost(endSeconds),
-                                    )
-                                }
-                            }
+                            val played = playbackHead.update(quietOwner(track).read { track.playbackHeadPosition } ?: throw PreviewCancelled())
+                            publishPosition(played)
                         }
                     }
                 }
                 count
             }
 
-            val targetFrames = readResult.sampleBytes / frameBytes
             var lastPlayedFrames = -1L
             var lastPlaybackAdvanceAt = SystemClock.elapsedRealtime()
             while (true) {
                 checkCurrent(token)
-                val played = playbackHead.update(track.playbackHeadPosition)
-                if (played >= targetFrames) break
+                val played = playbackHead.update(quietOwner(track).read { track.playbackHeadPosition } ?: throw PreviewCancelled())
+                if (played >= targetFrames) {
+                    if (samplePlaybackHead) publishPosition(played)
+                    break
+                }
                 val now = SystemClock.elapsedRealtime()
                 if (played > lastPlayedFrames) {
                     lastPlayedFrames = played
@@ -1123,50 +1347,82 @@ internal class TimelineAudioPreviewController(
                 } else if (previewPlaybackDrainStalled(lastPlaybackAdvanceAt, now)) {
                     throw IOException("Audio preview playback stalled")
                 }
-                if (samplePlaybackHead && onProgress != null) {
-                    postIfCurrent(token) {
-                        onProgress(
-                            (startSeconds + played.toDouble() / PREVIEW_SAMPLE_RATE.toDouble())
-                                .coerceAtMost(endSeconds),
-                        )
-                    }
-                }
+                if (samplePlaybackHead) publishPosition(played)
                 Thread.sleep(16L)
             }
             checkCurrent(token)
+            playbackRuns.finish(token)
             postIfCurrent(token, onFinished)
         } catch (_: PreviewCancelled) {
             Unit
         } catch (error: Exception) {
             playbackFailure = error
         } finally {
-            snapshot.releaseChildRangeBestEffort(child)
-            if (track != null) {
-                quietOwner(track).retire()
-                synchronized(trackLock) {
-                    if (activeTrack === track) activeTrack = null
+            playbackRuns.finish(token)
+            try {
+                source?.close()
+            } catch (error: Throwable) {
+                val primary = playbackFailure
+                if (primary != null && primary !== error) {
+                    primary.addSuppressed(error)
+                    throw primary
                 }
-                releaseTrackOnce(track) { trackReleaseFailure = it }
+                throw error
+            } finally {
+                if (track != null) {
+                    quietOwner(track).retire()
+                    synchronized(trackLock) {
+                        if (activeTrack === track) { activeTrack = null; activeTrackEpoch = 0L }
+                    }
+                    retireTrack(track)
+                }
+                // Configuration cleanup has completed and stays attached to its failure.
+                // Terminal track cleanup runs independently and reports process feedback.
+                completeRangePreviewFailure(
+                    playbackFailure = playbackFailure,
+                    releaseFailure = trackReleaseFailure,
+                    isCurrent = { isCurrent(token) },
+                    post = { action -> mainHandler.post { action() } },
+                    onPlaybackFailure = onError,
+                    onReleaseFailure = ::reportTrackReleaseFailure,
+                )
             }
-            // Deliver after cleanup so one explicit playback failure retains its release
-            // provenance. Superseded playback stays quiet; cleanup-only failures remain visible.
-            completeRangePreviewFailure(
-                playbackFailure = playbackFailure,
-                releaseFailure = trackReleaseFailure,
-                isCurrent = { isCurrent(token) },
-                post = { action -> mainHandler.post { action() } },
-                onPlaybackFailure = onError,
-                onReleaseFailure = ::reportTrackReleaseFailure,
-            )
         }
     }
 
     private fun createTrack(
+        token: Long,
         volume: Float,
         channelCount: Int = 1,
         minimumBufferBytes: Int = PREVIEW_FRAMES_PER_BATCH * pcm16FrameBytes(channelCount) * 4,
         lowLatency: Boolean = false,
         sampleRate: Int = PREVIEW_SAMPLE_RATE,
+        onConfigurationReleaseFailure: (Throwable) -> Unit,
+    ): AudioTrack {
+        while (!trackSlots.tryAcquire(16L, TimeUnit.MILLISECONDS)) {
+            checkCurrent(token)
+            if (failedTrackReleases.get() >= 3) throw IOException("Audio preview resources could not be released")
+        }
+        var releaseFailed = false
+        try {
+            checkCurrent(token)
+            return createConfiguredTrack(volume, channelCount, minimumBufferBytes, lowLatency, sampleRate) { error ->
+                releaseFailed = true
+                failedTrackReleases.incrementAndGet()
+                onConfigurationReleaseFailure(error)
+            }
+        } catch (error: Throwable) {
+            if (!releaseFailed) trackSlots.release()
+            throw error
+        }
+    }
+
+    private fun createConfiguredTrack(
+        volume: Float,
+        channelCount: Int,
+        minimumBufferBytes: Int,
+        lowLatency: Boolean,
+        sampleRate: Int,
         onConfigurationReleaseFailure: (Throwable) -> Unit,
     ): AudioTrack {
         val channelMask = playbackChannelMask(channelCount)
@@ -1217,12 +1473,16 @@ internal class TimelineAudioPreviewController(
         track: AudioTrack,
         onFailure: (Throwable) -> Unit = ::reportTrackReleaseFailure,
     ) {
-        quietOwner(track).release(
+        val owner = quietOwner(track)
+        val released = owner.release(
             pause = { track.pause() },
             flush = { track.flush() },
             release = { track.release() },
             onFailure = { error -> runCleanupReportingThrowable({ onFailure(error) }, {}) },
         )
+        if (released) {
+            if (owner.nativeReleaseSucceeded) trackSlots.release() else failedTrackReleases.incrementAndGet()
+        }
     }
 
     private fun reportTrackReleaseFailure(error: Throwable) {
@@ -1233,6 +1493,12 @@ internal class TimelineAudioPreviewController(
     private fun checkCurrent(token: Long) {
         if (!isCurrent(token) || Thread.currentThread().isInterrupted) throw PreviewCancelled()
     }
+
+    private fun awaitMainHandoff(token: Long, action: () -> Unit) = awaitPreviewPlaybackHandoff(
+        checkCurrent = { checkCurrent(token) },
+        post = { block -> mainHandler.post { block() } },
+        action = action,
+    )
 
     private fun isCurrent(token: Long): Boolean = !closed && generation.get() == token
 

@@ -26,7 +26,8 @@ internal class OnboardingPermissionRequestSequence(
     fun claimNext(status: OnboardingPermissionStatus, resumed: Boolean): OnboardingPermission? {
         if (!resumed || !status.interactionEnabled || pending != null) return null
         val permission = requestOrder.firstOrNull {
-            attemptedMask and bit(it) == 0 && missing(status, it)
+            attemptedMask and bit(it) == 0 && missing(status, it) &&
+                (it != OnboardingPermission.ALL_FILES || !status.recoveryAllowed)
         } ?: return null
         claim(permission)
         return permission

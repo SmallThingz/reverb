@@ -236,7 +236,8 @@ private class CaptureClearProgressBody(
             }
         }
         when (val value = progress) {
-            is SettingsCalibrationProgressView -> value.bind(checkNotNull(fraction), next)
+            is SettingsCalibrationProgressView -> value.bind(checkNotNull(fraction), next,
+                status.operationId, status.phase.isTerminal)
             is ReverbIndeterminateLinearProgressView -> value.bindEnvironment(next)
         }
         val message = if (status.totalBytes > 0L) context.getString(R.string.clear_buffer_progress_detail,

@@ -2,7 +2,6 @@ package app.smallthingz.reverb
 
 import android.app.Application
 import android.app.Instrumentation
-import android.media.AudioTrack
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import android.os.Handler
@@ -17,6 +16,11 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.math.roundToLong
 
 /** Optional QA composition only. Standalone preview retains its original ownership and teardown. */
 internal interface CapturePreviewWorkload {
@@ -79,9 +83,11 @@ internal fun verifyRangePreviewCase(
     var snapshot: ReverbService.TimelineSnapshot? = null
     var preview: TimelineAudioPreviewController? = null
     var worker: ExecutorService? = null
+    var controlWorker: ExecutorService? = null
     var releaseWorker: ExecutorService? = null
     var submitted = false
     var workerDrained = false
+    var controlDrained = false
     var releaseDrained = false
     var mainDrained = false
     var workloadReleased = workload == null
@@ -120,7 +126,7 @@ internal fun verifyRangePreviewCase(
     var sampleCount = 0
     var sampleOverflow = false
     var unavailableSamples = 0
-    var observedTrack: AudioTrack? = null
+    var observedTrack: Any? = null
     var trackChanges = 0
     var trackMetadata: JSONObject? = null
     try {
@@ -165,47 +171,37 @@ internal fun verifyRangePreviewCase(
         val controller = TimelineAudioPreviewController(::callbackFailed)
         preview = controller
         // onFinished precedes stream's finally; callbacks alone cannot authorize store close.
-        // Resolve QA-only fences and the volatile track field before submission.
-        // trackLock does not cover native release; never hold it across getter calls.
-        val activeTrackField = TimelineAudioPreviewController::class.java.getDeclaredField("activeTrack")
-            .apply { isAccessible = true }
+        // Only immutable observations leave the controller's native-owner lifetime gate.
         fun observeTrack() {
-            val track = activeTrackField.get(controller) as? AudioTrack ?: return
             val before = SystemClock.elapsedRealtimeNanos()
-            try {
-                val head = track.playbackHeadPosition.toLong() and 0xffff_ffffL
-                val underruns = track.underrunCount
-                val state = track.playState
-                val after = SystemClock.elapsedRealtimeNanos()
-                if (activeTrackField.get(controller) !== track || track.state != AudioTrack.STATE_INITIALIZED) {
-                    unavailableSamples++
-                    return
-                }
-                if (observedTrack !== track) {
-                    if (observedTrack != null) trackChanges++
-                    observedTrack = track
-                    val route = track.routedDevice
-                    trackMetadata = JSONObject().put("sample_rate", track.sampleRate)
-                        .put("channels", track.channelCount).put("buffer_frames", track.bufferSizeInFrames)
-                        .put("capacity_frames", track.bufferCapacityInFrames).put("session_id", track.audioSessionId)
-                        .put("route_id", route?.id ?: JSONObject.NULL).put("route_type", route?.type ?: JSONObject.NULL)
-                }
-                if (sampleCount < sampleTimes.size) {
-                    sampleTimes[sampleCount] = before
-                    sampleCosts[sampleCount] = after - before
-                    sampleHeads[sampleCount] = head
-                    sampleUnderruns[sampleCount] = underruns
-                    sampleStates[sampleCount] = state
-                    sampleCount++
-                } else sampleOverflow = true
-            } catch (_: IllegalStateException) {
-                // The controller owns release; a racing observation is not authority to touch it again.
+            val track = controller.observeTrack()
+            val after = SystemClock.elapsedRealtimeNanos()
+            if (track == null) {
                 unavailableSamples++
+                return
             }
+            if (observedTrack !== track.identity) {
+                if (observedTrack != null) trackChanges++
+                observedTrack = track.identity
+                trackMetadata = JSONObject().put("sample_rate", track.sampleRate)
+                    .put("channels", track.channelCount).put("buffer_frames", track.bufferSizeInFrames)
+                    .put("capacity_frames", track.bufferCapacityInFrames).put("session_id", track.audioSessionId)
+                    .put("route_id", JSONObject.NULL).put("route_type", JSONObject.NULL)
+                    .put("observation", "immutable lifetime-guarded controller sample; route not sampled")
+            }
+            if (sampleCount < sampleTimes.size) {
+                sampleTimes[sampleCount] = before
+                sampleCosts[sampleCount] = after - before
+                sampleHeads[sampleCount] = track.playbackHeadFrames
+                sampleUnderruns[sampleCount] = track.underrunCount
+                sampleStates[sampleCount] = track.playState
+                sampleCount++
+            } else sampleOverflow = true
         }
         fun executor(name: String) = TimelineAudioPreviewController::class.java.getDeclaredField(name)
             .apply { isAccessible = true }.get(controller) as ExecutorService
         worker = executor("executor")
+        controlWorker = executor("controlExecutor")
         releaseWorker = executor("releaseExecutor")
         result.put("submission_uptime_ms", SystemClock.uptimeMillis())
         File(evidence, "result.json").writeText(result.toString(2))
@@ -233,6 +229,8 @@ internal fun verifyRangePreviewCase(
         observeTrack()
         checkNotNull(worker).submit {}.get(15, TimeUnit.SECONDS)
         workerDrained = true
+        checkNotNull(controlWorker).submit {}.get(15, TimeUnit.SECONDS)
+        controlDrained = true
         checkNotNull(releaseWorker).submit {}.get(15, TimeUnit.SECONDS)
         releaseDrained = true
         awaitMain()
@@ -281,7 +279,11 @@ internal fun verifyRangePreviewCase(
             checkNotNull(worker).submit {}.get(15, TimeUnit.SECONDS)
             workerDrained = true
         }
-        if (workerDrained && !releaseDrained) cleanup {
+        if (workerDrained && !controlDrained) cleanup {
+            controlWorker?.submit {}?.get(15, TimeUnit.SECONDS)
+            controlDrained = true
+        }
+        if (controlDrained && !releaseDrained) cleanup {
             releaseWorker?.submit {}?.get(15, TimeUnit.SECONDS)
             releaseDrained = true
         }
@@ -292,13 +294,14 @@ internal fun verifyRangePreviewCase(
             cleanup { snapshot?.close(); parentReleased = true }
             if (workload == null) cleanup { source?.close() }
             else cleanup {
-                check(parentReleased && releaseDrained && mainDrained) { "Preview reader/release quiescence unknown" }
+                check(parentReleased && controlDrained && releaseDrained && mainDrained) { "Preview reader/release quiescence unknown" }
                 workload.afterReadersReleased()
                 workloadReleased = true
             }
         } else cleanup { error("Preview worker quiescence unknown; parent/store left open and PCM retained") }
         cleanup { synchronized(callbackLock) { callbackFailure }?.let { throw it } }
-        result.put("worker_drained", workerDrained).put("release_worker_drained", releaseDrained)
+        result.put("worker_drained", workerDrained).put("control_worker_drained", controlDrained)
+            .put("release_worker_drained", releaseDrained)
             .put("main_callbacks_drained", mainDrained)
             .put("started_callbacks", if (mainDrained) started else JSONObject.NULL)
             .put("finished_callbacks", if (mainDrained) finished else JSONObject.NULL)
@@ -392,4 +395,427 @@ internal fun verifyRangePreviewCase(
     report.append("PASS range_preview_continuity ").append(case.name)
         .append(" native counters, transport callbacks and source preservation; audible continuity unverified\n")
     return File(evidence, "result.json")
+}
+
+/** Explicit short selectors only; the original three 16-second cases are never called here. */
+internal fun verifyShortRangePreview(instrumentation: Instrumentation, report: StringBuilder, selector: String) {
+    val context = instrumentation.targetContext
+    check(context.packageName == "app.smallthingz.reverb.uitheme.reliability" &&
+        context.applicationContext.javaClass == Application::class.java) {
+        "Short preview fixtures require the isolated current-QA package with plain Application"
+    }
+    check(selector in setOf("range_preview_short_end", "range_preview_short_controls", "range_preview_short_retirement"))
+    check(Looper.myLooper() != Looper.getMainLooper())
+    val evidence = File(context.filesDir, "$selector-${UUID.randomUUID()}")
+    check(evidence.mkdir())
+    val root = File(evidence, "synthetic-pcm")
+    check(root.mkdir())
+    val result = JSONObject().put("selector", selector).put("passed", false)
+        .put("source_duration_ms", 1_000).put("source_sample_rate", 48_000)
+        .put("source_channels", 1).put("source_format", "PCM_16")
+        .put("production_head", "BOUND_BY_HOST_ARTIFACT_RECEIPT")
+        .put("microphone_or_capture_service", "NOT_USED")
+        .put("audible_quality", "UNVERIFIED").put("hardware_pipeline_latency", "UNMEASURED")
+        .put("source_directory", root.absolutePath).put("source_pcm_preserved", false)
+    val resultFile = File(evidence, "result.json")
+    resultFile.writeText(result.toString(2))
+    report.append("PARITY_EVIDENCE ").append(evidence.name).append("/result.json\n")
+    val failures = java.util.concurrent.ConcurrentLinkedQueue<Throwable>()
+    fun callbackFailure(error: Throwable) { failures.add(error) }
+    fun <T> onMain(action: () -> T): T {
+        val task = FutureTask<T> { action() }
+        check(Handler(Looper.getMainLooper()).post(task))
+        return task.get(15, TimeUnit.SECONDS)
+    }
+    class Run(val label: String, val start: Double, val end: Double) {
+        val retired = AtomicBoolean(false)
+        val started = AtomicInteger()
+        val finished = AtomicInteger()
+        val errors = AtomicInteger()
+        val staleCallbacks = AtomicInteger()
+        val startedAt = AtomicLong()
+        val latest = AtomicReference<PreviewPlaybackSample?>(null)
+        val progress = JSONArray() // Main writes; read only after the Main fence.
+        var maximumHead = 0L // Instrumentation thread only.
+        var nativeSamples = 0
+    }
+    val runs = ArrayList<Run>()
+    val currentRun = AtomicReference<Run?>(null)
+    val nativeSamples = JSONArray()
+    val identities = java.util.IdentityHashMap<Any, Int>()
+    var source: PersistentAudioChunkStore? = null
+    var snapshot: ReverbService.TimelineSnapshot? = null
+    var preview: TimelineAudioPreviewController? = null
+    var worker: ExecutorService? = null
+    var controlWorker: ExecutorService? = null
+    var releaseWorker: ExecutorService? = null
+    var closed = false
+    var workerDrained = false
+    var controlDrained = false
+    var releaseDrained = false
+    var mainDrained = false
+    var observer: Thread? = null
+    val observeConcurrently = AtomicBoolean(false)
+    val concurrentObservations = AtomicInteger()
+    val successfulConcurrentObservations = AtomicInteger()
+    val closedForObserver = AtomicBoolean(false)
+    val postCloseNullObserved = CountDownLatch(1)
+    var failure: Throwable? = null
+    var sourceDigest: ByteArray? = null
+    try {
+        val pcm = ByteArray(48_000 * 2)
+        val encoded = ByteBuffer.wrap(pcm).order(ByteOrder.LITTLE_ENDIAN)
+        repeat(48_000) { frame -> encoded.putShort((((frame % 240) - 120) * 24).toShort()) }
+        val expectedDigest = MessageDigest.getInstance("SHA-256").digest(pcm)
+        sourceDigest = expectedDigest
+        result.put("source_pcm_sha256", expectedDigest.toHexString())
+        val store = PersistentAudioChunkStore(root, overwriteOldest = false)
+        source = store
+        store.configure(RetentionMode.SIZE, 2_097_152L, 48_000, 1, PcmSampleFormat.PCM_16)
+        check(store.append(pcm, 0, pcm.size) == pcm.size)
+        store.sealActiveChunk()
+        check(kotlin.math.abs(store.durationSeconds() - 1.0) < 1.0 / 48_000)
+        val parent = ReverbService.TimelineSnapshot(checkNotNull(store.acquireRange(0.0, 1.0)), ::callbackFailure)
+        snapshot = parent
+        val controller = TimelineAudioPreviewController(::callbackFailure)
+        preview = controller
+        // Executor reflection exposes only QA fences, never an AudioTrack or its native lifetime.
+        fun executor(name: String) = TimelineAudioPreviewController::class.java.getDeclaredField(name)
+            .apply { isAccessible = true }.get(controller) as ExecutorService
+        worker = executor("executor"); controlWorker = executor("controlExecutor"); releaseWorker = executor("releaseExecutor")
+        fun observe() {
+            val sample = controller.observeTrack() ?: return
+            check(sample.sampleRate == 24_000 && sample.channelCount == 1)
+            val identity = identities[sample.identity] ?: (identities.size + 1).also { identities[sample.identity] = it }
+            val run = checkNotNull(currentRun.get()) { "Track remained published without a current fixture command" }
+            val expectedFrames = ((run.end - run.start) * sample.sampleRate).roundToLong()
+            check(sample.playbackHeadFrames in 0L..expectedFrames) { "Native head passed the selected frame boundary" }
+            run.maximumHead = maxOf(run.maximumHead, sample.playbackHeadFrames)
+            run.nativeSamples++
+            check(nativeSamples.length() < 4_096) { "Bounded native evidence overflow" }
+            nativeSamples.put(JSONObject().put("elapsed_ms", SystemClock.elapsedRealtime())
+                .put("run", run.label).put("identity", identity).put("epoch", sample.epoch)
+                .put("head_frames", sample.playbackHeadFrames).put("expected_frames", expectedFrames)
+                .put("sample_rate", sample.sampleRate).put("play_state", sample.playState)
+                .put("underruns", sample.underrunCount).put("buffer_frames", sample.bufferSizeInFrames))
+        }
+        fun await(label: String, condition: () -> Boolean) {
+            val deadline = SystemClock.elapsedRealtime() + 10_000L
+            while (!condition()) {
+                observe()
+                failures.peek()?.let { throw it }
+                check(SystemClock.elapsedRealtime() < deadline) { "$label timed out" }
+                Thread.sleep(4L)
+            }
+        }
+        fun launch(label: String, start: Double, end: Double): Run {
+            val run = Run(label, start, end)
+            runs.add(run)
+            fun callback(action: () -> Unit) {
+                if (run.retired.get()) { run.staleCallbacks.incrementAndGet(); return }
+                try { action() } catch (error: Throwable) { callbackFailure(error) }
+            }
+            onMain {
+                currentRun.get()?.retired?.set(true)
+                currentRun.set(run)
+                check(controller.play(parent, start, end,
+                    onStarted = { callback { run.started.incrementAndGet(); run.startedAt.set(SystemClock.elapsedRealtime()) } },
+                    onFinished = { callback { run.finished.incrementAndGet() } },
+                    onError = { error -> callback { run.errors.incrementAndGet(); callbackFailure(error) } },
+                    onClockSample = { sample -> callback {
+                        val previous = run.latest.get()?.positionSeconds ?: start
+                        check(sample.positionSeconds >= previous && sample.positionSeconds <= end + 0.000001)
+                        check(sample.queuedUntilSeconds >= sample.positionSeconds && sample.queuedUntilSeconds <= end + 0.000001)
+                        check(sample.sampledAtElapsedRealtimeMillis <= SystemClock.elapsedRealtime())
+                        check(run.progress.length() < 512) { "Bounded progress evidence overflow" }
+                        run.latest.set(sample)
+                        run.progress.put(JSONObject().put("sampled_elapsed_ms", sample.sampledAtElapsedRealtimeMillis)
+                            .put("delivered_elapsed_ms", SystemClock.elapsedRealtime())
+                            .put("source_seconds", sample.positionSeconds).put("queued_until_seconds", sample.queuedUntilSeconds))
+                    } },
+                )) { "Short preview submission rejected" }
+            }
+            return run
+        }
+        fun awaitRunning(run: Run) = await("${run.label} native start") {
+            run.started.get() == 1 && run.maximumHead > 0 && controller.playbackActive
+        }
+        fun awaitFinished(run: Run) {
+            await("${run.label} finish") { run.finished.get() == 1 }
+            onMain {}
+            check(run.started.get() == 1 && run.errors.get() == 0 && run.nativeSamples > 0)
+            check(!controller.playbackActive) { "Worker still active after finished callback" }
+            val last = checkNotNull(run.latest.get()) { "Actual-head clock sample missing" }
+            check(kotlin.math.abs(last.positionSeconds - run.end) <= 1.0 / 24_000) {
+                "Terminal consumed-head sample did not reach selected end"
+            }
+        }
+        when (selector) {
+            "range_preview_short_end" -> {
+                val run = launch("selected-end", .125, .875)
+                awaitRunning(run)
+                val entered = CountDownLatch(1)
+                val resumeMain = CountDownLatch(1)
+                val releasedNormally = AtomicBoolean(false)
+                check(Handler(Looper.getMainLooper()).post {
+                    entered.countDown()
+                    releasedNormally.set(resumeMain.await(2, TimeUnit.SECONDS))
+                })
+                try {
+                    check(entered.await(2, TimeUnit.SECONDS))
+                    await("native end while Main callback is delayed") { !controller.playbackActive }
+                    check(run.finished.get() == 0) { "Main was not delayed across the native end" }
+                    result.put("native_end_independent_of_main_callback", true)
+                } finally { resumeMain.countDown() }
+                awaitFinished(run)
+                check(releasedNormally.get()) { "Main-delay probe exceeded its finite two-second hold" }
+            }
+            "range_preview_short_controls" -> {
+                val first = launch("play-before-pause", .05, .95)
+                awaitRunning(first)
+                onMain { first.retired.set(true); controller.stop(); currentRun.set(null) }
+                check(!controller.playbackActive && controller.observeTrack() == null)
+                val seek = launch("seek-after-pause", .60, .90)
+                awaitFinished(seek)
+                val shuttleCommands = JSONArray()
+                val shuttleSamples = JSONArray()
+                result.put("shuttle_commands", shuttleCommands).put("shuttle_samples", shuttleSamples)
+                    .put("stable_shuttle_head_advanced", false)
+                var phase = "initial"
+                var phaseCommandAt = SystemClock.elapsedRealtime()
+                var lastShuttleIdentity: Any? = null
+                var lastShuttleHead = 0L
+                var setupObservations = 0
+                var advancingSamples = 0
+                fun observeShuttle(): PreviewTrackObservation? {
+                    val sample = controller.observeTrack() ?: return null
+                    check(sample.channelCount == 1 && sample.sampleRate in listOf(48_000, 96_000))
+                    val identity = identities[sample.identity] ?: (identities.size + 1).also { identities[sample.identity] = it }
+                    val changed = lastShuttleIdentity !== sample.identity
+                    if (changed) { setupObservations++; lastShuttleHead = 0L }
+                    if (sample.playbackHeadFrames > lastShuttleHead) advancingSamples++
+                    result.put("observed_shuttle_setups", setupObservations)
+                        .put("shuttle_advancing_samples", advancingSamples).put("last_shuttle_phase", phase)
+                    check(shuttleSamples.length() < 4_096)
+                    shuttleSamples.put(JSONObject().put("phase", phase).put("elapsed_ms", SystemClock.elapsedRealtime())
+                        .put("since_command_ms", SystemClock.elapsedRealtime() - phaseCommandAt)
+                        .put("identity", identity).put("epoch", sample.epoch).put("head_frames", sample.playbackHeadFrames)
+                        .put("sample_rate", sample.sampleRate).put("underruns", sample.underrunCount)
+                        .put("new_observed_owner", changed))
+                    lastShuttleIdentity = sample.identity
+                    lastShuttleHead = sample.playbackHeadFrames
+                    return sample
+                }
+                fun awaitShuttleHead(label: String, condition: (PreviewTrackObservation) -> Boolean): PreviewTrackObservation {
+                    val deadline = SystemClock.elapsedRealtime() + 10_000L
+                    while (true) {
+                        val sample = observeShuttle()
+                        if (sample != null && condition(sample)) return sample
+                        failures.peek()?.let { throw it }
+                        check(SystemClock.elapsedRealtime() < deadline) { "$label: no advancing native output before fixture deadline" }
+                        Thread.sleep(4L)
+                    }
+                }
+                onMain {
+                    seek.retired.set(true); currentRun.set(null)
+                    controller.startShuttle(parent, .4, .5f, .30, .70)
+                }
+                val initial = awaitShuttleHead("Initial shuttle") { it.playbackHeadFrames > 0L }
+                // This interior +0.5x command admits one 24ms output grain: its body plus
+                // the once-emitted pending tail. Drain ALL of it before testing new output.
+                val initialGrainFrames = initial.sampleRate.toLong() * 24L / 1_000L
+                val drained = awaitShuttleHead("Initial shuttle grain drain") {
+                    check(it.identity === initial.identity && it.epoch == initial.epoch)
+                    check(it.playbackHeadFrames <= initialGrainFrames) { "Unchanged initial target replayed audio" }
+                    it.playbackHeadFrames == initialGrainFrames
+                }
+                val initialHead = drained.playbackHeadFrames
+                result.put("initial_grain_output_frame_budget", initialGrainFrames)
+                    .put("initial_drained_head_frames", initialHead)
+                repeat(4) { index ->
+                    phase = "expand-$index"; phaseCommandAt = SystemClock.elapsedRealtime()
+                    val lower = (300 - (index + 1) * 25) / 1_000.0
+                    val upper = (700 + (index + 1) * 25) / 1_000.0
+                    shuttleCommands.put(JSONObject().put("phase", phase).put("elapsed_ms", phaseCommandAt)
+                        .put("start_seconds", lower).put("end_seconds", upper))
+                    onMain { controller.updateShuttle(.41 + index * .01, .5f, lower, upper) }
+                    val until = SystemClock.elapsedRealtime() + 33L
+                    while (SystemClock.elapsedRealtime() < until) {
+                        observeShuttle()?.let { sample ->
+                            check(sample.identity === initial.identity && sample.epoch == initial.epoch) {
+                                "Same-direction bounds expansion replaced the native owner"
+                            }
+                        }
+                        Thread.sleep(4L)
+                    }
+                }
+                val expanded = awaitShuttleHead("Expanded shuttle") {
+                    check(it.identity === initial.identity && it.epoch == initial.epoch)
+                    it.playbackHeadFrames > initialHead
+                }
+                result.put("expansion_retained_native_identity", true)
+                    .put("expansion_head_frames_advanced", expanded.playbackHeadFrames - initialHead)
+                val advancingBeforeContractions = advancingSamples
+                repeat(8) { index ->
+                    phase = "contract-$index"; phaseCommandAt = SystemClock.elapsedRealtime()
+                    val lower = (200 + (index + 1) * 20) / 1_000.0
+                    val upper = (800 - (index + 1) * 20) / 1_000.0
+                    shuttleCommands.put(JSONObject().put("phase", phase).put("elapsed_ms", phaseCommandAt)
+                        .put("start_seconds", lower).put("end_seconds", upper))
+                    onMain { controller.updateShuttle(.44 + index * .005, .5f, lower, upper) }
+                    val until = SystemClock.elapsedRealtime() + 33L
+                    while (SystemClock.elapsedRealtime() < until) { observeShuttle(); Thread.sleep(4L) }
+                }
+                val contractionAdvances = advancingSamples - advancingBeforeContractions
+                result.put("contraction_advancing_samples", contractionAdvances)
+                    .put("contraction_window_had_no_observed_output_progress", contractionAdvances == 0)
+                phase = "stable-last-bounds"; phaseCommandAt = SystemClock.elapsedRealtime()
+                val beforeStable = controller.observeTrack()
+                onMain { controller.updateShuttle(.50, .5f, .36, .64) }
+                val stableHead = awaitShuttleHead("Stable last shuttle bounds") {
+                    it.playbackHeadFrames > if (beforeStable != null && it.identity === beforeStable.identity)
+                        beforeStable.playbackHeadFrames else 0L
+                }
+                check(stableHead.identity !== initial.identity && stableHead.epoch > initial.epoch) {
+                    "Contracted bounds retained the pre-contraction native owner"
+                }
+                result.put("stable_shuttle_head_advanced", true)
+                    .put("stable_shuttle_first_advance_delay_ms", SystemClock.elapsedRealtime() - phaseCommandAt)
+                    .put("stable_shuttle_head_frames", stableHead.playbackHeadFrames)
+                    .put("observed_shuttle_setups", setupObservations)
+                    .put("shuttle_advancing_samples", advancingSamples)
+                onMain { controller.stopShuttle() }
+                check(controller.observeTrack() == null)
+                val stable = launch("stable-last-bounds", .36, .64)
+                awaitFinished(stable)
+                result.put("bounds_expansions", 4).put("bounds_contractions", 8)
+                    .put("stable_last_command_completed", true)
+                // A DOWN/UP-style play/pause pair in one Main turn must never start later.
+                val pendingStarts = AtomicInteger()
+                onMain {
+                    stable.retired.set(true)
+                    check(controller.play(parent, .1, .9, onStarted = { pendingStarts.incrementAndGet() },
+                        onFinished = { pendingStarts.incrementAndGet() }, onError = ::callbackFailure))
+                    controller.stop()
+                    currentRun.set(null)
+                }
+                checkNotNull(worker).submit {}.get(15, TimeUnit.SECONDS)
+                checkNotNull(controlWorker).submit {}.get(15, TimeUnit.SECONDS)
+                checkNotNull(releaseWorker).submit {}.get(15, TimeUnit.SECONDS)
+                onMain {}
+                check(pendingStarts.get() == 0 && !controller.playbackActive && controller.observeTrack() == null)
+                result.put("same_turn_play_pause_callbacks", pendingStarts.get())
+            }
+            "range_preview_short_retirement" -> {
+                val run = launch("retired-active-preview", .0, 1.0)
+                awaitRunning(run)
+                observeConcurrently.set(true)
+                observer = Thread({
+                    try {
+                        while (observeConcurrently.get()) {
+                            val afterClose = closedForObserver.get()
+                            val sample = controller.observeTrack()
+                            if (afterClose) {
+                                check(sample == null) { "Retired controller still exposed a native owner" }
+                                postCloseNullObserved.countDown()
+                            } else if (sample != null) {
+                                check(sample.playbackHeadFrames >= 0L)
+                                successfulConcurrentObservations.incrementAndGet()
+                            }
+                            concurrentObservations.incrementAndGet()
+                            Thread.sleep(1L)
+                        }
+                    } catch (error: Throwable) { callbackFailure(error) }
+                }, "Reverb-QA-preview-observer").also { it.start() }
+                await("concurrent live native observations") { successfulConcurrentObservations.get() >= 4 }
+                val closeHead = onMain {
+                    check(controller.playbackActive) { "Retirement probe reached an already-finished run" }
+                    val sample = checkNotNull(controller.observeTrack()) { "Retirement probe has no live native owner" }
+                    check(sample.playbackHeadFrames < 24_000L) { "Retirement probe reached source EOF" }
+                    check(controller.playbackActive) { "Retirement probe completed during native observation" }
+                    run.retired.set(true)
+                    controller.close()
+                    closed = true
+                    currentRun.set(null)
+                    closedForObserver.set(true)
+                    sample.playbackHeadFrames
+                }
+                check(!controller.playbackActive && controller.observeTrack() == null)
+                check(!onMain { controller.play(parent, .1, .9,
+                    onStarted = { callbackFailure(IllegalStateException("Closed preview started")) },
+                    onFinished = { callbackFailure(IllegalStateException("Closed preview finished")) },
+                    onError = ::callbackFailure) }) { "Closed preview accepted new playback" }
+                check(postCloseNullObserved.await(5, TimeUnit.SECONDS)) {
+                    "Concurrent observer did not acknowledge retirement"
+                }
+                observeConcurrently.set(false)
+                observer!!.join(5_000L)
+                check(!observer!!.isAlive) { "Native observation did not retire" }
+                result.put("post_close_play_rejected", true).put("close_accepted_while_playback_active", true)
+                    .put("native_head_at_accepted_close", closeHead).put("observer_acknowledged_post_close_null", true)
+            }
+        }
+    } catch (error: Throwable) { failure = error }
+    finally {
+        fun cleanup(action: () -> Unit) {
+            try { action() } catch (error: Throwable) {
+                if (failure == null) failure = error else if (failure !== error) failure!!.addSuppressed(error)
+            }
+        }
+        observeConcurrently.set(false)
+        cleanup { observer?.join(5_000L); check(observer?.isAlive != true) }
+        cleanup {
+            if (!closed) onMain {
+                currentRun.get()?.retired?.set(true)
+                preview?.close()
+                closed = true
+                currentRun.set(null)
+            }
+        }
+        // close queues shutdown in stream -> control -> release order. Never close a parent
+        // snapshot/store while a native/source reader's terminal ownership is uncertain.
+        cleanup { workerDrained = worker?.awaitTermination(15, TimeUnit.SECONDS) ?: true; check(workerDrained) }
+        cleanup { controlDrained = controlWorker?.awaitTermination(15, TimeUnit.SECONDS) ?: true; check(controlDrained) }
+        cleanup { releaseDrained = releaseWorker?.awaitTermination(15, TimeUnit.SECONDS) ?: true; check(releaseDrained) }
+        cleanup { onMain {}; mainDrained = true }
+        cleanup { check(preview?.observeTrack() == null && preview?.playbackActive != true) }
+        if (workerDrained && controlDrained && releaseDrained && mainDrained) {
+            cleanup {
+                val store = source
+                if (store != null && sourceDigest != null) {
+                    val retained = MessageDigest.getInstance("SHA-256")
+                    var count = 0L
+                    checkNotNull(store.acquireRange(0.0, 1.0)).use { lease ->
+                        lease.readNormalized(48_000, 1, PcmSampleFormat.PCM_16) { bytes, offset, size ->
+                            retained.update(bytes, offset, size); count += size; size
+                        }
+                    }
+                    check(count == 96_000L && retained.digest().contentEquals(checkNotNull(sourceDigest)))
+                    result.put("source_pcm_preserved", true)
+                }
+            }
+            cleanup { snapshot?.close() }
+            cleanup { source?.close() }
+        } else cleanup { error("Preview quiescence unknown; synthetic parent/store retained") }
+        while (true) { val error = failures.poll() ?: break; cleanup { throw error } }
+        val runResults = JSONArray()
+        if (mainDrained) for (run in runs) {
+            cleanup { check(run.staleCallbacks.get() == 0) { "Retired ${run.label} delivered callbacks" } }
+            runResults.put(JSONObject().put("label", run.label).put("start_seconds", run.start).put("end_seconds", run.end)
+                .put("started", run.started.get()).put("finished", run.finished.get()).put("errors", run.errors.get())
+                .put("stale_callbacks", run.staleCallbacks.get()).put("started_elapsed_ms", run.startedAt.get())
+                .put("native_samples", run.nativeSamples).put("maximum_native_head", run.maximumHead).put("progress", run.progress))
+        }
+        result.put("runs", runResults).put("native_samples", nativeSamples).put("native_track_identities", identities.size)
+            .put("concurrent_observation_calls", concurrentObservations.get())
+            .put("concurrent_live_observations", successfulConcurrentObservations.get())
+            .put("observer_post_close_null_count", if (postCloseNullObserved.count == 0L) 1 else 0)
+            .put("worker_drained", workerDrained).put("control_worker_drained", controlDrained)
+            .put("release_worker_drained", releaseDrained).put("main_callbacks_drained", mainDrained)
+            .put("passed", failure == null).put("failure", failure?.stackTraceToString() ?: JSONObject.NULL)
+        cleanup { resultFile.writeText(result.toString(2)) }
+    }
+    failure?.let { throw it }
+    report.append("PASS ").append(selector)
+        .append(" bounded native-head/callback/retirement evidence; audible quality and pipeline latency unverified\n")
 }

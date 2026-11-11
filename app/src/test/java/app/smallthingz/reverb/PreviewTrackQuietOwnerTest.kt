@@ -14,6 +14,79 @@ import org.junit.Test
 class PreviewTrackQuietOwnerTest {
     private fun CountDownLatch.reached() = assertTrue(await(5, TimeUnit.SECONDS))
 
+    @Test fun blockedOldReleaseCannotDelayNextTrackPauseAndFlush(): Unit = runBlocking {
+        val registry = PreviewQuietCoordinator()
+        val old = PreviewTrackQuietOwner(registry)
+        val next = PreviewTrackQuietOwner(registry)
+        val releaseStarted = CountDownLatch(1)
+        val releaseAllowed = CountDownLatch(1)
+        val terminalWorker = Executors.newSingleThreadExecutor()
+        try {
+            old.retire()
+            assertTrue(old.silence({}, {}))
+            val pending = terminalWorker.submit<Boolean> {
+                old.release({ fail("pause repeated") }, { fail("flush repeated") },
+                    { releaseStarted.countDown(); releaseAllowed.reached() }, { throw it })
+            }
+            releaseStarted.reached()
+            next.retire()
+            var pauses = 0
+            var flushes = 0
+            assertTrue(next.silence({ pauses++ }, { flushes++ }))
+            assertTrue(registry.awaitQuiet())
+            assertEquals(1, pauses)
+            assertEquals(1, flushes)
+            assertFalse(pending.isDone)
+            releaseAllowed.countDown()
+            assertTrue(pending.get(5, TimeUnit.SECONDS))
+            next.release({}, {}, {}, { throw it })
+        } finally { releaseAllowed.countDown(); terminalWorker.shutdownNow() }
+    }
+
+    @Test fun retiredWriteMayReturnButCannotReplayAndReleaseWaitsForItsReturn() = runBlocking {
+        val registry = PreviewQuietCoordinator()
+        val owner = PreviewTrackQuietOwner(registry)
+        val writeStarted = CountDownLatch(1)
+        val writeAllowed = CountDownLatch(1)
+        val paused = CountDownLatch(1)
+        val releases = AtomicInteger()
+        val workers = Executors.newFixedThreadPool(2)
+        try {
+            val write = workers.submit<Int?> {
+                owner.write { writeStarted.countDown(); writeAllowed.reached(); 2 }
+            }
+            writeStarted.reached()
+            owner.retire()
+            val cleanup = workers.submit<Boolean> {
+                owner.release({ paused.countDown() }, {}, { releases.incrementAndGet() }, { throw it })
+            }
+            paused.reached()
+            assertTrue(registry.awaitQuiet())
+            assertEquals(0, releases.get())
+            assertFalse(owner.play { fail("Retired buffer played after quiet") })
+            assertFalse(cleanup.isDone)
+            writeAllowed.countDown()
+            assertEquals(2, write.get(5, TimeUnit.SECONDS))
+            assertTrue(cleanup.get(5, TimeUnit.SECONDS))
+            assertEquals(1, releases.get())
+            assertNull(owner.write { fail("Retired track accepted another write"); 0 })
+        } finally { writeAllowed.countDown(); workers.shutdownNow() }
+    }
+
+    @Test fun callerAndStreamFinallyDispatchOneTerminalCleanup() {
+        val owner = PreviewTrackQuietOwner(PreviewQuietCoordinator())
+        assertTrue(owner.claimCleanupDispatch())
+        owner.retire()
+        assertFalse(owner.claimCleanupDispatch())
+    }
+
+    @Test fun positionReadCannotTouchReleasedOwner() {
+        val owner = PreviewTrackQuietOwner(PreviewQuietCoordinator())
+        assertEquals(7, owner.read { 7 })
+        owner.release({}, {}, {}, { throw it })
+        assertNull(owner.read { fail("Position sampled after release"); 0 })
+    }
+
     @Test fun quietProofDoesNotWaitForHeavyRelease() = runBlocking {
         val registry = PreviewQuietCoordinator()
         val owner = PreviewTrackQuietOwner(registry)

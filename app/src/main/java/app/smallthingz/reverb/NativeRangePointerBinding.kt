@@ -21,7 +21,8 @@ import java.util.IdentityHashMap
 /**
  * Range's source pointer modifiers in Main's ONE window dispatch. The waveform transform affects
  * drawing only: scrub coordinates stay on the untransformed waveformInput container. Endpoints
- * retain their own moving local coordinates and source44dp layout/48dp minimum finger target.
+ * retain their source44dp layout/48dp minimum finger target; endpoint motion is projected into
+ * the stationary waveform container through the same event's actual window geometry.
  */
 internal class NativeRangePointerBinding(
     private val content: ReverbRangeExportContent,
@@ -33,7 +34,8 @@ internal class NativeRangePointerBinding(
     private var closed = false
     private val timeline = NativeRangeTimelineInput(content.state, { content.interactionEnabled },
         content.timeline::timelineWidthPixels, content.timeline::secondsForWaveformX,
-        content.timeline::markerCenterPixels, touchSlop)
+        { change -> coordinates.coordinates(content.timeline.waveformInput)
+            .local(coordinates.rootToScreen(change.originalPosition)).x }, touchSlop)
     private val waveformNode = GestureNode(content.timeline.waveformInput, timeline.waveform, false)
     private val startNode = GestureNode(content.timeline.endpointStart, timeline.start, true)
     private val endNode = GestureNode(content.timeline.endpointEnd, timeline.end, true)

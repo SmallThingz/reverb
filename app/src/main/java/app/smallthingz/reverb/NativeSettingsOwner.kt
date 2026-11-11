@@ -3,7 +3,9 @@ package app.smallthingz.reverb
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Environment
 import android.os.SystemClock
+import android.provider.DocumentsContract
 import android.view.View
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -452,9 +454,15 @@ internal class NativeSettingsOwner(
     }
 
     fun chooseDirectory(owner: Any) {
-        if (!acceptsInput(owner) || !draft.directoryPicker.beginRequest()) return
+        if (!acceptsInput(owner) || state.persisting || !draft.directoryPicker.beginRequest()) return
         try {
-            launchDirectory(snapshot.exportDirectoryUri?.let(Uri::parse))
+            // The picker expects a document location; its returned/stored authority remains a tree.
+            val initial = snapshot.exportDirectoryUri?.let { value ->
+                val tree = Uri.parse(value)
+                DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))
+            } ?: DocumentsContract.buildDocumentUri("com.android.externalstorage.documents",
+                "primary:${Environment.DIRECTORY_MUSIC}/${APP_STORAGE_FOLDER_NAME}")
+            launchDirectory(initial)
         } catch (error: RuntimeException) {
             draft.directoryPicker.receiveResult(null)
             feedback(R.string.cant_access_folder, error)

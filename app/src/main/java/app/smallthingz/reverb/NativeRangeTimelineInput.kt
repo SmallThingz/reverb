@@ -19,7 +19,7 @@ internal class NativeRangeTimelineInput(
     private val enabled: () -> Boolean,
     private val timelineWidth: () -> Float,
     private val secondsForWaveformX: (Float) -> Float,
-    private val markerCenter: (RangeEditTarget) -> Float,
+    private val endpointPointerX: (NativeDragPointerChange) -> Float,
     private val touchSlop: () -> Float,
 ) : AutoCloseable {
     val waveform = WaveformGesture()
@@ -143,8 +143,7 @@ internal class NativeRangeTimelineInput(
     internal inner class EndpointGesture(private val target: RangeEditTarget) : Gesture() {
         override val requiresUnconsumedDown = false
         private var origin = 0f
-        private var centerAtDown = 0f
-        private var downLocalX = 0f
+        private var downTimelineX = 0f
         private var dragging = false
         override fun begin(down: NativeDragPointerChange): Boolean {
             if (!checkNotNull(owned).perform {
@@ -152,15 +151,15 @@ internal class NativeRangeTimelineInput(
                     state.selectTarget(target)
                 }) return false
             origin = state.targetSeconds(target)
-            centerAtDown = markerCenter(target)
-            downLocalX = down.position.x
+            downTimelineX = endpointPointerX(down)
             dragging = false
             insideFinally = true
             return true
         }
         override fun move(change: NativeDragPointerChange) = checkNotNull(owned).perform {
-            val delta = rangeTimelineDragDeltaPx(centerAtDown, markerCenter(target),
-                downLocalX, change.position.x)
+            // The model can advance several times before the moving endpoint is laid out.
+            // Both samples must belong to the stationary waveform, never its requested marker.
+            val delta = endpointPointerX(change) - downTimelineX
             if (!dragging && abs(delta) > touchSlop()) {
                 dragging = true
                 state.beginBoundaryScrub(target)

@@ -41,23 +41,17 @@ internal class SettingsStorageSection(
         context.getString(R.string.choose_folder),inputRoot,onChooseFolder)
     private val move=SettingsStorageActionView(context,environment,null,
         context.getString(R.string.move_recordings),inputRoot,onMoveRecordings)
-    private val allFilesStatus=environment.paragraph(context,"",ReverbTextRole.BODY_LARGE,environment.palette.onSurface)
-    private val allFilesBody=environment.paragraph(context,context.getString(R.string.all_files_access_body),
-        ReverbTextRole.BODY_MEDIUM,environment.palette.muted)
-    private val allFilesAction=SettingsStorageActionView(context,environment,null,
-        context.getString(R.string.all_files_access_settings),inputRoot,onAllFilesAccess)
-    private val audioReadStatus=environment.paragraph(context,"",ReverbTextRole.BODY_LARGE,environment.palette.onSurface)
-    private val audioReadBody=environment.paragraph(context,context.getString(R.string.audio_read_access_body),
-        ReverbTextRole.BODY_MEDIUM,environment.palette.muted)
-    private val audioReadAction=SettingsStorageActionView(context,environment,null,
-        context.getString(R.string.audio_read_access_settings),inputRoot,onAudioReadAccess)
+    private val audioRead=SettingsStoragePermissionRow(context,environment,inputRoot,ReverbIcon.AudioFile,
+        R.string.settings_audio_read_missing,R.string.background_review,R.string.audio_read_access_settings,onAudioReadAccess)
+    private val allFiles=SettingsStoragePermissionRow(context,environment,inputRoot,ReverbIcon.Folder,
+        R.string.settings_all_files_optional,R.string.settings_manage_access,R.string.all_files_access_settings,onAllFilesAccess)
     private val body=StorageBody(context)
     init {
         importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO
         body.addView(path);body.addView(reset);body.addView(choose);body.addView(move)
-        body.addView(allFilesStatus);body.addView(allFilesBody);body.addView(allFilesAction)
-        body.addView(audioReadStatus);body.addView(audioReadBody);body.addView(audioReadAction)
         surface.addRow(body,ReverbGroupLayout.LayoutParams(-1,-2))
+        surface.addRow(audioRead,ReverbGroupLayout.LayoutParams(-1,-2).apply {dividerTop=true})
+        surface.addRow(allFiles,ReverbGroupLayout.LayoutParams(-1,-2).apply {dividerTop=true})
         addView(title);addView(surface);bind(initial,environment)
     }
     fun bind(next:SettingsStorageState,colors:ReverbViewEnvironment) {
@@ -66,19 +60,12 @@ internal class SettingsStorageSection(
         path.setText(next.pathText);colors.bindParagraphStyle(path,ReverbTextRole.BODY_LARGE,colors.palette.muted)
         surface.setPalette(colors.palette.field,colors.palette.border)
         reset.visibility=if(next.hasCustomDirectory)VISIBLE else GONE
-        reset.bind(colors,true);choose.bind(colors,true);move.bind(colors,next.canMove&&!next.settingsPersisting)
-        val accessVisibility=if(next.allFilesAvailable)VISIBLE else GONE
-        allFilesStatus.visibility=accessVisibility;allFilesBody.visibility=accessVisibility;allFilesAction.visibility=accessVisibility
-        allFilesStatus.setText(context.getString(if(next.allFilesAllowed)R.string.all_files_access_allowed else R.string.all_files_access_not_allowed))
-        colors.bindParagraphStyle(allFilesStatus,ReverbTextRole.BODY_LARGE,colors.palette.onSurface)
-        colors.bindParagraphStyle(allFilesBody,ReverbTextRole.BODY_MEDIUM,colors.palette.muted)
-        allFilesAction.bind(colors,!next.settingsPersisting)
-        val audioVisibility=if(next.audioReadAvailable)VISIBLE else GONE
-        audioReadStatus.visibility=audioVisibility;audioReadBody.visibility=audioVisibility;audioReadAction.visibility=audioVisibility
-        audioReadStatus.setText(context.getString(if(next.audioReadAllowed)R.string.audio_read_access_allowed else R.string.audio_read_access_not_allowed))
-        colors.bindParagraphStyle(audioReadStatus,ReverbTextRole.BODY_LARGE,colors.palette.onSurface)
-        colors.bindParagraphStyle(audioReadBody,ReverbTextRole.BODY_MEDIUM,colors.palette.muted)
-        audioReadAction.bind(colors,!next.settingsPersisting)
+        reset.bind(colors,true);choose.bind(colors,!next.settingsPersisting);move.bind(colors,next.canMove&&!next.settingsPersisting)
+        allFiles.visibility=if(next.allFilesAvailable)VISIBLE else GONE
+        allFiles.bind(colors,!next.settingsPersisting&&next.allFilesAvailable)
+        val missingAudio=next.audioReadAvailable&&!next.audioReadAllowed
+        audioRead.visibility=if(missingAudio)VISIBLE else GONE
+        audioRead.bind(colors,!next.settingsPersisting&&missingAudio)
         requestLayout()
     }
     override fun onMeasure(w:Int,h:Int) {
@@ -93,7 +80,7 @@ internal class SettingsStorageSection(
         val top=2*dp(12)+title.measuredHeight+dp(4)
         surface.layout(dp(16),top,width-dp(16),top+surface.measuredHeight)
     }
-    override fun close() {reset.close();choose.close();move.close();allFilesAction.close();audioReadAction.close()}
+    override fun close() {reset.close();choose.close();move.close();allFiles.close();audioRead.close()}
     private fun dp(value:Int)=(value*environment.textDensity.density).roundToInt()
 
     private inner class StorageBody(context:Context):ViewGroup(context) {
@@ -118,19 +105,7 @@ internal class SettingsStorageSection(
             rowHeight=max(path.measuredHeight,max(choose.measuredHeight,
                 if(state.hasCustomDirectory)reset.measuredHeight else 0))
             move.measure(atMost(inner),unspecified())
-            val accessHeight=if(state.allFilesAvailable) {
-                allFilesStatus.measure(exact(inner),unspecified())
-                allFilesBody.measure(exact(inner),unspecified())
-                allFilesAction.measure(atMost(inner),unspecified())
-                dp(12)+allFilesStatus.measuredHeight+dp(4)+allFilesBody.measuredHeight+dp(4)+allFilesAction.measuredHeight
-            } else 0
-            val audioHeight=if(state.audioReadAvailable) {
-                audioReadStatus.measure(exact(inner),unspecified())
-                audioReadBody.measure(exact(inner),unspecified())
-                audioReadAction.measure(atMost(inner),unspecified())
-                dp(12)+audioReadStatus.measuredHeight+dp(4)+audioReadBody.measuredHeight+dp(4)+audioReadAction.measuredHeight
-            } else 0
-            setMeasuredDimension(width,2*dp(10)+rowHeight+move.measuredHeight+accessHeight+audioHeight)
+            setMeasuredDimension(width,2*dp(10)+rowHeight+move.measuredHeight)
         }
         override fun onLayout(changed:Boolean,l:Int,t:Int,r:Int,b:Int) {
             fun place(child:View,start:Int,top:Int) {
@@ -143,19 +118,73 @@ internal class SettingsStorageSection(
             if(state.hasCustomDirectory) {center(reset,start);start+=reset.measuredWidth+secondGap}
             center(choose,start)
             place(move,dp(16),dp(10)+rowHeight)
-            var top=dp(10)+rowHeight+move.measuredHeight
-            if(state.allFilesAvailable) {
-                top+=dp(12)
-                place(allFilesStatus,dp(16),top);top+=allFilesStatus.measuredHeight+dp(4)
-                place(allFilesBody,dp(16),top);top+=allFilesBody.measuredHeight+dp(4)
-                place(allFilesAction,dp(16),top);top+=allFilesAction.measuredHeight
-            }
-            if(state.audioReadAvailable) {
-                top+=dp(12)
-                place(audioReadStatus,dp(16),top);top+=audioReadStatus.measuredHeight+dp(4)
-                place(audioReadBody,dp(16),top);top+=audioReadBody.measuredHeight+dp(4)
-                place(audioReadAction,dp(16),top)
-            }
         }
     }
+}
+
+/** Same compact icon/title/action arrangement as the background-access warning, sharing group borders. */
+private class SettingsStoragePermissionRow(
+    context:Context,
+    private var environment:ReverbViewEnvironment,
+    inputRoot:()->View?,
+    private val glyph:ReverbIcon,
+    titleResource:Int,
+    private val actionResource:Int,
+    actionDescriptionResource:Int,
+    request:()->Unit,
+):ViewGroup(context),AutoCloseable {
+    private val icon=OnboardingIconView(context,glyph,environment.palette.tertiary)
+    private val title=environment.paragraph(context,context.getString(titleResource),
+        ReverbTextRole.BODY_MEDIUM,environment.palette.onSurface)
+    private val action=SettingsCalibrationActionView(context,environment,inputRoot,action=request)
+    private var rowHeight=0
+    private var firstGap=0
+    private var secondGap=0
+    private var stackedAction=false
+    init {
+        importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO
+        icon.importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO
+        action.textView.contentDescription=context.getString(actionDescriptionResource)
+        addView(icon);addView(title);addView(action)
+    }
+    fun bind(next:ReverbViewEnvironment,enabled:Boolean) {
+        environment=next
+        icon.bind(glyph,next.palette.tertiary)
+        next.bindParagraphStyle(title,ReverbTextRole.BODY_MEDIUM,next.palette.onSurface)
+        action.bind(context.getString(actionResource),enabled,next)
+        requestLayout()
+    }
+    override fun onMeasure(w:Int,h:Int) {
+        val width=MeasureSpec.getSize(w)
+        val available=(width-2*dp(15)).coerceAtLeast(0)
+        icon.measure(exact(min(dp(22),available)),exact(dp(22)))
+        firstGap=min(dp(12),(available-icon.measuredWidth).coerceAtLeast(0))
+        action.measure(atMost(available),unspecified())
+        secondGap=min(dp(12),(available-icon.measuredWidth-firstGap-action.measuredWidth).coerceAtLeast(0))
+        val inlineTitleWidth=(available-icon.measuredWidth-firstGap-action.measuredWidth-secondGap).coerceAtLeast(0)
+        title.measure(exact(inlineTitleWidth),unspecified())
+        // Keep ordinary one/two-line labels compact; move the action before text becomes a sliver.
+        val twoLineHeight=2*title.intrinsicTextHeight(title.maxIntrinsicTextWidth().coerceAtLeast(1))
+        stackedAction=inlineTitleWidth==0||title.measuredHeight>max(twoLineHeight,action.measuredHeight)
+        if(stackedAction)title.measure(exact((available-icon.measuredWidth-firstGap).coerceAtLeast(0)),unspecified())
+        rowHeight=max(icon.measuredHeight,title.measuredHeight)
+        if(!stackedAction)rowHeight=max(rowHeight,action.measuredHeight)
+        val extra=if(stackedAction)dp(4)+action.measuredHeight else 0
+        setMeasuredDimension(resolveSize(width,w),resolveSize(rowHeight+extra+2*dp(6),h))
+    }
+    override fun onLayout(changed:Boolean,l:Int,t:Int,r:Int,b:Int) {
+        var start=dp(15)
+        fun place(child:View,top:Int=dp(6)+(rowHeight-child.measuredHeight)/2) {
+            val x=if(layoutDirection==LAYOUT_DIRECTION_RTL)width-start-child.measuredWidth else start
+            child.layout(x,top,x+child.measuredWidth,top+child.measuredHeight)
+        }
+        place(icon);start+=icon.measuredWidth+firstGap
+        place(title);start+=title.measuredWidth+secondGap
+        if(stackedAction) {
+            start=width-dp(15)-action.measuredWidth
+            place(action,dp(6)+rowHeight+dp(4))
+        }else place(action)
+    }
+    override fun close()=action.close()
+    private fun dp(value:Int)=(value*environment.textDensity.density).roundToInt()
 }

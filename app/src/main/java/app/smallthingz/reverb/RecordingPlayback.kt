@@ -16,6 +16,7 @@ internal data class RecordingPlaybackState(
     val generation: Long = 0,
     val wantsPlayback: Boolean = false,
     val transportIntentRevision: Long = 0,
+    val playbackAnchor: PlaybackPositionAnchor? = null,
 ) {
     fun matches(candidate: RecordingEntity): Boolean = recording?.let {
         samePlaybackRecording(it, candidate)
@@ -36,7 +37,7 @@ internal object RecordingPlayback {
     private var nextOwner = 0L
     private var pending: Start? = null
     private var service: RecordingPlaybackService? = null
-    private val positionObservers = java.util.IdentityHashMap<Any, Unit>()
+    private val positionObservers = PlaybackPositionObservers { service?.positionObservationChanged() }
     internal data class Start(val token: Long, val recording: RecordingEntity, val positionMillis: Int?)
 
     fun play(context: Context, recording: RecordingEntity, positionMillis: Int? = null): Boolean {
@@ -61,10 +62,9 @@ internal object RecordingPlayback {
     internal fun takeStart(token: Long): Start? = pending?.takeIf { it.token == token }?.also { pending = null }
     internal fun hasPendingStart(): Boolean = pending != null
     internal fun nextGeneration(): Long = ++nextOwner
-    internal fun positionObserved(): Boolean = positionObservers.isNotEmpty()
+    internal fun positionObserved(): Boolean = positionObservers.observed
     fun observePosition(token: Any, visible: Boolean) {
-        if (visible) positionObservers[token] = Unit else positionObservers.remove(token)
-        service?.positionObservationChanged()
+        positionObservers.observe(token, visible)
     }
     internal fun attach(owner: RecordingPlaybackService) { service = owner }
     internal fun detach(owner: RecordingPlaybackService) { if (service === owner) service = null }

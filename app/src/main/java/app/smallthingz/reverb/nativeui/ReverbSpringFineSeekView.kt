@@ -64,7 +64,7 @@ internal data class SpringFineSeekEnvironment(
 /**
  * The released SpringFineSeekControl as direct ordinary Views, including Range's optional tap owner.
  *
- * Parent supplies source104/120dp bounds and external trim alpha. Place fineSeekNode on this full
+ * Parent supplies visual bounds and external trim alpha. Place fineSeekNode on this full
  * rectangle only while fineSeekInputEnabled, then puckClickNode on puckClickView's live64dp rectangle in the shared phase hit tree.
  * Neither parent nor this leaf must also run a stock Android gesture recognizer for that stream.
  * Offsets update child placement directly, not a second virtual/layout tree or a recomposition.
@@ -101,6 +101,7 @@ internal class ReverbSpringFineSeekView(
     private val model = NativeSpringFineSeekState(::visualChanged, ::requestFrames)
     private val puck = PuckView(context)
     private var geometry = SpringFineSeekGeometry(0, 0, environment.density.density)
+    private var verticalGestureHeightPixels: Int? = null
     private var geometryLease: AutoCloseable? = null
     private var descriptionLease: AutoCloseable? = null
     val puckClickView: View get() = puck
@@ -202,11 +203,14 @@ internal class ReverbSpringFineSeekView(
         puck.invalidate()
     }
 
+    /** The compact Library measures its original gesture span before shrinking visual whitespace. */
+    fun setVerticalGestureHeightPixels(value: Int?) { verticalGestureHeightPixels = value?.coerceAtLeast(0) }
+
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        // Released callers provide bounded fillMaxWidth + explicit104/120dp height.
+        // The optional gesture span affects only Y gain, never puck placement or hit geometry.
         val w = MeasureSpec.getSize(widthMeasureSpec)
         val h = MeasureSpec.getSize(heightMeasureSpec)
-        geometry = SpringFineSeekGeometry(w, h, environment.density.density)
+        geometry = SpringFineSeekGeometry(w, h, environment.density.density, verticalGestureHeightPixels ?: h)
         puck.measure(MeasureSpec.makeMeasureSpec(geometry.hitWidth, MeasureSpec.EXACTLY),
             MeasureSpec.makeMeasureSpec(geometry.hitHeight, MeasureSpec.EXACTLY))
         setMeasuredDimension(w, h)

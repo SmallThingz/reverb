@@ -48,6 +48,25 @@ class OnboardingPermissionRequestSequenceTest {
         assertNull(sequence.claimNext(status, true))
     }
 
+    @Test fun existingAudioReadSkipsAutomaticBroadAccessButKeepsExplicitAllFiles() {
+        val sequence = OnboardingPermissionRequestSequence()
+        val ready = missing.copy(microphoneAllowed = true, storageRequired = false,
+            recoveryAllowed = true, notificationsAllowed = true, batteryOptimizationAllowed = true)
+        assertNull(sequence.claimNext(ready, true))
+        assertEquals(0, sequence.attemptedMask)
+        assertTrue(sequence.claimManual(OnboardingPermission.ALL_FILES, ready, true))
+        assertEquals(OnboardingPermission.ALL_FILES, sequence.pending)
+    }
+
+    @Test fun existingAudioReadStillRequestsMissingBackgroundAccessAndRechecksRevocation() {
+        val sequence = OnboardingPermissionRequestSequence()
+        val ready = missing.copy(microphoneAllowed = true, storageRequired = false,
+            recoveryAllowed = true, notificationsAllowed = true)
+        assertEquals(OnboardingPermission.BATTERY, sequence.claimNext(ready, true))
+        sequence.completed(OnboardingPermission.BATTERY)
+        assertEquals(OnboardingPermission.ALL_FILES, sequence.claimNext(ready.copy(recoveryAllowed = false), true))
+    }
+
     @Test fun automaticRequestsWaitForResumedInteractivePage() {
         val sequence = OnboardingPermissionRequestSequence()
         assertNull(sequence.claimNext(missing, false))

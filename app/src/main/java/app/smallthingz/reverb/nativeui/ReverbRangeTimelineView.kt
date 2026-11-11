@@ -1,7 +1,9 @@
 package app.smallthingz.reverb.nativeui
 
 import android.content.Context
+import android.graphics.Canvas
 import android.graphics.Outline
+import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
@@ -10,6 +12,7 @@ import smallthingz.ui.text.font.FontFamily
 import smallthingz.ui.text.font.FontWeight
 import smallthingz.ui.unit.sp
 import app.smallthingz.reverb.NativeRangeExportPresentation
+import app.smallthingz.reverb.PlaybackPositionDisplayClock
 import app.smallthingz.reverb.RangeEditTarget
 import app.smallthingz.reverb.RangeExportEditorState
 import app.smallthingz.reverb.formatRangeTimeInput
@@ -38,18 +41,24 @@ internal class ReverbRangeTimelineView(
     private var renderedDuration = Float.NaN
     private var renderedTarget: RangeEditTarget? = null
     private var stylesDirty = true
+    private val playbackClock = PlaybackPositionDisplayClock()
+    private var playheadVisible = false
     val waveformInput: ViewGroup = object : ViewGroup(context) {
         init { clipChildren = false; clipToPadding = false; importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO }
         override fun onMeasure(w: Int, h: Int) {
             val width = MeasureSpec.getSize(w); val height = MeasureSpec.getSize(h)
-            waveform.measure(exact(width), exact(height)); setMeasuredDimension(width, height)
+            waveform.measure(exact(width), exact(height))
+            playhead.measure(exact(width), exact(height))
+            setMeasuredDimension(width, height)
         }
         override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
             waveform.layout(0, 0, width, height)
+            playhead.layout(0, 0, width, height)
             onWaveformPositioned(this)
         }
     }
     val waveform: ProgressiveWaveformView = ProgressiveWaveformView(context)
+    private val playhead = PlaybackPlayheadLine(context, environment)
     private val chrome = Chrome(context)
     private val start = Endpoint(context)
     private val end = Endpoint(context)
@@ -65,6 +74,7 @@ internal class ReverbRangeTimelineView(
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         if (android.os.Build.VERSION.SDK_INT >= 29) isForceDarkAllowed = false
         waveformInput.addView(waveform)
+        waveformInput.addView(playhead)
         addView(waveformInput); addView(chrome)
         chrome.addView(start); chrome.addView(end)
         chrome.addView(startBubble); chrome.addView(endBubble)
@@ -74,6 +84,11 @@ internal class ReverbRangeTimelineView(
 
     fun bind(state: RangeExportEditorState, frame: NativeRangeExportPresentation) {
         editor = state; presentation = frame
+        val anchor = state.playbackAnchor.takeIf { frame.interactionReady && state.snapshotReady }
+        playbackClock.bind("range-preview", true, anchor)
+        playheadVisible = playbackClock.anchor != null
+        playhead.bind(environment, playheadVisible)
+        updatePlayheadPosition()
         if (data !== frame.waveformData) { data = frame.waveformData; waveform.setWaveform(data) }
         waveform.setFrame(frame.waveformFrame)
         chrome.alpha = frame.chromeAlpha
@@ -99,6 +114,33 @@ internal class ReverbRangeTimelineView(
         }
         // Draw-only wobble/morph frames do not remeasure labels or recreate their typography.
         updateMorph()
+    }
+
+    private fun updatePlayheadPosition() {
+        val state = editor ?: return
+        val anchor = playbackClock.anchor ?: return
+        val durationMillis = state.durationSeconds.toDouble() * 1_000.0
+        val fraction = if (durationMillis > 0.0)
+            (anchor.positionAt(SystemClock.elapsedRealtime()).toDouble() / durationMillis).toFloat().coerceIn(0f, 1f)
+        else 0f
+        playhead.setPosition(fraction)
+    }
+
+    override fun dispatchDraw(canvas: Canvas) {
+        updatePlayheadPosition()
+        super.dispatchDraw(canvas)
+        if (playheadVisible && isAttachedToWindow && isShown && windowVisibility == VISIBLE &&
+            playbackClock.anchor?.isAdvancingAt(SystemClock.elapsedRealtime()) == true) postInvalidateOnAnimation()
+    }
+
+    override fun onAttachedToWindow() { super.onAttachedToWindow(); invalidate() }
+    override fun onVisibilityChanged(changedView: View, visibility: Int) {
+        super.onVisibilityChanged(changedView, visibility)
+        if (visibility == VISIBLE) invalidate()
+    }
+    override fun onWindowVisibilityChanged(visibility: Int) {
+        super.onWindowVisibilityChanged(visibility)
+        if (visibility == VISIBLE) invalidate()
     }
 
     fun setEnvironment(value: ReverbViewEnvironment) {
@@ -211,19 +253,19 @@ internal class ReverbRangeTimelineView(
             if (editor == null) return
             fun place(target: RangeEditTarget, endpoint: View, bubble: View) {
                 val center = markerCenterPixels(target)
-                relative(endpoint, (center - 44f * density * .5f).roundToInt(), dp(42f))
+                placeAt(endpoint, (center - 44f * density * .5f).roundToInt(), dp(42f))
                 val bubbleLeft = (center - 84f * density * .5f)
                     .coerceIn(0f, (width - 84f * density).coerceAtLeast(0f)).roundToInt()
-                relative(bubble, bubbleLeft, dp(3f))
+                placeAt(bubble, bubbleLeft, dp(3f))
             }
             place(RangeEditTarget.START, start, startBubble)
             place(RangeEditTarget.END, end, endBubble)
-            relative(first, dp(12f), height - first.measuredHeight)
-            relative(last, width - dp(12f) - last.measuredWidth, height - last.measuredHeight)
+            placeAt(first, dp(12f), height - first.measuredHeight)
+            placeAt(last, width - dp(12f) - last.measuredWidth, height - last.measuredHeight)
         }
-        private fun relative(child: View, x: Int, y: Int) {
-            val left = if (layoutDirection == LAYOUT_DIRECTION_RTL) width - x - child.measuredWidth else x
-            child.layout(left, y, left + child.measuredWidth, y + child.measuredHeight)
+        private fun placeAt(child: View, x: Int, y: Int) {
+            // Time runs left-to-right in both the waveform renderer and its pointer coordinates.
+            child.layout(x, y, x + child.measuredWidth, y + child.measuredHeight)
         }
     }
 

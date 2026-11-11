@@ -7,6 +7,91 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PredictiveBackMotionTest {
+    @Test fun libraryToolbar_backBeforeTheFirstOpeningFrameKeepsTheHomeEndpointThroughCancellation() {
+        val motion = LibraryTopBarCloseMotion()
+        motion.progress(0f, true, false)
+        assertEquals(1f, motion.progress(0f, true, true), 0f)
+        assertEquals(.75f, motion.progress(.25f, true, true), .0001f)
+        assertEquals(0f, motion.progress(1f, true, false), 0f)
+    }
+
+    @Test fun libraryToolbar_partialOpeningHandsItsBackGlyphToPredictiveMotionWithoutASwap() {
+        val motion = LibraryTopBarCloseMotion()
+        assertEquals(0f, motion.progress(.3f, true, false), 0f)
+        assertEquals(0f, motion.progress(.3f, true, true), 0f)
+        assertEquals(.5f, motion.progress(.15f, true, true), .0001f)
+        assertEquals(0f, motion.progress(.3f, true, true), 0f)
+        assertEquals(0f, motion.progress(.8f, true, true), 0f)
+        assertEquals(0f, motion.progress(1f, true, false), 0f)
+    }
+
+    @Test fun libraryToolbar_partialOpeningAcceptedCloseReopenAndPreviewShareTheHeldGlyph() {
+        val motion = LibraryTopBarCloseMotion()
+        assertEquals(0f, motion.progress(.4f, true, false), 0f)
+        motion.onNavigation(wasOpen = true, isOpen = false)
+        assertEquals(0f, motion.progress(.4f, false, false), 0f)
+        assertEquals(.5f, motion.progress(.2f, false, false), .0001f)
+        motion.onNavigation(wasOpen = false, isOpen = true)
+        assertEquals(.5f, motion.progress(.2f, true, false), .0001f)
+        assertEquals(.25f, motion.progress(.3f, true, false), .0001f)
+        assertEquals(.25f, motion.progress(.3f, true, true), .0001f)
+        assertEquals(.625f, motion.progress(.15f, true, true), .0001f)
+        assertEquals(1f, motion.progress(0f, true, true), 0f)
+    }
+
+    @Test fun libraryToolbar_previewCleanupDoesNotResetAnIntermediateGlyph() {
+        val motion = LibraryTopBarCloseMotion()
+        motion.progress(.4f, true, false)
+        motion.progress(.4f, true, true)
+        assertEquals(.5f, motion.progress(.2f, true, true), .0001f)
+        assertEquals(.5f, motion.progress(.2f, true, false), .0001f)
+        assertEquals(.25f, motion.progress(.3f, true, false), .0001f)
+        assertEquals(0f, motion.progress(1f, true, false), 0f)
+    }
+
+    @Test fun libraryToolbar_acceptedOrdinaryCloseMorphsToHomeAndRetiresItsLatch() {
+        val motion = LibraryTopBarCloseMotion()
+        motion.onNavigation(wasOpen = true, isOpen = false)
+        assertEquals(0f, motion.progress(1f, false, false), 0f)
+        assertEquals(.25f, motion.progress(.75f, false, false), 0f)
+        assertEquals(.75f, motion.progress(.25f, false, false), 0f)
+        assertEquals(1f, motion.progress(0f, false, false), 0f)
+        motion.onNavigation(wasOpen = false, isOpen = true)
+        assertEquals(0f, motion.progress(.25f, true, false), 0f)
+    }
+
+    @Test fun libraryToolbar_interruptedCloseReopensAlongTheSameMorph() {
+        val motion = LibraryTopBarCloseMotion()
+        motion.onNavigation(wasOpen = true, isOpen = false)
+        assertEquals(.6f, motion.progress(.4f, false, false), .0001f)
+        motion.onNavigation(wasOpen = false, isOpen = true)
+        assertEquals(.6f, motion.progress(.4f, true, false), .0001f)
+        assertEquals(.2f, motion.progress(.8f, true, false), .0001f)
+        assertEquals(0f, motion.progress(1f, true, false), 0f)
+        assertEquals(0f, motion.progress(.7f, true, false), 0f)
+    }
+
+    @Test fun libraryToolbar_initialAndCancelledOpeningNeverStartACloseMorph() {
+        val motion = LibraryTopBarCloseMotion()
+        assertEquals(0f, motion.progress(.2f, false, false), 0f)
+        assertEquals(0f, motion.progress(.6f, false, false), 0f)
+        assertEquals(0f, motion.progress(.3f, false, false), 0f)
+        assertEquals(0f, motion.progress(0f, false, false), 0f)
+        motion.onNavigation(wasOpen = false, isOpen = true)
+        assertEquals(0f, motion.progress(.4f, true, false), 0f)
+        assertEquals(0f, motion.progress(1f, true, false), 0f)
+    }
+
+    @Test fun libraryToolbar_predictiveReversalAndCancellationKeepTheirExistingProgress() {
+        val motion = LibraryTopBarCloseMotion()
+        assertEquals(.7f, motion.progress(.3f, true, true), .0001f)
+        assertEquals(.2f, motion.progress(.8f, true, true), .0001f)
+        assertEquals(0f, motion.progress(1f, true, true), 0f)
+        assertEquals(0f, motion.progress(1f, true, false), 0f)
+        motion.onNavigation(wasOpen = true, isOpen = false)
+        assertEquals(1f, motion.progress(0f, false, true), 0f)
+    }
+
     @Test
     fun committedRelease_continuesToTerminalBeforeLogicalBack() = runBlocking {
         val events = mutableListOf<String>()

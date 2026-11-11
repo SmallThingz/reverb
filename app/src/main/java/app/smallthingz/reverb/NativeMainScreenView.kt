@@ -18,6 +18,7 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewGroup
+import android.view.inputmethod.InputMethodManager
 import androidx.activity.OnBackPressedDispatcher
 import smallthingz.ui.runtime.MonotonicFrameClock
 import smallthingz.ui.MotionDurationScale
@@ -93,6 +94,7 @@ internal class NativeMainScreenView private constructor(
     private var libraryText: NativeLibraryAccessibilityBinding? = null
     private var libraryToolbar: ReverbAppTopBarView? = null
     private var libraryToolbarText: AutoCloseable? = null
+    private val libraryTopBarCloseMotion = LibraryTopBarCloseMotion()
     private var about: ReverbAboutDialog? = null
     private val clipLeases = IdentityHashMap<View, Any>()
     private val shellLayouts = IdentityHashMap<View, ShellLayout>()
@@ -132,7 +134,7 @@ internal class NativeMainScreenView private constructor(
         }, scrollEvents = scrollEvents, restoredPosition = restored?.incidentsPosition,
         admitChildren = source::retainPresentSemanticChildren)
     private val libraryMotion = NativeMainPanelMotion(navigation.showLibrary, scope, dispatcher,
-        lifecycleOwner, ::motionChanged)
+        lifecycleOwner, ::motionChanged, animateBackCancellation = true)
     private val home = ReverbHomeScaffoldView(context, environment, homeNavigation(), hasIncidentAlert,
         homeInsets(), this)
     private val feedback = NativeAppFeedbackHostView(context, environment, windowRoot, lifecycleOwner,
@@ -140,7 +142,8 @@ internal class NativeMainScreenView private constructor(
     private val vertical = NativeHomeVerticalDrag(
         touchSlop = { ViewConfiguration.get(context).scaledTouchSlop.toFloat() },
         onStart = { point ->
-            when (navigation.beginVerticalReveal(point.y, home.height.toFloat())) {
+            when (navigation.beginVerticalReveal(point.y, home.height.toFloat(),
+                settingsMotion.panelProgress, libraryMotion.panelProgress)) {
                 NativeMainPanel.SETTINGS -> settingsMotion.beginForwardMotion()
                 NativeMainPanel.LIBRARY -> libraryMotion.beginForwardMotion()
                 null -> Unit
@@ -244,8 +247,22 @@ internal class NativeMainScreenView private constructor(
 
     private fun navigate(action: NativeMainNavigationState.() -> Unit) {
         if (closed) return
+        val settingsWasVisible = navigation.showSettings
+        val libraryWasVisible = navigation.showLibrary
         navigation.action()
+        libraryTopBarCloseMotion.onNavigation(libraryWasVisible, navigation.showLibrary)
+        val settingsRetired = settingsWasVisible && !navigation.showSettings
         requestRender()
+        if (settingsRetired && !navigation.showSettings) retireSettingsInput()
+    }
+
+    private fun retireSettingsInput() {
+        // Route acceptance owns retirement. Preview/cancel and rejected unsaved Back never reach here.
+        updateSurfaceAdmission()
+        if (!windowRoot.isAttachedToWindow || !windowRoot.hasWindowFocus()) return
+        val token = windowRoot.windowToken ?: return
+        (context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
+            ?.hideSoftInputFromWindow(token, 0)
     }
 
     private fun requestRender() {
@@ -462,11 +479,16 @@ internal class NativeMainScreenView private constructor(
     }
 
     private fun applyMotion(bindToolbar: Boolean) {
+        val backIncidentProgress = libraryTopBarCloseMotion.progress(libraryMotion.panelProgress,
+            navigation.showLibrary, libraryMotion.backPreviewActive)
         home.translationY = settingsMotion.panelProgress * height
         home.topBar.setIncidentsSuppressed(navigation.showLibrary || libraryMotion.panelProgress > 0f)
         settings?.alpha = if (settingsMotion.panelProgress > 0f || navigation.showSettings) 1f else .01f
         libraryLayer?.bind(environment, statusInsets.top, libraryMotion.panelProgress, navigation.showLibrary)
-        val toolbarVisible = !navigation.showSettings && libraryMotion.panelProgress > 0f && !navigation.librarySelectionActive
+        // Keep the preview's terminal glyph until the navigation owner accepts Home.
+        val toolbarVisible = !navigation.showSettings &&
+            (libraryMotion.panelProgress > 0f || (navigation.showLibrary && libraryMotion.backPreviewActive)) &&
+            !navigation.librarySelectionActive
         if (toolbarVisible) {
             val created = libraryToolbar == null
             val toolbar = libraryToolbar ?: ReverbAppTopBarView(context, environment, this).also {
@@ -474,6 +496,7 @@ internal class NativeMainScreenView private constructor(
             }
             // All toolbar inputs change through requestRender; motion only changes its membership.
             if (created || bindToolbar) toolbar.bind(environment, hasIncidentAlert, libraryNavigation(), statusInsets.top)
+            toolbar.setBackIncidentProgress(backIncidentProgress)
             if (libraryToolbarText == null) libraryToolbarText = toolbar.bindAccessibility(
                 windowText.textWindow, source.geometry, source, source::retainPresentSemanticChildren)
         } else if (libraryToolbar != null) {

@@ -53,8 +53,14 @@ internal class NativeLibraryPredictiveBack(
     private var activeJobStarted = false
     private var predictive = false
     private var closed = false
+    /** Library's shared Back/Incidents preview opts in; selection and inline owners retain their contract. */
+    var animateCancellation: Boolean = false
+    /** Panel-only handoff: revoke its ordinary frame publisher and return the currently displayed Back fraction. */
+    var takeCurrentBackProgress: (() -> Float)? = null
+    private var cancelling = false
     /** Main's retained panels use the same released completion marker as inline Library owners. */
     val commitCompleted: Boolean get() = committed
+    val ownsProgress: Boolean get() = activeJob != null
 
     /** A new forward drag must not inherit a previous completed predictive dismissal. */
     fun beginForwardMotion() {
@@ -65,16 +71,33 @@ internal class NativeLibraryPredictiveBack(
 
     private val callback = object : OnBackPressedCallback(false) {
         override fun handleOnBackStarted(backEvent: BackEventCompat) {
+            val restartingCancellation = animateCancellation && cancelling
+            val panelProgress = if (isEnabled) takeCurrentBackProgress?.invoke()?.coerceIn(0f, 1f) else null
+            val heldProgress = panelProgress ?: if (restartingCancellation) progress.value else 0f
+            val anchored = restartingCancellation || panelProgress != null
+            val rawAnchor = if (anchored) backEvent.progress.coerceIn(0f, 1f) else null
             retireGesture()
-            if (isEnabled) { predictive = true; launchGesture() }
+            if (isEnabled) {
+                predictive = true
+                if (anchored) edge = backEvent.swipeEdge
+                launchGesture(heldProgress, rawAnchor)
+            }
         }
         override fun handleOnBackProgressed(backEvent: BackEventCompat) { activeChannel?.trySend(backEvent) }
-        override fun handleOnBackCancelled() = cancelGesture()
+        override fun handleOnBackCancelled() {
+            if (cancelling) return
+            if (animateCancellation && gestureActive && progress.value > 0f && isEnabled)
+                settleCancelledGesture()
+            else cancelGesture()
+        }
         override fun handleOnBackPressed() {
+            val panelProgress = if (isEnabled && (activeChannel == null || !predictive))
+                takeCurrentBackProgress?.invoke()?.coerceIn(0f, 1f) else null
+            val resumedProgress = panelProgress ?: if (cancelling) progress.value else 0f
             if (activeChannel != null && !predictive) retireGesture()
             predictive = false
             // Initial publication can synchronously replace this gesture. Close only its channel.
-            val channel = activeChannel ?: run { retireGesture(); launchGesture() }
+            val channel = activeChannel ?: run { retireGesture(); launchGesture(resumedProgress) }
             channel.close()
         }
     }
@@ -83,8 +106,10 @@ internal class NativeLibraryPredictiveBack(
     fun bind(enabled: Boolean, onBack: () -> Unit) {
         if (closed) return
         this.onBack = onBack
+        val retirePanelGesture = !enabled && callback.isEnabled && takeCurrentBackProgress != null && !committed
         if (!enabled && callback.isEnabled && activeJob?.isActive == false) cancelGesture()
         callback.isEnabled = enabled
+        if (retirePanelGesture) cancelGesture()
         if (this.enabled == enabled) return
         this.enabled = enabled
         enabledEffect?.cancel()
@@ -104,7 +129,7 @@ internal class NativeLibraryPredictiveBack(
         if (!closed) frame(gestureActive, progress.value, predictiveBackHorizontalDirection(edge))
     }
 
-    private fun launchGesture(): Channel<BackEventCompat> {
+    private fun launchGesture(initialProgress: Float = 0f, rawAnchor: Float? = null): Channel<BackEventCompat> {
         val channel = Channel<BackEventCompat>(Channel.BUFFERED, BufferOverflow.SUSPEND)
         activeChannel = channel
         // Main.immediate may run the body before launch returns. Install ownership first.
@@ -115,13 +140,15 @@ internal class NativeLibraryPredictiveBack(
             try {
                 if (!callback.isEnabled) return@launch
                 committed = false
-                progress.snapTo(0f)
+                progress.snapTo(initialProgress)
                 gestureActive = true
                 publish()
                 currentCoroutineContext().ensureActive()
                 channel.consumeAsFlow().collect { event ->
                     edge = event.swipeEdge
-                    progress.snapTo(event.progress.coerceIn(0f, 1f))
+                    val rawProgress = event.progress.coerceIn(0f, 1f)
+                    progress.snapTo(if (rawAnchor == null) rawProgress
+                        else restartedGestureProgress(initialProgress, rawAnchor, rawProgress))
                     publish()
                     currentCoroutineContext().ensureActive()
                 }
@@ -144,6 +171,38 @@ internal class NativeLibraryPredictiveBack(
         job.start()
         return channel
     }
+    private fun settleCancelledGesture() {
+        val retiredJob = activeJob
+        val retiredChannel = activeChannel
+        // Revoke before cancellation: the old finally block cannot clear the replacement owner.
+        activeJob = null
+        activeChannel = null
+        activeJobStarted = false
+        predictive = false
+        cancelling = true
+        retiredJob?.cancel()
+        retiredChannel?.cancel(CancellationException("onBack cancelled"))
+        val settle = scope.launch(start = CoroutineStart.LAZY) {
+            val owner = currentCoroutineContext()[Job]
+            if (activeJob === owner) activeJobStarted = true
+            try {
+                progress.animateTo(0f, tween(160, easing = FastOutSlowInEasing)) { publish() }
+            } finally {
+                finishGesture(owner, completed = false)
+            }
+        }
+        activeJob = settle
+        settle.start()
+    }
+    private fun restartedGestureProgress(held: Float, anchor: Float, raw: Float): Float {
+        // The new stream starts at its own raw anchor, not at the interrupted visual fraction.
+        return when {
+            raw == anchor -> held
+            raw == 1f -> 1f
+            raw < anchor -> held * raw / anchor
+            else -> held + (1f - held) * (raw - anchor) / (1f - anchor)
+        }
+    }
     private fun cancelGesture() {
         val job = activeJob
         val channel = activeChannel
@@ -160,6 +219,7 @@ internal class NativeLibraryPredictiveBack(
     private fun finishGesture(owner: Job?, completed: Boolean) {
         // Replacement/close revokes ownership before an old gesture can publish cleanup.
         if (activeJob === owner) {
+            cancelling = false
             activeJob = null
             activeJobStarted = false
             activeChannel = null
@@ -171,6 +231,7 @@ internal class NativeLibraryPredictiveBack(
         }
     }
     private fun retireGesture() {
+        cancelling = false
         val job = activeJob
         val channel = activeChannel
         activeJob = null

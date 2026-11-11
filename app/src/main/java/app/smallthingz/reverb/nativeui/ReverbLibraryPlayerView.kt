@@ -6,6 +6,7 @@ import smallthingz.ui.runtime.MonotonicFrameClock
 import kotlinx.coroutines.CoroutineScope
 import android.graphics.Canvas
 import android.os.Bundle
+import android.os.SystemClock
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
@@ -13,6 +14,8 @@ import android.view.accessibility.AccessibilityNodeInfo
 import smallthingz.ui.text.font.FontFamily
 import androidx.core.view.ViewCompat
 import app.smallthingz.reverb.InlineFineSeekTarget
+import app.smallthingz.reverb.PlaybackPositionAnchor
+import app.smallthingz.reverb.PlaybackPositionDisplayClock
 import smallthingz.ui.input.phase.NativeDragPointerEvent
 import smallthingz.ui.input.phase.NativePointerPass
 import smallthingz.ui.input.phase.NativeViewPhasePointerNode
@@ -44,6 +47,8 @@ internal data class LibraryPlayerUiState(
     val backProgress: Float,
     val backDirection: Float,
     val preparing: Boolean = false,
+    val playbackAnchor: PlaybackPositionAnchor? = null,
+    val playbackDisplayActive: Boolean = true,
 ) {
     val trimBackProgress: Float get() = if (trimMode && !trimSaving && backGestureActive) backProgress.coerceIn(0f, 1f) else 0f
     val collapseProgress: Float get() = if (!trimMode && !trimSaving && backGestureActive) backProgress.coerceIn(0f, 1f) else 0f
@@ -116,7 +121,7 @@ internal class ReverbLibraryPlayerView(
     fun setWaveformFrame(frame: ProgressiveWaveformFrame) = content.timeline.setWaveformFrame(frame)
 
     /** Row disposal only; accepted operations remain owned by the existing controller/store. */
-    fun release() { content.timeline.cancel(); fineSeekView.release() }
+    fun release() { content.timeline.release(); fineSeekView.release() }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         content.measure(widthMeasureSpec, heightMeasureSpec)
@@ -199,9 +204,13 @@ private class PlayerColumn(context: Context, private var environment: ReverbView
             val before = if (child === times || child === buttons) dp(2f) else if (child === error) dp(8f) else 0
             used += before
             val remaining = max(0, maxHeight - used)
-            val fixed = when (child) { timeline -> dp(128f); fineSeek -> dp(if (state?.trimMode == true) 104f else 120f); else -> null }
+            val fixed = when (child) { timeline -> dp(128f); fineSeek -> dp(96f); else -> null }
             val hs = if (fixed != null) libraryPlayerExact(if (bounded) min(fixed, remaining) else fixed)
                 else if (bounded) libraryPlayerAtMost(remaining) else MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
+            if (child === fineSeek) {
+                val originalHeight = dp(if (state?.trimMode == true) 104f else 120f)
+                fineSeek.setVerticalGestureHeightPixels(if (bounded) min(originalHeight, remaining) else originalHeight)
+            }
             child.measure(if (child === error) libraryPlayerAtMost(availableWidth) else libraryPlayerExact(availableWidth), hs)
             used += child.measuredHeight
             if (child === heading) used += dp(5f)
@@ -231,18 +240,29 @@ private class PlayerTimeline(context: Context, private var environment: ReverbVi
     ViewGroup(context), NativeViewPhasePointerNode {
     override val view: View get() = this
     private val waveform = ProgressiveWaveformView(context)
+    private val playhead = PlaybackPlayheadLine(context, environment)
+    private val playbackClock = PlaybackPositionDisplayClock()
     private var first = ReverbTimelineMarkerView(context, environment)
     private var second: ReverbTimelineMarkerView? = null
     private var state: LibraryPlayerUiState? = null
     private var frame: ProgressiveWaveformFrame? = null
     private val input = InlineWaveformPointerOwner()
-    init { importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO; clipChildren = false; addView(waveform); addView(first) }
+    init {
+        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
+        clipChildren = false
+        addView(waveform); addView(playhead); addView(first)
+    }
     fun bind(value: ReverbViewEnvironment, next: LibraryPlayerUiState, callbacks: LibraryPlayerActions) {
         input.bind(InlineWaveformPointerBinding(
             InlineWaveformPointerKey(next.recordingRevisionKey, next.durationMillis, next.prepared, next.trimMode),
             next.trimSaving, callbacks.waveformBegin, callbacks.waveformMove, callbacks.waveformFinish))
         val geometryChanged = environment.textDensity.density != value.textDensity.density || state?.trimMode != next.trimMode
         environment = value; state = next
+        playbackClock.bind(next.recordingRevisionKey, next.trimMode,
+            if (next.prepared) next.playbackAnchor else null)
+        playbackClock.setDisplayActive(next.playbackDisplayActive, SystemClock.elapsedRealtime())
+        playhead.bind(value, next.prepared && next.durationMillis > 0)
+        first.visibility = if (next.trimMode) VISIBLE else GONE
         waveform.setPalette(ProgressiveWaveformPalette(value.palette.primary, value.palette.onSurfaceVariant, value.palette.tertiary))
         if (next.trimMode && second == null) second = ReverbTimelineMarkerView(context, value).also(::addView)
         else if (!next.trimMode) { second?.let(::removeView); second = null }
@@ -254,23 +274,30 @@ private class PlayerTimeline(context: Context, private var environment: ReverbVi
         applyFrame()
         if (geometryChanged) requestLayout()
         if (isLaidOut && !isLayoutRequested) placeMarkers()
+        invalidate()
     }
     fun setWaveform(data: ProgressiveWaveformData?) = waveform.setWaveform(data)
     fun setWaveformFrame(value: ProgressiveWaveformFrame) { frame = value; applyFrame() }
     private fun applyFrame() {
-        val f = frame ?: return
         val s = state ?: return
-        waveform.setFrame(f.copy(startFraction = s.selectionStart, endFraction = s.selectionEnd))
+        val position = playbackClock.positionAt(SystemClock.elapsedRealtime()) ?: s.positionMillis
+        val fraction = if (s.durationMillis > 0) (position.toFloat() / s.durationMillis).coerceIn(0f, 1f) else 0f
+        playhead.setPosition(fraction)
+        val f = frame ?: return
+        waveform.setFrame(f.copy(startFraction = s.selectionStart,
+            endFraction = if (s.trimMode) s.selectionEnd else fraction))
     }
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val width = MeasureSpec.getSize(widthMeasureSpec); val height = MeasureSpec.getSize(heightMeasureSpec)
         waveform.measure(libraryPlayerExact(width), libraryPlayerExact(height))
+        playhead.measure(libraryPlayerExact(width), libraryPlayerExact(height))
         val visualWidth = min(width, (12f * environment.textDensity.density).roundToInt())
         first.measure(libraryPlayerExact(visualWidth), libraryPlayerExact(height)); second?.measure(libraryPlayerExact(visualWidth), libraryPlayerExact(height))
         setMeasuredDimension(width, height)
     }
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
         waveform.layout(0, 0, width, height)
+        playhead.layout(0, 0, width, height)
         placeMarkers()
     }
     private fun placeMarkers() {
@@ -279,8 +306,8 @@ private class PlayerTimeline(context: Context, private var environment: ReverbVi
         val d = environment.textDensity.density
         val waveformWidth = ((width / d) * d).coerceAtLeast(1f)
         fun place(marker: View, fraction: Float) {
-            val offset = (waveformWidth * fraction - 12f * d * .5f).roundToInt()
-            val x = if (layoutDirection == LAYOUT_DIRECTION_RTL) width - marker.measuredWidth - offset else offset
+            // Match the waveform's physical time axis and the scrub input in every locale.
+            val x = (waveformWidth * fraction - 12f * d * .5f).roundToInt()
             marker.layout(x, 0, x + marker.measuredWidth, height)
         }
         place(first, if (s.trimMode) s.selectionStart else s.progressFraction)
@@ -290,6 +317,28 @@ private class PlayerTimeline(context: Context, private var environment: ReverbVi
         if (pass == NativePointerPass.MAIN) input.dispatch(event, width)
     }
     override fun cancel() = input.cancel()
+    fun release() {
+        input.cancel()
+        playbackClock.bind("", false, null)
+        state = null
+        invalidate()
+    }
+    override fun dispatchDraw(canvas: Canvas) {
+        // This is an elapsed transport clock, not a decorative animation or seek tween.
+        applyFrame()
+        super.dispatchDraw(canvas)
+        if (isAttachedToWindow && isShown && windowVisibility == VISIBLE &&
+            playbackClock.isAdvancingAt(SystemClock.elapsedRealtime())) postInvalidateOnAnimation()
+    }
+    override fun onAttachedToWindow() { super.onAttachedToWindow(); invalidate() }
+    override fun onVisibilityChanged(changedView: View, visibility: Int) {
+        super.onVisibilityChanged(changedView, visibility)
+        if (visibility == VISIBLE) invalidate()
+    }
+    override fun onWindowVisibilityChanged(visibility: Int) {
+        super.onWindowVisibilityChanged(visibility)
+        if (visibility == VISIBLE) invalidate()
+    }
     override fun onDetachedFromWindow() { input.detached(); super.onDetachedFromWindow() }
 }
 
@@ -344,8 +393,7 @@ private class PlayerTimes(context: Context, private var environment: ReverbViewE
         setMeasuredDimension(width, resolveSize(max(start.measuredHeight, end.measuredHeight), heightMeasureSpec))
     }
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
-        fun place(child: View, logical: Int) {
-            val x = if (layoutDirection == LAYOUT_DIRECTION_RTL) width - logical - child.measuredWidth else logical
+        fun place(child: View, x: Int) {
             val y = ((height - child.measuredHeight) / 2f).roundToInt()
             child.layout(x, y, x + child.measuredWidth, y + child.measuredHeight)
         }

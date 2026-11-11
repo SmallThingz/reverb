@@ -20,8 +20,9 @@ internal inline fun <Owner> configureRangePreviewTrackOrRelease(
 )
 
 /**
- * Explicit playback owns one terminal report after track cleanup. A stale playback error is
- * silent, but cancellation never hides a genuine cleanup failure.
+ * Combine playback and cleanup failures already available at this boundary. A stale playback
+ * error is silent, but cancellation never hides a genuine cleanup failure. Asynchronous terminal
+ * track cleanup reports independently and does not delay playback feedback.
  */
 internal fun completeRangePreviewFailure(
     playbackFailure: Throwable?,

@@ -141,20 +141,60 @@ internal class RecordingPcm16Reader internal constructor(
 
     val durationSeconds: Double get() = layout.durationSeconds
     val channelCount: Int get() = layout.channelCount
+    val isFlac: Boolean get() = flac != null
+
+    /** Native-rate playback reads exact source frames; no neighboring resampler samples enter trim. */
+    fun readFramesPcm16(firstFrame: Long, frameCount: Int): ByteArray {
+        check(!closed) { "Recording PCM reader is closed" }
+        require(firstFrame >= 0L && frameCount >= 0 && firstFrame <= layout.frameCount - frameCount)
+        require(frameCount <= Int.MAX_VALUE / layout.frameBytes)
+        if (!validateRead()) throw IOException("Recording identity changed while reading")
+        val output = if (flac != null) {
+            flac.range(firstFrame, frameCount)
+        } else {
+            val input = ByteArray(frameCount * layout.frameBytes)
+            requireReadAt(channel, layout.dataOffsetBytes + firstFrame * layout.frameBytes, input, input.size)
+            if (layout.sampleFormat == PcmSampleFormat.PCM_16) input else {
+                val converted = ByteArray(frameCount * channelCount * 2)
+                repeat(frameCount * channelCount) { sample ->
+                    val offset = sample * layout.sampleFormat.bytesPerSample
+                    val value = when (layout.sampleFormat) {
+                        PcmSampleFormat.PCM_8 -> ((input[offset].toInt() and 255) - 128) shl 8
+                        PcmSampleFormat.PCM_FLOAT -> {
+                            val bits = (input[offset].toInt() and 255) or
+                                ((input[offset + 1].toInt() and 255) shl 8) or
+                                ((input[offset + 2].toInt() and 255) shl 16) or
+                                (input[offset + 3].toInt() shl 24)
+                            val value = Float.fromBits(bits)
+                            if (value.isFinite()) (value.coerceIn(-1f, 1f) * 32767f).roundToInt() else 0
+                        }
+                        PcmSampleFormat.PCM_16 -> error("PCM16 is copied directly")
+                    }
+                    converted[sample * 2] = value.toByte()
+                    converted[sample * 2 + 1] = (value shr 8).toByte()
+                }
+                converted
+            }
+        }
+        if (!validateRead()) throw IOException("Recording identity changed while reading")
+        return output
+    }
 
     fun readRange(
         startSeconds: Double,
         endSeconds: Double,
         targetSampleRate: Int,
+        sourceBounds: PcmPreviewFrameRange? = null,
     ): ByteArray {
         check(!closed) { "Recording PCM reader is closed" }
         if (!validateRead()) throw IOException("Recording identity changed while reading")
-        val output = if (flac != null) readFlacPcm16Range(flac, startSeconds, endSeconds, targetSampleRate) else readWavPcm16Range(
+        val output = if (flac != null) readFlacPcm16Range(flac, startSeconds, endSeconds, targetSampleRate, sourceBounds) else readWavPcm16Range(
             channel = channel,
             layout = layout,
             startSeconds = startSeconds,
             endSeconds = endSeconds,
             targetSampleRate = targetSampleRate,
+            sourceBounds = sourceBounds,
         )
         if (!validateRead()) throw IOException("Recording identity changed while reading")
         return output
@@ -260,24 +300,29 @@ internal fun readWavPcm16Range(
     startSeconds: Double,
     endSeconds: Double,
     targetSampleRate: Int,
+    sourceBounds: PcmPreviewFrameRange? = null,
 ): ByteArray {
     require(targetSampleRate > 0)
     if (layout.channelCount !in 1..2) throw IOException("Unsupported PCM channel count")
     val outputFrameBytes = layout.channelCount * 2
-    val duration = layout.durationSeconds.coerceAtLeast(0.0)
-    val start = startSeconds.takeIf { it.isFinite() }?.coerceIn(0.0, duration) ?: return ByteArray(0)
+    val lowerFrame = sourceBounds?.first?.coerceIn(0L, layout.frameCount) ?: 0L
+    val upperFrame = sourceBounds?.endExclusive?.coerceIn(lowerFrame, layout.frameCount) ?: layout.frameCount
+    if (upperFrame <= lowerFrame) return ByteArray(0)
+    val lower = lowerFrame.toDouble() / layout.sampleRate
+    val duration = upperFrame.toDouble() / layout.sampleRate
+    val start = startSeconds.takeIf { it.isFinite() }?.coerceIn(lower, duration) ?: return ByteArray(0)
     val end = endSeconds.takeIf { it.isFinite() }?.coerceIn(start, duration) ?: return ByteArray(0)
     if (end <= start || layout.frameCount <= 0L) return ByteArray(0)
 
     val sourceStep = layout.sampleRate.toDouble() / targetSampleRate.toDouble()
     val radius = pcmResamplingRadius(sourceStep)
     val firstFrame = (floor(start * layout.sampleRate.toDouble()).toLong() - radius)
-        .coerceIn(0L, layout.frameCount - 1L)
+        .coerceIn(lowerFrame, upperFrame - 1L)
     val endFrameCeil = ceil(end * layout.sampleRate.toDouble()).toLong()
-    val lastNeededExclusive = if (endFrameCeil >= layout.frameCount) {
-        layout.frameCount
+    val lastNeededExclusive = if (endFrameCeil >= upperFrame) {
+        upperFrame
     } else {
-        (endFrameCeil + 1L + radius).coerceIn(firstFrame + 1L, layout.frameCount)
+        (endFrameCeil + 1L + radius).coerceIn(firstFrame + 1L, upperFrame)
     }
     val sourceFrameCount = lastNeededExclusive - firstFrame
     val sourceByteCount = sourceFrameCount * layout.frameBytes.toLong()
@@ -626,19 +671,24 @@ private fun littleEndianUInt(bytes: ByteArray, offset: Int): Long =
 
 internal fun readFlacPcm16Range(
     decoder: FlacPcmDecoder, startSeconds: Double, endSeconds: Double, targetRate: Int,
+    sourceBounds: PcmPreviewFrameRange? = null,
 ): ByteArray {
     require(targetRate > 0)
     val info = decoder.info
     if (info.channelCount !in 1..2) throw IOException("Unsupported PCM channel count")
     val frameBytes = info.channelCount * 2
-    val duration = info.frameCount.toDouble() / info.sampleRate
-    val start = startSeconds.takeIf { it.isFinite() }?.coerceIn(0.0, duration) ?: return ByteArray(0)
+    val lowerFrame = sourceBounds?.first?.coerceIn(0L, info.frameCount) ?: 0L
+    val upperFrame = sourceBounds?.endExclusive?.coerceIn(lowerFrame, info.frameCount) ?: info.frameCount
+    if (upperFrame <= lowerFrame) return ByteArray(0)
+    val lower = lowerFrame.toDouble() / info.sampleRate
+    val duration = upperFrame.toDouble() / info.sampleRate
+    val start = startSeconds.takeIf { it.isFinite() }?.coerceIn(lower, duration) ?: return ByteArray(0)
     val end = endSeconds.takeIf { it.isFinite() }?.coerceIn(start, duration) ?: return ByteArray(0)
     if (end <= start) return ByteArray(0)
     val sourceStep = info.sampleRate.toDouble() / targetRate
     val radius = pcmResamplingRadius(sourceStep)
-    val first = (floor(start * info.sampleRate).toLong() - radius).coerceIn(0L, info.frameCount - 1)
-    val endFrame = minOf(info.frameCount, ceil(end * info.sampleRate).toLong() + 1 + radius)
+    val first = (floor(start * info.sampleRate).toLong() - radius).coerceIn(lowerFrame, upperFrame - 1)
+    val endFrame = minOf(upperFrame, ceil(end * info.sampleRate).toLong() + 1 + radius)
     val frameCount = endFrame - first
     require(frameCount <= 16 * 1024 * 1024 / frameBytes) { "FLAC preview is too large" }
     val count = ceil((end - start) * targetRate).toLong()

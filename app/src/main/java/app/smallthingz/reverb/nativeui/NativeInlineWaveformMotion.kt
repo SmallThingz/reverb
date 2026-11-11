@@ -26,13 +26,15 @@ internal class NativeInlineWaveformMotion(
     private val morph = animation(760)
     private var loading: Boolean? = null
     private var settlingFrames = 0
-    private var phase = 0f
+    private var phase = 0.0
+    private var lastPhaseFrame: Long? = null
+    private var motionEnabled = true
     private var frameJob: Job? = null
     private var closed = false
 
     fun bind(data: ProgressiveWaveformData, loading: Boolean, morphStarted: Boolean) {
         if (closed) return
-        val scale = durationScale()
+        val scale = scale()
         val coarseTarget = if (data.coarse.size == 0) 0f else
             (data.coarse.builtCount.toFloat() / data.coarse.size.toFloat()).coerceIn(0f, 1f)
         val detailTarget = if (data.pass == RangeWaveformPass.DETAIL && data.detail.size > 0)
@@ -44,25 +46,38 @@ internal class NativeInlineWaveformMotion(
             this.loading = loading
             settlingFrames = if (loading) 0 else 14
         }
+        motionEnabled = scale > 0f
+        if (!motionEnabled) {
+            snapTargets()
+            frameJob?.cancel()
+            frameJob = null
+        }
         publishFrame()
         requestFrames()
     }
 
-    private fun active() = loading == true || settlingFrames > 0 || coarse.running || detail.running || morph.running
+    private fun active() = motionEnabled &&
+        (loading == true || settlingFrames > 0 || coarse.running || detail.running || morph.running)
     private fun requestFrames() {
         if (frameJob?.isActive == true || !active()) return
+        lastPhaseFrame = null
         frameJob = scope.launch {
             while (!closed && active()) {
                 frames.withFrameNanos { time ->
                     if (!closed) {
-                        val scale = durationScale()
+                        val scale = scale()
+                        motionEnabled = scale > 0f
                         coarse.frame(time, scale)
                         detail.frame(time, scale)
                         morph.frame(time, scale)
-                        if (loading == true || settlingFrames > 0) {
-                            phase = (time / 1_000_000_000.0).toFloat()
+                        if (!motionEnabled) snapTargets()
+                        else if (loading == true || settlingFrames > 0) {
+                            lastPhaseFrame?.let { previous ->
+                                phase += (time - previous).coerceAtLeast(0L) / (1_000_000_000.0 * scale)
+                            }
+                            lastPhaseFrame = maxOf(lastPhaseFrame ?: time, time)
                             if (loading != true) settlingFrames--
-                        }
+                        } else lastPhaseFrame = null
                         publishFrame()
                     }
                 }
@@ -70,11 +85,21 @@ internal class NativeInlineWaveformMotion(
         }
     }
 
+    private fun scale(): Float = durationScale().let { if (it.isFinite() && it >= 0f) it else 1f }
+
+    private fun snapTargets() {
+        coarse.snap(coarse.target)
+        detail.snap(detail.target)
+        morph.snap(morph.target)
+        settlingFrames = 0
+        lastPhaseFrame = null
+    }
+
     private fun publishFrame() = publish(ProgressiveWaveformFrame(
         morphProgress = morph.value,
         visibleCoarseFraction = coarse.value,
         visibleDetailFraction = detail.value,
-        wobblePhaseSeconds = phase,
+        wobblePhaseSeconds = phase.toFloat(),
         // PlayerTimeline substitutes the current source-derived selection on every frame.
         startFraction = 0f, endFraction = 0f, morphFromBlob = false,
     ))

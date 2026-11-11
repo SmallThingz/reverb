@@ -78,7 +78,8 @@ internal class NativeMainNavigationState(restored: NativeMainSavedNavigation = N
     fun bindIncidentsOverlayVisibility(visible: Boolean) { incidentMotionVisible = visible }
 
     /** Return target so the corresponding retained Back owner calls beginForwardMotion. */
-    fun beginVerticalReveal(startY: Float, height: Float): NativeMainPanel? {
+    fun beginVerticalReveal(startY: Float, height: Float,
+        currentSettingsProgress: Float = 0f, currentLibraryProgress: Float = 0f): NativeMainPanel? {
         settingsDragProgress = 0f
         libraryDragProgress = 0f
         dragTarget = when {
@@ -86,7 +87,14 @@ internal class NativeMainNavigationState(restored: NativeMainSavedNavigation = N
             startY >= height * .52f -> NativeMainPanel.LIBRARY
             else -> null
         }
-        if (dragTarget == NativeMainPanel.SETTINGS) settingsBufferTargetCode = -1
+        when (dragTarget) {
+            NativeMainPanel.SETTINGS -> {
+                settingsBufferTargetCode = -1
+                settingsDragProgress = currentSettingsProgress.coerceIn(0f, 1f)
+            }
+            NativeMainPanel.LIBRARY -> libraryDragProgress = currentLibraryProgress.coerceIn(0f, 1f)
+            null -> Unit
+        }
         return dragTarget
     }
 

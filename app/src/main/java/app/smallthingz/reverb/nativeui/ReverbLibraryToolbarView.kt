@@ -109,8 +109,27 @@ internal class ReverbLibraryToolbarView(
 private class LibrarySelectionBar(context: Context, private var environment: ReverbViewEnvironment, inputRoot: View) :
     ReverbTopBarActionRoutingGroup(context) {
     private val close = ReverbTopBarIconAction(context, environment, inputRoot, ReverbIcon.Close, R.string.clear_selection, true)
-    private val share = ReverbTopBarIconAction(context, environment, inputRoot, ReverbIcon.Share, R.string.share_recording, true)
-    private val delete = ReverbTopBarIconAction(context, environment, inputRoot, ReverbIcon.Delete, R.string.delete_recording, true)
+    private val share = ReverbTopBarIconAction(context, environment, inputRoot, ReverbIcon.Share,
+        R.string.share_recording, true, sharedSurface = true)
+    private val delete = ReverbTopBarIconAction(context, environment, inputRoot, ReverbIcon.Delete,
+        R.string.delete_recording, true, sharedSurface = true)
+    private val selectionActions = ReverbGroupLayout(context, 15f)
+    private val actionRow = object : ViewGroup(context) {
+        init { importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO; addView(share); addView(delete) }
+        override fun onMeasure(w: Int, h: Int) {
+            val size = dp(48f)
+            share.measure(libraryToolbarExact(size), libraryToolbarExact(size))
+            delete.measure(libraryToolbarExact(size), libraryToolbarExact(size))
+            setMeasuredDimension(size * 2, size)
+        }
+        override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
+            val size = share.measuredWidth
+            val shareX = if (layoutDirection == LAYOUT_DIRECTION_RTL) size else 0
+            val deleteX = if (layoutDirection == LAYOUT_DIRECTION_RTL) 0 else size
+            share.layout(shareX, 0, shareX + size, height)
+            delete.layout(deleteX, 0, deleteX + size, height)
+        }
+    }
     private val title = environment.paragraph(context, "", ReverbTextRole.TITLE_MEDIUM).apply {
         setTextLayout(maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
@@ -119,7 +138,9 @@ private class LibrarySelectionBar(context: Context, private var environment: Rev
     init {
         background = noise
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
-        addView(close); addView(title); addView(share); addView(delete)
+        selectionActions.addRow(actionRow, ReverbGroupLayout.LayoutParams(
+            LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        addView(close); addView(title); addView(selectionActions)
     }
     fun bind(value: ReverbViewEnvironment, state: LibraryToolbarState, actions: LibraryToolbarActions) {
         environment = value
@@ -130,6 +151,7 @@ private class LibrarySelectionBar(context: Context, private var environment: Rev
         share.bind(value, !state.selectionHasBusyMutation, value.palette.ink, value.palette.border, actions.shareSelection)
         delete.bind(value, state.acceptsDeletions && !state.selectionHasBusyMutation,
             value.palette.error, value.palette.border, actions.deleteSelection)
+        selectionActions.setPalette(value.palette.field, value.palette.border)
         touchDensity = value.textDensity.density
     }
     override fun onTouchEvent(event: MotionEvent): Boolean = true
@@ -139,8 +161,7 @@ private class LibrarySelectionBar(context: Context, private var environment: Rev
         val size = dp(48f)
         val actionSpec = libraryToolbarExact(size)
         close.measure(actionSpec, actionSpec)
-        share.measure(actionSpec, actionSpec)
-        delete.measure(actionSpec, actionSpec)
+        selectionActions.measure(libraryToolbarExact(size * 2), actionSpec)
         val available = max(0, width - dp(16f) - dp(16f) - size * 3 - dp(16f))
         title.measure(libraryToolbarExact(available), libraryToolbarAtMost(dp(66f)))
         setMeasuredDimension(width, resolveSize(dp(66f), heightMeasureSpec))
@@ -148,8 +169,7 @@ private class LibrarySelectionBar(context: Context, private var environment: Rev
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
         var x = place(close, dp(16f)) + dp(16f)
         x = place(title, x)
-        x = place(share, x)
-        place(delete, x)
+        place(selectionActions, x)
     }
     private fun place(child: View, x: Int): Int {
         val px = if (layoutDirection == LAYOUT_DIRECTION_RTL) width - x - child.measuredWidth else x

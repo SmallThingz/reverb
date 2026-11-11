@@ -37,9 +37,15 @@ internal data class SpringFineSeekBinding(
 )
 
 /** Source uses two intentionally distinct travel clamps:1 physical px in input,1dp in drawing. */
-internal data class SpringFineSeekGeometry(val width: Int, val height: Int, val density: Float) {
+internal data class SpringFineSeekGeometry(
+    val width: Int,
+    val height: Int,
+    val density: Float,
+    val verticalGestureHeight: Int = height,
+) {
     val inputHorizontalTravel = (width * .5f - 10f * density - 24f * density).coerceAtLeast(1f)
     val inputVerticalTravel = (height * .5f - 10f * density - 24f * density).coerceAtLeast(1f)
+    val verticalGestureTravel = (verticalGestureHeight * .5f - 10f * density - 24f * density).coerceAtLeast(1f)
     val drawHorizontalTravel = (width / density * .5f - 10f - 24f).coerceAtLeast(1f) * density
     val drawVerticalTravel = (height / density * .5f - 10f - 24f).coerceAtLeast(1f) * density
     val hitWidth = minOf(width, (64f * density).roundToInt())
@@ -241,7 +247,7 @@ internal class NativeSpringFineSeekState(
                 horizontalPull = rangeFineTuneHorizontalTouchPull(change.position.x,
                     geometry.width.toFloat(), active.geometry.inputHorizontalTravel)
                 rawVerticalPull = rangeFineTuneVerticalDragPull(active.dragStartRawVertical,
-                    change.position.y - active.down.y, active.geometry.inputVerticalTravel * 2.35f)
+                    change.position.y - active.down.y, active.geometry.verticalGestureTravel * 2.35f)
                 change.consume()
                 invalidate()
             }

@@ -62,8 +62,10 @@
   `RecordingIncidentStore.recordUnexpectedError*`. Do not create incidents for modeled outcomes such as cancellation,
   permission denial, validation rejection, normal provider/file unavailability, lifecycle teardown rejection, or other
   failures the current operation explicitly expects and reports as a normal result.
-- The Incidents button occupies the Home top bar's start slot (left in LTR), is hidden throughout Library and its
-  transitions, and uses a warning/error glyph. Brand remains centered and Settings at end. A durably armed,
+- The Incidents button occupies the Home top bar's start slot (left in LTR) and uses a warning/error glyph. While Library
+  is open its separate Home action stays hidden; predictive Library close morphs the retained Back glyph into Incidents
+  using the shared panel progress, including cancellation. Only committed Home navigation transfers action/accessibility
+  authority to Incidents. Brand remains centered and Settings at end. A durably armed,
   actually-running capture session may be suppressed only by an explicit known-capture-stop transition; a persisted
   disabled-listening preference is not proof that the already-armed session stopped. Persistence/audio failures that
   actually halt an armed capture are interruption incidents, not known stops. Transparent AudioRecord/config restarts
@@ -220,9 +222,11 @@
   stays in plain remembered holders rather than Compose state; bookkeeping changes must not trigger recomposition.
 - Library playback and inline trim reuse the exact range-export spring fine-seek control: same puck, 2D pull field,
   nonlinear seek math, hit target, and play/pause tap semantics. Fine seek never becomes silent seek/pause: Library
-  hands audio from MediaPlayer to the same continuous grain shuttle and resumes normal playback on release. Trim has
-  only Start/End boundaries: the last-touched boundary itself becomes the audition cursor, and fine seek edits/auditions
-  that exact edge without a third trim cursor. Waveform-body scrubbing moves the already-active boundary; only touching
+  hands ordinary playback from MediaPlayer to the same continuous grain shuttle and resumes normal playback on release.
+  Trim playback uses bounded PCM preview rather than a whole-file player with a UI endpoint timer. Trim has only Start/End
+  editable boundaries: the last-touched boundary itself becomes the audition cursor, and fine seek edits/auditions that
+  exact edge. A separate thin display-only playhead shows consumed playback position on Library and Range Export waveforms;
+  it adds no editable cursor or seek hit target. Waveform-body scrubbing moves the already-active boundary; only touching
   the other boundary marker switches which edge is the cursor.
 - Long-pressing an expanded recording card to open its context menu must preserve the card expansion; opening the menu
   is not a collapse action.
@@ -1026,8 +1030,13 @@
   while source-head catch-up remains free to move faster. Slow sub-1x motion keeps normal pitch and becomes sparse rather
   than replaying near-identical grains. Prefer 96 kHz shuttle processing/output, but fall back to 48 kHz if either the capability query
   or actual AudioTrack creation/configuration rejects 96 kHz. The audible target includes uncommitted display-rate jog
-  motion, continuous grains overlap on one persistent low-latency AudioTrack, and a small verified normalized PCM source
-  window is reused across adjacent grains instead of rescanning durable storage per hop.
+  motion, continuous grains overlap on one persistent low-latency AudioTrack while bounds and direction permit it, and a
+  small verified normalized PCM source window is reused across adjacent grains instead of rescanning durable storage per
+  hop. Bounds expansion preserves admitted queued support; contraction or direction reversal revokes the old epoch and
+  silences its physical queue before replacement. Selected play/audition/shuttle output and resampler support stay inside
+  the exact source-frame interval. Native pause/flush is independent of slow terminal release, with bounded outstanding
+  native owners; retired tracks never replay. Display progress projects actual consumed-position samples, not queued tails,
+  and resets on seek/pause/owner changes. Animator duration scale affects decoration, never audio transport or its clock.
 - Range Export is an accepted-work boundary in the click callback: the export callback runs synchronously before
   returning. Never defer the pinned-snapshot handoff through View.post() or another lifecycle-owned queue.
 - Saved-recording shuttle positions are bounded by the opened audio source duration, not catalog duration metadata;

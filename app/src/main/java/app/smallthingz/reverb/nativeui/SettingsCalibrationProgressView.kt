@@ -9,10 +9,12 @@ import smallthingz.ui.text.view.NativePlainTextViewGeometry
 import smallthingz.ui.text.view.NativeSourceAccessibilityNode
 import smallthingz.ui.text.view.nativeMergedRoleBoundsInScreen
 import android.content.Context
+import android.animation.ValueAnimator
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.os.Bundle
 import android.view.View
+import android.view.Choreographer
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityManager
 import android.view.accessibility.AccessibilityNodeInfo
@@ -21,16 +23,24 @@ import smallthingz.ui.geometry.Rect
 import androidx.core.view.ViewCompat
 import androidx.core.view.accessibility.AccessibilityEventCompat
 import androidx.core.view.accessibility.AccessibilityNodeInfoCompat
+import smallthingz.ui.animation.view.ViewColorTransition
+import smallthingz.ui.interaction.view.readCachedAnimatorDurationScale
 import kotlin.math.min
 import kotlin.math.roundToInt
 
-/** The SkipSilenceSettings determinate overload has no implicit progress animation. */
+/** Determinate Clear progress keeps authoritative semantics separate from its smooth visual fill. */
 internal class SettingsCalibrationProgressView(
     context:Context,
     private var environment:ReverbViewEnvironment,
-):View(context) {
+):View(context),Choreographer.FrameCallback {
     private val paint=Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
+    private val colors=ViewColorTransition(this,
+        intArrayOf(environment.palette.primary,environment.palette.secondaryContainer),{invalidate()})
     private var progress=0f
+    private val motion=ClearProgressMotion()
+    private val choreographer=Choreographer.getInstance()
+    private var motionPosted=false
+    private var scaleReadDenied=false
     private var geometry:NativePlainTextViewGeometry?=null
     private var exposure:(()->Boolean)?=null
     private var geometryToken:Any?=null
@@ -54,12 +64,17 @@ internal class SettingsCalibrationProgressView(
         ViewCompat.setScreenReaderFocusable(this,true)
         if(android.os.Build.VERSION.SDK_INT>=29)isForceDarkAllowed=false
     }
-    fun bind(value:Float,next:ReverbViewEnvironment) {
+    fun bind(value:Float,next:ReverbViewEnvironment,operationId:Long,terminal:Boolean) {
         val densityChanged=environment.textDensity.density!=next.textDensity.density
         val changedProgress=calibrationProgressValue(value)
         val progressChanged=progress!=changedProgress
+        if(progressChanged)scaleReadDenied=false
         environment=next
+        colors.retarget(next.palette.primary,next.palette.secondaryContainer)
         progress=changedProgress
+        motion.bind(operationId,progress,terminal,frameScale())
+        if(!isAttachedToWindow||!isShown)motion.snap()
+        scheduleMotion()
         if(densityChanged)requestLayout()
         invalidate()
         if(progressChanged && isAttachedToWindow && manager?.isEnabled==true && !semanticsPosted) {
@@ -99,16 +114,17 @@ internal class SettingsCalibrationProgressView(
         setMeasuredDimension(resolveSize((240f*density).roundToInt(),w),resolveSize((4f*density).roundToInt(),h))
     }
     override fun onDraw(canvas:Canvas) {
+        val visibleProgress=motion.value
         val density=environment.textDensity.density
         val stroke=height.toFloat()
         val adjustedGap=if(height>width)4f else 4f+stroke/density
         val gapFraction=adjustedGap/(width/density)
-        val trackStart=progress+min(progress,gapFraction)
-        if(trackStart<=1f)line(canvas,trackStart,1f,environment.palette.secondaryContainer)
-        line(canvas,0f,progress,environment.palette.primary)
+        val trackStart=visibleProgress+min(visibleProgress,gapFraction)
+        if(trackStart<=1f)line(canvas,trackStart,1f,colors.color(1))
+        line(canvas,0f,visibleProgress,colors.color(0))
         val size=min(4f*density,stroke)
         val offset=min((stroke-size)/2f,6f*density)
-        paint.style=Paint.Style.FILL;paint.color=environment.palette.primary
+        paint.style=Paint.Style.FILL;paint.color=colors.color(0)
         val save=canvas.save()
         try {
             if(layoutDirection==LAYOUT_DIRECTION_RTL) {
@@ -170,8 +186,31 @@ internal class SettingsCalibrationProgressView(
         super.onRtlPropertiesChanged(layoutDirection);invalidate()
     }
     override fun onDetachedFromWindow() {
+        motion.snap();scheduleMotion()
         removeCallbacks(semanticsChanged);semanticsPosted=false
         super.onDetachedFromWindow()
+    }
+
+    override fun doFrame(frameTimeNanos:Long) {
+        motionPosted=false
+        if(!isAttachedToWindow||!isShown)motion.snap()
+        else motion.frame(frameTimeNanos,frameScale())
+        invalidate();scheduleMotion()
+    }
+    private fun scheduleMotion() {
+        if(motion.running&&!motionPosted) {
+            motionPosted=true;choreographer.postFrameCallback(this)
+        } else if(!motion.running&&motionPosted) {
+            choreographer.removeFrameCallback(this);motionPosted=false
+        }
+    }
+    private fun frameScale():Float {
+        if(!ValueAnimator.areAnimatorsEnabled())return 0f
+        if(scaleReadDenied)return 1f
+        val scale=try {readCachedAnimatorDurationScale(context)} catch(_:SecurityException) {
+            scaleReadDenied=true;1f
+        }
+        return if(scale.isFinite()&&scale>=0f)scale else 1f
     }
 }
 

@@ -30,6 +30,7 @@ internal class NativeNotificationDurationWheel(
     private val binding=NotificationDurationBinding(interactionState)
     private var maximum=1
     private var enabled=false
+    private var interactionRetired=false
     private var closed=false
     private val observer=LifecycleEventObserver {_,event->
         if(event==Lifecycle.Event.ON_PAUSE||event==Lifecycle.Event.ON_STOP) {
@@ -39,7 +40,9 @@ internal class NativeNotificationDurationWheel(
     init {
         lifecycle.addObserver(observer)
         view.setAccessibilityLabel(context.getString(R.string.range_export_duration))
-        view.onInteractionStart={binding.beginInteraction(readOwner());interactionChanged()}
+        view.onInteractionStart={
+            if(enabled&&!closed) {binding.beginInteraction(readOwner());interactionChanged()}
+        }
         view.onDurationChanged=binding::select
         view.onInteractionEnd={
             try {
@@ -83,6 +86,7 @@ internal class NativeNotificationDurationWheel(
     fun bind(seconds:Int,maximumSeconds:Int,interactionReady:Boolean,editRevision:Long,
              environment:ReverbViewEnvironment) {
         maximum=maximumSeconds.coerceIn(1,86_400);enabled=interactionReady
+        if(interactionReady)interactionRetired=false
         binding.update(seconds,maximum,enabled,editRevision)
         view.isEnabled=enabled
         with(environment.palette) {view.setPalette(ink=onSurface,muted=onSurfaceVariant,border=outlineVariant,error=error)}
@@ -97,6 +101,15 @@ internal class NativeNotificationDurationWheel(
         } finally {interactionChanged()}
     }
     private fun step(forward:Boolean)=commit(stepDuration(binding.seconds,maximum,forward))
+    /** End logical ownership now while the containing surface retains these pixels for its exit. */
+    fun cancelInteraction() {
+        if(closed||interactionRetired)return
+        interactionRetired=true
+        enabled=false
+        view.isEnabled=false
+        binding.release()
+        interactionChanged()
+    }
     override fun close() {
         if(closed)return
         closed=true

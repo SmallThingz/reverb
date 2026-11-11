@@ -18,6 +18,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.junit.runners.Parameterized
 import smallthingz.ui.runtime.MonotonicFrameClock
+import smallthingz.ui.MotionDurationScale
 import kotlin.coroutines.CoroutineContext
 
 @RunWith(Parameterized::class)
@@ -392,15 +393,270 @@ class NativeLibraryPredictiveBackTest(private val queued: Boolean) {
         assertEquals(1f, f.last.progress, 0f)
     }
 
+    @Test fun smoothCancellationKeepsReleasedPoseAndSettlesTheSameProgress() = smoothScenario { f ->
+        f.start(.6f, BackEventCompat.EDGE_RIGHT)
+        f.callback.handleOnBackCancelled()
+        f.drain()
+        assertTrue(f.last.active)
+        assertEquals(.6f, f.last.progress, 0f)
+        assertEquals(-1f, f.last.direction, 0f)
+        f.at(0)
+        f.at(80)
+        assertTrue(f.last.active)
+        assertTrue(f.last.progress > 0f && f.last.progress < .6f)
+        f.at(160)
+        assertFalse(f.last.active)
+        assertEquals(0f, f.last.progress, 0f)
+        assertEquals(0, f.pendingFrames)
+        assertEquals(0, f.commits)
+    }
+
+    @Test fun smoothDuplicateCancelAndLateProgressKeepTheOriginalSettle() = smoothScenario { f ->
+        f.start(.6f)
+        f.callback.handleOnBackCancelled()
+        f.drain()
+        f.at(0)
+        f.at(80)
+        val sampled = f.last
+        val requests = f.frameRequests
+        f.callback.handleOnBackCancelled()
+        f.callback.handleOnBackProgressed(event(.95f))
+        f.drain()
+        assertEquals(sampled, f.last)
+        assertEquals(requests, f.frameRequests)
+        f.at(160)
+        assertFalse(f.last.active)
+        assertEquals(0f, f.last.progress, 0f)
+        assertEquals(0, f.commits)
+    }
+
+    @Test fun smoothCancellationCannotRetireANewerGesture() = smoothScenario { f ->
+        f.start(.6f)
+        f.callback.handleOnBackCancelled()
+        f.callback.handleOnBackStarted(event(0f, BackEventCompat.EDGE_RIGHT))
+        f.callback.handleOnBackProgressed(event(.3f, BackEventCompat.EDGE_RIGHT))
+        f.drain()
+        f.at(160)
+        assertTrue(f.last.active)
+        assertEquals(.72f, f.last.progress, .0001f)
+        assertEquals(-1f, f.last.direction, 0f)
+        f.callback.handleOnBackPressed()
+        f.drain()
+        f.at(200)
+        f.at(420)
+        assertEquals(1, f.commits)
+        assertTrue(f.back.commitCompleted)
+    }
+
+    @Test fun ordinaryBackReversesSmoothCancellationFromItsActualPose() = smoothScenario { f ->
+        f.start(.6f)
+        f.callback.handleOnBackCancelled()
+        f.drain()
+        f.at(0)
+        f.at(80)
+        val sampled = f.last.progress
+        f.callback.handleOnBackPressed()
+        f.drain()
+        assertEquals(sampled, f.last.progress, 0f)
+        f.at(100)
+        f.at(320)
+        assertEquals(1, f.commits)
+        assertEquals(1f, f.last.progress, 0f)
+    }
+
+    @Test fun smoothCancellationRevokesACommitAlreadyWaitingForFrames() = smoothScenario { f ->
+        f.start(.6f)
+        f.callback.handleOnBackPressed()
+        f.drain()
+        f.at(0)
+        f.callback.handleOnBackCancelled()
+        f.drain()
+        f.at(40)
+        f.at(240)
+        assertFalse(f.last.active)
+        assertEquals(0f, f.last.progress, 0f)
+        assertEquals(0, f.commits)
+        assertFalse(f.back.commitCompleted)
+    }
+
+    @Test fun smoothCancellationStopsOnDisableAndDisposal() = smoothScenario { f ->
+        f.start(.6f)
+        f.callback.handleOnBackCancelled()
+        f.drain()
+        f.back.bind(false) { f.commits++ }
+        f.drain()
+        assertFalse(f.last.active)
+        assertEquals(0f, f.last.progress, 0f)
+        assertEquals(0, f.pendingFrames)
+        f.back.bind(true) { f.commits++ }
+        f.drain()
+        f.start(.8f)
+        f.callback.handleOnBackCancelled()
+        f.drain()
+        f.back.close()
+        val publications = f.states.size
+        f.drain()
+        f.at(300)
+        assertEquals(publications, f.states.size)
+        assertEquals(0, f.pendingFrames)
+        assertEquals(0, f.commits)
+    }
+
+    @Test fun zeroScaleSmoothCancellationReachesItsFinalPose() = smoothScenario(scale = 0f) { f ->
+        f.start(.6f)
+        assertEquals(.6f, f.last.progress, 0f)
+        f.callback.handleOnBackCancelled()
+        f.drain()
+        f.at(0)
+        assertFalse(f.last.active)
+        assertEquals(0f, f.last.progress, 0f)
+        assertEquals(0, f.pendingFrames)
+        assertEquals(0, f.commits)
+    }
+
+    @Test fun restartedPredictiveGestureHoldsMidCancelPoseThenMapsAndReverses() = smoothScenario { f ->
+        f.start(.8f)
+        f.callback.handleOnBackCancelled()
+        f.drain()
+        f.at(0)
+        f.at(80)
+        val held = f.last.progress
+        assertTrue(held > 0f && held < .8f)
+        f.callback.handleOnBackStarted(event(0f, BackEventCompat.EDGE_RIGHT))
+        f.drain()
+        assertTrue(f.last.active)
+        assertEquals(held, f.last.progress, 0f)
+        assertEquals(-1f, f.last.direction, 0f)
+        f.callback.handleOnBackProgressed(event(0f, BackEventCompat.EDGE_RIGHT))
+        f.drain()
+        assertEquals(held, f.last.progress, 0f)
+        f.callback.handleOnBackProgressed(event(.5f))
+        f.drain()
+        assertEquals(held + (1f - held) * .5f, f.last.progress, .0001f)
+        f.callback.handleOnBackProgressed(event(.2f))
+        f.drain()
+        assertEquals(held + (1f - held) * .2f, f.last.progress, .0001f)
+        f.at(240)
+        assertEquals(held + (1f - held) * .2f, f.last.progress, .0001f)
+        f.callback.handleOnBackProgressed(event(1f))
+        f.drain()
+        assertEquals(1f, f.last.progress, 0f)
+        f.callback.handleOnBackPressed()
+        f.drain()
+        assertEquals(1, f.commits)
+        assertTrue(f.back.commitCompleted)
+        assertEquals(0, f.pendingFrames)
+    }
+
+    @Test fun restartedGestureUsesItsNonzeroRawStartAsAnchorInBothDirections() = smoothScenario { f ->
+        f.start(.6f)
+        f.callback.handleOnBackCancelled()
+        f.drain()
+        f.callback.handleOnBackStarted(event(.4f))
+        f.drain()
+        assertEquals(.6f, f.last.progress, 0f)
+        f.callback.handleOnBackProgressed(event(.4f))
+        f.drain()
+        assertEquals(.6f, f.last.progress, 0f)
+        f.callback.handleOnBackProgressed(event(.7f))
+        f.drain()
+        assertEquals(.8f, f.last.progress, .0001f)
+        f.callback.handleOnBackProgressed(event(.2f))
+        f.drain()
+        assertEquals(.3f, f.last.progress, .0001f)
+        f.callback.handleOnBackProgressed(event(0f))
+        f.drain()
+        assertEquals(0f, f.last.progress, 0f)
+        f.callback.handleOnBackProgressed(event(1f))
+        f.drain()
+        assertEquals(1f, f.last.progress, 0f)
+        f.callback.handleOnBackCancelled()
+        f.drain()
+        f.at(0)
+        f.at(160)
+        assertFalse(f.last.active)
+        assertEquals(0f, f.last.progress, 0f)
+        assertEquals(0, f.commits)
+    }
+
+    @Test fun repeatedCancellationRestartOwnsOnlyItsNewestPoseAndCleanup() = smoothScenario { f ->
+        f.start(.6f)
+        f.callback.handleOnBackCancelled()
+        f.callback.handleOnBackStarted(event(0f))
+        f.callback.handleOnBackProgressed(event(.5f))
+        f.drain()
+        assertEquals(.8f, f.last.progress, .0001f)
+        f.callback.handleOnBackCancelled()
+        f.drain()
+        f.at(0)
+        f.at(80)
+        val held = f.last.progress
+        f.callback.handleOnBackStarted(event(0f))
+        f.drain()
+        assertEquals(held, f.last.progress, 0f)
+        f.callback.handleOnBackProgressed(event(.5f))
+        f.drain()
+        assertEquals(held + (1f - held) * .5f, f.last.progress, .0001f)
+        f.callback.handleOnBackCancelled()
+        f.drain()
+        f.at(100)
+        f.at(260)
+        assertFalse(f.last.active)
+        assertEquals(0f, f.last.progress, 0f)
+        assertEquals(0, f.pendingFrames)
+        assertEquals(0, f.commits)
+    }
+
+    @Test fun restartedGestureAtRawEndpointRemainsFiniteAndCommitFinishes() = smoothScenario { f ->
+        f.start(.6f)
+        f.callback.handleOnBackCancelled()
+        f.drain()
+        f.callback.handleOnBackStarted(event(1f))
+        f.callback.handleOnBackProgressed(event(1f))
+        f.drain()
+        assertEquals(.6f, f.last.progress, 0f)
+        f.callback.handleOnBackPressed()
+        f.drain()
+        f.at(0)
+        f.at(220)
+        assertEquals(1f, f.last.progress, 0f)
+        assertEquals(1, f.commits)
+    }
+
+    @Test fun zeroScaleRestartPreservesDirectGestureAndCommitsOnce() = smoothScenario(scale = 0f) { f ->
+        f.start(.6f)
+        f.callback.handleOnBackCancelled()
+        f.drain()
+        val held = f.last.progress
+        f.callback.handleOnBackStarted(event(0f))
+        f.drain()
+        assertEquals(held, f.last.progress, 0f)
+        f.callback.handleOnBackProgressed(event(.5f))
+        f.drain()
+        assertEquals(held + (1f - held) * .5f, f.last.progress, .0001f)
+        f.callback.handleOnBackPressed()
+        f.drain()
+        f.at(0)
+        assertEquals(1f, f.last.progress, 0f)
+        assertEquals(1, f.commits)
+        assertEquals(0, f.pendingFrames)
+    }
+
+    private fun smoothScenario(scale: Float = 1f, block: (Fixture) -> Unit) {
+        Fixture(queued, smoothCancellation = true, durationScale = scale).use(block)
+    }
+
     private fun scenario(block: (Fixture) -> Unit) {
         Fixture(queued).use(block)
     }
 
     private data class Frame(val active: Boolean, val progress: Float, val direction: Float)
 
-    private class Fixture(queued: Boolean) : AutoCloseable {
+    private class Fixture(queued: Boolean, smoothCancellation: Boolean = false, durationScale: Float = 1f) : AutoCloseable {
         val dispatcher = TestDispatcher(queued)
-        private val scope = CoroutineScope(dispatcher + Job())
+        private val scope = CoroutineScope(dispatcher + Job() + object : MotionDurationScale {
+            override val scaleFactor = durationScale
+        })
         private val clock = TestFrameClock()
         val states = mutableListOf<Frame>()
         var commits = 0
@@ -410,7 +666,7 @@ class NativeLibraryPredictiveBackTest(private val queued: Boolean) {
             val state = Frame(active, progress, direction)
             states.add(state)
             onFrame?.invoke(state)
-        }
+        }.apply { animateCancellation = smoothCancellation }
         // Exercise the actual production callback/controller without an Android lifecycle or Looper.
         // Dispatcher registration and physical gesture routing require separate device qualification.
         val callback = NativeLibraryPredictiveBack::class.java.getDeclaredField("callback").run {

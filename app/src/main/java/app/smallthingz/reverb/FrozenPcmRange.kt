@@ -24,6 +24,7 @@ internal data class FrozenPcmRange(
         targetSampleFormat: PcmSampleFormat,
         maximumOutputFrames: Long,
         maximumOutputBatchBytes: Int = PcmNormalizer.DEFAULT_OUTPUT_BATCH_BYTES,
+        allowOutsideRangeContext: Boolean = true,
         consumer: Consumer,
     ): ReadResult {
         require(targetSampleRate > 0 && targetChannelCount in 1..2)
@@ -57,6 +58,7 @@ internal data class FrozenPcmRange(
                     targetChannelCount, targetSampleFormat, maximumOutputBatchBytes, consumer,
                     if (first == 0) leadingContext else emptyList(),
                     if (end == segments.size) trailingContext else emptyList(),
+                    allowOutsideRangeContext = allowOutsideRangeContext,
                 )
                 framesToDrop = 0L
             } else {

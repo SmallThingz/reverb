@@ -151,30 +151,6 @@ class RangeExportEditorMathTest {
     }
 
     @Test
-    fun movingRangeMarkerDragUsesTimelineStableCoordinates() {
-        assertEquals(
-            -350f,
-            rangeTimelineDragDeltaPx(
-                initialMarkerCenterPx = 1_000f,
-                currentMarkerCenterPx = 650f,
-                downLocalX = 32f,
-                currentLocalX = 32f,
-            ),
-            0f,
-        )
-        assertEquals(
-            -350f,
-            rangeTimelineDragDeltaPx(
-                initialMarkerCenterPx = 1_000f,
-                currentMarkerCenterPx = 990f,
-                downLocalX = 32f,
-                currentLocalX = -308f,
-            ),
-            0f,
-        )
-    }
-
-    @Test
     fun subMinimumTimelineNeverInventsAudioPastTheRealEnd() {
         assertEquals(0.02f, rangeTimelineDurationSeconds(0.02f), 0f)
 

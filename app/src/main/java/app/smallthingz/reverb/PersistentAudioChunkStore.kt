@@ -1308,11 +1308,12 @@ internal class PersistentAudioChunkStore internal constructor(
             targetSampleFormat: PcmSampleFormat,
             maximumOutputFrames: Long,
             maximumOutputBatchBytes: Int = PcmNormalizer.DEFAULT_OUTPUT_BATCH_BYTES,
+            allowOutsideRangeContext: Boolean = true,
             consumer: Consumer,
         ): ReadResult {
             check(!closedLease) { "RangeLease is closed" }
             return frozenRange().readNormalized(targetSampleRate, targetChannelCount, targetSampleFormat,
-                maximumOutputFrames, maximumOutputBatchBytes, consumer)
+                maximumOutputFrames, maximumOutputBatchBytes, allowOutsideRangeContext, consumer)
         }
 
         private fun frozenRange() = FrozenPcmRange(segments, leadingContext, trailingContext,

@@ -109,6 +109,11 @@ internal class SettingsQuickTilesView(
     private val retry = SettingsCalibrationActionView(context, environment, inputRoot) { owner.retry() }
     private var inline: QuickTileInlineView? = null
     private var inlineOwner: NativeQuickTileInlineOwner? = null
+    private val creation = QuickTileCreationMorph(context, create) { retired ->
+        retired.close()
+        if (inline === retired) { inline = null; inlineOwner = null }
+        render()
+    }
     private var ordered = emptyList<View>()
     private var closed = false
     private var rendering = false
@@ -170,24 +175,25 @@ internal class SettingsQuickTilesView(
             loadingInset.setEnvironment(environment)
             children += loadingInset
         }
-        if (owner.failure == null && owner.options != null && items.size < QUICK_SAVE_TILE_COUNT) {
+        val canShowCreation = owner.failure == null && owner.options != null && items.size < QUICK_SAVE_TILE_COUNT
+        if (canShowCreation) {
             create.bind(context.getString(R.string.tiles_ui_create),
                 owner.interactive && !owner.editorState.editorOpen &&
                     owner.inputs.durationSubmissionAllowed, environment)
-            children += create
+            children += creation
         }
-        rows.bind(children)
 
         val nextOwner = owner.inline
-        if (inlineOwner !== nextOwner) {
-            inline?.let { removeView(it); it.close() }
+        if (nextOwner != null && inlineOwner !== nextOwner) {
             inlineOwner = nextOwner
-            inline = nextOwner?.let {
-                QuickTileInlineView(context, it, owner.lifecycle, environment, inputRoot,
-                    animationScope).also(::addView)
-            }
+            inline = QuickTileInlineView(context, nextOwner, owner.lifecycle, environment, inputRoot,
+                animationScope)
         }
-        inline?.bind(environment)
+        inline?.bind(environment, nextOwner != null)
+        creation.editor(if (nextOwner != null) inline else null, canShowCreation)
+        // The source action and editor share this exact row and its surrounding surface.
+        if (creation.hasEditor && creation !in children) children += creation
+        rows.bind(children)
         applyFirst.visibility = if (owner.inputs.durationSubmissionAllowed) GONE else VISIBLE
         environment.bindParagraphStyle(applyFirst, ReverbTextRole.BODY_SMALL, colors.muted)
         val failure = owner.failure ?: owner.observationFailure
@@ -196,7 +202,7 @@ internal class SettingsQuickTilesView(
         environment.bindParagraphStyle(error, ReverbTextRole.BODY_SMALL, colors.muted)
         retry.visibility = error.visibility
         retry.bind(context.getString(R.string.tiles_ui_retry), owner.interactive, environment)
-        ordered = listOfNotNull(title, surface, inline,
+        ordered = listOfNotNull(title, surface,
             applyFirst.takeIf { it.visibility != GONE },
             error.takeIf { it.visibility != GONE }, retry.takeIf { it.visibility != GONE })
         // Child drawing/focus order matches the source conditional Column, without detaching survivors.
@@ -212,7 +218,7 @@ internal class SettingsQuickTilesView(
         val children = ordered
         for (index in children.indices) {
             val child = children[index]
-            val fill = child === surface || child === inline
+            val fill = child === surface
             child.measure(if (fill) exact(inner) else atMost(inner), unspecified())
             height += child.measuredHeight + if (index == 0) 0 else dp(8)
         }
@@ -234,7 +240,7 @@ internal class SettingsQuickTilesView(
         if (closed) return
         closed = true
         owner.close()
-        inline?.close()
+        creation.close()
         inline = null
         rowViews.close()
         create.close()
@@ -242,6 +248,91 @@ internal class SettingsQuickTilesView(
         deleteTargetChanged(null)
     }
     private fun dp(value: Int) = (value * environment.textDensity.density).roundToInt()
+}
+
+/** One retained row: its source action becomes the editor without a second card or layout jump. */
+private class QuickTileCreationMorph(
+    context: Context,
+    private val action: View,
+    private val retire: (QuickTileInlineView) -> Unit,
+) : ViewGroup(context), AutoCloseable {
+    private var expanded: QuickTileInlineView? = null
+    private var opening = false
+    private var sourceAvailable = true
+    private var closed = false
+    private val progress = ReleasedSpringValue.float(0f)
+    private val durationScale = SettingsAnimatorDurationScale(context)
+    private var driver: ViewSpringDriver<Float, smallthingz.ui.animation.core.AnimationVector1D>? = null
+    val hasEditor get() = expanded != null
+    init {
+        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
+        clipChildren = true
+        addView(action)
+    }
+    fun editor(next: QuickTileInlineView?, sourceAvailable: Boolean) {
+        if (closed) return
+        this.sourceAvailable = sourceAvailable
+        if (next != null && expanded !== next) {
+            releaseEditor()
+            expanded = next
+            addView(next)
+        }
+        opening = next != null
+        expanded?.importantForAccessibility = if (opening) IMPORTANT_FOR_ACCESSIBILITY_NO
+            else IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+        action.importantForAccessibility = if (opening) IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+            else IMPORTANT_FOR_ACCESSIBILITY_AUTO
+        val target = if (opening) 1f else 0f
+        if (durationScale.target(target) == 0f || !isAttachedToWindow) {
+            progress.snapTo(target)
+            publish()
+        } else {
+            val motion = driver ?: ViewSpringDriver(this, progress, { publish() },
+                durationScale::read).also { driver = it }
+            motion.retarget(target)
+            publish()
+        }
+    }
+    private fun publish() {
+        val fraction = progress.value.coerceIn(0f, 1f)
+        action.alpha = 1f - fraction
+        action.visibility = if (!sourceAvailable || opening && !progress.isRunning && fraction == 1f)
+            INVISIBLE else VISIBLE
+        expanded?.alpha = fraction
+        if (!opening && !progress.isRunning) releaseEditor()
+        requestLayout()
+    }
+    private fun releaseEditor() {
+        val old = expanded ?: return
+        expanded = null
+        try { retire(old) } finally { removeView(old) }
+    }
+    override fun onMeasure(w: Int, h: Int) {
+        val width = MeasureSpec.getSize(w)
+        action.measure(exact(width), unspecified())
+        expanded?.measure(exact(width), unspecified())
+        val collapsedHeight = if (sourceAvailable) action.measuredHeight else 0
+        val height = collapsedHeight +
+            (((expanded?.measuredHeight ?: collapsedHeight) - collapsedHeight) *
+                progress.value.coerceIn(0f, 1f)).roundToInt()
+        setMeasuredDimension(width, resolveSize(height, h))
+    }
+    override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
+        action.layout(0, 0, width, action.measuredHeight)
+        expanded?.let { it.layout(0, 0, width, it.measuredHeight) }
+    }
+    override fun onDetachedFromWindow() {
+        driver?.close(); driver = null
+        progress.snapTo(if (opening) 1f else 0f)
+        publish()
+        super.onDetachedFromWindow()
+    }
+    override fun close() {
+        if (closed) return
+        closed = true
+        driver?.close(); driver = null
+        releaseEditor()
+    }
 }
 
 /** Source Column has no inter-row gap; only one physical-pixel divider over later row content. */
@@ -415,7 +506,6 @@ internal class QuickTileInlineView(
     inputRoot: () -> View?,
     animationScope: CoroutineScope,
 ) : ViewGroup(context), AutoCloseable {
-    private val surface = ReverbGroupLayout(context, 20f)
     private val body = Body(context)
     private val close = ReverbStandardIconButtonView(context, environment, inputRoot)
     private val selector = ReverbBufferSelectorView(context, environment, inputRoot, animationScope)
@@ -425,25 +515,26 @@ internal class QuickTileInlineView(
     private val save = SettingsCalibrationActionView(context, environment, inputRoot) { owner.save() }
     private var wheel: NativeNotificationDurationWheel? = null
     private var maximum = 1
+    private var exiting = false
     private var ordered = emptyList<View>()
     private var closed = false
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
-        surface.addRow(body, ReverbGroupLayout.LayoutParams(-1, -2))
-        addView(surface)
+        addView(body)
         listOf(close, selector, loading, warning, message, save).forEach(body::addView)
     }
-    fun bind(next: ReverbViewEnvironment) {
+    fun bind(next: ReverbViewEnvironment, interactive: Boolean = true) {
         if (closed) return
+        val beganExit = !interactive && !exiting
+        exiting = !interactive
         environment = next
-        surface.setPalette(next.palette.field, next.palette.border)
-        val iconColor = if (!owner.target.busy) next.palette.onSurface
+        val iconColor = if (interactive && !owner.target.busy) next.palette.onSurface
             else reverbColorWithAlpha(next.palette.onSurface, .38f)
-        close.bind(next, ReverbIcon.Close, context.getString(R.string.cancel), !owner.target.busy,
+        close.bind(next, ReverbIcon.Close, context.getString(R.string.cancel), interactive && !owner.target.busy,
             iconColor, iconColor, owner::dismiss)
         selector.setEnvironment(next)
         selector.bind(owner.target.buffer, null, false, owner.capacities?.oneShotSeconds != null,
-            false, owner.capacities?.loopingSeconds != null, owner.enabled, owner::selectBuffer)
+            false, owner.capacities?.loopingSeconds != null, interactive && owner.enabled, owner::selectBuffer)
         val capacity = owner.capacity
         val showWheel = owner.durationSubmissionAllowed && capacity != null && capacity.maximumSeconds >= 1
         if (showWheel) {
@@ -452,7 +543,7 @@ internal class QuickTileInlineView(
                 owner.durationInteraction, { owner.wheelOwner(maximum) },
                 { owner.changeSeconds(it, maximum) }, ::quickTileStepSeconds,
                 owner::interactionChanged).also { wheel = it; body.addView(it.view) }
-            current.bind(owner.target.seconds, maximum, owner.enabled && owner.capacityReady,
+            current.bind(owner.target.seconds, maximum, interactive && owner.enabled && owner.capacityReady,
                 owner.target.wheelOwner(owner.renderedRevision), next)
         } else wheel?.let {
             wheel = null
@@ -470,19 +561,20 @@ internal class QuickTileInlineView(
             context.getString(R.string.tiles_ui_reduce_duration, formatDurationInput(owner.target.seconds)) else null, next)
         bindStatus(message, owner.message, next)
         save.bind(context.getString(if (owner.shortened == null) R.string.tiles_ui_save
-            else R.string.tiles_ui_save_anyway), owner.saveEnabled, next)
+            else R.string.tiles_ui_save_anyway), interactive && owner.saveEnabled, next)
         ordered = listOfNotNull(close, selector,
             loading.takeIf { it.visibility != GONE }, wheel?.view,
             warning.takeIf { it.visibility != GONE }, message.takeIf { it.visibility != GONE }, save)
         ordered.forEach(body::bringChildToFront)
+        if (beganExit) wheel?.cancelInteraction()
         requestLayout()
     }
     override fun onMeasure(w: Int, h: Int) {
-        surface.measure(w, h)
-        setMeasuredDimension(surface.measuredWidth, surface.measuredHeight)
+        body.measure(w, h)
+        setMeasuredDimension(body.measuredWidth, body.measuredHeight)
     }
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) =
-        surface.layout(0, 0, width, height)
+        body.layout(0, 0, width, height)
     override fun close() {
         if (closed) return
         closed = true
@@ -493,6 +585,7 @@ internal class QuickTileInlineView(
     }
     private fun dp(value: Int) = (value * environment.textDensity.density).roundToInt()
     private inner class Body(context: Context) : ViewGroup(context), smallthingz.ui.input.NativeAndroidInteropHost {
+        private var stackedHeader = false
     override val nativeInteropRequests = smallthingz.ui.input.NativeAndroidInteropRequests()
     override fun requestDisallowInterceptTouchEvent(disallowIntercept: Boolean) {
         nativeInteropRequests.request(disallowIntercept)
@@ -502,31 +595,45 @@ internal class QuickTileInlineView(
         init { importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO }
         override fun onMeasure(w: Int, h: Int) {
             val width = MeasureSpec.getSize(w)
-            val inner = (width - 2 * dp(16)).coerceAtLeast(0)
-            var height = 2 * dp(16)
+            val inner = (width - 2 * dp(8)).coerceAtLeast(0)
+            close.measure(atMost(inner), unspecified())
+            selector.measure(atMost(inner), unspecified())
+            stackedHeader = selector.measuredWidth + close.measuredWidth + dp(4) > inner
+            var height = 2 * dp(8) + if (stackedHeader)
+                close.measuredHeight + dp(4) + selector.measuredHeight
+                else max(close.measuredHeight, selector.measuredHeight)
             val children = ordered
             for (index in children.indices) {
                 val child = children[index]
+                if (child === close || child === selector) continue
                 child.measure(if (child === wheel?.view) exact(inner) else atMost(inner),
                     if (child === wheel?.view) exact(dp(160)) else unspecified())
-                height += child.measuredHeight + if (index == 0) 0 else dp(8)
+                height += child.measuredHeight + dp(4)
             }
             setMeasuredDimension(width, resolveSize(height, h))
         }
         override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
-            var y = dp(16)
+            var y = dp(8)
+            val headerHeight = if (stackedHeader) close.measuredHeight
+                else max(close.measuredHeight, selector.measuredHeight)
+            placeTileLogical(close, width - dp(8) - close.measuredWidth,
+                y + (headerHeight - close.measuredHeight) / 2)
+            if (stackedHeader) {
+                placeTileLogical(selector, (width - selector.measuredWidth) / 2,
+                    y + headerHeight + dp(4))
+            } else placeTileLogical(selector, dp(8), y + (headerHeight - selector.measuredHeight) / 2)
+            y += headerHeight
+            if (stackedHeader) y += dp(4) + selector.measuredHeight
             val children = ordered
             for (index in children.indices) {
                 val child = children[index]
-                if (index != 0) y += dp(8)
+                if (child === close || child === selector) continue
+                y += dp(4)
                 val start = when (child) {
-                    close, save -> width - dp(16) - child.measuredWidth
-                    selector -> ((width - child.measuredWidth) / 2f).roundToInt()
-                    else -> dp(16)
+                    save -> width - dp(8) - child.measuredWidth
+                    else -> dp(8)
                 }
-                if (child === selector) child.layout(start, y, start + child.measuredWidth,
-                    y + child.measuredHeight)
-                else placeTileLogical(child, start, y)
+                placeTileLogical(child, start, y)
                 y += child.measuredHeight
             }
         }

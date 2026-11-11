@@ -17,6 +17,7 @@ internal object PcmStreamNormalizer {
         consumer: PersistentAudioChunkStore.Consumer,
         leadingContext: List<PersistentAudioChunkStore.Segment> = emptyList(),
         trailingContext: List<PersistentAudioChunkStore.Segment> = emptyList(),
+        allowOutsideRangeContext: Boolean = true,
     ): Long {
         checkPcmConversionNotInterrupted()
         require(segments.isNotEmpty() && firstTargetFrame in 0..targetFrameCount)
@@ -56,13 +57,13 @@ internal object PcmStreamNormalizer {
 
         val step = sourceFrames.toDouble() / targetFrameCount
         val radius = pcmResamplingRadius(step)
-        val ownBefore = minOf(radius.toLong(), first.startFrame)
+        val ownBefore = if (allowOutsideRangeContext) minOf(radius.toLong(), first.startFrame) else 0L
         // Linear upsampling needs the next frame even though its filter radius is zero.
         val requiredAfter = if (step < 1.0) 1L else radius.toLong()
-        val ownAfter = minOf(requiredAfter, last.payloadBytesAtAcquire / frameBytes - last.startFrame - last.frameCount)
+        val ownAfter = if (allowOutsideRangeContext) minOf(requiredAfter, last.payloadBytesAtAcquire / frameBytes - last.startFrame - last.frameCount) else 0L
         val availableBefore = leadingContext.sumOf { it.frameCount }
-        val extraBefore = minOf(radius - ownBefore, availableBefore)
-        val extraAfter = minOf(requiredAfter - ownAfter, trailingContext.sumOf { it.frameCount })
+        val extraBefore = if (allowOutsideRangeContext) minOf(radius - ownBefore, availableBefore) else 0L
+        val extraAfter = if (allowOutsideRangeContext) minOf(requiredAfter - ownAfter, trailingContext.sumOf { it.frameCount }) else 0L
         val before = ownBefore + extraBefore
         val after = ownAfter + extraAfter
         val bufferedFrames = Math.addExact(Math.addExact(sourceFrames, before), after)

@@ -67,6 +67,10 @@ internal enum class ReverbIcon(val autoMirrored: Boolean = false) {
 
 /** Private, immutable paths are shared; callers own paints, masks, and tint state. */
 internal object ReverbIconPaths {
+    /** Private path copies for the retained Library close morph; shared glyph paths stay immutable. */
+    fun copyLibraryBackPath(): Path = Path(backPath0)
+    fun copyHomeIncidentPath(): Path = Path(incidentsPath0)
+
     fun drawMask(icon: ReverbIcon, canvas: Canvas, paint: Paint) {
         paint.color = Color.BLACK
         paint.shader = null
