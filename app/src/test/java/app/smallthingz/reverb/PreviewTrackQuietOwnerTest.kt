@@ -14,6 +14,30 @@ import org.junit.Test
 class PreviewTrackQuietOwnerTest {
     private fun CountDownLatch.reached() = assertTrue(await(5, TimeUnit.SECONDS))
 
+    @Test fun acceptedWriteCountTracksPartialNativeTransfersWithoutCountingFailuresOrRetiredCalls() {
+        val owner = PreviewTrackQuietOwner(PreviewQuietCoordinator())
+        assertEquals(2, owner.write { 2 })
+        assertEquals(4, owner.write { 4 })
+        assertEquals(0, owner.write { 0 })
+        assertEquals(-6, owner.write { -6 })
+        assertThrows(IllegalStateException::class.java) { owner.write { error("Native write threw") } }
+        assertEquals(6L, owner.read { owner.acceptedWriteBytes })
+        owner.retire()
+        assertNull(owner.write { fail("Retired owner wrote again"); 8 })
+        assertEquals(6L, owner.acceptedWriteBytes)
+    }
+
+    @Test fun cancellationBetweenPrimingWriteAndPlayCannotConfigureOrStartRetiredTrack() {
+        val owner = PreviewTrackQuietOwner(PreviewQuietCoordinator())
+        val written = requireNotNull(owner.write { 32 })
+        owner.retire()
+        assertFalse(owner.play {
+            playPrimedPreviewTrack(30, written / 2,
+                { fail("Retired track resized its buffer"); it }, { fail("Retired primed track started") })
+        })
+        assertEquals(32L, owner.acceptedWriteBytes)
+    }
+
     @Test fun blockedOldReleaseCannotDelayNextTrackPauseAndFlush(): Unit = runBlocking {
         val registry = PreviewQuietCoordinator()
         val old = PreviewTrackQuietOwner(registry)
@@ -67,6 +91,7 @@ class PreviewTrackQuietOwnerTest {
             assertFalse(cleanup.isDone)
             writeAllowed.countDown()
             assertEquals(2, write.get(5, TimeUnit.SECONDS))
+            assertEquals(2L, owner.acceptedWriteBytes)
             assertTrue(cleanup.get(5, TimeUnit.SECONDS))
             assertEquals(1, releases.get())
             assertNull(owner.write { fail("Retired track accepted another write"); 0 })

@@ -202,8 +202,7 @@ internal class NativeRecordingInlinePlayerController(
         private var trimClock by observed<PlaybackPositionAnchor?>(null)
         private var duration by observed(recording.durationMillis.coerceIn(1L, Int.MAX_VALUE.toLong()).toInt())
         private var isScrubbing by observed(false)
-        private var ordinaryScrubGeneration: Long? = null
-        private var ordinaryScrubTransportIntentRevision = 0L
+        private var ordinaryScrubAuthority: RecordingScrubAuthority? = null
         var trimMode by observed(false)
         private var trimStartMillis by observed(0)
         private var trimEndMillis by observed(duration)
@@ -267,6 +266,7 @@ internal class NativeRecordingInlinePlayerController(
         }
 
         fun releasePlayer() {
+            finishOrdinaryScrub()
             cancelPendingTrimStart()
             if (playbackBookkeeping.released) return
             playbackBookkeeping.released = true
@@ -283,17 +283,17 @@ internal class NativeRecordingInlinePlayerController(
 
         private fun pauseStartedMediaPlayer(forGesture: Boolean = false) {
             if (!trimMode) {
-                val generation = ordinaryScrubGeneration
-                if (forGesture && generation != null && ordinaryScrubStillCurrent()) {
-                    RecordingPlayback.suspendForGesture(recording, generation, ordinaryScrubTransportIntentRevision)
-                } else if (!forGesture && (generation == null || ordinaryScrubStillCurrent())) RecordingPlayback.pause(recording)
+                val authority = ordinaryScrubAuthority
+                if (forGesture && authority != null && ordinaryScrubStillCurrent()) {
+                    RecordingPlayback.suspendForGesture(recording, authority)
+                } else if (!forGesture && (authority == null || ordinaryScrubStillCurrent())) RecordingPlayback.pause(recording)
             } else if (prepared) fineSeekPreviewController.stop()
         }
 
         fun pauseForLifecycle() {
             // Normal playback belongs to the service; only the gesture/editor belongs to this row.
             if (trimMode || isScrubbing || playbackBookkeeping.fineSeekShuttleActive) pauseInlinePlayback()
-            ordinaryScrubGeneration = null
+            finishOrdinaryScrub()
         }
 
         private fun startOrdinaryPlaybackIfNeeded() {
@@ -314,6 +314,7 @@ internal class NativeRecordingInlinePlayerController(
             playbackBookkeeping.fineSeekShuttleActive = false
             isScrubbing = false
             runCatching { pauseStartedMediaPlayer() }
+            finishOrdinaryScrub()
             isPlaying = false
             if (trimMode) trimClock = stoppedTrimClock()
         }
@@ -490,9 +491,11 @@ internal class NativeRecordingInlinePlayerController(
                 rate = shuttleRate,
                 fromSeconds = if (trimMode) trimStartMillis / 1_000.0 else 0.0,
                 untilSeconds = if (trimMode) trimEndMillis / 1_000.0 else Double.POSITIVE_INFINITY,
+                ordinaryAuthority = if (trimMode) null else checkNotNull(ordinaryScrubAuthority),
                 onStarted = {
-                    if (!trimMode && playbackBookkeeping.fineSeekShuttleActive && playbackBookkeeping.resumeAfterScrub &&
-                        ordinaryScrubStillCurrent()) {
+                    if (!trimMode && !ordinaryScrubStillCurrent()) {
+                        fineSeekPreviewController.stopShuttle()
+                    } else if (!trimMode && playbackBookkeeping.fineSeekShuttleActive && playbackBookkeeping.resumeAfterScrub) {
                         runCatching { pauseStartedMediaPlayer(forGesture = true) }
                     }
                 },
@@ -562,11 +565,11 @@ internal class NativeRecordingInlinePlayerController(
             val shouldResume = playbackBookkeeping.resumeAfterScrub
             playbackBookkeeping.resumeAfterScrub = false
             if (!ordinaryScrubStillCurrent()) {
-                ordinaryScrubGeneration = null
+                finishOrdinaryScrub()
                 adoptOrdinaryState()
                 return
             }
-            ordinaryScrubGeneration = null
+            finishOrdinaryScrub()
             if (trimMode) currentPosition = fineSeekTargetMillis()
             seekTo(
                 if (trimMode && shouldResume) trimPlaybackStartMillis() else currentPosition,
@@ -618,7 +621,7 @@ internal class NativeRecordingInlinePlayerController(
             fineSeekPreviewController.stopShuttle()
             playbackBookkeeping.fineSeekShuttleActive = false
             isScrubbing = false
-            ordinaryScrubGeneration = null
+            finishOrdinaryScrub()
             if (trimMode) leaveTrimMode() else adoptOrdinaryState()
         }
 
@@ -646,12 +649,12 @@ internal class NativeRecordingInlinePlayerController(
                     if (trimMode && (playback.playing || playback.wantsPlayback)) {
                         if (trimSaving) pauseInlinePlayback() else leaveTrimMode()
                     }
-                    if (!trimMode && ordinaryScrubGeneration != null && !ordinaryScrubStillCurrent()) {
+                    if (!trimMode && ordinaryScrubAuthority != null && !ordinaryScrubStillCurrent()) {
                         playbackBookkeeping.revokeResume()
                         fineSeekPreviewController.stopShuttle()
                         playbackBookkeeping.fineSeekShuttleActive = false
                         isScrubbing = false
-                        ordinaryScrubGeneration = null
+                        finishOrdinaryScrub()
                     }
                     adoptOrdinaryState()
                 }
@@ -804,16 +807,20 @@ internal class NativeRecordingInlinePlayerController(
 
         private var waveformTarget = InlineFineSeekTarget.PLAYHEAD
         private fun beginOrdinaryScrub(): Boolean {
-            val playback = RecordingPlayback.state.value
-            if (!playback.matches(recording) || !playback.prepared) return false
-            ordinaryScrubGeneration = playback.generation
-            ordinaryScrubTransportIntentRevision = playback.transportIntentRevision
+            val authority = RecordingPlayback.acquireScrub(recording) ?: return false
+            ordinaryScrubAuthority = authority
             return true
         }
+        private fun finishOrdinaryScrub() {
+            ordinaryScrubAuthority?.let(RecordingPlayback::finishScrub)
+            ordinaryScrubAuthority = null
+        }
         private fun ordinaryScrubStillCurrent(): Boolean = trimMode || run {
+            val authority = ordinaryScrubAuthority
             val playback = RecordingPlayback.state.value
-            inlineOrdinaryGestureIsCurrent(ordinaryScrubGeneration, playback.generation, playback.matches(recording)) &&
-                playback.prepared && ordinaryScrubTransportIntentRevision == playback.transportIntentRevision
+            authority != null && authority.active &&
+                inlineOrdinaryGestureIsCurrent(authority.key.generation, playback.generation, playback.matches(recording)) &&
+                playback.prepared && authority.key.transportIntentRevision == playback.transportIntentRevision
         }
 
         private fun beginWaveform(x: Float, width: Float) {

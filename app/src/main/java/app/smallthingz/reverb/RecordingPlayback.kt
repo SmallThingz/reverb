@@ -37,6 +37,7 @@ internal object RecordingPlayback {
     private var nextOwner = 0L
     private var pending: Start? = null
     private var service: RecordingPlaybackService? = null
+    private val scrubAuthorities = RecordingScrubAuthorities()
     private val positionObservers = PlaybackPositionObservers { service?.positionObservationChanged() }
     internal data class Start(val token: Long, val recording: RecordingEntity, val positionMillis: Int?)
 
@@ -46,6 +47,8 @@ internal object RecordingPlayback {
         val request = Start(++nextRequest, recording,
             positionMillis ?: retained?.positionMillis?.takeIf { service?.ownsRecording(recording) != true })
         pending = request
+        // Incoming intent revokes a primed/playing scrub before service delivery can be delayed.
+        scrubAuthorities.revoke()
         return try {
             val started = ContextCompat.startForegroundService(app,
                 Intent(app, RecordingPlaybackService::class.java)
@@ -66,18 +69,37 @@ internal object RecordingPlayback {
     fun observePosition(token: Any, visible: Boolean) {
         positionObservers.observe(token, visible)
     }
-    internal fun attach(owner: RecordingPlaybackService) { service = owner }
-    internal fun detach(owner: RecordingPlaybackService) { if (service === owner) service = null }
-    internal fun publish(owner: RecordingPlaybackService, value: RecordingPlaybackState) {
-        if (service === owner) mutableState.value = value
+    internal fun attach(owner: RecordingPlaybackService) {
+        if (service !== owner) scrubAuthorities.revoke()
+        service = owner
     }
+    internal fun detach(owner: RecordingPlaybackService) {
+        if (service === owner) { scrubAuthorities.revoke(); service = null }
+    }
+    internal fun revokeScrub(owner: RecordingPlaybackService) {
+        if (service === owner) scrubAuthorities.revoke()
+    }
+    internal fun publish(owner: RecordingPlaybackService, value: RecordingPlaybackState) {
+        if (service !== owner) return
+        // StateFlow delivery can queue behind the worker's Main acknowledgement. Revoke now.
+        scrubAuthorities.published(value.takeIf { it.prepared && it.recording != null }
+            ?.let { RecordingScrubKey(it.generation, it.transportIntentRevision) })
+        mutableState.value = value
+    }
+    fun acquireScrub(recording: RecordingEntity): RecordingScrubAuthority? {
+        val value = mutableState.value
+        if (service?.ownsRecording(recording) != true || !value.matches(recording) || !value.prepared) return null
+        return scrubAuthorities.acquire(RecordingScrubKey(value.generation, value.transportIntentRevision))
+    }
+    fun finishScrub(authority: RecordingScrubAuthority) = scrubAuthorities.finish(authority)
     fun pause(recording: RecordingEntity) {
         if (pending?.recording?.let { samePlaybackRecording(it, recording) } == true) pending = null
         service?.pauseMatching(recording)
     }
     fun pauseCurrent() { pending = null; service?.pauseCurrent() }
-    fun suspendForGesture(recording: RecordingEntity, generation: Long, transportIntentRevision: Long) {
-        service?.suspendForGestureMatching(recording, generation, transportIntentRevision)
+    fun suspendForGesture(recording: RecordingEntity, authority: RecordingScrubAuthority) {
+        if (scrubAuthorities.owns(authority)) service?.suspendForGestureMatching(recording,
+            authority.key.generation, authority.key.transportIntentRevision)
     }
     fun seek(recording: RecordingEntity, positionMillis: Int, resume: Boolean) {
         service?.seekMatching(recording, positionMillis, resume)
@@ -86,6 +108,7 @@ internal object RecordingPlayback {
         if (pending?.recording?.let { samePlaybackRecording(it, recording) } == true) pending = null
         service?.stopMatching(recording)
         if (service?.ownsRecording(recording) != true && mutableState.value.matches(recording)) {
+            scrubAuthorities.revoke()
             mutableState.value = RecordingPlaybackState(generation = mutableState.value.generation)
         }
     }

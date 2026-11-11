@@ -1048,7 +1048,8 @@
 - Saved-recording fine-seek keeps MediaPlayer audible until the first shuttle grain is actually queued. If shuttle
   playback then fails non-cancellably while it owns audible playback, hand control back to the still-open MediaPlayer
   only while the same scrub gesture is active/resumable and the lifecycle is resumed; cancellation/newer gestures remain
-  silent.
+  silent. External transport commands revoke the exact native scrub authority synchronously; queued UI collection only
+  cleans up presentation. The service boundary must not retain a UI owner or callback.
 - Blob-to-range uses one continuous material path after the initial renderer handoff: its bounds and envelope morph from
   the blob body into the timeline waveform; never implement this transition as overlapping blob/timeline opacity fades.
 - Home save-status cards sit above the fixed capture-control cluster with a deliberate gap; they must never cover the

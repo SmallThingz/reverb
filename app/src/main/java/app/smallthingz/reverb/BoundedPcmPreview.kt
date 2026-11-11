@@ -47,7 +47,29 @@ internal data class PreviewTrackObservation(
     val bufferSizeInFrames: Int,
     val bufferCapacityInFrames: Int,
     val audioSessionId: Int,
+    val acceptedWriteFrames: Long,
+    val startThresholdInFrames: Int?,
 )
+
+/** Legacy streaming readiness uses effective buffer size, which must fit actual queued PCM. */
+internal inline fun playPrimedPreviewTrack(
+    apiLevel: Int,
+    firstWriteFrames: Int,
+    setBufferSize: (Int) -> Int,
+    play: () -> Unit,
+) {
+    require(firstWriteFrames > 0)
+    if (apiLevel < 31) {
+        val effectiveFrames = setBufferSize(maxOf(16, firstWriteFrames))
+        if (effectiveFrames <= 0) {
+            throw IOException("Audio preview buffer configuration failed (native result $effectiveFrames)")
+        }
+        if (effectiveFrames > firstWriteFrames) {
+            throw IOException("Audio preview needs $effectiveFrames startup frames but only $firstWriteFrames are queued")
+        }
+    }
+    play()
+}
 
 /** The primed track stays silent until the current UI-owned transport acknowledges handoff. */
 internal fun awaitPreviewPlaybackHandoff(
@@ -70,6 +92,7 @@ internal data class PreviewPlaybackSample(
     val positionSeconds: Double,
     val sampledAtElapsedRealtimeMillis: Long,
     val queuedUntilSeconds: Double,
+    val acceptedWriteFrames: Long = 0L,
 )
 
 /** An exact source-frame interval. End is exclusive. */

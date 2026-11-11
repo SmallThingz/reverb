@@ -2,6 +2,7 @@ package app.smallthingz.reverb
 
 import android.app.Application
 import android.app.Instrumentation
+import android.os.Debug
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import android.os.Handler
@@ -21,6 +22,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.roundToLong
+import kotlin.math.roundToInt
 
 /** Optional QA composition only. Standalone preview retains its original ownership and teardown. */
 internal interface CapturePreviewWorkload {
@@ -490,6 +492,12 @@ internal fun verifyShortRangePreview(instrumentation: Instrumentation, report: S
             val run = checkNotNull(currentRun.get()) { "Track remained published without a current fixture command" }
             val expectedFrames = ((run.end - run.start) * sample.sampleRate).roundToLong()
             check(sample.playbackHeadFrames in 0L..expectedFrames) { "Native head passed the selected frame boundary" }
+            check(sample.acceptedWriteFrames in sample.playbackHeadFrames..expectedFrames) {
+                "Accepted native writes did not match the bounded playback interval"
+            }
+            if (run.label == "below-buffer-preview") check(expectedFrames < sample.bufferCapacityInFrames) {
+                "Short preview was not smaller than its observed native buffer capacity"
+            }
             run.maximumHead = maxOf(run.maximumHead, sample.playbackHeadFrames)
             run.nativeSamples++
             check(nativeSamples.length() < 4_096) { "Bounded native evidence overflow" }
@@ -497,7 +505,10 @@ internal fun verifyShortRangePreview(instrumentation: Instrumentation, report: S
                 .put("run", run.label).put("identity", identity).put("epoch", sample.epoch)
                 .put("head_frames", sample.playbackHeadFrames).put("expected_frames", expectedFrames)
                 .put("sample_rate", sample.sampleRate).put("play_state", sample.playState)
-                .put("underruns", sample.underrunCount).put("buffer_frames", sample.bufferSizeInFrames))
+                .put("underruns", sample.underrunCount).put("buffer_frames", sample.bufferSizeInFrames)
+                .put("buffer_capacity_frames", sample.bufferCapacityInFrames)
+                .put("start_threshold_frames", sample.startThresholdInFrames ?: JSONObject.NULL)
+                .put("accepted_write_frames", sample.acceptedWriteFrames))
         }
         fun await(label: String, condition: () -> Boolean) {
             val deadline = SystemClock.elapsedRealtime() + 10_000L
@@ -527,11 +538,13 @@ internal fun verifyShortRangePreview(instrumentation: Instrumentation, report: S
                         check(sample.positionSeconds >= previous && sample.positionSeconds <= end + 0.000001)
                         check(sample.queuedUntilSeconds >= sample.positionSeconds && sample.queuedUntilSeconds <= end + 0.000001)
                         check(sample.sampledAtElapsedRealtimeMillis <= SystemClock.elapsedRealtime())
+                        check(sample.acceptedWriteFrames in 1L..((end - start) * 24_000).roundToLong())
                         check(run.progress.length() < 512) { "Bounded progress evidence overflow" }
                         run.latest.set(sample)
                         run.progress.put(JSONObject().put("sampled_elapsed_ms", sample.sampledAtElapsedRealtimeMillis)
                             .put("delivered_elapsed_ms", SystemClock.elapsedRealtime())
-                            .put("source_seconds", sample.positionSeconds).put("queued_until_seconds", sample.queuedUntilSeconds))
+                            .put("source_seconds", sample.positionSeconds).put("queued_until_seconds", sample.queuedUntilSeconds)
+                            .put("accepted_write_frames", sample.acceptedWriteFrames))
                     } },
                 )) { "Short preview submission rejected" }
             }
@@ -540,12 +553,15 @@ internal fun verifyShortRangePreview(instrumentation: Instrumentation, report: S
         fun awaitRunning(run: Run) = await("${run.label} native start") {
             run.started.get() == 1 && run.maximumHead > 0 && controller.playbackActive
         }
-        fun awaitFinished(run: Run) {
+        fun awaitFinished(run: Run, requireNativeObservation: Boolean = true) {
             await("${run.label} finish") { run.finished.get() == 1 }
             onMain {}
-            check(run.started.get() == 1 && run.errors.get() == 0 && run.nativeSamples > 0)
+            check(run.started.get() == 1 && run.errors.get() == 0 && (!requireNativeObservation || run.nativeSamples > 0))
             check(!controller.playbackActive) { "Worker still active after finished callback" }
             val last = checkNotNull(run.latest.get()) { "Actual-head clock sample missing" }
+            check(last.acceptedWriteFrames == ((run.end - run.start) * 24_000).roundToLong()) {
+                "Terminal accepted-write count did not match the exact selected interval"
+            }
             check(kotlin.math.abs(last.positionSeconds - run.end) <= 1.0 / 24_000) {
                 "Terminal consumed-head sample did not reach selected end"
             }
@@ -577,6 +593,14 @@ internal fun verifyShortRangePreview(instrumentation: Instrumentation, report: S
                 check(!controller.playbackActive && controller.observeTrack() == null)
                 val seek = launch("seek-after-pause", .60, .90)
                 awaitFinished(seek)
+                val tiny = launch("below-buffer-preview", .20, .22)
+                // The20ms selection may finish before the observation worker gets a turn.
+                // Its mandatory terminal clock still comes from the actual consumed native head.
+                awaitFinished(tiny, requireNativeObservation = false)
+                result.put("below_buffer_preview_finished", true)
+                    .put("below_buffer_native_observation", tiny.nativeSamples > 0)
+                    .put("below_buffer_selected_frames", 480)
+                    .put("below_buffer_requested_minimum_frames", 1_200)
                 val shuttleCommands = JSONArray()
                 val shuttleSamples = JSONArray()
                 result.put("shuttle_commands", shuttleCommands).put("shuttle_samples", shuttleSamples)
@@ -601,6 +625,10 @@ internal fun verifyShortRangePreview(instrumentation: Instrumentation, report: S
                         .put("since_command_ms", SystemClock.elapsedRealtime() - phaseCommandAt)
                         .put("identity", identity).put("epoch", sample.epoch).put("head_frames", sample.playbackHeadFrames)
                         .put("sample_rate", sample.sampleRate).put("underruns", sample.underrunCount)
+                        .put("play_state", sample.playState).put("buffer_frames", sample.bufferSizeInFrames)
+                        .put("buffer_capacity_frames", sample.bufferCapacityInFrames)
+                        .put("start_threshold_frames", sample.startThresholdInFrames ?: JSONObject.NULL)
+                        .put("accepted_write_frames", sample.acceptedWriteFrames)
                         .put("new_observed_owner", changed))
                     lastShuttleIdentity = sample.identity
                     lastShuttleHead = sample.playbackHeadFrames
@@ -617,7 +645,7 @@ internal fun verifyShortRangePreview(instrumentation: Instrumentation, report: S
                     }
                 }
                 onMain {
-                    seek.retired.set(true); currentRun.set(null)
+                    tiny.retired.set(true); currentRun.set(null)
                     controller.startShuttle(parent, .4, .5f, .30, .70)
                 }
                 val initial = awaitShuttleHead("Initial shuttle") { it.playbackHeadFrames > 0L }
@@ -686,6 +714,131 @@ internal fun verifyShortRangePreview(instrumentation: Instrumentation, report: S
                     .put("shuttle_advancing_samples", advancingSamples)
                 onMain { controller.stopShuttle() }
                 check(controller.observeTrack() == null)
+                val fastRuns = JSONArray()
+                result.put("fast_shuttle_runs", fastRuns)
+                    .put("fast_shuttle_sampling", "paced consumed-body acknowledgements; not continuous-audibility evidence")
+                var previousFastOwner: Any? = null
+                var fastSampleRate = 0
+                for (direction in listOf(1, -1)) {
+                    val rate = direction * 2f
+                    val label = if (direction > 0) "fast-forward" else "fast-reverse"
+                    val startTarget = if (direction > 0) .38 else .62
+                    val fastResult = JSONObject().put("phase", label).put("rate", rate)
+                        .put("start_seconds", .36).put("end_seconds", .64).put("passed", false)
+                        .put("expected_retained_tail_updates", 7)
+                    val deliveries = JSONArray()
+                    fastResult.put("commands", deliveries); fastRuns.put(fastResult)
+                    phase = "$label-0"; phaseCommandAt = SystemClock.elapsedRealtime()
+                    shuttleCommands.put(JSONObject().put("phase", phase).put("elapsed_ms", phaseCommandAt)
+                        .put("kind", "start").put("rate", rate).put("target_seconds", startTarget)
+                        .put("start_seconds", .36).put("end_seconds", .64))
+                    onMain { controller.startShuttle(parent, startTarget, rate, .36, .64) }
+                    val fastOwner = awaitShuttleHead("$label initial body") { it.playbackHeadFrames > 0L }
+                    check(fastOwner.identity !== previousFastOwner) { "Direction restart retained its retired native owner" }
+                    previousFastOwner = fastOwner.identity
+                    fastSampleRate = maxOf(fastSampleRate, fastOwner.sampleRate)
+                    val bodyFrames = fastOwner.sampleRate.toLong() * 16L / 1_000L
+                    val initialUnderruns = fastOwner.underrunCount
+                    var finalUnderruns = initialUnderruns
+                    repeat(8) { index ->
+                        val target = startTarget + direction * index * .032
+                        if (index > 0) {
+                            phase = "$label-$index"; phaseCommandAt = SystemClock.elapsedRealtime()
+                            shuttleCommands.put(JSONObject().put("phase", phase).put("elapsed_ms", phaseCommandAt)
+                                .put("kind", "update").put("rate", rate).put("target_seconds", target)
+                                .put("start_seconds", .36).put("end_seconds", .64))
+                            onMain { controller.updateShuttle(target, rate, .36, .64) }
+                        }
+                        val expectedFrames = bodyFrames * (index + 1)
+                        val consumed = awaitShuttleHead("$label body $index") {
+                            check(it.identity === fastOwner.identity && it.epoch == fastOwner.epoch) {
+                                "Same-direction fast updates replaced the native owner"
+                            }
+                            check(it.playbackHeadFrames <= expectedFrames && it.acceptedWriteFrames <= expectedFrames) {
+                                "Fast command emitted more than one 16 ms body or replayed an old target"
+                            }
+                            it.playbackHeadFrames == expectedFrames && it.acceptedWriteFrames == expectedFrames
+                        }
+                        finalUnderruns = consumed.underrunCount
+                        val consumedAt = SystemClock.elapsedRealtime()
+                        deliveries.put(JSONObject().put("index", index).put("target_seconds", target)
+                            .put("command_elapsed_ms", phaseCommandAt)
+                            .put("consumed_elapsed_ms", consumedAt)
+                            .put("command_to_consumed_ms", consumedAt - phaseCommandAt)
+                            .put("head_frames", consumed.playbackHeadFrames)
+                            .put("accepted_write_frames", consumed.acceptedWriteFrames)
+                            .put("underruns", consumed.underrunCount))
+                    }
+                    fastResult.put("passed", true).put("sample_rate", fastOwner.sampleRate)
+                        .put("epoch", fastOwner.epoch).put("native_identity", identities[fastOwner.identity])
+                        .put("body_frames", bodyFrames).put("consumed_body_frames", bodyFrames * 8)
+                        .put("native_owner_retained_across_updates", true)
+                        .put("underruns_at_first_observation", initialUnderruns)
+                        .put("underruns_after_updates", finalUnderruns)
+                        .put("observed_underrun_delta", finalUnderruns - initialUnderruns)
+                    onMain { controller.stopShuttle() }
+                    check(controller.observeTrack() == null)
+                }
+                // Isolate the cached-helper measurement from our own native transport/cleanup workers.
+                checkNotNull(worker).submit {}.get(15, TimeUnit.SECONDS)
+                checkNotNull(controlWorker).submit {}.get(15, TimeUnit.SECONDS)
+                checkNotNull(releaseWorker).submit {}.get(15, TimeUnit.SECONDS)
+                onMain {}
+                val helperCosts = JSONArray()
+                result.put("phase_helper_cost", JSONObject().put("sample_rate", fastSampleRate)
+                    .put("sample_rate_selection", "highest sample rate actually observed in the two fast native runs")
+                    .put("warmup_calls_per_case", 8).put("measured_calls_per_case", 16)
+                    .put("scope", "exact helper on cached synthetic PCM; instrumentation-thread CPU, not audio-worker timing")
+                    .put("allocation_scope", "process-wide ART counter delta; includes stats reads and other QA threads")
+                    .put("cases", helperCosts))
+                for (channels in 1..2) {
+                    val cached = ByteArray(fastSampleRate * channels * 2)
+                    val cacheBuffer = ByteBuffer.wrap(cached).order(ByteOrder.LITTLE_ENDIAN)
+                    repeat(fastSampleRate) { frame -> repeat(channels) { channel ->
+                        cacheBuffer.putShort((.6 * kotlin.math.sin(2 * Math.PI * 243.05555555555554 *
+                            frame / fastSampleRate + channel * .73) * 32767).roundToInt().toShort())
+                    } }
+                    for (rate in listOf(2f, -2f, 21f, -21f, 4096f, -4096f)) {
+                        val grainSeconds = .024 * shuttleAudibleSpeed(rate).toDouble()
+                        val firstStart = if (rate > 0f) .25 else .65 - grainSeconds
+                        val firstGrain = transformShuttlePcm16(sliceShuttlePcm16(cached, 0.0, firstStart,
+                            firstStart + grainSeconds, fastSampleRate, channels), rate, channels)
+                        val overlapBytes = (fastSampleRate * .008).roundToInt() * channels * 2
+                        val retainedTail = firstGrain.copyOfRange(firstGrain.size - overlapBytes, firstGrain.size)
+                        val nextStart = firstStart + if (rate > 0f) .032 else -.032
+                        val nominalStart = (nextStart * fastSampleRate).roundToInt()
+                        val grainFrames = ((nextStart + grainSeconds) * fastSampleRate).roundToInt() - nominalStart
+                        fun align(enabled: Boolean) = alignedShuttleStartFrame(cached, channels, nominalStart,
+                            grainFrames, retainedTail, rate, fastSampleRate, enabled,
+                            (.05 * fastSampleRate).roundToInt(), (.95 * fastSampleRate).roundToInt())
+                        val chosen = align(true)
+                        check(chosen != nominalStart) {
+                            "Synthetic phase-cost case did not change alignment: $channels channels, rate $rate, $fastSampleRate Hz"
+                        }
+                        for (enabled in listOf(false, true)) {
+                            repeat(8) { align(enabled) }
+                            val allocatedBefore = Debug.getRuntimeStat("art.gc.bytes-allocated")?.toLongOrNull()
+                            val cpuBefore = Debug.threadCpuTimeNanos()
+                            val wallBefore = SystemClock.elapsedRealtimeNanos()
+                            var frameChecksum = 0L
+                            repeat(16) { frameChecksum += align(enabled) }
+                            val wallNanos = SystemClock.elapsedRealtimeNanos() - wallBefore
+                            val cpuAfter = Debug.threadCpuTimeNanos()
+                            val allocatedAfter = Debug.getRuntimeStat("art.gc.bytes-allocated")?.toLongOrNull()
+                            val allocatedDelta = if (allocatedBefore != null && allocatedAfter != null &&
+                                allocatedAfter >= allocatedBefore) allocatedAfter - allocatedBefore else null
+                            check(frameChecksum == (if (enabled) chosen else nominalStart).toLong() * 16)
+                            helperCosts.put(JSONObject().put("channels", channels).put("rate", rate)
+                                .put("audible_speed", shuttleAudibleSpeed(rate)).put("alignment_enabled", enabled)
+                                .put("nominal_start_frame", nominalStart).put("chosen_start_frame", if (enabled) chosen else nominalStart)
+                                .put("grain_frames", grainFrames).put("retained_tail_frames", retainedTail.size / (channels * 2))
+                                .put("wall_nanos", wallNanos)
+                                .put("thread_cpu_nanos", if (cpuBefore >= 0L && cpuAfter >= cpuBefore) cpuAfter - cpuBefore else JSONObject.NULL)
+                                .put("process_allocated_bytes_delta", allocatedDelta ?: JSONObject.NULL)
+                                .put("frame_checksum", frameChecksum))
+                        }
+                    }
+                }
                 val stable = launch("stable-last-bounds", .36, .64)
                 awaitFinished(stable)
                 result.put("bounds_expansions", 4).put("bounds_contractions", 8)

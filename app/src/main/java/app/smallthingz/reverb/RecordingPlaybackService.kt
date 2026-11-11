@@ -247,8 +247,8 @@ class RecordingPlaybackService : Service() {
         val generation = ownership.generation
         val revision = ownership.beginExternalCommand()
         externalCommandPending = true
-        // Publish revocation before the next Main turn: UI collectors retire their AudioTrack
-        // generation before ordinary transport restarts. No UI callback is retained by the service.
+        // Publishing synchronously revokes the exact scrub lease; UI collector scheduling is
+        // not part of audible authority. No UI callback is retained by the service.
         publish()
         check(main.post {
             if (!destroyed && ownership.currentGesture(generation, revision)) {
@@ -332,6 +332,7 @@ class RecordingPlaybackService : Service() {
         clockEpoch++
         externalCommandPending = false
         ownership.pause()
+        RecordingPlayback.revokeScrub(this)
         pauseTransport(releaseFocus = true)
     }
     internal fun suspendForGestureMatching(expected: RecordingEntity, generation: Long, transportIntentRevision: Long) = guarded {
@@ -356,6 +357,7 @@ class RecordingPlaybackService : Service() {
     }
     internal fun seekMatching(expected: RecordingEntity, target: Int, resume: Boolean) = guarded {
         if (recording?.let { samePlaybackRecording(it, expected) } != true) return@guarded
+        RecordingPlayback.revokeScrub(this)
         clockEpoch++
         quietStart?.cancel()
         quietStart = null
@@ -472,6 +474,7 @@ class RecordingPlaybackService : Service() {
     }
 
     private fun releaseTransport() {
+        RecordingPlayback.revokeScrub(this)
         quietStart?.cancel()
         quietStart = null
         quietStartPending = false

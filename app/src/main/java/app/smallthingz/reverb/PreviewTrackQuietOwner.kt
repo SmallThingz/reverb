@@ -1,5 +1,7 @@
 package app.smallthingz.reverb
 
+import java.util.concurrent.RejectedExecutionException
+
 /** One instance per physical AudioTrack; only the caller holds the native track. */
 internal class PreviewTrackQuietOwner(private val coordinator: PreviewQuietCoordinator) {
     val observationIdentity = Any()
@@ -14,16 +16,41 @@ internal class PreviewTrackQuietOwner(private val coordinator: PreviewQuietCoord
     private var quietSucceeded = false
     private var quietFailure: Throwable? = null
     private var cleanupDispatched = false
+    private var silenceDispatched = false
+    private var silenceDispatchFailure: Throwable? = null
     @Volatile var nativeReleaseSucceeded = false
+        private set
+    @Volatile var acceptedWriteBytes = 0L
         private set
 
     fun claimCleanupDispatch(): Boolean = synchronized(stateLock) {
         if (cleanupDispatched) false else { cleanupDispatched = true; true }
     }
 
+    /** Only enqueue here: the short state lock orders dispatch failure before terminal reporting. */
+    fun dispatchSilence(dispatch: () -> Unit) {
+        val rejected = synchronized(stateLock) {
+            if (cleanupDispatched || releaseClaimed || silenceDispatched) null else {
+                silenceDispatched = true
+                try {
+                    dispatch()
+                    null
+                } catch (error: RejectedExecutionException) {
+                    silenceDispatchFailure = error
+                    retire()
+                }
+            }
+        }
+        // A waiter may resume inline. Never run its continuation under the native owner's lock.
+        // Successful release can win this race; the coordinator ignores failure after QUIET.
+        rejected?.let(coordinator::failed)
+    }
+
     /** Pause may interrupt a blocking write; terminal release waits for its return. */
     fun write(action: () -> Int): Int? = synchronized(writeGate) {
-        if (synchronized(stateLock) { terminal }) null else action()
+        if (synchronized(stateLock) { terminal }) null else action().also { written ->
+            if (written > 0) acceptedWriteBytes += written
+        }
     }
 
     /** Native position sampling shares the terminal lifetime fence with writes. */
@@ -83,7 +110,10 @@ internal class PreviewTrackQuietOwner(private val coordinator: PreviewQuietCoord
         }
         if (!claimed) return false
         val silenced = silence(pause, flush)
-        var failure: Throwable? = synchronized(audioGate) { quietFailure }
+        var failure: Throwable? = synchronized(stateLock) { silenceDispatchFailure }
+        synchronized(audioGate) { quietFailure }?.let { error ->
+            if (failure == null) failure = error else if (failure !== error) failure?.addSuppressed(error)
+        }
         fun attempt(block: () -> Unit): Boolean = try {
             block(); true
         } catch (error: Throwable) {

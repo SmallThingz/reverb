@@ -17,6 +17,38 @@ import org.junit.Test
 class BoundedPcmPreviewTest {
     private class Superseded : RuntimeException()
 
+    @Test fun legacyStartupFitsTheActualFirstTransferBeforePlayWithoutTinySteadyStateBuffer() {
+        for (api in 28..30) for (writtenFrames in listOf(480, 768, 1_200, 1_536)) {
+            val events = mutableListOf<String>()
+            playPrimedPreviewTrack(api, writtenFrames,
+                { requested -> events += "buffer:$requested"; requested }, { events += "play" })
+            assertEquals(listOf("buffer:$writtenFrames", "play"), events)
+        }
+    }
+
+    @Test fun legacyStartupRejectsUnreachableFloorOrNativeErrorWithoutPlaying() {
+        for ((queued, returned) in listOf(1 to 16, 15 to 16, 480 to 481, 480 to 0, 480 to -2)) {
+            var played = false
+            val failure = assertThrows(java.io.IOException::class.java) {
+                playPrimedPreviewTrack(30, queued,
+                    { requested -> assertEquals(maxOf(16, queued), requested); returned }, { played = true })
+            }
+            assertEquals(if (returned <= 0)
+                "Audio preview buffer configuration failed (native result $returned)"
+            else "Audio preview needs $returned startup frames but only $queued are queued", failure.message)
+            assertFalse(played)
+        }
+    }
+
+    @Test fun modernStartupKeepsNativeBufferCapacityEvenForOneFrame() {
+        for (api in listOf(31, 36)) {
+            var plays = 0
+            playPrimedPreviewTrack(api, 1,
+                { error("Modern start threshold must not shrink the native buffer") }, { plays++ })
+            assertEquals(1, plays)
+        }
+    }
+
     @Test fun expandingSelectedBoundsPreservesQueuedSupportAcrossRepeatedUpdates() {
         for (direction in listOf(-1, 1)) {
             var admission = ShuttlePlaybackAdmission(5.0, 6.0, direction)
