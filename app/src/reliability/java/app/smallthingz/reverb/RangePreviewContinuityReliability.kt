@@ -406,7 +406,8 @@ internal fun verifyShortRangePreview(instrumentation: Instrumentation, report: S
         context.applicationContext.javaClass == Application::class.java) {
         "Short preview fixtures require the isolated current-QA package with plain Application"
     }
-    check(selector in setOf("range_preview_short_end", "range_preview_short_controls", "range_preview_short_retirement"))
+    val samplingOnly = selector == "range_preview_normalization_sampling"
+    check(samplingOnly || selector in setOf("range_preview_short_end", "range_preview_short_controls", "range_preview_short_retirement"))
     check(Looper.myLooper() != Looper.getMainLooper())
     val evidence = File(context.filesDir, "$selector-${UUID.randomUUID()}")
     check(evidence.mkdir())
@@ -419,6 +420,17 @@ internal fun verifyShortRangePreview(instrumentation: Instrumentation, report: S
         .put("microphone_or_capture_service", "NOT_USED")
         .put("audible_quality", "UNVERIFIED").put("hardware_pipeline_latency", "UNMEASURED")
         .put("source_directory", root.absolutePath).put("source_pcm_preserved", false)
+    val samplingTraces = JSONArray()
+    if (samplingOnly) result.put("normalization_sampling", JSONObject()
+        .put("diagnostic_only", true).put("process_pid", android.os.Process.myPid())
+        .put("process_uid", android.os.Process.myUid()).put("package", context.packageName)
+        .put("process_arch", System.getProperty("os.arch") ?: "unknown")
+        .put("process_is_64_bit", android.os.Process.is64Bit())
+        .put("requested_interval_us", 1_000).put("requested_buffer_bytes", 8 * 1024 * 1024)
+        .put("maximum_trace_file_bytes", 16 * 1024 * 1024).put("maximum_traces", 2)
+        .put("scope", "process-wide ART sampling; attribute only the identity-bound preview worker")
+        .put("excluded", "earlier controls/paced cases, native28+4 proof, cached cost loops, final stable-play cases")
+        .put("runtime_quality_pass", false).put("traces", samplingTraces))
     val resultFile = File(evidence, "result.json")
     resultFile.writeText(result.toString(2))
     report.append("PARITY_EVIDENCE ").append(evidence.name).append("/result.json\n")
@@ -480,12 +492,72 @@ internal fun verifyShortRangePreview(instrumentation: Instrumentation, report: S
         val parent = ReverbService.TimelineSnapshot(checkNotNull(store.acquireRange(0.0, 1.0)), ::callbackFailure)
         snapshot = parent
         val controller = TimelineAudioPreviewController(::callbackFailure,
-            collectShuttleTimings = selector == "range_preview_short_controls")
+            collectShuttleTimings = samplingOnly || selector == "range_preview_short_controls")
         preview = controller
         // Executor reflection exposes only QA fences, never an AudioTrack or its native lifetime.
         fun executor(name: String) = TimelineAudioPreviewController::class.java.getDeclaredField(name)
             .apply { isAccessible = true }.get(controller) as ExecutorService
         worker = executor("executor"); controlWorker = executor("controlExecutor"); releaseWorker = executor("releaseExecutor")
+        fun samplingWorkerIdentity(): JSONObject = checkNotNull(worker).submit<JSONObject> {
+            val thread = Thread.currentThread()
+            check(thread.name == "Reverb-range-preview")
+            JSONObject().put("name", thread.name).put("java_id", thread.id)
+                .put("linux_tid", android.os.Process.myTid())
+                .put("elapsed_ns", SystemClock.elapsedRealtimeNanos())
+                .put("thread_cpu_ns", Debug.threadCpuTimeNanos())
+        }.get(15, TimeUnit.SECONDS)
+        fun startSampling(direction: Int, owner: PreviewTrackObservation, before: JSONObject): JSONObject {
+            check(owner.sampleRate == 96_000) { "Sampling requires the actually observed 96 kHz route" }
+            check(samplingTraces.length() < 2)
+            val file = File(evidence, if (direction > 0) "normalization-forward.trace" else "normalization-reverse.trace")
+            check(file.createNewFile()) { "Sampling trace already exists" }
+            val row = JSONObject().put("direction", direction).put("epoch", owner.epoch)
+                .put("sample_rate", owner.sampleRate).put("worker_before", before)
+                .put("file", file.name).put("start_succeeded", false).put("stop_succeeded", false)
+                .put("start_requested_elapsed_ns", SystemClock.elapsedRealtimeNanos())
+            samplingTraces.put(row)
+            resultFile.writeText(result.toString(2))
+            // This fresh isolated QA process must have no pre-existing profiler. A failed
+            // start never grants ownership to stop someone else's tracing lifetime.
+            Debug.startMethodTracingSampling(file.absolutePath, 8 * 1024 * 1024, 1_000)
+            try {
+                row.put("start_succeeded", true).put("start_returned_elapsed_ns", SystemClock.elapsedRealtimeNanos())
+                return row
+            } catch (error: Throwable) {
+                throwAfterClosePreservingPrimary(error) { Debug.stopMethodTracing() }
+            }
+        }
+        fun stopSampling(row: JSONObject) {
+            var terminal: Throwable? = null
+            fun finish(action: () -> Unit) { terminal = closePreservingPrimaryFailure(terminal, action) }
+            // Quiet/worker completion precede trace finalization; outer cleanup still owns
+            // observer/control/release and source drains even when any of these steps fail.
+            finish { onMain { controller.stopShuttle() } }
+            finish {
+                val after = samplingWorkerIdentity()
+                row.put("worker_after", after)
+                val before = row.getJSONObject("worker_before")
+                for (key in listOf("name", "java_id", "linux_tid")) check(before.get(key) == after.get(key)) {
+                    "Sampling preview worker changed: $key"
+                }
+            }
+            row.put("stop_requested_elapsed_ns", SystemClock.elapsedRealtimeNanos())
+            finish {
+                check(row.getBoolean("start_succeeded"))
+                Debug.stopMethodTracing()
+                row.put("stop_succeeded", true)
+            }
+            row.put("stop_returned_elapsed_ns", SystemClock.elapsedRealtimeNanos())
+            finish {
+                val file = File(evidence, row.getString("file"))
+                row.put("bytes", file.length())
+                check(file.length() in 1L..16L * 1024L * 1024L) { "Trace file is empty or exceeds its evidence bound" }
+                row.put("sha256", MessageDigest.getInstance("SHA-256").digest(file.readBytes()).toHexString())
+            }
+            row.put("finalization_failure", terminal?.stackTraceToString() ?: JSONObject.NULL)
+            finish { resultFile.writeText(result.toString(2)) }
+            terminal?.let { throw it }
+        }
         fun observe() {
             val sample = controller.observeTrack() ?: return
             check(sample.sampleRate == 24_000 && sample.channelCount == 1)
@@ -587,7 +659,9 @@ internal fun verifyShortRangePreview(instrumentation: Instrumentation, report: S
                 awaitFinished(run)
                 check(releasedNormally.get()) { "Main-delay probe exceeded its finite two-second hold" }
             }
-            "range_preview_short_controls" -> {
+            "range_preview_short_controls", "range_preview_normalization_sampling" -> {
+                var fastSampleRate = 0
+                if (!samplingOnly) {
                 val first = launch("play-before-pause", .05, .95)
                 awaitRunning(first)
                 onMain { first.retired.set(true); controller.stop(); currentRun.set(null) }
@@ -719,7 +793,6 @@ internal fun verifyShortRangePreview(instrumentation: Instrumentation, report: S
                 result.put("fast_shuttle_runs", fastRuns)
                     .put("fast_shuttle_sampling", "paced consumed-body acknowledgements; not continuous-audibility evidence")
                 var previousFastOwner: Any? = null
-                var fastSampleRate = 0
                 for (direction in listOf(1, -1)) {
                     val rate = direction * 2f
                     val label = if (direction > 0) "fast-forward" else "fast-reverse"
@@ -780,6 +853,7 @@ internal fun verifyShortRangePreview(instrumentation: Instrumentation, report: S
                     onMain { controller.stopShuttle() }
                     check(controller.observeTrack() == null)
                 }
+                }
                 // Continuous commands use their own clock; native getters can block behind writes.
                 data class ContinuousRead(val phaseBefore: Int, val phaseAfter: Int,
                     val began: Long, val ended: Long, val sample: PreviewTrackObservation?)
@@ -837,6 +911,7 @@ internal fun verifyShortRangePreview(instrumentation: Instrumentation, report: S
                             .put("status", "INCOMPLETE").put("audible_quality", "UNVERIFIED")
                         continuousRuns.put(continuous)
                         continuousPhase.set(phaseId)
+                        val workerBefore = if (samplingOnly) samplingWorkerIdentity() else null
                         val startCompleted = onMain {
                             controller.startShuttle(parent, if (direction > 0) .088 else .912, rate, .05, .95)
                             SystemClock.elapsedRealtimeNanos()
@@ -855,6 +930,8 @@ internal fun verifyShortRangePreview(instrumentation: Instrumentation, report: S
                         check(owner.identity !== priorOwner) { "Continuous reversal retained retired owner" }
                         priorOwner = owner.identity
                         continuous.put("epoch", owner.epoch).put("sample_rate", owner.sampleRate)
+                        val trace = if (samplingOnly) startSampling(direction, owner, checkNotNull(workerBefore)) else null
+                        withOwnedResource(trace, release = { owned -> if (owned != null) stopSampling(owned) }) {
                         val clockStart = SystemClock.elapsedRealtimeNanos() + 16_000_000L
                         continuous.put("requested_steady_start_ns", clockStart + 8L * 16_000_000L)
                             .put("requested_steady_end_ns", clockStart + 24L * 16_000_000L)
@@ -895,7 +972,11 @@ internal fun verifyShortRangePreview(instrumentation: Instrumentation, report: S
                             commands.length() == 25 && skipped.length() == 0 && wholePeriodLateCommands == 0, continuous))
                         continuous.put("whole_period_late_commands", wholePeriodLateCommands)
                         onMain { controller.stopShuttle() }
+                        }
                     }
+                } catch (error: Throwable) {
+                    if (samplingOnly) result.put("sampling_window_failure", error.stackTraceToString())
+                    throw error
                 } finally {
                     try { onMain { controller.stopShuttle() } }
                     finally {
@@ -994,6 +1075,7 @@ internal fun verifyShortRangePreview(instrumentation: Instrumentation, report: S
                 checkNotNull(controlWorker).submit {}.get(15, TimeUnit.SECONDS)
                 checkNotNull(releaseWorker).submit {}.get(15, TimeUnit.SECONDS)
                 onMain {}
+                if (!samplingOnly) {
                 qualifyNativeShuttlePcm(result)
                 val helperCosts = JSONArray()
                 val combinedCosts = JSONArray()
@@ -1104,6 +1186,7 @@ internal fun verifyShortRangePreview(instrumentation: Instrumentation, report: S
                 onMain {}
                 check(pendingStarts.get() == 0 && !controller.playbackActive && controller.observeTrack() == null)
                 result.put("same_turn_play_pause_callbacks", pendingStarts.get())
+                }
             }
             "range_preview_short_retirement" -> {
                 val run = launch("retired-active-preview", .0, 1.0)
@@ -1177,7 +1260,7 @@ internal fun verifyShortRangePreview(instrumentation: Instrumentation, report: S
         cleanup { controlDrained = controlWorker?.awaitTermination(15, TimeUnit.SECONDS) ?: true; check(controlDrained) }
         cleanup { releaseDrained = releaseWorker?.awaitTermination(15, TimeUnit.SECONDS) ?: true; check(releaseDrained) }
         cleanup { onMain {}; mainDrained = true }
-        if (selector == "range_preview_short_controls") cleanup {
+        if (samplingOnly || selector == "range_preview_short_controls") cleanup {
             // close()/quiet acknowledgement alone cannot finish a canceled worker's last read.
             // Drain after the original executor's termination fence, preserving its old epochs.
             val timings = preview?.drainShuttleTimings() ?: PreviewShuttleTimingBatch(emptyList(), 0)
@@ -1198,6 +1281,22 @@ internal fun verifyShortRangePreview(instrumentation: Instrumentation, report: S
             check(timings.records.any { it.stage == PreviewShuttleStage.READ_NORMALIZE }) { "Shuttle read timing missing" }
             check(timings.records.any { it.stage == PreviewShuttleStage.FIRST_WRITE && (it.outputBytes ?: 0) > 0 }) {
                 "Successful first-write timing missing"
+            }
+            if (samplingOnly) {
+                check(samplingTraces.length() == 2) { "Both requested sampling windows must complete" }
+                for (index in 0 until samplingTraces.length()) {
+                    val trace = samplingTraces.getJSONObject(index)
+                    val began = trace.getLong("start_returned_elapsed_ns")
+                    val ended = trace.getLong("stop_requested_elapsed_ns")
+                    val reads = timings.records.count { it.epoch == trace.getLong("epoch") &&
+                        it.stage == PreviewShuttleStage.READ_NORMALIZE && it.completed &&
+                        it.startedAtElapsedRealtimeNanos >= began &&
+                        it.startedAtElapsedRealtimeNanos + it.elapsedNanos <= ended }
+                    trace.put("completed_reads_inside_trace", reads)
+                    check(trace.getBoolean("stop_succeeded") && reads > 0) {
+                        "Sampling did not capture a completed moving-window normalization"
+                    }
+                }
             }
         }
         cleanup { check(preview?.observeTrack() == null && preview?.playbackActive != true) }
@@ -1239,7 +1338,8 @@ internal fun verifyShortRangePreview(instrumentation: Instrumentation, report: S
     }
     failure?.let { throw it }
     report.append("PASS ").append(selector)
-        .append(" bounded native-head/callback/retirement evidence; audible quality and pipeline latency unverified\n")
+        .append(if (samplingOnly) " diagnostic trace collection only; attribution and runtime quality unverified\n"
+            else " bounded native-head/callback/retirement evidence; audible quality and pipeline latency unverified\n")
 }
 
 private fun qualifyNativeShuttlePcm(result: JSONObject) {
