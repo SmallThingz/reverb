@@ -38,7 +38,8 @@ internal class RecordingCatalogIdentityChangedException(
 ) : IOException(message, cause)
 
 internal fun catalogRegistrationFailureAllowsVerifiedSaveSuccess(error: Throwable): Boolean =
-    error !is RecordingCatalogIdentityChangedException
+    error !is CancellationException && error !is RecordingCatalogIdentityChangedException &&
+        error !is FileCopyCleanupPendingException
 
 internal inline fun <T> attemptRenameRecoveryPreservingPrimaryFailure(
     primaryFailure: Throwable,
@@ -56,14 +57,18 @@ internal fun catalogRegistrationFailureAfterIdentityRecheck(
     stableIdentityAvailable: Boolean,
     currentIdentityMatches: Boolean,
     currentDisplayNameMatches: Boolean = true,
+    copyCleanupPending: Boolean = false,
 ): Exception {
+    if (error is CancellationException) return error
     if (recordingCatalogPostconditionIsCurrent(
             stableIdentityAvailable = stableIdentityAvailable,
             currentIdentityMatches = currentIdentityMatches,
             currentDisplayNameMatches = currentDisplayNameMatches,
         )
     ) {
-        return error
+        return if (copyCleanupPending && error !is FileCopyCleanupPendingException)
+            FileCopyCleanupPendingException("Saved FILE publication recovery remains pending", error)
+        else error
     }
     return RecordingCatalogIdentityChangedException(
         "Recording changed while catalog registration failed",
@@ -140,11 +145,11 @@ object RecordingRepository {
             throw ConfiguredRecordingDirectoryUnavailableException(configuredDirectoryId)
         }
         val pending = pendingDeletionIds(context)
-        return visibleCatalogRecordings(
+        return filterFileCopyCatalogRows(context, visibleCatalogRecordings(
             dao(context).listAll(),
             pending,
             pendingOutputCleanupIds(context),
-        )
+        ))
     }
 
     /**
@@ -158,11 +163,11 @@ object RecordingRepository {
             mutex.withLock {
                 try {
                     val pending = pendingDeletionIds(context)
-                    visibleCatalogRecordings(
+                    filterFileCopyCatalogRows(context, visibleCatalogRecordings(
                         dao(context).listAll(),
                         pending,
                         pendingOutputCleanupIds(context),
-                    )
+                    ))
                 } catch (corrupt: SQLiteDatabaseCorruptException) {
                     // The preservation handler froze and copied the corrupt database before
                     // removing its active files. First paint must not crash while waiting for
@@ -231,7 +236,17 @@ object RecordingRepository {
         }
     }
 
-    suspend fun register(context: Context, recording: RecordingEntity): RecordingEntity {
+    suspend fun register(context: Context, recording: RecordingEntity): RecordingEntity =
+        registerWithCopyOwner(context, recording, FileCopyCleanupOwner.RECONCILIATION)
+
+    internal suspend fun registerFromAcceptedOperation(context: Context, recording: RecordingEntity): RecordingEntity =
+        registerWithCopyOwner(context, recording, FileCopyCleanupOwner.LIVE_ACCEPTED_OPERATION)
+
+    private suspend fun registerWithCopyOwner(
+        context: Context,
+        recording: RecordingEntity,
+        owner: FileCopyCleanupOwner,
+    ): RecordingEntity {
         return withContext(Dispatchers.IO) {
             mutex.withLock {
                 val stableIdentityAvailable = recording.fileIdentity.isNotBlank()
@@ -249,15 +264,29 @@ object RecordingRepository {
                     throw RecordingCatalogIdentityChangedException("Recording changed before catalog registration")
                 }
                 val dao = dao(context)
+                var copyOwnershipUnresolved = recording.storageType == RecordingStorageType.FILE
                 try {
                     val existing = dao.findById(recording.id)
                     val presentRecording = mergeObservedRecording(
                         existing = existing, observed = recording,
                         nowMillis = System.currentTimeMillis(),
                     )
-                    dao.upsert(presentRecording)
+                    val publication = if (presentRecording.storageType == RecordingStorageType.FILE)
+                        FileCopyPublications.snapshot(context) else null
+                    val copied = publication?.let { fileCopyPublicationForTarget(it, presentRecording) }
+                    copyOwnershipUnresolved = copied != null
+                    FileCopyPublications.catalogCommit(context, publication, listOfNotNull(copied)) {
+                        dao.upsert(presentRecording)
+                    }
+                    if (copied != null && !finishCopiedFileSourceLocked(context, copied, presentRecording, owner) &&
+                        owner == FileCopyCleanupOwner.LIVE_ACCEPTED_OPERATION) {
+                        val pending = FileCopyCleanupPendingException("Saved copy is cataloged; staging cleanup remains pending")
+                        reportFileCopyRecoveryIncident(context, copied.token, pending)
+                        throw pending
+                    }
                     presentRecording
                 } catch (error: Exception) {
+                    if (error is CancellationException) throw error
                     val retryPostcondition = if (stableIdentityAvailable) {
                         runCatching { recordingCatalogPostconditionObservation(context, recording) }.getOrNull()
                     } else {
@@ -268,6 +297,7 @@ object RecordingRepository {
                         stableIdentityAvailable = stableIdentityAvailable,
                         currentDisplayNameMatches = retryPostcondition?.displayNameMatches == true,
                         currentIdentityMatches = retryPostcondition?.identityMatches == true,
+                        copyCleanupPending = copyOwnershipUnresolved && owner == FileCopyCleanupOwner.LIVE_ACCEPTED_OPERATION,
                     )
                 }
             }
@@ -453,7 +483,9 @@ object RecordingRepository {
 
                     var fileFailure: Throwable? = null
                     val deleted = when (tracked.storageType) {
-                        RecordingStorageType.FILE -> when (deleteClaimedFile(intent, failureObserved = { fileFailure = it })) {
+                        RecordingStorageType.FILE -> when (deleteClaimedFile(intent,
+                            restoreMove = { claim, target -> moveClaimForRecovery(context, claim, target) },
+                            failureObserved = { fileFailure = it })) {
                             FileDeletionClaimResult.DELETED -> true
                             FileDeletionClaimResult.MISMATCH_PRESERVED -> {
                                 recordingDeletionJournalStage({ onFailure?.invoke(it) }) {
@@ -578,7 +610,8 @@ object RecordingRepository {
                     ClaimedFileReplayAction.WAIT -> continue
                     ClaimedFileReplayAction.NO_CLAIM -> Unit
                     ClaimedFileReplayAction.REPLAY -> when (
-                        val replayResult = replayClaimedFileDeletion(intent, claim) {
+                        val replayResult = replayClaimedFileDeletion(intent, claim,
+                            restoreMove = { source, target -> moveClaimForRecovery(context, source, target) }) {
                             pendingDeletionMoveTargetMatchesCurrentAsset(context, intent)
                         }
                     ) {
@@ -694,6 +727,7 @@ object RecordingRepository {
     ): Boolean = runCatching {
         val storageType = intent.moveTargetStorageType
             ?: return@runCatching !pendingDeletionHasAnyMoveTargetField(intent)
+        if (storageType == RecordingStorageType.FILE) return@runCatching pendingFileDeletionMoveTargetIsCurrent(intent)
         val id = intent.moveTargetId?.takeIf { it.isNotBlank() } ?: return@runCatching false
         val identity = intent.moveTargetIdentity?.takeIf { it.isNotBlank() } ?: return@runCatching false
         val target = RecordingEntity(
@@ -789,7 +823,13 @@ object RecordingRepository {
                         renameRecordingAsset(context, tracked, requestedBaseName, allowWriteConsent = true)
                     else renameRecordingAssetAfterConsent(context, tracked, consent)) ?: return@withLock null
                     if (renamed == tracked) return@withLock tracked
+                    val copiedPhysicalResult = renamed.storageType == RecordingStorageType.FILE &&
+                        !sameFileObjectAcrossRename(tracked.fileIdentity, renamed.fileIdentity)
+                    var copied: FileCopyPublication? = null
                     try {
+                        val publication = if (renamed.storageType == RecordingStorageType.FILE)
+                            FileCopyPublications.snapshot(context) else null
+                        copied = publication?.let { fileCopyPublicationForTarget(it, renamed) }
                         // The storage-specific rename verified its result, but external writers are
                         // outside Reverb's mutation lock. Recheck the exact renamed object at the
                         // catalog boundary before carrying metadata/cache state into SQLite.
@@ -807,11 +847,16 @@ object RecordingRepository {
                         ) {
                             throw IOException("Recording changed before rename catalog commit")
                         }
-                        dao.applyChanges(
-                            upserts = listOf(renamed),
-                            deleteIds = if (renamed.id == tracked.id) emptyList() else listOf(tracked.id),
-                        )
+                        FileCopyPublications.catalogCommit(context, publication, listOfNotNull(copied)) {
+                            dao.applyChanges(
+                                upserts = listOf(renamed),
+                                deleteIds = if (renamed.id == tracked.id) emptyList() else listOf(tracked.id),
+                            )
+                        }
                     } catch (error: Exception) {
+                        // A compatibility copy retained the original; reverse-copy rollback would
+                        // create another output and incorrectly treat the copied inode as renamed.
+                        if (copiedPhysicalResult) throw error
                         // Prefer restoring the original physical identity. If that is no longer
                         // possible (for example the old path was reused concurrently), never keep
                         // a stale catalog row that could now address unrelated bytes. A refresh can
@@ -831,6 +876,12 @@ object RecordingRepository {
                             }
                         }
                         throw error
+                    }
+                    if (copied != null && !finishCopiedFileSourceLocked(context, copied, renamed,
+                            FileCopyCleanupOwner.LIVE_ACCEPTED_OPERATION)) {
+                        reportFileCopyRecoveryIncident(context, copied.token,
+                            FileCopyCleanupPendingException("Renamed copy saved; original cleanup remains pending"))
+                        throw RecordingRenameStateUncertainException("Renamed copy saved; original cleanup remains pending")
                     }
                     renamed
                 }
@@ -1004,7 +1055,21 @@ object RecordingRepository {
         // Once the exact verified target is cataloged, make it recoverable before touching the
         // source. Never delete that target merely because later source cleanup is uncertain: the
         // source path/URI may have disappeared or been reused for different bytes.
-        dao.upsert(target)
+        val publication = if (target.storageType == RecordingStorageType.FILE)
+            FileCopyPublications.snapshot(context) else null
+        val copied = publication?.let { fileCopyPublicationForTarget(it, target) }
+        FileCopyPublications.catalogCommit(context, publication, listOfNotNull(copied)) { dao.upsert(target) }
+        if (copied != null) {
+            val intermediate = finishCopiedMoveIntermediate(
+                cleanup = { finishCopiedFileSourceLocked(context, copied, target, FileCopyCleanupOwner.LIVE_ACCEPTED_OPERATION) },
+                targetStillCurrent = { recordingContentIdentityMatches(context, target) },
+            )
+            if (intermediate != VerifiedMoveCommitResult.MOVED) {
+                reportFileCopyRecoveryIncident(context, copied.token,
+                    FileCopyCleanupPendingException("Moved copy saved; intermediate staging cleanup remains pending"))
+                return intermediate
+            }
+        }
 
         val cleanupResult = cleanupMovedSourceAfterVerifiedCopy(context, source, target)
         if (cleanupResult != VerifiedMoveCommitResult.MOVED) return cleanupResult
@@ -1021,6 +1086,8 @@ object RecordingRepository {
         context: Context,
         configuredTreeUri: Uri?,
     ): Map<String, Boolean> {
+        runCatching { recoverPendingFileCopyPublications(context) }
+            .onFailure { Log.w("RecordingRepository", "Unable to recover FILE copy publications", it) }
         // Cleanup replay can hash/provider-query large failed outputs. Run it once for the whole
         // refresh, not once per default/persisted/legacy directory scan. Replay itself is best
         // effort: one cleanup failure must not make unrelated directories unavailable. Each scan
@@ -1128,20 +1195,21 @@ object RecordingRepository {
         context: Context,
         directoryId: String,
         scan: (Map<String, RecordingEntity>) -> List<RecordingEntity>,
-    ): Boolean {
+    ): Boolean = try {
         val dao = dao(context)
+        val publication = if (directoryId in managedRecordingFileDirectoryIds(context)) {
+            FileCopyPublications.snapshot(context)
+        } else null
         val existing = dao.listByDirectory(directoryId)
         val existingById = HashMap<String, RecordingEntity>(existing.size)
         existing.associateByTo(existingById) { it.id }
-        val imported = try {
-            scan(existingById)
-        } catch (error: Exception) {
-            // A failed directory enumeration is not evidence that every known recording
-            // disappeared. Leave this directory's catalog state untouched and continue
-            // reconciling other recoverable locations.
-            Log.w("RecordingRepository", "Unable to enumerate recording directory $directoryId", error)
-            return false
-        }
+        val scanned = scan(existingById)
+        val copies = publication?.let { snapshot ->
+            scanned.mapNotNull { fileCopyPublicationForTarget(snapshot, it) }
+        }.orEmpty()
+        val currentRows = (existingById + scanned.associateBy { it.id }).values.toList()
+        val hiddenSources = fileCopySourceIdsToHide(copies, currentRows)
+        val imported = scanned.filterNot { it.id in hiddenSources }
         val nowMillis = System.currentTimeMillis()
         val importedIds = HashSet<String>(imported.size)
         val updates = ArrayList<RecordingEntity>()
@@ -1152,7 +1220,7 @@ object RecordingRepository {
         }
 
         existing.asSequence()
-            .filter { it.id !in importedIds }
+            .filter { it.id !in importedIds && it.id !in hiddenSources }
             .forEach { recording ->
                 // Never convert a scan gap into catalog deletion. Provider visibility,
                 // removable storage, and persisted permissions can all recover later.
@@ -1160,8 +1228,24 @@ object RecordingRepository {
                 if (updated != recording) updates += updated
             }
 
-        dao.applyChanges(updates, emptyList())
-        return true
+        if (publication != null) {
+            FileCopyPublications.catalogCommit(context, publication, copies) {
+                dao.applyChanges(updates, hiddenSources.toList())
+            }
+            copies.forEach { copy ->
+                val target = imported.single { it.id == copy.targetId }
+                if (!finishCopiedFileSourceLocked(context, copy, target, FileCopyCleanupOwner.RECONCILIATION)) {
+                    reportFileCopyRecoveryIncident(context, copy.token,
+                        FileCopyCleanupPendingException("Recovered copy is cataloged; original cleanup requires its accepted owner"))
+                }
+            }
+        } else dao.applyChanges(updates, emptyList())
+        true
+    } catch (error: Exception) {
+        // A changed publication revision is an uncertain scan, never an empty directory.
+        if (error is CancellationException) throw error
+        Log.w("RecordingRepository", "Unable to reconcile recording directory $directoryId", error)
+        false
     }
 
     private fun reconcileRecordingAssetState(
@@ -1187,6 +1271,40 @@ object RecordingRepository {
             if (updated != recording) updates += updated
         }
         dao.applyChanges(updates, emptyList())
+    }
+
+    private fun finishCopiedFileSourceLocked(
+        context: Context,
+        receipt: FileCopyPublication,
+        target: RecordingEntity,
+        owner: FileCopyCleanupOwner,
+    ): Boolean {
+        val record = FileCopyPublications.snapshot(context).records.singleOrNull { it.token == receipt.token }
+            ?: return true
+        if (record.phase != FileCopyPhase.CATALOGED || record.targetIdentity != target.fileIdentity) return false
+        val currentTarget = readCurrentVerifiedFileFingerprint(File(record.targetId)) ?: return false
+        if (!record.matchesTarget(currentTarget)) return false
+        val source = target.copy(id = record.sourceId, displayName = File(record.sourceId).name,
+            fileIdentity = record.sourceIdentity)
+        // Discovery can acknowledge a completed copy, but cannot invent a live deletion owner.
+        if (owner == FileCopyCleanupOwner.RECONCILIATION &&
+            storagePathState(File(record.sourceId)) != StoragePathState.MISSING) return false
+        if (owner == FileCopyCleanupOwner.LIVE_ACCEPTED_OPERATION) {
+            if (cleanupMovedSourceAfterVerifiedCopy(context, source, target) != VerifiedMoveCommitResult.MOVED) return false
+        } else if (!confirmMissingFileRecordingDurable(File(record.sourceId))) return false
+        for (raw in pendingDeletionEntries(context)) {
+            if (pendingDeletionSuppressedId(raw) != record.sourceId) continue
+            val intent = decodePendingDeletionIntent(raw) ?: return false
+            val claim = deletionClaimFile(intent) ?: return false
+            if (storagePathState(claim) != StoragePathState.MISSING) return false
+        }
+        if (record.purpose == FileCopyPurpose.STAGING &&
+            !removeVerifiedExportStaging(context, RecordingStorageType.FILE, record.sourceId, record.sourceFingerprint())) {
+            return false
+        }
+        if (!removePendingDeletionLocked(context, record.sourceId)) return false
+        FileCopyPublications.replace(context, record, null)
+        return true
     }
 
     private fun cleanupMovedSourceAfterVerifiedCopy(
@@ -1233,7 +1351,8 @@ object RecordingRepository {
                     VerifiedMoveCommitResult.MOVED
                 } else {
                     when (
-                        deleteClaimedFile(intent) {
+                        deleteClaimedFile(intent,
+                            restoreMove = { claim, target -> moveClaimForRecovery(context, claim, target) }) {
                             pendingDeletionMoveTargetMatchesCurrentAsset(context, intent)
                         }
                     ) {
@@ -1590,7 +1709,8 @@ private fun preserveTornPendingDeletionClaims(
         // files beneath an arbitrary absolute directory recovered from malformed metadata.
         return false
     }
-    return preserveOrphanedDeletionClaims(sourceId) { claim ->
+    return preserveOrphanedDeletionClaims(sourceId,
+        restoreMove = { claim, target -> moveClaimForRecovery(context, claim, target) }) { claim ->
         pendingDeletionOwnsClaimPath(pendingDeletionSnapshot, claim.absolutePath) ||
             pendingOutputCleanupOwnsClaimPath(context, claim.absolutePath)
     }
@@ -1598,6 +1718,7 @@ private fun preserveTornPendingDeletionClaims(
 
 internal fun preserveOrphanedDeletionClaims(
     sourceId: String,
+    restoreMove: (File, File) -> Unit = ::moveFileWithoutOverwrite,
     claimOwnedByValidJournal: (File) -> Boolean,
 ): Boolean {
     val source = File(sourceId)
@@ -1616,7 +1737,7 @@ internal fun preserveOrphanedDeletionClaims(
             StoragePathState.PRESENT -> if (!observation.isRegularFile) return false
         }
         if (claimOwnedByValidJournal(claim)) continue
-        if (!publishOrphanedDeletionClaim(source, claim)) return false
+        if (!publishOrphanedDeletionClaim(source, claim, restoreMove)) return false
     }
     // A missing claim is safe evidence only after its parent directory is synced. This also
     // makes every claim -> visible-recovery rename above crash-stable before suppression drops.
@@ -1634,7 +1755,7 @@ internal fun deletionClaimTokenFromFileName(name: String): String? {
 internal fun isDeletionClaimFileName(name: String): Boolean =
     deletionClaimTokenFromFileName(name) != null
 
-private fun publishOrphanedDeletionClaim(source: File, claim: File): Boolean {
+private fun publishOrphanedDeletionClaim(source: File, claim: File, restoreMove: (File, File) -> Unit): Boolean {
     val parent = source.parentFile ?: claim.parentFile ?: return false
     val extension = source.name.substringAfterLast('.', "").takeIf { it.isNotBlank() }
     val suffix = extension?.let { ".$it" }.orEmpty()
@@ -1644,7 +1765,7 @@ private fun publishOrphanedDeletionClaim(source: File, claim: File): Boolean {
         val candidateName = if (index == 0) "$base$suffix" else "$base-$index$suffix"
         val candidate = File(parent, candidateName)
         try {
-            Files.move(claim.toPath(), candidate.toPath())
+            restoreMove(claim, candidate)
             return confirmFileDirectoryStateDurable(candidate)
         } catch (_: FileAlreadyExistsException) {
             continue
@@ -1664,6 +1785,19 @@ internal fun pendingDeletionMatchesDigest(
     byteCount: Long,
     sha256Hex: String,
 ): Boolean = intent.byteCount == byteCount && intent.sha256Hex.equals(sha256Hex, ignoreCase = true)
+
+/** Destructive FILE target authority always rereads bytes, even with a warm revision cache. */
+internal fun pendingFileDeletionMoveTargetIsCurrent(
+    intent: PendingDeletionIntent,
+    readFingerprint: (File) -> StableOutputFingerprint? = ::readStableFileOutputFingerprint,
+): Boolean {
+    if (intent.moveTargetStorageType != RecordingStorageType.FILE) return false
+    val id = intent.moveTargetId?.takeIf { it.isNotBlank() } ?: return false
+    val identity = intent.moveTargetIdentity?.takeIf { it.isNotBlank() } ?: return false
+    val current = readFingerprint(File(id)) ?: return false
+    return fileIdentityMatches(identity, current.fileKey.orEmpty()) &&
+        pendingDeletionMatchesDigest(intent, current.digest.byteCount, current.digest.sha256.toHexString())
+}
 
 internal enum class FileDeletionClaimResult { DELETED, MISMATCH_PRESERVED, RETRY }
 
@@ -1693,6 +1827,7 @@ internal fun deletionClaimFile(intent: PendingDeletionIntent): File? {
 
 internal fun deleteClaimedFile(
     intent: PendingDeletionIntent,
+    restoreMove: (File, File) -> Unit = ::moveFileWithoutOverwrite,
     failureObserved: ((Throwable) -> Unit)? = null,
     moveTargetStillCurrent: (() -> Boolean)? = null,
 ): FileDeletionClaimResult {
@@ -1702,6 +1837,7 @@ internal fun deleteClaimedFile(
         ClaimedFileReplayAction.REPLAY -> replayClaimedFileDeletion(
             intent = intent,
             claim = claim,
+            restoreMove = restoreMove,
             failureObserved = failureObserved,
             moveTargetStillCurrent = moveTargetStillCurrent,
         )
@@ -1728,6 +1864,7 @@ internal fun deleteClaimedFile(
     return replayClaimedFileDeletion(
         intent = intent,
         claim = claim,
+        restoreMove = restoreMove,
         failureObserved = failureObserved,
         moveTargetStillCurrent = moveTargetStillCurrent,
     )
@@ -1752,14 +1889,21 @@ internal fun replayClaimedFileDeletion(
     claim: File? = deletionClaimFile(intent),
     readClaimFingerprint: (File, String) -> StableOutputFingerprint? = ::readStableDeletionClaimFingerprint,
     identityBeforeDelete: (File) -> String = ::resolveFileIdentity,
+    restoreMove: (File, File) -> Unit = ::moveFileWithoutOverwrite,
+    restoreMismatchedClaim: Boolean = true,
     failureObserved: ((Throwable) -> Unit)? = null,
     moveTargetStillCurrent: (() -> Boolean)? = null,
 ): FileDeletionClaimResult {
     val resolvedClaim = claim ?: return FileDeletionClaimResult.RETRY
     val expectedIdentity = intent.fileIdentity ?: return FileDeletionClaimResult.RETRY
-    if (!deletionClaimIdentityHasPinnedDescriptorAuthority(expectedIdentity)) {
-        val preserved = restoreOrPublishMismatchedClaim(intent, resolvedClaim)
+    fun preserveMismatch(): FileDeletionClaimResult {
+        // A recovery copy may retire its existing claim, but target loss cannot recursively publish another copy.
+        if (!restoreMismatchedClaim) return FileDeletionClaimResult.RETRY
+        val preserved = restoreOrPublishMismatchedClaim(intent, resolvedClaim, restoreMove)
         return if (preserved) FileDeletionClaimResult.MISMATCH_PRESERVED else FileDeletionClaimResult.RETRY
+    }
+    if (!deletionClaimIdentityHasPinnedDescriptorAuthority(expectedIdentity)) {
+        return preserveMismatch()
     }
     val verifiedClaim = readClaimFingerprint(resolvedClaim, expectedIdentity)
         ?: return FileDeletionClaimResult.RETRY
@@ -1771,20 +1915,17 @@ internal fun replayClaimedFileDeletion(
             verifiedClaim.digest.sha256.toHexString(),
         )
     ) {
-        val preserved = restoreOrPublishMismatchedClaim(intent, resolvedClaim)
-        return if (preserved) FileDeletionClaimResult.MISMATCH_PRESERVED else FileDeletionClaimResult.RETRY
+        return preserveMismatch()
     }
     if (pendingDeletionHasAnyMoveTargetField(intent)) {
         val targetStillCurrent = runCatching { moveTargetStillCurrent?.invoke() == true }.getOrDefault(false)
         if (!targetStillCurrent) {
-            val preserved = restoreOrPublishMismatchedClaim(intent, resolvedClaim)
-            return if (preserved) FileDeletionClaimResult.MISMATCH_PRESERVED else FileDeletionClaimResult.RETRY
+            return preserveMismatch()
         }
     }
     val currentIdentity = runCatching { identityBeforeDelete(resolvedClaim) }.getOrDefault("")
     if (!fileIdentityMatches(verifiedIdentity, currentIdentity)) {
-        val preserved = restoreOrPublishMismatchedClaim(intent, resolvedClaim)
-        return if (preserved) FileDeletionClaimResult.MISMATCH_PRESERVED else FileDeletionClaimResult.RETRY
+        return preserveMismatch()
     }
     return try {
         if (!Files.deleteIfExists(resolvedClaim.toPath())) return FileDeletionClaimResult.RETRY
@@ -1801,10 +1942,14 @@ internal fun replayClaimedFileDeletion(
     }
 }
 
-private fun restoreOrPublishMismatchedClaim(intent: PendingDeletionIntent, claim: File): Boolean {
+private fun restoreOrPublishMismatchedClaim(
+    intent: PendingDeletionIntent,
+    claim: File,
+    restoreMove: (File, File) -> Unit,
+): Boolean {
     val original = File(intent.id)
     try {
-        Files.move(claim.toPath(), original.toPath())
+        restoreMove(claim, original)
         return confirmFileDirectoryStateDurable(original)
     } catch (_: FileAlreadyExistsException) {
         // A new object now owns the original path. Preserve the claimed replacement under
@@ -1824,7 +1969,7 @@ private fun restoreOrPublishMismatchedClaim(intent: PendingDeletionIntent, claim
         val candidateName = if (index == 0) "$base$suffix" else "$base-$index$suffix"
         val candidate = File(parent, candidateName)
         try {
-            Files.move(claim.toPath(), candidate.toPath())
+            restoreMove(claim, candidate)
             return confirmFileDirectoryStateDurable(candidate)
         } catch (_: FileAlreadyExistsException) {
             index++
@@ -1920,6 +2065,12 @@ internal fun verifiedMoveCommitResult(
     !sourceCleanupComplete -> VerifiedMoveCommitResult.SOURCE_CLEANUP_FAILED
     else -> VerifiedMoveCommitResult.MOVED
 }
+
+internal inline fun finishCopiedMoveIntermediate(
+    cleanup: () -> Boolean,
+    targetStillCurrent: () -> Boolean,
+): VerifiedMoveCommitResult = if (cleanup()) VerifiedMoveCommitResult.MOVED
+else verifiedMoveCommitResult(targetIdentityCurrent = targetStillCurrent(), sourceCleanupComplete = false)
 
 internal fun visibleCatalogRecordings(
     recordings: List<RecordingEntity>,

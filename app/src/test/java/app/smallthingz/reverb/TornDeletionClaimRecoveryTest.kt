@@ -87,7 +87,7 @@ class TornDeletionClaimRecoveryTest {
             ).apply { writeBytes(byteArrayOf(5, 4, 3, 2)) }
 
             assertTrue(
-                preserveOrphanedDeletionClaims(source.absolutePath) { claim ->
+                preserveOrphanedDeletionClaims(source.absolutePath, restoreMove = ::moveOwnedTestFile) { claim ->
                     claim.absolutePath == owned.absolutePath
                 },
             )
@@ -117,7 +117,7 @@ class TornDeletionClaimRecoveryTest {
                 ".reverb-delete-00000000-0000-0000-0000-000000000304.pending",
             ).mkdirs()
 
-            assertFalse(preserveOrphanedDeletionClaims(source.absolutePath) { false })
+            assertFalse(preserveOrphanedDeletionClaims(source.absolutePath, restoreMove = ::moveOwnedTestFile) { false })
         } finally {
             directory.deleteRecursively()
         }

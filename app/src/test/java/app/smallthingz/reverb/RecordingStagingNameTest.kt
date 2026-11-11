@@ -89,7 +89,7 @@ class RecordingStagingNameTest {
             assertTrue(utf8Size(created.file.name) <= 255)
             val bytes = byteArrayOf(index.toByte(), 7, 9)
             created.file.writeBytes(bytes)
-            val published = publishStagedFile(created.file, name).file
+            val published = publishStagedFile(created.file, name, moveFile = ::moveOwnedTestFile).file
             assertEquals(name, published.name)
             assertArrayEquals(bytes, published.readBytes())
         }
@@ -117,7 +117,7 @@ class RecordingStagingNameTest {
             val blocker = File(targetDirectory, name).apply { writeBytes(blockerBytes) }
             val created = createLocalStagingFile(targetDirectory, name, StagingOutputKind.COPY, io = realCreationIo())
             created.file.writeBytes(renamed.readBytes())
-            val published = publishStagedFile(created.file, name).file
+            val published = publishStagedFile(created.file, name, moveFile = ::moveOwnedTestFile).file
             assertTrue(utf8Size(published.name) <= 255)
             assertTrue(published.name.endsWith(" (2).wav"))
             assertEquals(published.name, published.name.toByteArray(Charsets.UTF_8).toString(Charsets.UTF_8))
@@ -137,7 +137,7 @@ class RecordingStagingNameTest {
         val blocker = File(directory, name).apply { writeBytes(byteArrayOf(1)) }
         val created = createLocalStagingFile(directory, name, StagingOutputKind.COPY, io = realCreationIo())
         created.file.writeBytes(byteArrayOf(2, 3))
-        val published = publishStagedFile(created.file, name).file
+        val published = publishStagedFile(created.file, name, moveFile = ::moveOwnedTestFile).file
         assertEquals(255, utf8Size(published.name))
         assertEquals("a".repeat(247) + " (2).wav", published.name)
         assertArrayEquals(byteArrayOf(1), blocker.readBytes())

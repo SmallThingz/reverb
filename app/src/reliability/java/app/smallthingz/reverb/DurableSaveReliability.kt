@@ -38,6 +38,242 @@ private const val DURABLE_QA_RATE = 48_000
 private const val DURABLE_QA_FRAMES = 96_000
 private const val DURABLE_QA_WAIT_MS = 30_000L
 
+/** Exact descriptor-dependent journal retirement regression, isolated from Service and normal data. */
+internal fun verifyDurableSaveReferenceRetirement(context: Context, report: StringBuilder) {
+    durableQaGuard(context)
+    val run = UUID.randomUUID().toString()
+    val root = File(context.filesDir, "durable-qa-reference-$run")
+    check(root.mkdir()) { "Reference fixture root already exists" }
+    val rootStat = Os.lstat(root.path)
+    report.append("DURABLE_REFERENCE_BEGIN run=$run root=${root.absolutePath}\n")
+    // No finally cleanup: any failed assertion leaves the exact source, pins and manifests for inspection.
+    val expected = ByteArray(16) + ByteArray(32) { it.toByte() }
+    val source = File(root, "store/chunks/0").absoluteFile
+    check(source.parentFile!!.mkdirs())
+    source.writeBytes(expected)
+    val sourceIdentity = resolveFileIdentity(source)
+    java.io.FileInputStream(source).use { input ->
+        check(fileDescriptorIdentityMatches(sourceIdentity, resolveFileDescriptorIdentity(input.fd))) {
+            "Android descriptor identity proof is required; this regression cannot be skipped"
+        }
+    }
+    val checksum = java.util.zip.CRC32().apply { update(expected, 16, 32) }.value.toInt()
+    val record = PersistentAudioChunkStore.ChunkRecord(0u, source,
+        PersistentAudioChunkStore.ChunkState.FINALIZED, 1000, 32, 8, 48_000, 2,
+        PcmSampleFormat.PCM_16, checksum, 1, 16)
+    val segment = PersistentAudioChunkStore.Segment(record, 0, 8, 16, 32, record.payloadChecksum,
+        0.0, 8.0 / 48_000)
+    val range = FrozenPcmRange(listOf(segment), emptyList(), emptyList(), 1000, 1001, 8.0 / 48_000)
+    val request = DurableSaveRequest("Selected audio.flac", "destination-at-admission", ExportFormat.FLAC,
+        ExportCodec.PCM_16, 96_000, 2, PcmSampleFormat.PCM_16, 8)
+    val journal = DurableSaveJournal(File(root, "jobs"))
+    fun admit(): DurableSaveRecord {
+        val id = UUID.randomUUID().toString()
+        val directory = journal.createDirectory(id)
+        val pinned = DurablePcmPins.link(directory, range) { snapshot ->
+            journal.write(DurableSaveRecord(id, DurableSaveStage.PINNING, request, snapshot))
+        }
+        return DurableSaveRecord(id, DurableSaveStage.QUEUED, request, pinned).also(journal::write)
+    }
+    val first = admit()
+    val second = admit()
+    val firstPin = DurablePcmPins.referenceFile(journal.directory(first.id), first.source.objects.single())
+    val secondPin = DurablePcmPins.referenceFile(journal.directory(second.id), second.source.objects.single())
+    check(firstPin != secondPin && firstPin.isFile && secondPin.isFile)
+    check(first.source.range.segments.single().record.file == source)
+    check(second.source.range.segments.single().record.file == source)
+    check(source.readBytes().contentEquals(expected) && DurablePcmPins.isProtected(source))
+    val secondManifest = File(journal.directory(second.id), "manifest")
+    val secondManifestBytes = secondManifest.readBytes()
+    val cancelled = first.copy(stage = DurableSaveStage.CANCELLED)
+    journal.write(cancelled)
+    journal.retire(cancelled)
+    check(storagePathState(journal.directory(first.id)) == StoragePathState.MISSING)
+    check(storagePathState(firstPin) == StoragePathState.MISSING)
+    check(secondPin.isFile)
+    check(source.readBytes().contentEquals(expected)) { "First job retirement changed shared source bytes" }
+    check(fileIdentityMatches(sourceIdentity, resolveFileIdentity(source))) { "Shared source identity changed" }
+    check(DurablePcmPins.isProtected(source)) { "Second job lost shared source protection" }
+    DurablePcmPins.verify(journal.directory(second.id), second.source.objects.single())
+    check(secondManifest.isFile && secondManifest.readBytes().contentEquals(secondManifestBytes))
+    val reread = journal.read(second.id)
+    check(reread.id == second.id && reread.stage == DurableSaveStage.QUEUED &&
+        reread.request == request && reread.source.objects == second.source.objects)
+    report.append("DURABLE_REFERENCE_RETIRED run=$run first=${first.id} second=${second.id}")
+        .append(" first_pin_removed=true second_pin_verified=true second_manifest_unchanged=true")
+        .append(" source_bytes=48 pcm_bytes=32 source_sha256=${durableQaHex(MessageDigest.getInstance("SHA-256").digest(expected))}\n")
+    // All intermediate assertions passed. Retire only the second owned synthetic job, then remove this owned root.
+    val secondCancelled = second.copy(stage = DurableSaveStage.CANCELLED)
+    journal.write(secondCancelled)
+    journal.retire(secondCancelled)
+    check(storagePathState(secondPin) == StoragePathState.MISSING && !DurablePcmPins.isProtected(source))
+    check(source.readBytes().contentEquals(expected))
+    deleteDurableQaRoot(root, rootStat.st_dev, rootStat.st_ino)
+    report.append("DURABLE_REFERENCE_DONE run=$run owned_root_removed=true\n")
+}
+
+/** Actual coordinator and one Service failure path; no live capture or unowned output. */
+internal fun verifyDurableSaveCleanupFailure(
+    context: Context,
+    tree: Uri,
+    provider: ReliabilityDocumentsProvider,
+    report: StringBuilder,
+) {
+    durableQaGuard(context)
+    durableQaRequireNoPendingJobs(context)
+    check(DurableSaveFaultHooks.onBoundary == null)
+    check(setConfiguredExportTreeUri(context, tree))
+    provider.mode = ReliabilityDocumentsProvider.Mode.RENAME_NEW_ID
+    val providerRoot = File(context.filesDir, "reliability-documents")
+    val providerRootIdentity = resolveDirectoryIdentity(providerRoot)
+    check(providerRootIdentity.isNotBlank() && providerRoot.listFiles()?.isEmpty() == true &&
+        provider.retainedBytes().isEmpty()) { "Cleanup fixture requires an empty owned provider root" }
+    durableQaConfigure(context, ExportFormat.WAV)
+    val coordinator = DurableSaveCoordinator.get(context)
+    val journalField = DurableSaveCoordinator::class.java.getDeclaredField("journal").apply { isAccessible = true }
+    val journal = journalField.get(coordinator) as DurableSaveJournal
+    val session = DurableQaService(context)
+    var primary: Throwable? = null
+    try {
+        for (boundary in listOf("BEFORE_STAGING_MARKER_RETIREMENT", "BEFORE_PIN_RELEASE",
+            "METADATA_AFTER_MANIFEST_UNLINK", "METADATA_ROOT_BARRIER", "AFTER_PIN_RELEASE")) {
+            durableQaRequireNoPendingJobs(context)
+            val run = UUID.randomUUID().toString()
+            val source = DurableQaSource(context, run)
+            var success = false
+            var caseFailure: Throwable? = null
+            val injected = java.io.IOException("Injected durable cleanup failure: $boundary")
+            val hooks = AtomicInteger()
+            val failedPublications = AtomicInteger()
+            val targetId = AtomicReference<String>()
+            val name = "durable-$run-cleanup"
+            try {
+                source.append()
+                if (boundary.startsWith("METADATA_")) {
+                    // Existing seam: real manifest/job unlink precedes the injected directory barrier failure.
+                    val root = durableSaveJournalRoot(context)
+                    journalField.set(coordinator, DurableSaveJournal(root, directorySync = { dir ->
+                        val id = targetId.get()
+                        val atBoundary = id != null && if (boundary == "METADATA_ROOT_BARRIER") {
+                            dir == root && !File(root, id).exists()
+                        } else dir.name == id && !File(dir, "manifest").exists()
+                        if (atBoundary && hooks.compareAndSet(0, 1)) throw injected
+                        forceRecordingDirectoryDurable(dir)
+                    }))
+                } else {
+                    DurableSaveFaultHooks.onBoundary = { id, point ->
+                        if (point == boundary) {
+                            targetId.compareAndSet(null, id)
+                            check(targetId.get() == id)
+                            if (hooks.getAndIncrement() == 0) throw injected
+                        }
+                    }
+                }
+                val serviceCase = boundary == "BEFORE_STAGING_MARKER_RETIREMENT"
+                val id: String
+                if (serviceCase) {
+                    val receiver = session.submit(source.store, name, .25f, 1.5f)
+                    val failure = receiver.awaitFailed()
+                    id = failure.first
+                    check(failure.second.cause === injected)
+                    session.fence()
+                    check(receiver.terminals.get() == 1) { "Service delivered more than one terminal result" }
+                } else {
+                    id = checkNotNull(source.store.acquireRange(.25, 1.5)).use { lease ->
+                        coordinator.admit(lease, DurableSaveRequest(name, getConfiguredOutputDirectoryId(context),
+                            ExportFormat.WAV, ExportCodec.PCM_16, DURABLE_QA_RATE, 1,
+                            PcmSampleFormat.PCM_16, DEFAULT_FLAC_COMPRESSION)).id
+                    }
+                    targetId.set(id)
+                    val failure = runCatching {
+                        coordinator.materialize(id, onFailurePublished = { failedPublications.incrementAndGet() }) { }
+                    }.exceptionOrNull()
+                    check(failure === injected) { "Cleanup fault returned success or changed its primary failure: $failure" }
+                    check(failedPublications.get() == if (boundary == "AFTER_PIN_RELEASE") 0 else 1)
+                }
+                check(targetId.get() == id && hooks.get() == 1)
+                DurableSaveFaultHooks.onBoundary = null
+                journalField.set(coordinator, journal)
+                val selected = catalog(context).single { it.displayName == "$name.wav" }
+                verifyDurableQaOutput(context, selected, ExportFormat.WAV, 12_000, 60_000, report)
+                if (boundary == "AFTER_PIN_RELEASE") {
+                    check(!journal.directory(id).exists() && coordinator.pendingCount() == 0)
+                    check(DurableSaveJobs.state.value.filter { it.id == id }.all { it.terminallyRetired && it.phase != SavePhase.FAILED })
+                    check(coordinator.recover().none { it.id == id })
+                } else if (boundary == "METADATA_ROOT_BARRIER") {
+                    check(!journal.directory(id).exists() && coordinator.pendingCount() == 1)
+                    check(injected.suppressed.isNotEmpty()) { "Failed manifest republication must retain its error" }
+                    val failed = DurableSaveJobs.state.value.single { it.id == id }
+                    check(failed.phase == SavePhase.FAILED && !failed.terminallyRetired)
+                    val root = durableSaveJournalRoot(context)
+                    val retryBarrier = java.io.IOException("Injected authoritative membership barrier failure")
+                    journalField.set(coordinator, DurableSaveJournal(root, directorySync = { dir ->
+                        if (dir == root) throw retryBarrier
+                        forceRecordingDirectoryDurable(dir)
+                    }))
+                    check(runCatching { coordinator.recover() }.exceptionOrNull() === retryBarrier)
+                    check(coordinator.pendingCount() == 1 && DurableSaveJobs.state.value.single { it.id == id } == failed)
+                    journalField.set(coordinator, journal)
+                    check(coordinator.recover().none { it.id == id })
+                    check(coordinator.pendingCount() == 0 && DurableSaveJobs.state.value.none { it.id == id })
+                } else {
+                    val durable = journal.read(id)
+                    check(durable.stage == DurableSaveStage.COMPLETE && durable.error.contains(injected.message!!))
+                    val failed = DurableSaveJobs.state.value.single { it.id == id }
+                    check(failed.phase == SavePhase.FAILED && !failed.terminallyRetired)
+                    check(recordingOwnedByPendingSave(selected, pendingSaveOutputIdentities(listOf(failed))))
+                    // Pin cleanup may already be partial or complete; COMPLETE replay trusts the reverified output.
+                    check(coordinator.recover().single().id == id)
+                    val recovered = coordinator.materialize(id) { }
+                    check(recovered.id == selected.id && recovered.fileIdentity == selected.fileIdentity)
+                    verifyDurableQaOutput(context, recovered, ExportFormat.WAV, 12_000, 60_000, report)
+                    verifyDurableQaPinsReleased(context, id)
+                    check(coordinator.materialize(id) { } == recovered) { "Completed retry cache changed the result" }
+                    check(catalog(context).count { it.displayName == "$name.wav" } == 1)
+                }
+                session.fence()
+                session.assertNoMicrophone()
+                check(!recordingOwnedByPendingSave(selected, pendingSaveOutputIdentities(DurableSaveJobs.state.value)))
+                report.append("DURABLE_CLEANUP_FAILURE run=$run job=$id boundary=$boundary service=$serviceCase")
+                    .append(" fault_once=true failed_publications=${if (serviceCase) "service-receipt" else failedPublications.get().toString()} pcm_exact=true")
+                    .append(" journal_retired=true retry_duplicate=false post_retired=${boundary == "AFTER_PIN_RELEASE"}\n")
+                check(runBlocking { RecordingRepository.deleteExactWithoutPendingReplay(context, selected) })
+                // Deleted document IDs can query as UNAVAILABLE. Prove absence in this owned provider instead.
+                val directState = recordingAssetState(context, selected)
+                val providerEmpty = provider.retainedBytes().isEmpty()
+                val rootOwned = resolveDirectoryIdentity(providerRoot) == providerRootIdentity
+                val physicalEmpty = providerRoot.listFiles()?.isEmpty() == true
+                val rootStillOwned = resolveDirectoryIdentity(providerRoot) == providerRootIdentity
+                val catalogAbsent = catalog(context).none { it.id == selected.id }
+                report.append("DURABLE_CLEANUP_OUTPUT run=$run direct_state=$directState provider_empty=$providerEmpty")
+                    .append(" root_owned=${rootOwned && rootStillOwned} physical_empty=$physicalEmpty catalog_absent=$catalogAbsent\n")
+                check(providerEmpty && rootOwned && physicalEmpty && rootStillOwned && catalogAbsent) {
+                    "Owned output cleanup incomplete: provider=$providerEmpty root=${rootOwned && rootStillOwned} physical=$physicalEmpty catalog=$catalogAbsent direct=$directState"
+                }
+                DurableSaveJobs.acknowledgePublished(emptyMap())
+                success = true
+            } catch (error: Throwable) { caseFailure = error; throw error }
+            finally {
+                DurableSaveFaultHooks.onBoundary = null
+                journalField.set(coordinator, journal)
+                try {
+                    session.fence()
+                    if (success) source.deleteAfterSuccess() else source.close()
+                } catch (cleanup: Throwable) {
+                    if (caseFailure != null && cleanup !== caseFailure) caseFailure.addSuppressed(cleanup) else throw cleanup
+                }
+            }
+        }
+    } catch (error: Throwable) { primary = error; throw error }
+    finally {
+        DurableSaveFaultHooks.onBoundary = null
+        journalField.set(coordinator, journal)
+        try { session.close() } catch (cleanup: Throwable) {
+            if (primary != null && cleanup !== primary) primary.addSuppressed(cleanup) else throw cleanup
+        }
+    }
+}
+
 /** Two real Service submissions share raw chunks, then survive removal of their original timeline. */
 internal fun verifyDurableSaveOverlap(
     context: Context,
@@ -808,6 +1044,11 @@ private class DurableQaReceiver : ReverbService.AudioFileReceiver {
         check(queued.await(DURABLE_QA_WAIT_MS, TimeUnit.MILLISECONDS)) { "Durable acknowledgement timed out" }
         failure.get()?.let { throw it }
         return checkNotNull(job.get())
+    }
+    fun awaitFailed(): Pair<String, Throwable> {
+        check(terminal.await(DURABLE_QA_WAIT_MS, TimeUnit.MILLISECONDS)) { "Durable failure result timed out" }
+        check(saved.get() == null && terminals.get() == 1) { "Cleanup failure was delivered as Saved" }
+        return checkNotNull(job.get()) to checkNotNull(failure.get())
     }
     fun awaitReady(): RecordingEntity {
         check(terminal.await(DURABLE_QA_WAIT_MS, TimeUnit.MILLISECONDS)) { "Durable terminal result timed out" }

@@ -2077,7 +2077,7 @@ open class ReverbService : Service() {
                 )
                 check(markExportCommitted(token)) { "Recompression lost its publication owner" }
                 val registered = try {
-                    runBlocking { RecordingRepository.register(this@ReverbService, created) }
+                    runBlocking { RecordingRepository.registerFromAcceptedOperation(this@ReverbService, created) }
                 } catch (error: Exception) {
                     if (!catalogRegistrationFailureAllowsVerifiedSaveSuccess(error)) throw error
                     Log.w(TAG, "FLAC copy saved; catalog refresh is pending", error)

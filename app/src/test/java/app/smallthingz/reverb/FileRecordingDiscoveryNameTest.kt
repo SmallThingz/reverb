@@ -60,11 +60,11 @@ class FileRecordingDiscoveryNameTest {
             val first = createLocalStagingFile(child, accepted, StagingOutputKind.EXPORT_TRACKED, io = realCreationIo())
             first.file.writeBytes(bytes)
             assertFalse(isDiscoverableFileRecordingName(first.file.name))
-            val published = publishStagedFile(first.file, accepted).file
+            val published = publishStagedFile(first.file, accepted, moveFile = ::moveOwnedTestFile).file
             assertEquals(accepted, published.name)
             val next = createLocalStagingFile(child, accepted, StagingOutputKind.COPY, io = realCreationIo())
             next.file.writeBytes(bytes)
-            val collision = publishStagedFile(next.file, accepted).file
+            val collision = publishStagedFile(next.file, accepted, moveFile = ::moveOwnedTestFile).file
             assertTrue(collision.name != published.name)
             if (requested == ".wav" || requested == ".flac") {
                 assertEquals("$FALLBACK_DISPLAY_NAME (2)$requested", collision.name)
@@ -106,7 +106,7 @@ class FileRecordingDiscoveryNameTest {
             val bytes = recordingBytes(accepted)
             val created = createLocalStagingFile(child, accepted, StagingOutputKind.COPY, io = realCreationIo())
             created.file.writeBytes(bytes)
-            val published = publishStagedFile(created.file, accepted).file
+            val published = publishStagedFile(created.file, accepted, moveFile = ::moveOwnedTestFile).file
             assertEquals(accepted, published.name)
             assertTrue(isDiscoverableFileRecordingName(published.name))
             assertArrayEquals(bytes, published.readBytes())

@@ -111,7 +111,33 @@ class ReliabilityInstrumentation : Instrumentation() {
             if (requestedTest == "native_text_backend" || requestedTest == "native_motion_spline") {
                 requireNativeMathProbeHost(targetContext.packageName, parityOnly)
             }
-            if (requestedTest == "durable_save_overlap_recover") {
+            if (requestedTest == "file_noreplace") {
+                executed++
+                if (verifyNoReplaceMovePrimitive(targetContext, report)) {
+                    report.appendLine("PASS file_noreplace")
+                } else {
+                    failures++
+                    report.appendLine("UNQUALIFIED file_noreplace: native capability unavailable; no native success claim")
+                }
+            } else if (requestedTest == "file_copy_publication") {
+                executed++
+                verifyFileCopyPublicationBackend(targetContext, report)
+                report.appendLine("PASS file_copy_publication")
+            } else if (requestedTest == "durable_save_cleanup_failure") {
+                executed++
+                val tree = DocumentsContract.buildTreeDocumentUri(
+                    "${targetContext.packageName}.reliability.documents", ReliabilityDocumentsProvider.ROOT_ID,
+                )
+                targetContext.contentResolver.acquireContentProviderClient(tree).use { client ->
+                    val provider = requireNotNull(client?.localContentProvider as? ReliabilityDocumentsProvider)
+                    verifyDurableSaveCleanupFailure(targetContext, tree, provider, report)
+                }
+                report.appendLine("PASS durable_save_cleanup_failure")
+            } else if (requestedTest == "durable_save_reference_retirement") {
+                executed++
+                verifyDurableSaveReferenceRetirement(targetContext, report)
+                report.appendLine("PASS durable_save_reference_retirement")
+            } else if (requestedTest == "durable_save_overlap_recover") {
                 executed++
                 val tree = DocumentsContract.buildTreeDocumentUri(
                     "${targetContext.packageName}.reliability.documents", ReliabilityDocumentsProvider.ROOT_ID,

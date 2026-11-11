@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import java.util.Collections
 import java.util.IdentityHashMap
 import java.io.IOException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
@@ -53,6 +54,15 @@ internal suspend fun <T> awaitCommittedRenameConsent(result: Deferred<T>): T =
 
 /** Only positively unchanged rejection or permission-flow termination may keep the editor open. */
 internal class RecordingRenameDefiniteFailure(message: String, cause: Throwable) : IOException(message, cause)
+
+/** Called only after unchanged-source proof, before any permission prompt or approved retry. */
+internal inline fun <T> prepareRecordingRenameConsentSender(factory: () -> T): T = try {
+    factory()
+} catch (cancelled: CancellationException) {
+    throw cancelled
+} catch (failure: Exception) {
+    throw RecordingRenameDefiniteFailure("Unable to request rename permission", failure)
+}
 
 internal fun routeRecordingRenameFailure(
     failure: Throwable,

@@ -50,7 +50,7 @@ internal suspend fun saveTrimmedRecordingCopy(
         return withContext(Dispatchers.IO + NonCancellable) {
             val created = writeTrimmedRecordingCopy(appContext, recording, startMillis, endMillis)
             try {
-                RecordingRepository.register(appContext, created)
+                RecordingRepository.registerFromAcceptedOperation(appContext, created)
             } catch (error: Exception) {
                 if (!catalogRegistrationFailureAllowsVerifiedSaveSuccess(error)) {
                     Log.w(TRIM_TAG, "Trim output changed before catalog registration", error)

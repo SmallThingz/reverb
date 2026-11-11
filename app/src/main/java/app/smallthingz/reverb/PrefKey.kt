@@ -40,6 +40,7 @@ enum class PrefKey {
     PENDING_RECORDING_DELETIONS,
     PENDING_OUTPUT_CLEANUP,
     VERIFIED_EXPORT_STAGING,
+    FILE_COPY_PUBLICATIONS,
 }
 
 fun SharedPreferences.getString(key: PrefKey, default: String?): String? = getString(key.name, default)
@@ -117,6 +118,7 @@ private fun PrefKey.usesDurableStringSetStorage(): Boolean = when (this) {
     PrefKey.PENDING_RECORDING_DELETIONS,
     PrefKey.PENDING_OUTPUT_CLEANUP,
     PrefKey.VERIFIED_EXPORT_STAGING,
+    PrefKey.FILE_COPY_PUBLICATIONS,
     -> true
     else -> false
 }

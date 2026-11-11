@@ -1388,7 +1388,7 @@ class DurabilityInvariantTest {
             val existing = File(directory, "clip.wav").apply { writeBytes(existingBytes) }
             val staged = File(directory, stagingOutputName("clip.wav", "token")).apply { writeBytes(stagedBytes) }
 
-            val published = publishStagedFile(staged, "clip.wav").file
+            val published = publishStagedFile(staged, "clip.wav", moveFile = ::moveOwnedTestFile).file
 
             assertEquals("clip (2).wav", published.name)
             assertArrayEquals(existingBytes, existing.readBytes())
@@ -1429,6 +1429,7 @@ class DurabilityInvariantTest {
                         Files.move(source.toPath(), destination.toPath())
                         throw transportFailure
                     },
+                    recoveryMove = ::moveOwnedTestFile,
                     readFingerprint = { published ->
                         if (!published.isFile) null else StableOutputFingerprint(
                             digest = sha256(ByteArrayInputStream(published.readBytes())),
@@ -1484,6 +1485,8 @@ class DurabilityInvariantTest {
                         suppressionOnlyFileOutputRecord(published.absolutePath, digest)
                             ?.also { cleanupRecord = it } != null
                     },
+                    moveFile = ::moveOwnedTestFile,
+                    recoveryMove = ::moveOwnedTestFile,
                 )
             }
 
@@ -1522,6 +1525,7 @@ class DurabilityInvariantTest {
             var protectedDigest: CopyDigest? = null
 
             val protected = preserveUnexpectedRenameTarget(
+                moveFile = ::moveOwnedTestFile,
                 source = source,
                 moved = moved,
                 originalDisplayName = "original.wav",
@@ -2425,7 +2429,7 @@ class DurabilityInvariantTest {
                 fileIdentity = identity,
             )
 
-            val result = deleteClaimedFile(intent)
+            val result = deleteClaimedFile(intent, restoreMove = ::moveOwnedTestFile)
             if (deletionClaimIdentityHasPinnedDescriptorAuthority(identity)) {
                 assertEquals(FileDeletionClaimResult.DELETED, result)
                 assertFalse(source.exists())
@@ -2469,7 +2473,7 @@ class DurabilityInvariantTest {
                 java.nio.file.StandardCopyOption.REPLACE_EXISTING,
             )
             assertFalse(fileIdentityMatches(originalIdentity, resolveFileIdentity(source)))
-            assertEquals(FileDeletionClaimResult.MISMATCH_PRESERVED, deleteClaimedFile(intent))
+            assertEquals(FileDeletionClaimResult.MISMATCH_PRESERVED, deleteClaimedFile(intent, restoreMove = ::moveOwnedTestFile))
             assertArrayEquals(replacementBytes, source.readBytes())
             assertFalse(requireNotNull(deletionClaimFile(intent)).exists())
         } finally {
@@ -2498,7 +2502,7 @@ class DurabilityInvariantTest {
             Files.move(source.toPath(), claim.toPath())
 
             assertFalse(deletionClaimIdentityHasPinnedDescriptorAuthority(requireNotNull(intent.fileIdentity)))
-            assertEquals(FileDeletionClaimResult.MISMATCH_PRESERVED, replayClaimedFileDeletion(intent, claim))
+            assertEquals(FileDeletionClaimResult.MISMATCH_PRESERVED, replayClaimedFileDeletion(intent, claim, restoreMove = ::moveOwnedTestFile))
             assertTrue(source.isFile)
             assertArrayEquals(bytes, source.readBytes())
             assertFalse(claim.exists())
@@ -2534,7 +2538,7 @@ class DurabilityInvariantTest {
             val claimedIdentity = resolveFileIdentity(claim)
             assertTrue(sameFileObjectAcrossRename(originalIdentity, claimedIdentity))
 
-            val result = replayClaimedFileDeletion(intent, claim)
+            val result = replayClaimedFileDeletion(intent, claim, restoreMove = ::moveOwnedTestFile)
             if (deletionClaimIdentityHasPinnedDescriptorAuthority(originalIdentity)) {
                 assertEquals(FileDeletionClaimResult.DELETED, result)
                 assertFalse(claim.exists())
@@ -2582,6 +2586,7 @@ class DurabilityInvariantTest {
                     )
                 },
                 identityBeforeDelete = { replacementIdentity },
+                restoreMove = ::moveOwnedTestFile,
             )
 
             assertEquals(FileDeletionClaimResult.MISMATCH_PRESERVED, result)

@@ -412,8 +412,24 @@
   Physical identity loss must surface as save failure while preserving the already-committed uncertain object; trim also
   refreshes authoritative Library storage. Ordinary catalog persistence failure still preserves verified save success
   and relies on reconciliation to repair metadata.
-- FILE/SAF exports write to scanner-excluded staging targets and publish final names only after verification; partial
-  output must never enter the Library as a finished recording. SAF providers that cannot rename verified staging fail
+- FILE/SAF exports write to scanner-excluded staging targets; partial output must never enter the Library as a finished
+  recording. FILE final-name publication/rename/restoration uses atomic native no-replace where supported. A definitive
+  unsupported rename may use the explicit FILE copy journal: persist reservation before exclusive creation, durable
+  created-object identity before payload, and independently verified copied-target identity before catalog acknowledgement.
+  Such mounts can expose an incomplete final filename to external apps during the compatibility copy; Reverb suppresses
+  it until verification and coordinates the observation revision through catalog commit. Keep the original source until
+  verified target/catalog durability and ordinary identity-checked source retirement. Never treat the copied inode as
+  same-object rename proof. CLAIM_RESTORE separately binds an already-held hidden deletion claim and may preserve zero-byte
+  or non-audio regular objects: verified physical target durability suffices before replaying retirement of that exact
+  existing claim, since those objects need not form catalog rows. It must never acquire a fresh claim or recursively
+  restore after target/source authority changes. Consult its durable transaction before any native mutation on retry;
+  generic recovery may finish that already-journaled claim. A stable ambiguous RESERVED candidate for any FILE copy transfers
+  to suppression-only preservation before choosing another exclusive name, without adopting equal bytes as identity.
+  Ambiguous empty creation and crash-left partials remain preserved with an incident/suppression,
+  without new deletion authority. Generic refresh acknowledges completed copies and replays existing deletion claims;
+  only a live accepted operation may initiate source cleanup. Cleanup-pending saves retain their durable recovery owner
+  and cannot use the ordinary metadata-failure success allowance. Existing random UUID deletion-claim acquisition remains
+  a separate internal-namespace assumption, not an atomic no-replace guarantee. SAF providers that cannot rename verified staging fail
   closed instead of copying into a visible final-name document; a URI-changing SAF publish must also positively retire
   the original staging URI. If an unsafe provider rename has already returned an uncertain final URI, suppress both that
   result and any surviving staging URI without granting physical-delete authority, and revoke automatic staging recovery

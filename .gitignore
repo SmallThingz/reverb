@@ -1,4 +1,5 @@
 # Build outputs
+.cxx/
 build/
 */build/
 .gradle/

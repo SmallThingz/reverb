@@ -288,7 +288,7 @@ internal fun suppressionOnlyFileOutputRecord(
     id: String,
     digest: CopyDigest,
 ): PendingOutputCleanupRecord? {
-    if (id.isBlank() || digest.byteCount <= 0L) return null
+    if (id.isBlank() || digest.byteCount < 0L) return null
     return PendingOutputCleanupRecord(
         storageType = RecordingStorageType.FILE,
         id = id,
@@ -947,7 +947,7 @@ private fun deletePendingOutputAsset(
     context: Context,
     record: PendingOutputCleanupRecord,
 ): Boolean = when (record.storageType) {
-    RecordingStorageType.FILE -> deletePendingFileOutput(record)
+    RecordingStorageType.FILE -> deletePendingFileOutput(context, record)
     RecordingStorageType.DOCUMENT -> {
         deleteVerifiedDocumentAndConfirm(context, record.id) {
             pendingProviderOutputCleanupStillMatches(context, record)
@@ -981,23 +981,24 @@ private fun pendingProviderOutputCleanupStillMatches(
     )
 }
 
-private fun deletePendingFileOutput(record: PendingOutputCleanupRecord): Boolean {
+private fun deletePendingFileOutput(context: Context, record: PendingOutputCleanupRecord): Boolean {
     val intent = pendingOutputCleanupFileIntent(record) ?: return false
     val identity = requireNotNull(intent.fileIdentity)
     val claimState = outputCleanupClaimState(record)
+    val restoreMove: (File, File) -> Unit = { claim, target -> moveClaimForRecovery(context, claim, target) }
     if (!pendingFileOutputCleanupHasDeleteAuthority(record)) {
         // Legacy/NIO FILE identities can still own an older hidden claim, so recover that claim
         // back to visible/preserved bytes. They may not create a new claim or physically delete:
         // equal bytes plus a path-scoped legacy identity are suppression evidence only.
         if (claimState is OutputCleanupClaimState.REPLAY) {
-            replayClaimedFileDeletion(claimState.intent, claimState.file)
+            replayClaimedFileDeletion(claimState.intent, claimState.file, restoreMove = restoreMove)
         }
         return false
     }
     val result = when (claimState) {
         OutputCleanupClaimState.WAIT -> return false
-        OutputCleanupClaimState.NONE -> deleteClaimedFile(intent)
-        is OutputCleanupClaimState.REPLAY -> replayClaimedFileDeletion(claimState.intent, claimState.file)
+        OutputCleanupClaimState.NONE -> deleteClaimedFile(intent, restoreMove = restoreMove)
+        is OutputCleanupClaimState.REPLAY -> replayClaimedFileDeletion(claimState.intent, claimState.file, restoreMove = restoreMove)
     }
     return when (result) {
         FileDeletionClaimResult.RETRY -> false

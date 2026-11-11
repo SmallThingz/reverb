@@ -127,6 +127,7 @@ internal class DurableSaveCoordinator private constructor(private val context: C
         completed[id]?.let { return@synchronized it }
         var record = synchronized(journalLock) { journal.read(id) }
         var publicationOwner: RecordingOperationToken? = null
+        var retired = false
         fun reservePublishedOutput(target: RecordingOutputTarget) {
             if (publicationOwner?.recordingId == target.id) return
             check(publicationOwner == null) { "Save publication changed its owned output" }
@@ -254,7 +255,11 @@ internal class DurableSaveCoordinator private constructor(private val context: C
                 checkActive()
                 val recovered = if (record.stage == DurableSaveStage.PUBLISHING)
                     recoverDurableSavePublication(context, target, fingerprint) else null
-                val published = recovered ?: finalizeOutputTarget(context, target, fingerprint) { exactTarget ->
+                val published = recovered ?: finalizeOutputTarget(context, target, fingerprint,
+                    publicationProgress = { copied, total ->
+                        publishProgress(0.90f + 0.03f * (copied.toDouble() / total).toFloat().coerceIn(0f, 1f))
+                    },
+                ) { exactTarget ->
                     checkActive()
                     commit(record.copy(stage = DurableSaveStage.PUBLISHING, output = exactTarget))
                     DurableSaveFaultHooks.reached(id, "BEFORE_PUBLISH")
@@ -278,7 +283,7 @@ internal class DurableSaveCoordinator private constructor(private val context: C
                 buildCodecSummary(context, request.format, request.sampleRate, request.channelCount, request.sampleFormat,
                     request.flacCompression), knownSizeBytes = fingerprint.digest.byteCount)
             val registered = try {
-                runBlocking { RecordingRepository.register(context, recording) }
+                runBlocking { RecordingRepository.registerFromAcceptedOperation(context, recording) }
             } catch (failure: Exception) {
                 if (!catalogRegistrationFailureAllowsVerifiedSaveSuccess(failure)) throw failure
                 recording
@@ -292,32 +297,34 @@ internal class DurableSaveCoordinator private constructor(private val context: C
                 throw IOException("Published save changed before releasing source pins")
             }
             publishProgress(0.98f, force = true)
-            var retired = false
-            try {
-                DurableSaveFaultHooks.reached(id, "BEFORE_STAGING_MARKER_RETIREMENT")
-                if (!removeVerifiedExportStagingForJob(context, id, target.storageType, fingerprint)) {
-                    throw IOException("Verified save recovery-marker cleanup is pending")
-                }
-                DurableSaveFaultHooks.reached(id, "BEFORE_PIN_RELEASE")
-                journal.releasePins(record)
-                synchronized(journalLock) { journal.retireMetadata(record); pendingIds -= id }
-                DurableSaveFaultHooks.reached(id, "AFTER_PIN_RELEASE")
-                DurableSaveJobs.remove(id)
-                retired = true
-            } catch (cleanup: Exception) {
-                reportFailure(record, cleanup)
+            DurableSaveFaultHooks.reached(id, "BEFORE_STAGING_MARKER_RETIREMENT")
+            if (!removeVerifiedExportStagingForJob(context, id, target.storageType, fingerprint)) {
+                throw IOException("Verified save recovery-marker cleanup is pending")
             }
-            if (retired) completed[id] = registered
+            DurableSaveFaultHooks.reached(id, "BEFORE_PIN_RELEASE")
+            journal.releasePins(record)
+            synchronized(journalLock) { journal.retireMetadata(record); pendingIds -= id }
+            retired = true
+            // This hook retains its post-retirement crash boundary. A hook failure cannot
+            // recreate a retryable job after its journal and pending identity are gone.
+            DurableSaveFaultHooks.reached(id, "AFTER_PIN_RELEASE")
+            completed[id] = registered
             while (completed.size > DurableSaveJournal.MAX_JOBS) completed.remove(completed.keys.first())
             registered
         } catch (failure: Exception) {
-            val publication = reportFailure(record, failure)
-            try { onFailurePublished(publication) } catch (deliveryFailure: Exception) {
-                if (deliveryFailure !== failure) failure.addSuppressed(deliveryFailure)
+            if (!retired) {
+                val publication = reportFailure(record, failure)
+                try { onFailurePublished(publication) } catch (deliveryFailure: Exception) {
+                    if (deliveryFailure !== failure) failure.addSuppressed(deliveryFailure)
+                }
             }
             throw failure
         } finally {
-            publicationOwner?.let(recordingMutations::finish)
+            try {
+                if (retired) DurableSaveJobs.remove(id)
+            } finally {
+                publicationOwner?.let(recordingMutations::finish)
+            }
         }
     }
 

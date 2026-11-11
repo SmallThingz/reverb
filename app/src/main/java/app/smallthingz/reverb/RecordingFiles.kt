@@ -910,12 +910,13 @@ internal fun finalizeOutputTarget(
     context: Context,
     target: RecordingOutputTarget,
     expectedFingerprint: StableOutputFingerprint,
+    publicationProgress: (Long, Long) -> Unit = { _, _ -> },
     beforePublish: (RecordingOutputTarget) -> Unit = {},
 ): RecordingOutputTarget {
     require(target.staging) { "Output finalization requires a staging target" }
     return when (target.storageType) {
         RecordingStorageType.MEDIASTORE -> finalizeMediaStoreOutputTarget(context, target, expectedFingerprint, beforePublish)
-        RecordingStorageType.FILE -> finalizeFileOutputTarget(context, target, expectedFingerprint, beforePublish)
+        RecordingStorageType.FILE -> finalizeFileOutputTarget(context, target, expectedFingerprint, beforePublish, publicationProgress)
         RecordingStorageType.DOCUMENT -> finalizeDocumentOutputTarget(context, target, expectedFingerprint, beforePublish)
     }
 }
@@ -952,6 +953,7 @@ internal fun recoverDurableSavePublication(
     when (target.storageType) {
         RecordingStorageType.FILE -> {
             val source = requireNotNull(target.file)
+            recoverCopiedFileTarget(context, target, expected)?.let { return it }
             if (storagePathState(source) == StoragePathState.MISSING) {
                 val destination = File(source.parentFile, target.displayName)
                 val observed = readStableFileOutputFingerprint(destination)
@@ -1129,8 +1131,13 @@ private fun finalizeFileOutputTarget(
     target: RecordingOutputTarget,
     expectedFingerprint: StableOutputFingerprint,
     beforePublish: (RecordingOutputTarget) -> Unit,
-): RecordingOutputTarget {
+    publicationProgress: (Long, Long) -> Unit,
+): RecordingOutputTarget = FileCopyPublications.withSource(requireNotNull(target.file)) {
     val source = requireNotNull(target.file)
+    recoverCopiedFileTarget(context, target, expectedFingerprint)?.let { recovered ->
+        beforePublish(recovered)
+        return@withSource recovered
+    }
     val current = readCurrentVerifiedFileFingerprint(source)
         ?: throw IOException("Unable to bind output staging to a stable file")
     if (!stableOutputFingerprintMatches(RecordingStorageType.FILE, expectedFingerprint, current)) {
@@ -1141,6 +1148,11 @@ private fun finalizeFileOutputTarget(
         finalDisplayName = target.displayName,
         expectedFingerprint = expectedFingerprint,
         beforeMove = { destination -> beforePublish(target.copy(displayName = destination.name)) },
+        copyOnUnsupported = { destination ->
+            val copy = copyFileForPublication(ContextFileCopyPublicationStore(context), DefaultFileCopyPublicationIo,
+                source, destination, target.displayName, expectedFingerprint, FileCopyPurpose.STAGING, publicationProgress)
+            PublishedStagedFile(File(copy.targetId), copy.targetIdentity)
+        },
         onUnexpectedPublishedFile = { unexpected, digest ->
             suppressFileOutputWithoutDeletion(
                 context = context,
@@ -1160,7 +1172,7 @@ private fun finalizeFileOutputTarget(
     if (target.directoryId == getSharedMusicRecordingsDirectory().absolutePath) {
         MediaScannerConnection.scanFile(context, arrayOf(destination.absolutePath), arrayOf(target.mimeType), null)
     }
-    return target.copy(
+    target.copy(
         id = destination.absolutePath,
         displayName = destination.name,
         file = destination,
@@ -1174,10 +1186,6 @@ internal data class PublishedStagedFile(
     val identity: String,
 )
 
-private fun moveFileWithoutOverwrite(source: File, destination: File) {
-    Files.move(source.toPath(), destination.toPath())
-}
-
 @Throws(IOException::class)
 internal fun publishStagedFile(
     source: File,
@@ -1186,6 +1194,8 @@ internal fun publishStagedFile(
     onUnexpectedPublishedFile: ((File, CopyDigest) -> Boolean)? = null,
     onUnprotectedUnexpectedPublish: ((File) -> Unit)? = null,
     moveFile: (File, File) -> Unit = ::moveFileWithoutOverwrite,
+    copyOnUnsupported: ((File) -> PublishedStagedFile)? = null,
+    recoveryMove: (File, File) -> Unit = ::moveFileWithoutOverwrite,
     readFingerprint: (File) -> StableOutputFingerprint? = ::readStableFileOutputFingerprint,
     beforeMove: (File) -> Unit = {},
 ): PublishedStagedFile {
@@ -1209,9 +1219,13 @@ internal fun publishStagedFile(
         val destination = File(parent, finalName)
         beforeMove(destination)
         try {
-            // Same-directory move is the publish boundary. Do not use ATOMIC_MOVE here:
-            // when a racing destination exists its replacement semantics are provider-specific.
-            moveFile(source, destination)
+            // Only a definite unsupported primitive may take the journaled exclusive-copy path.
+            // An uncertain rename error must retain the existing ambiguous-publication guard.
+            try {
+                moveFile(source, destination)
+            } catch (unsupported: NoReplaceMoveUnsupported) {
+                return copyOnUnsupported?.invoke(destination) ?: throw unsupported
+            }
             val publishedIdentity = if (expectedFingerprint != null) {
                 val published = readFingerprint(destination)
                 if (published == null || !verifiedFilePublishMatches(expectedFingerprint, published)) {
@@ -1224,6 +1238,7 @@ internal fun publishStagedFile(
                         source = source,
                         moved = destination,
                         finalDisplayName = finalDisplayName,
+                        moveFile = recoveryMove,
                     )
                     if (!cleanupSuppressed && !hiddenStateDurable) {
                         Log.e(
@@ -1253,6 +1268,7 @@ internal fun publishStagedFile(
                     onUnexpectedPublishedFile = onUnexpectedPublishedFile,
                     onUnprotectedUnexpectedPublish = onUnprotectedUnexpectedPublish,
                     readFingerprint = readFingerprint,
+                    recoveryMove = recoveryMove,
                 )
             }
             throw error
@@ -1268,13 +1284,14 @@ private fun protectAmbiguousPublishedFile(
     onUnexpectedPublishedFile: ((File, CopyDigest) -> Boolean)?,
     onUnprotectedUnexpectedPublish: ((File) -> Unit)?,
     readFingerprint: (File) -> StableOutputFingerprint?,
+    recoveryMove: (File, File) -> Unit,
 ) {
     val expectedIdentity = expectedFingerprint.fileKey?.takeIf { it.isNotBlank() } ?: return
     val published = readFingerprint(destination) ?: return
     val publishedIdentity = published.fileKey?.takeIf { it.isNotBlank() } ?: return
     if (!sameFileObjectAcrossRename(expectedIdentity, publishedIdentity)) return
 
-    // Files.move() may become visible before surfacing an I/O failure. Once the exact staging
+    // A move may become visible before surfacing an I/O failure. Once the exact staging
     // object is proven at the final path, suppress it before rollback so a failed directory
     // durability barrier cannot expose a failed publication as a normal Library recording.
     val suppressed = onUnexpectedPublishedFile != null &&
@@ -1283,6 +1300,7 @@ private fun protectAmbiguousPublishedFile(
         source = source,
         moved = destination,
         finalDisplayName = finalDisplayName,
+        moveFile = recoveryMove,
     )
     if (!suppressed && !hiddenStateDurable) {
         Log.e(TAG, "Ambiguous published file could not be durably suppressed or hidden: $destination")
@@ -1300,10 +1318,15 @@ internal fun verifiedFilePublishMatches(
         sameFileObjectAcrossRename(expectedIdentity, publishedIdentity)
 }
 
-private fun preserveUnexpectedPublishedFile(source: File, moved: File, finalDisplayName: String): Boolean {
+private fun preserveUnexpectedPublishedFile(
+    source: File,
+    moved: File,
+    finalDisplayName: String,
+    moveFile: (File, File) -> Unit,
+): Boolean {
     val parent = moved.parentFile ?: return false
     try {
-        Files.move(moved.toPath(), source.toPath())
+        moveFile(moved, source)
         return runCatching {
             forceRecordingDirectoryDurable(parent)
             true
@@ -1320,7 +1343,7 @@ private fun preserveUnexpectedPublishedFile(source: File, moved: File, finalDisp
         val token = "publish-race-${UUID.randomUUID()}-$index"
         val hidden = File(parent, stagingOutputName(finalDisplayName, token, kind = StagingOutputKind.COPY))
         try {
-            Files.move(moved.toPath(), hidden.toPath())
+            moveFile(moved, hidden)
             return runCatching {
                 forceRecordingDirectoryDurable(parent)
                 true
@@ -2916,6 +2939,7 @@ private fun recoverStagedFileOutputs(
     var outcome = StagedRecoveryOutcome.NONE
     files.forEach { file ->
         if (file.absolutePath in suppressedIds) return@forEach
+        if (FileCopyPublications.sourceIsActive(file.absolutePath)) return@forEach
         val name = file.name
         if (!isStagingOutputName(name)) return@forEach
         val pathObservation = observeStoragePath(file)
@@ -3130,6 +3154,7 @@ private fun listFileDirectoryRecordings(
     knownRecordings: Map<String, RecordingEntity>,
     suppressedIds: Set<String>,
 ): List<RecordingEntity> {
+    val copyCandidates = pendingFileCopyCandidateIds(FileCopyPublications.snapshot(context))
     when (storageDirectoryState(directory)) {
         StoragePathState.MISSING -> return emptyList()
         StoragePathState.UNAVAILABLE -> throw IOException(
@@ -3154,10 +3179,13 @@ private fun listFileDirectoryRecordings(
     // Keep both snapshots so this scan cannot relax an earlier suppression during replay.
     val recoveredSuppressedIds = if (recovery == StagedRecoveryOutcome.NONE) emptySet()
     else pendingOutputCleanupIds(context)
+    val recoveredCopyCandidates = if (recovery == StagedRecoveryOutcome.NONE) emptySet()
+    else pendingFileCopyCandidateIds(FileCopyPublications.snapshot(context))
     return files.asSequence()
         .filter { file ->
             val id = file.absolutePath
-            id !in suppressedIds && id !in recoveredSuppressedIds
+            id !in suppressedIds && id !in recoveredSuppressedIds &&
+                id !in copyCandidates && id !in recoveredCopyCandidates
         }
         .filter { isDiscoverableFileRecordingName(it.name) }
         .mapNotNull { file ->
@@ -3723,7 +3751,7 @@ internal fun isSupportedRecordingName(name: String): Boolean {
     return false
 }
 
-private fun isDirectChildBasename(name: String): Boolean =
+internal fun isDirectChildBasename(name: String): Boolean =
     name.isNotBlank() && name != "." && name != ".." &&
         name.none { it == '/' || it == '\\' || it == '\u0000' } &&
         name.toByteArray(Charsets.UTF_8).toString(Charsets.UTF_8) == name
@@ -4060,6 +4088,14 @@ private fun renameFileRecording(
     context: Context,
     recording: RecordingEntity,
     displayName: String,
+): RecordingEntity? = FileCopyPublications.withSource(File(recording.id)) {
+    renameFileRecordingOwned(context, recording, displayName)
+}
+
+private fun renameFileRecordingOwned(
+    context: Context,
+    recording: RecordingEntity,
+    displayName: String,
 ): RecordingEntity? {
     val source = File(recording.id)
     val parent = source.parentFile ?: return null
@@ -4067,12 +4103,23 @@ private fun renameFileRecording(
 
     val (name, extension) = fileRecordingDisplayNameParts(displayName)
     val beforeDigest = sha256StableRecording(context, recording) ?: return null
+    val expected = StableOutputFingerprint(beforeDigest, recording.fileIdentity, null)
+    fun copiedRecording(copy: FileCopyPublication): RecordingEntity = rebindRecordingWaveformCache(
+        recording, recording.copy(id = copy.targetId, displayName = File(copy.targetId).name,
+            fileIdentity = copy.targetIdentity),
+    )
+    recoverCopiedFileRecord(context, source, displayName, expected)?.let { return copiedRecording(it) }
     var suffix = 1
     while (suffix > 0) {
         val uniqueName = if (suffix == 1) displayName else generatedRecordingDisplayName(name, " ($suffix)", extension)
         val target = File(parent, uniqueName)
         try {
-            Files.move(source.toPath(), target.toPath())
+            try {
+                attemptRecordingRenameMove { moveFileWithoutOverwrite(source, target) }
+            } catch (_: NoReplaceMoveUnsupported) {
+                return copiedRecording(copyFileForPublication(ContextFileCopyPublicationStore(context),
+                    DefaultFileCopyPublicationIo, source, target, displayName, expected, FileCopyPurpose.RENAME))
+            }
             val renamedIdentity = resolveFileIdentity(target)
             val sameObject = sameFileObjectAcrossRename(recording.fileIdentity, renamedIdentity)
             if (!sameObject) {
@@ -4181,6 +4228,7 @@ internal fun preserveUnexpectedRenameTarget(
     moved: File,
     originalDisplayName: String,
     onUnexpectedMovedFile: ((File, CopyDigest) -> Boolean)? = null,
+    moveFile: (File, File) -> Unit = ::moveFileWithoutOverwrite,
 ): Boolean {
     val suppressed = if (onUnexpectedMovedFile == null) false else {
         val suppressionDigest = readStableFileOutputFingerprint(moved)?.digest ?: runCatching {
@@ -4191,7 +4239,7 @@ internal fun preserveUnexpectedRenameTarget(
     }
 
     try {
-        Files.move(moved.toPath(), source.toPath())
+        moveFile(moved, source)
         val restoredDurably = source.parentFile?.takeIf { it.isDirectory }?.let { parent ->
             runCatching {
                 forceRecordingDirectoryDurable(parent)
@@ -4216,7 +4264,7 @@ internal fun preserveUnexpectedRenameTarget(
         val name = if (index == 0) "$base$suffix" else "$base-$index$suffix"
         val recovery = File(parent, name)
         try {
-            Files.move(moved.toPath(), recovery.toPath())
+            moveFile(moved, recovery)
             val recoveryDurable = runCatching {
                 forceRecordingDirectoryDurable(parent)
                 true
@@ -4280,7 +4328,7 @@ internal fun providerRenameStateIsUncertain(
 ): Boolean = mutationAccepted && (!contentContinuityVerified || !displayNameVerified)
 
 internal fun fileRenameMoveFailureIsUncertain(error: Throwable): Boolean =
-    error is IOException && error !is FileAlreadyExistsException
+    error is IOException && error !is FileAlreadyExistsException && error !is RecordingRenameDefiniteFailure
 
 internal data class MediaStoreRenameObservation(
     val displayName: String,

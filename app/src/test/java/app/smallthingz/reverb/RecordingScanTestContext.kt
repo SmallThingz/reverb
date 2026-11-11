@@ -14,6 +14,7 @@ internal class RecordingScanTestContext(
     ) { proxy, method, args ->
         when (method.name) {
             "contains" -> {
+                if (args!![0] == PrefKey.FILE_COPY_PUBLICATIONS.name) return@newProxyInstance false
                 check(args!![0] == PrefKey.PENDING_OUTPUT_CLEANUP.name)
                 true
             }

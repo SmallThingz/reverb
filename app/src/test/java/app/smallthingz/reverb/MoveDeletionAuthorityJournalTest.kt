@@ -109,6 +109,52 @@ class MoveDeletionAuthorityJournalTest {
     }
 
     @Test
+    fun finalFileMoveTargetProofReadsSameSizeChangedPayloadDespiteUnchangedRevision() {
+        val bytes = byteArrayOf(1, 2, 3, 4)
+        val expected = sha256(ByteArrayInputStream(bytes))
+        val identity = "stat:101:202:303:404:0"
+        val intent = PendingDeletionIntent("/owned/source.wav", expected.byteCount, expected.sha256.toHexString(), false,
+            RecordingStorageType.FILE, "00000000-0000-0000-0000-000000000208", identity,
+            RecordingStorageType.FILE, "/owned/target.wav", identity)
+        var reads = 0
+        val readCurrentBytes: (File) -> StableOutputFingerprint = { file ->
+            assertEquals(intent.moveTargetId, file.path)
+            reads++
+            StableOutputFingerprint(sha256(ByteArrayInputStream(bytes)), identity, null)
+        }
+        assertTrue(pendingFileDeletionMoveTargetIsCurrent(intent, readCurrentBytes))
+        // Model a coarse unchanged revision with an in-place, same-size content change.
+        // The expected digest remains the old warm proof; the destructive policy must read again.
+        bytes[0] = 9
+        assertFalse(pendingFileDeletionMoveTargetIsCurrent(intent, readCurrentBytes))
+        assertEquals(2, reads)
+    }
+
+    @Test
+    fun alreadyCopiedClaimNeverRestoresRecursivelyOnAnyMismatchBoundary() {
+        for (boundary in listOf("legacy", "digest", "target", "delete")) {
+            withClaimedMoveSource("00000000-0000-0000-0000-000000000207") { source, claim, bytes, intent ->
+                val identity = "stat:101:202:303:404:505"
+                val digest = sha256(ByteArrayInputStream(bytes))
+                val result = replayClaimedFileDeletion(
+                    intent = intent.copy(fileIdentity = if (boundary == "legacy") "nio:legacy:1" else identity),
+                    claim = claim,
+                    readClaimFingerprint = { _, _ -> StableOutputFingerprint(
+                        if (boundary == "digest") sha256(ByteArrayInputStream(byteArrayOf(1))) else digest,
+                        identity, null) },
+                    identityBeforeDelete = { if (boundary == "delete") "stat:9:9:9:9:9" else identity },
+                    restoreMove = { _, _ -> error("copied claim mismatch must retain ownership without recursion") },
+                    restoreMismatchedClaim = false,
+                    moveTargetStillCurrent = { boundary != "target" },
+                )
+                assertEquals(FileDeletionClaimResult.RETRY, result)
+                assertFalse(source.exists())
+                assertArrayEquals(bytes, claim.readBytes())
+            }
+        }
+    }
+
+    @Test
     fun partialMoveAuthorityCannotSerializeAsDeletionJournal() {
         val partial = PendingDeletionIntent(
             id = "/storage/source.wav",
@@ -142,6 +188,7 @@ class MoveDeletionAuthorityJournalTest {
                 )
             },
             identityBeforeDelete = { descriptorBoundIdentity },
+            restoreMove = ::moveOwnedTestFile,
             moveTargetStillCurrent = moveTargetStillCurrent,
         )
     }

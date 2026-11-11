@@ -4,7 +4,6 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.File
-import java.io.FileInputStream
 import java.io.FileDescriptor
 import java.io.IOException
 import java.nio.ByteBuffer
@@ -13,7 +12,6 @@ import java.nio.file.Files
 import java.util.UUID
 import java.util.zip.CRC32
 import org.junit.Assert.*
-import org.junit.Assume.assumeTrue
 import org.junit.Test
 
 class DurableSaveJournalTest {
@@ -415,51 +413,6 @@ class DurableSaveJournalTest {
     }
 
     @Test
-    fun overlappingReferencesKeepOriginalSourceAndOtherJobOwnershipAfterRetirement() = withRoot { root ->
-        val source = File(root, "store/chunks/0").absoluteFile.apply {
-            parentFile!!.mkdirs()
-            writeBytes(ByteArray(16) + ByteArray(32) { it.toByte() })
-        }
-        requireDescriptorProof(source)
-        val record = PersistentAudioChunkStore.ChunkRecord(0u, source,
-            PersistentAudioChunkStore.ChunkState.FINALIZED, 1000, 32, 8, 48_000, 2,
-            PcmSampleFormat.PCM_16, crc(source.readBytes().copyOfRange(16, 48)), 1, 16)
-        val segment = PersistentAudioChunkStore.Segment(record, 0, 8, 16, 32, record.payloadChecksum,
-            0.0, 8.0 / 48_000)
-        val range = FrozenPcmRange(listOf(segment), emptyList(), emptyList(), 1000, 1001, 8.0 / 48_000)
-        val journal = DurableSaveJournal(File(root, "jobs"))
-        fun admit(): DurableSaveRecord {
-            val id = UUID.randomUUID().toString()
-            val directory = journal.createDirectory(id)
-            val pinned = DurablePcmPins.link(directory, range) { snapshot ->
-                journal.write(DurableSaveRecord(id, DurableSaveStage.PINNING, request(), snapshot))
-            }
-            return DurableSaveRecord(id, DurableSaveStage.QUEUED, request(), pinned).also(journal::write)
-        }
-        val first = admit()
-        val second = admit()
-        val firstPin = DurablePcmPins.referenceFile(journal.directory(first.id), first.source.objects.single())
-        val secondPin = DurablePcmPins.referenceFile(journal.directory(second.id), second.source.objects.single())
-        assertNotEquals(firstPin, secondPin)
-        assertTrue(firstPin.isFile)
-        assertTrue(secondPin.isFile)
-        assertEquals(source, first.source.range.segments.single().record.file)
-        assertEquals(source, second.source.range.segments.single().record.file)
-        val expected = source.readBytes()
-        assertTrue(DurablePcmPins.isProtected(source))
-        val cancelled = first.copy(stage = DurableSaveStage.CANCELLED)
-        journal.write(cancelled)
-        journal.retire(cancelled)
-        assertFalse(journal.directory(first.id).exists())
-        assertFalse(firstPin.exists())
-        assertTrue(secondPin.exists())
-        assertArrayEquals(expected, source.readBytes())
-        assertTrue(DurablePcmPins.isProtected(source))
-        DurablePcmPins.verify(journal.directory(second.id), second.source.objects.single())
-        assertTrue(File(journal.directory(second.id), "manifest").exists())
-    }
-
-    @Test
     fun authoritativeMembershipIncludesMalformedJobsAndRequiresFinalRootBarrier() = withRoot { root ->
         var rootBarriers = 0
         var countBarriers = false
@@ -585,13 +538,6 @@ class DurableSaveJournalTest {
         val body = output.toByteArray()
         ByteBuffer.wrap(body).putInt(4, 1)
         return withChecksum(body)
-    }
-
-    private fun requireDescriptorProof(file: File) {
-        FileInputStream(file).use { input ->
-            assumeTrue("Platform file-descriptor identity is required for physical pin recovery",
-                fileDescriptorIdentityMatches(resolveFileIdentity(file), resolveFileDescriptorIdentity(input.fd)))
-        }
     }
 
     private fun withRoot(block: (File) -> Unit) {

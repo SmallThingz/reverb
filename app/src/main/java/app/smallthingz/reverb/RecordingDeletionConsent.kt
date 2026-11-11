@@ -224,10 +224,12 @@ internal object RecordingDeletionConsent {
                 check(active === execution && !work.cancelled) { "Rename permission request was cancelled" }
             }
             val sender = checkNotNull(pending.createRequest(request.token) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    MediaStore.createWriteRequest(context.contentResolver,
-                        listOf(work.proof.recording.id.toUri())).intentSender
-                } else checkNotNull(work.proof.legacySender)
+                prepareRecordingRenameConsentSender {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        MediaStore.createWriteRequest(context.contentResolver,
+                            listOf(work.proof.recording.id.toUri())).intentSender
+                    } else checkNotNull(work.proof.legacySender)
+                }
             })
             synchronized(this) {
                 check(active === execution && !work.cancelled) { "Rename permission request was cancelled" }
