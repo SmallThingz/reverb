@@ -479,7 +479,8 @@ internal fun verifyShortRangePreview(instrumentation: Instrumentation, report: S
         check(kotlin.math.abs(store.durationSeconds() - 1.0) < 1.0 / 48_000)
         val parent = ReverbService.TimelineSnapshot(checkNotNull(store.acquireRange(0.0, 1.0)), ::callbackFailure)
         snapshot = parent
-        val controller = TimelineAudioPreviewController(::callbackFailure)
+        val controller = TimelineAudioPreviewController(::callbackFailure,
+            collectShuttleTimings = selector == "range_preview_short_controls")
         preview = controller
         // Executor reflection exposes only QA fences, never an AudioTrack or its native lifetime.
         fun executor(name: String) = TimelineAudioPreviewController::class.java.getDeclaredField(name)
@@ -779,12 +780,228 @@ internal fun verifyShortRangePreview(instrumentation: Instrumentation, report: S
                     onMain { controller.stopShuttle() }
                     check(controller.observeTrack() == null)
                 }
+                // Continuous commands use their own clock; native getters can block behind writes.
+                data class ContinuousRead(val phaseBefore: Int, val phaseAfter: Int,
+                    val began: Long, val ended: Long, val sample: PreviewTrackObservation?)
+                data class ContinuousWindow(val phase: Int, val owner: PreviewTrackObservation,
+                    val start: Long?, val end: Long?, val cadence: Boolean, val result: JSONObject)
+                val continuousReads = ArrayList<ContinuousRead>() // Observer writes; read only after join.
+                val latestRead = AtomicReference<ContinuousRead?>(null)
+                val continuousPhase = AtomicInteger()
+                val continuousOverflow = AtomicBoolean(false)
+                val continuousWindows = ArrayList<ContinuousWindow>()
+                val continuousRuns = JSONArray()
+                result.put("continuous_fast_runs", continuousRuns)
+                    .put("continuous_observer_requested_interval_ns", 8_000_000L)
+                    .put("continuous_observer_limit", 4_096)
+                    .put("continuous_scope", "fixed requested bounds and observed output progress; no queued-source-span or audible-quality proof")
+                fun waitUntil(deadline: Long) {
+                    while (true) {
+                        val remaining = deadline - SystemClock.elapsedRealtimeNanos()
+                        if (remaining <= 0L) return
+                        Thread.sleep(remaining / 1_000_000L, (remaining % 1_000_000L).toInt())
+                    }
+                }
+                observeConcurrently.set(true)
+                observer = Thread({
+                    try {
+                        while (observeConcurrently.get()) {
+                            val phaseBefore = continuousPhase.get()
+                            val began = SystemClock.elapsedRealtimeNanos()
+                            val sample = controller.observeTrack()
+                            val ended = SystemClock.elapsedRealtimeNanos()
+                            val read = ContinuousRead(phaseBefore, continuousPhase.get(), began, ended, sample)
+                            if (continuousReads.size == 4_096) {
+                                continuousOverflow.set(true)
+                                error("Continuous observer buffer overflow")
+                            }
+                            continuousReads.add(read)
+                            latestRead.set(read)
+                            val slots = (SystemClock.elapsedRealtimeNanos() - began) / 8_000_000L + 1L
+                            waitUntil(began + slots * 8_000_000L)
+                        }
+                    } catch (error: Throwable) { callbackFailure(error) }
+                }, "Reverb-QA-continuous-observer").also { it.start() }
+                try {
+                    var priorOwner: Any? = null
+                    for ((runIndex, direction) in listOf(1, -1).withIndex()) {
+                        val phaseId = runIndex + 1
+                        val rate = direction * 2f
+                        val commands = JSONArray()
+                        val skipped = JSONArray()
+                        val continuous = JSONObject().put("direction", direction).put("rate", rate)
+                            .put("audible_speed", shuttleAudibleSpeed(rate))
+                            .put("start_seconds", .05).put("end_seconds", .95)
+                            .put("requested_commands", 25).put("warmup_commands", 8)
+                            .put("requested_period_ns", 16_000_000L).put("commands", commands).put("skipped_slots", skipped)
+                            .put("status", "INCOMPLETE").put("audible_quality", "UNVERIFIED")
+                        continuousRuns.put(continuous)
+                        continuousPhase.set(phaseId)
+                        val startCompleted = onMain {
+                            controller.startShuttle(parent, if (direction > 0) .088 else .912, rate, .05, .95)
+                            SystemClock.elapsedRealtimeNanos()
+                        }
+                        continuous.put("start_completed_elapsed_ns", startCompleted)
+                        val startupDeadline = SystemClock.elapsedRealtimeNanos() + 10_000_000_000L
+                        var startup: ContinuousRead? = null
+                        while (startup == null) {
+                            failures.peek()?.let { throw it }
+                            startup = latestRead.get()?.takeIf { it.phaseBefore == phaseId && it.phaseAfter == phaseId &&
+                                it.began >= startCompleted && (it.sample?.playbackHeadFrames ?: 0L) > 0L }
+                            check(SystemClock.elapsedRealtimeNanos() < startupDeadline) { "Continuous startup did not advance" }
+                            if (startup == null) Thread.sleep(4L)
+                        }
+                        val owner = checkNotNull(checkNotNull(startup).sample)
+                        check(owner.identity !== priorOwner) { "Continuous reversal retained retired owner" }
+                        priorOwner = owner.identity
+                        continuous.put("epoch", owner.epoch).put("sample_rate", owner.sampleRate)
+                        val clockStart = SystemClock.elapsedRealtimeNanos() + 16_000_000L
+                        continuous.put("requested_steady_start_ns", clockStart + 8L * 16_000_000L)
+                            .put("requested_steady_end_ns", clockStart + 24L * 16_000_000L)
+                        var steadyStart: Long? = null
+                        var steadyEnd: Long? = null
+                        var wholePeriodLateCommands = 0
+                        var index = 0
+                        fun skipSlot() {
+                            skipped.put(JSONObject().put("index", index)
+                                .put("requested_elapsed_ns", clockStart + index * 16_000_000L))
+                            index++
+                        }
+                        while (index < 25) {
+                            waitUntil(clockStart + index * 16_000_000L)
+                            val due = ((SystemClock.elapsedRealtimeNanos() - clockStart) / 16_000_000L).toInt()
+                            while (index < minOf(due, 25)) skipSlot()
+                            if (index == 25) break
+                            val deadline = clockStart + index * 16_000_000L
+                            val target = (if (direction > 0) .12 else .88) + direction * index * .032
+                            val executed = onMain {
+                                val began = SystemClock.elapsedRealtimeNanos()
+                                controller.updateShuttle(target, rate, .05, .95)
+                                began to SystemClock.elapsedRealtimeNanos()
+                            }
+                            val returned = SystemClock.elapsedRealtimeNanos()
+                            if (executed.first - deadline >= 16_000_000L) wholePeriodLateCommands++
+                            commands.put(JSONObject().put("index", index).put("target_seconds", target)
+                                .put("requested_elapsed_ns", deadline).put("main_begin_ns", executed.first)
+                                .put("main_end_ns", executed.second).put("returned_elapsed_ns", returned)
+                                .put("lateness_ns", executed.first - deadline))
+                            if (index == 8) steadyStart = executed.first
+                            if (index == 24) steadyEnd = executed.first
+                            index++
+                            while (index < 25 && clockStart + index * 16_000_000L <= returned) skipSlot()
+                            failures.peek()?.let { throw it }
+                        }
+                        continuousWindows.add(ContinuousWindow(phaseId, owner, steadyStart, steadyEnd,
+                            commands.length() == 25 && skipped.length() == 0 && wholePeriodLateCommands == 0, continuous))
+                        continuous.put("whole_period_late_commands", wholePeriodLateCommands)
+                        onMain { controller.stopShuttle() }
+                    }
+                } finally {
+                    try { onMain { controller.stopShuttle() } }
+                    finally {
+                        observeConcurrently.set(false)
+                        observer!!.join(5_000L)
+                        val drained = !observer!!.isAlive
+                        result.put("continuous_observer_drained", drained)
+                            .put("continuous_observer_overflow", continuousOverflow.get())
+                        check(drained) { "Continuous observer did not drain after native retirement" }
+                        val reads = JSONArray()
+                        for (read in continuousReads) {
+                            val sample = read.sample
+                            val identity = sample?.let { identities[it.identity] ?:
+                                (identities.size + 1).also { id -> identities[it.identity] = id } }
+                            reads.put(JSONObject().put("phase_before", read.phaseBefore).put("phase_after", read.phaseAfter)
+                                .put("read_begin_ns", read.began).put("read_end_ns", read.ended)
+                                .put("read_cost_ns", read.ended - read.began).put("identity", identity ?: JSONObject.NULL)
+                                .put("epoch", sample?.epoch ?: JSONObject.NULL).put("head_frames", sample?.playbackHeadFrames ?: JSONObject.NULL)
+                                .put("accepted_write_frames", sample?.acceptedWriteFrames ?: JSONObject.NULL)
+                                .put("queued_frames", sample?.let { it.acceptedWriteFrames - it.playbackHeadFrames } ?: JSONObject.NULL)
+                                .put("play_state", sample?.playState ?: JSONObject.NULL).put("underruns", sample?.underrunCount ?: JSONObject.NULL))
+                        }
+                        result.put("continuous_observations", reads)
+                        check(!continuousOverflow.get()) { "Continuous observations were lost" }
+                        for (window in continuousWindows) {
+                            val start = window.start
+                            val end = window.end
+                            val covered = if (start != null && end != null) continuousReads.filter {
+                                it.phaseBefore == window.phase && it.phaseAfter == window.phase && it.began >= start && it.ended <= end
+                            } else emptyList()
+                            val overlappingReadNanos = if (start != null && end != null) continuousReads.sumOf {
+                                (minOf(it.ended, end) - maxOf(it.began, start)).coerceAtLeast(0L)
+                            } else 0L
+                            val counters = covered.filter { it.sample != null }
+                            for (read in counters) {
+                                val sample = checkNotNull(read.sample)
+                                check(sample.playbackHeadFrames >= 0L && sample.acceptedWriteFrames >= 0L &&
+                                    sample.underrunCount >= 0 && sample.playbackHeadFrames <= sample.acceptedWriteFrames) {
+                                    "Invalid continuous native counters"
+                                }
+                            }
+                            val sameOwner = counters.all {
+                                val sample = checkNotNull(it.sample)
+                                sample.identity === window.owner.identity && sample.epoch == window.owner.epoch
+                            }
+                            check(sameOwner) { "Continuous fixed-bound updates replaced native owner" }
+                            var advances = 0
+                            var maximumStall = 0L
+                            var stalledSince = counters.firstOrNull()?.ended ?: 0L
+                            for ((previous, next) in counters.zipWithNext()) {
+                                val a = checkNotNull(previous.sample); val b = checkNotNull(next.sample)
+                                check(b.playbackHeadFrames >= a.playbackHeadFrames && b.acceptedWriteFrames >= a.acceptedWriteFrames) {
+                                    "Continuous native counters regressed"
+                                }
+                                if (b.playbackHeadFrames > a.playbackHeadFrames) { advances++; stalledSince = next.ended }
+                                else maximumStall = maxOf(maximumStall, next.ended - stalledSince)
+                            }
+                            val first = counters.firstOrNull(); val last = counters.lastOrNull()
+                            val entry = covered.firstOrNull()?.sample
+                            val entryPlaying = entry != null && entry.playState == android.media.AudioTrack.PLAYSTATE_PLAYING &&
+                                entry.playbackHeadFrames > 0L
+                            val established = window.cadence && entryPlaying && counters.size >= 2 && advances > 0
+                            window.result.put("status", if (established) "OBSERVED_PROGRESS" else "INSUFFICIENT_OR_UNESTABLISHED_WINDOW")
+                                .put("cadence_established", window.cadence).put("counter_window_established", established)
+                                .put("steady_entry_playing_with_progress", entryPlaying)
+                                .put("steady_entry_play_state", entry?.playState ?: JSONObject.NULL)
+                                .put("steady_entry_head_frames", entry?.playbackHeadFrames ?: JSONObject.NULL)
+                                .put("steady_entry_queued_frames", entry?.let { it.acceptedWriteFrames - it.playbackHeadFrames } ?: JSONObject.NULL)
+                                .put("actual_steady_start_ns", start ?: JSONObject.NULL).put("actual_steady_end_ns", end ?: JSONObject.NULL)
+                                .put("counter_samples", counters.size).put("null_samples", covered.size - counters.size)
+                                .put("same_native_owner", if (counters.isEmpty()) JSONObject.NULL else sameOwner)
+                                .put("head_advance_samples", advances).put("maximum_sampled_head_stall_ns", maximumStall)
+                                .put("observed_counter_begin_ns", first?.began ?: JSONObject.NULL).put("observed_counter_end_ns", last?.ended ?: JSONObject.NULL)
+                                .put("blind_prefix_ns", if (first != null && start != null) first.began - start else JSONObject.NULL)
+                                .put("blind_suffix_ns", if (last != null && end != null) end - last.ended else JSONObject.NULL)
+                                .put("observed_read_cost_ns", covered.sumOf { it.ended - it.began })
+                                .put("read_busy_overlap_ns", overlappingReadNanos)
+                                .put("maximum_read_cost_ns", covered.maxOfOrNull { it.ended - it.began } ?: JSONObject.NULL)
+                            val firstSample = first?.sample; val lastSample = last?.sample
+                            if (firstSample != null && lastSample != null) window.result
+                                .put("first_head_frames", firstSample.playbackHeadFrames).put("last_head_frames", lastSample.playbackHeadFrames)
+                                .put("first_accepted_frames", firstSample.acceptedWriteFrames).put("last_accepted_frames", lastSample.acceptedWriteFrames)
+                                .put("first_underruns", firstSample.underrunCount).put("last_underruns", lastSample.underrunCount)
+                                .put("first_play_state", firstSample.playState).put("last_play_state", lastSample.playState)
+                                .put("first_queued_frames", firstSample.acceptedWriteFrames - firstSample.playbackHeadFrames)
+                                .put("last_queued_frames", lastSample.acceptedWriteFrames - lastSample.playbackHeadFrames)
+                                .put("head_frames_delta", lastSample.playbackHeadFrames - firstSample.playbackHeadFrames)
+                                .put("accepted_frames_delta", lastSample.acceptedWriteFrames - firstSample.acceptedWriteFrames)
+                                .put("observed_underrun_delta", lastSample.underrunCount - firstSample.underrunCount)
+                                .put("underrun_scope", "between first/last fully covered reads only; not the whole requested window")
+                        }
+                    }
+                }
                 // Isolate the cached-helper measurement from our own native transport/cleanup workers.
                 checkNotNull(worker).submit {}.get(15, TimeUnit.SECONDS)
                 checkNotNull(controlWorker).submit {}.get(15, TimeUnit.SECONDS)
                 checkNotNull(releaseWorker).submit {}.get(15, TimeUnit.SECONDS)
                 onMain {}
                 val helperCosts = JSONArray()
+                val combinedCosts = JSONArray()
+                result.put("combined_render_cost", JSONObject().put("sample_rate", fastSampleRate)
+                    .put("warmup_calls_per_case", 2).put("measured_calls_per_case", 8)
+                    .put("scope", "actual renderShuttlePcm16 on cached PCM; excludes cache read, crossfade and native writes")
+                    .put("cpu_scope", "instrumentation thread; not audio-worker or uninstrumented baseline performance")
+                    .put("allocation_scope", "process-wide ART counter delta; includes stats reads and other QA threads")
+                    .put("cases", combinedCosts))
                 result.put("phase_helper_cost", JSONObject().put("sample_rate", fastSampleRate)
                     .put("sample_rate_selection", "highest sample rate actually observed in the two fast native runs")
                     .put("warmup_calls_per_case", 8).put("measured_calls_per_case", 16)
@@ -836,6 +1053,34 @@ internal fun verifyShortRangePreview(instrumentation: Instrumentation, report: S
                                 .put("thread_cpu_nanos", if (cpuBefore >= 0L && cpuAfter >= cpuBefore) cpuAfter - cpuBefore else JSONObject.NULL)
                                 .put("process_allocated_bytes_delta", allocatedDelta ?: JSONObject.NULL)
                                 .put("frame_checksum", frameChecksum))
+                            val tail = if (enabled) retainedTail else null
+                            fun render() = renderShuttlePcm16(cached, 0.0, nextStart, nextStart + grainSeconds,
+                                fastSampleRate, channels, tail, rate, .05, .95)
+                            val reference = transformShuttlePcm16(sliceShuttlePcm16(cached, 0.0, nextStart,
+                                nextStart + grainSeconds, fastSampleRate, channels, tail, rate, .05, .95), rate, channels)
+                            check(render().contentEquals(reference)) { "Combined render changed the reference PCM" }
+                            fun checksum(bytes: ByteArray) = bytes.size.toLong() * 31L +
+                                bytes.first().toLong() * 17L + bytes[bytes.size / 2].toLong() * 7L + bytes.last()
+                            repeat(2) { render() }
+                            val combinedAllocationBefore = Debug.getRuntimeStat("art.gc.bytes-allocated")?.toLongOrNull()
+                            val combinedCpuBefore = Debug.threadCpuTimeNanos()
+                            val combinedWallBefore = SystemClock.elapsedRealtimeNanos()
+                            var outputChecksum = 0L
+                            repeat(8) { outputChecksum += checksum(render()) }
+                            val combinedWall = SystemClock.elapsedRealtimeNanos() - combinedWallBefore
+                            val combinedCpuAfter = Debug.threadCpuTimeNanos()
+                            val combinedAllocationAfter = Debug.getRuntimeStat("art.gc.bytes-allocated")?.toLongOrNull()
+                            check(outputChecksum == checksum(reference) * 8)
+                            combinedCosts.put(JSONObject().put("channels", channels).put("rate", rate)
+                                .put("audible_speed", shuttleAudibleSpeed(rate)).put("tail_present", enabled)
+                                .put("output_frames_per_call", reference.size / (channels * 2))
+                                .put("sampled_output_checksum", outputChecksum).put("reference_bytes_equal", true)
+                                .put("wall_nanos", combinedWall)
+                                .put("thread_cpu_nanos", if (combinedCpuBefore >= 0L && combinedCpuAfter >= combinedCpuBefore)
+                                    combinedCpuAfter - combinedCpuBefore else JSONObject.NULL)
+                                .put("process_allocated_bytes_delta", if (combinedAllocationBefore != null &&
+                                    combinedAllocationAfter != null && combinedAllocationAfter >= combinedAllocationBefore)
+                                    combinedAllocationAfter - combinedAllocationBefore else JSONObject.NULL))
                         }
                     }
                 }
@@ -931,8 +1176,31 @@ internal fun verifyShortRangePreview(instrumentation: Instrumentation, report: S
         cleanup { controlDrained = controlWorker?.awaitTermination(15, TimeUnit.SECONDS) ?: true; check(controlDrained) }
         cleanup { releaseDrained = releaseWorker?.awaitTermination(15, TimeUnit.SECONDS) ?: true; check(releaseDrained) }
         cleanup { onMain {}; mainDrained = true }
+        if (selector == "range_preview_short_controls") cleanup {
+            // close()/quiet acknowledgement alone cannot finish a canceled worker's last read.
+            // Drain after the original executor's termination fence, preserving its old epochs.
+            val timings = preview?.drainShuttleTimings() ?: PreviewShuttleTimingBatch(emptyList(), 0)
+            val records = JSONArray()
+            for (sample in timings.records) {
+                check(sample.epoch > 0L && sample.elapsedNanos >= 0L && sample.threadCpuNanos >= 0L)
+                records.put(JSONObject().put("epoch", sample.epoch).put("stage", sample.stage.name)
+                    .put("started_elapsed_ns", sample.startedAtElapsedRealtimeNanos)
+                    .put("duration_ns", sample.elapsedNanos).put("thread_cpu_ns", sample.threadCpuNanos)
+                    .put("completed", sample.completed).put("current_at_end", sample.currentAtEnd)
+                    .put("output_bytes", sample.outputBytes ?: JSONObject.NULL))
+            }
+            result.put("shuttle_stage_timings", records).put("shuttle_stage_timings_dropped", timings.dropped)
+                .put("shuttle_stage_timings_final", workerDrained && worker?.isTerminated == true)
+                .put("shuttle_stage_timings_scope", "opt-in wall/CPU stage samples; not audible quality or baseline performance")
+            check(timings.dropped == 0) { "Shuttle timing queue overflowed" }
+            check(workerDrained && worker?.isTerminated == true) { "Shuttle timing drain is not final" }
+            check(timings.records.any { it.stage == PreviewShuttleStage.READ_NORMALIZE }) { "Shuttle read timing missing" }
+            check(timings.records.any { it.stage == PreviewShuttleStage.FIRST_WRITE && (it.outputBytes ?: 0) > 0 }) {
+                "Successful first-write timing missing"
+            }
+        }
         cleanup { check(preview?.observeTrack() == null && preview?.playbackActive != true) }
-        if (workerDrained && controlDrained && releaseDrained && mainDrained) {
+        if (workerDrained && controlDrained && releaseDrained && mainDrained && observer?.isAlive != true) {
             cleanup {
                 val store = source
                 if (store != null && sourceDigest != null) {

@@ -51,6 +51,24 @@ internal data class PreviewTrackObservation(
     val startThresholdInFrames: Int?,
 )
 
+internal enum class PreviewShuttleStage {
+    SOURCE_FACTORY, CREATE_TRACK, QUIET_WAIT, READ_NORMALIZE, RENDER_GRAIN, FIRST_WRITE, CANCEL_REQUEST,
+}
+
+/** Opt-in timing metadata only; an old worker keeps its original epoch after cancellation. */
+internal data class PreviewShuttleTiming(
+    val epoch: Long,
+    val stage: PreviewShuttleStage,
+    val startedAtElapsedRealtimeNanos: Long,
+    val elapsedNanos: Long,
+    val threadCpuNanos: Long,
+    val completed: Boolean,
+    val currentAtEnd: Boolean,
+    val outputBytes: Int?,
+)
+
+internal data class PreviewShuttleTimingBatch(val records: List<PreviewShuttleTiming>, val dropped: Int)
+
 /** Legacy streaming readiness uses effective buffer size, which must fit actual queued PCM. */
 internal inline fun playPrimedPreviewTrack(
     apiLevel: Int,
