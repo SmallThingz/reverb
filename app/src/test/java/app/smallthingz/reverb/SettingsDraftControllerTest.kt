@@ -51,6 +51,53 @@ class SettingsDraftControllerTest {
     )
 
     @Test
+    fun retainedReopenShowsPendingThroughSuspendedReadFailureAndRetry() = runBlocking {
+        val host = Host()
+        val controller = host.controller()
+        controller.read()
+        val retained = controller.state.displayed
+        assertFalse(controller.state.hydrationPending)
+        host.panelActive = false
+        controller.setActive(false)
+        assertFalse(controller.state.hydrationPending)
+        host.panelActive = true
+        controller.setActive(true)
+        var launches = 0
+        fun choose() {
+            if (controller.acceptsInput(controller.state.activation, host.panelActive) &&
+                controller.directoryPicker.beginRequest()) launches++
+        }
+        val firstRead = CompletableDeferred<SettingsDraftBaseline>()
+        val firstAttempt = async(start = CoroutineStart.UNDISPATCHED) {
+            runCatching { controller.hydrate({ firstRead.await() }, { it }) }
+        }
+        assertTrue(controller.state.hydrated)
+        assertTrue(controller.state.hydrationPending)
+        assertEquals(retained, controller.state.displayed)
+        choose()
+        assertEquals(0, launches)
+        firstRead.completeExceptionally(java.io.IOException("transient hydration read"))
+        assertTrue(firstAttempt.await().isFailure)
+        assertTrue(controller.state.hydrationPending)
+        assertFalse(controller.acceptsInput(controller.state.activation, true))
+        val retryRead = CompletableDeferred<SettingsDraftBaseline>()
+        val retry = async(start = CoroutineStart.UNDISPATCHED) {
+            controller.hydrate({ retryRead.await() }, { it })
+        }
+        choose()
+        assertEquals(0, launches)
+        assertTrue(controller.state.hydrationPending)
+        retryRead.complete(SettingsDraftBaseline(SettingsUiDraft.normalized(baseline), "raw-durable-silence"))
+        assertEquals(SettingsDraftHydrationResult.APPLIED, retry.await())
+        assertFalse(controller.state.hydrationPending)
+        assertEquals(retained, controller.state.displayed)
+        choose()
+        choose()
+        assertEquals(1, launches)
+        controller.directoryPicker.receiveResult(null)
+    }
+
+    @Test
     fun restoredRawInputsAndChildEditorWaitForAcceptedCommitSettlement() = runBlocking {
         val barrier = SettingsCommitBarrier()
         val submitted = baseline.copy(themeMode = AppThemeMode.LIGHT, oneShotRetentionTime = 900)

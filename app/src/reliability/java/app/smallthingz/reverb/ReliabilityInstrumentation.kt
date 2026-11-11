@@ -76,7 +76,7 @@ class ReliabilityInstrumentation : Instrumentation() {
                 check(targetContext.applicationContext.javaClass == android.app.Application::class.java &&
                     requestedTest in setOf("native_rename_editor_current", "native_click_ripple_current", "native_retention_input_parity", "native_retention_keyboard", "native_icon_parity", "native_settings_library_selectors", "native_theme_matrix", "native_settings_calibration_current", "current_media_delete_consent",
                         "native_silence_blob_current", "native_silence_diagnostic_current", "native_blob_feel_current", "native_material_progress_current", "native_library_admission",
-                        "range_preview_short_end", "range_preview_short_controls", "range_preview_short_retirement", "native_ui_consistency_current")) {
+                        "range_preview_short_end", "range_preview_short_controls", "range_preview_short_retirement", "native_ui_consistency_current", "native_settings_hydration_current")) {
                     "Current UI smoke accepts only explicit current UI selectors with plain Application"
                 }
                 report.appendLine(if (requestedTest == "native_icon_parity")
@@ -109,7 +109,7 @@ class ReliabilityInstrumentation : Instrumentation() {
                 "native_library_fixture_cleanup",
                 "native_transaction_fixture_recovery",
                 "range_preview_short_end", "range_preview_short_controls", "range_preview_short_retirement",
-                "native_ui_consistency_current",
+                "native_ui_consistency_current", "native_settings_hydration_current",
             )) {
                 "The native-parity APK requires an explicit isolated fixture"
             }
@@ -346,6 +346,10 @@ class ReliabilityInstrumentation : Instrumentation() {
             } else if (requestedTest == "native_settings_back_guard") {
                 executed++
                 verifyNativeSettingsBackGuard(this, report)
+            } else if (requestedTest == "native_settings_hydration_current") {
+                executed++
+                check(currentUiSmoke) { "Settings hydration requires the isolated current-UI host" }
+                verifyNativeSettingsBackGuard(this, report, hydrationOnly = true)
             } else if (requestedTest == "native_onboarding_controls_current") {
                 executed++
                 verifyNativeOnboardingControlsCurrent(this, report)

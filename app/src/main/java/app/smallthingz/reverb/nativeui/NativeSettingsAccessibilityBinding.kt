@@ -16,7 +16,10 @@ internal class NativeSettingsAccessibilityBinding(
     private val admitChildren:((ArrayList<View>,Int,(View)->View?)->Unit)?=null,
 ):AutoCloseable {
     private val clips=NativeTextSemanticsClipPolicy(content::sourceClip)
-    private val topBar=window.bindSettingsTopBar(content.topBar,content,clips,sourceNode)
+    private val availableNode:(View)->NativeSourceAccessibilityNode={view->
+        if(content.inputAllowed)sourceNode(view) else NativeSourceAccessibilityNode.absent()
+    }
+    private val topBar=window.bindSettingsTopBar(content.topBar,content,clips,availableNode)
     private var sectionView:SettingsSectionListView?=null
     private var sections:NativePageTextAccessibilityOwner?=null
     private var listViewport:ReverbLibraryRecyclerView?=null
@@ -29,7 +32,7 @@ internal class NativeSettingsAccessibilityBinding(
         if(sectionView!==next) {
             sections?.close()
             sectionView=next
-            sections=next?.let {window.bindContent(it,clips,sourceNode) {view->
+            sections=next?.let {window.bindContent(it,clips,availableNode) {view->
                 content.inputAllowed&&!sourceNode(view).hidden
             }}
         }else sections?.refresh()
@@ -38,7 +41,7 @@ internal class NativeSettingsAccessibilityBinding(
         if(listViewport!==nextViewport) {
             listScroll?.close();listScroll=null
             listViewport=nextViewport
-            listScroll=nextViewport?.let {NativeLibraryRecyclerAccessibility(it,sourceNode,scrollEvents,admitChildren)}
+            listScroll=nextViewport?.let {NativeLibraryRecyclerAccessibility(it,availableNode,scrollEvents,admitChildren)}
         }
         val present=IdentityHashMap<SettingsCalibrationProgressView,Boolean>()
         fun visit(view:View) {

@@ -310,7 +310,9 @@ internal data class SettingsDraftPresentation(
     val outputSelectionRevision: Long,
     val calibrationResetRevision: Int,
     val originalSilenceRaw: String?,
-)
+) {
+    val hydrationPending: Boolean get() = active && !interactionReady
+}
 
 internal enum class SettingsDraftHydrationResult {
     APPLIED,

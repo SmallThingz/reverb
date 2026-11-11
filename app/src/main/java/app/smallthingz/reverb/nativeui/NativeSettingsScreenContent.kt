@@ -40,8 +40,8 @@ internal class NativeSettingsScreenContent(
     lifecycleOwner:LifecycleOwner,
     backDispatcher:OnBackPressedDispatcher,
     val inputRoot:View,
-    frames:MonotonicFrameClock,
-    animationScope:CoroutineScope,
+    private val frames:MonotonicFrameClock,
+    private val animationScope:CoroutineScope,
     val nestedScroll:NativeVerticalNestedHost,
     parentInterested:(NativeDragPointerChange)->Boolean,
     restoredPosition:SettingsListSavedPosition?=null,
@@ -57,6 +57,7 @@ internal class NativeSettingsScreenContent(
     private var lastTopBar:TopBarValues?=null
     private val tileEditorPublication=SettingsTileEditorPublication()
     private var list:SettingsSectionListView?=null
+    private var hydrationProgress:ReverbIncidentLoadingView?=null
     private var savedPosition=restoredPosition
     private var pendingRetentionFocus=false
     private var focusKeyInitialized=false
@@ -123,7 +124,7 @@ internal class NativeSettingsScreenContent(
         editorBack.isEnabled=state.active&&(state.hasUnsavedChanges||state.persisting||
             owner.quickTileEditorState.editorOpen||owner.calibration.running||
             owner.notificationDurationInteraction.pending)
-        importantForAccessibility=if(inputAllowed)IMPORTANT_FOR_ACCESSIBILITY_NO
+        importantForAccessibility=if(inputAllowed||state.hydrationPending)IMPORTANT_FOR_ACCESSIBILITY_NO
             else IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
         val focusBuffer=input.focusRetention
         val batteryRestricted=owner.batteryOptimizationRestricted
@@ -139,6 +140,7 @@ internal class NativeSettingsScreenContent(
             if(topBar.parent===this)removeView(topBar)
             lastSections=null;lastTopBar=null
             tileEditorPublication.reset()
+            showHydrationPending(state.hydrationPending)
             structureChanged()
             return
         }
@@ -168,9 +170,36 @@ internal class NativeSettingsScreenContent(
                 bar.backHint))
         }
         topBar.setRemainingWindowInsets(NativeSettingsTopBarInsets(input.insets.left,input.insets.top,input.insets.right))
+        showHydrationPending(state.hydrationPending)
         if(pendingRetentionFocus) {
             pendingRetentionFocus=false
             currentList.focusRetention()
+        }
+    }
+    private fun showHydrationPending(pending:Boolean) {
+        // The retained pixels keep their layout and scroll position while the existing gate owns input.
+        val contentAlpha=if(pending).38f else 1f
+        topBar.alpha=contentAlpha
+        list?.alpha=contentAlpha
+        val descendants=if(inputAllowed)IMPORTANT_FOR_ACCESSIBILITY_NO
+            else IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+        topBar.importantForAccessibility=descendants
+        list?.importantForAccessibility=descendants
+        if(pending) {
+            val progress=hydrationProgress?:run {
+                val scale=SettingsAnimatorDurationScale(context)
+                ReverbIncidentLoadingView(context,environment.palette.primary,frames,animationScope,
+                    scale::read,strokeWidthDp=4f).also {
+                    it.isScreenReaderFocusable=true
+                    it.accessibilityLiveRegion=ACCESSIBILITY_LIVE_REGION_POLITE
+                    hydrationProgress=it;addView(it)
+                }
+            }
+            progress.setColor(environment.palette.primary)
+            bringChildToFront(progress)
+        } else hydrationProgress?.let {
+            hydrationProgress=null
+            removeView(it)
         }
     }
     private fun structureChanged() {
@@ -201,12 +230,20 @@ internal class NativeSettingsScreenContent(
         val top=if(topBar.parent===this)topBar.measuredHeight else 0
         list?.measure(exact((width-input.insets.left-input.insets.right).coerceAtLeast(0)),
             exact((height-top-input.insets.bottom).coerceAtLeast(0)))
+        val progressSize=(40f*environment.textDensity.density).toInt()
+        hydrationProgress?.measure(exact(progressSize),exact(progressSize))
         setMeasuredDimension(resolveSize(width,w),resolveSize(height,h))
     }
     override fun onLayout(changed:Boolean,l:Int,t:Int,r:Int,b:Int) {
         if(topBar.parent===this)topBar.layout(0,0,width,topBar.measuredHeight)
         list?.let {it.layout(input.insets.left,topBar.measuredHeight,
             input.insets.left+it.measuredWidth,topBar.measuredHeight+it.measuredHeight)}
+        hydrationProgress?.let {
+            val top=if(topBar.parent===this)topBar.measuredHeight else input.insets.top
+            val x=input.insets.left+(width-input.insets.left-input.insets.right-it.measuredWidth)/2
+            val y=top+(height-top-input.insets.bottom-it.measuredHeight)/2
+            it.layout(x,y,x+it.measuredWidth,y+it.measuredHeight)
+        }
         // Child expansion/membership can change while this root's own bounds stay identical.
         structureChanged()
     }
@@ -221,6 +258,7 @@ internal class NativeSettingsScreenContent(
         retire(deleteSheet::close)
         retire {list?.close()};list=null
         retire(topBar::close)
+        retire {hydrationProgress?.let(::removeView);hydrationProgress=null}
         retire(owner::close)
         failure?.let {throw it}
     }
