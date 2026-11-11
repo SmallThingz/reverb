@@ -76,8 +76,8 @@ internal class SettingsStorageActionView(
             it.setTypography(reverbButtonTextStyle(),next.textDensity,next.sharedFontResolver)
             it.animateTextColor(textColor)
         }
-        content.glyph?.bind(requireNotNull(icon),next.palette.onSurfaceVariant)
-        // Surface Icon overrides only the Icon tint; TextButton changes its inherited content color.
+        val iconColor=if(enabled)next.palette.onSurfaceVariant else Color(next.palette.onSurfaceVariant).copy(alpha=.38f).toArgb()
+        content.glyph?.bind(requireNotNull(icon),iconColor)
         indication.updateColor(if(icon==null)textColor else next.palette.onSurface)
         controller.bind(NativeClickBinding(this,enabled,{content.performClick()}))
         content.isEnabled=enabled;content.isFocusable=enabled
