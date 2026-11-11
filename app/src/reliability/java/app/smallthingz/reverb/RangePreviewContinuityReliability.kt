@@ -994,6 +994,7 @@ internal fun verifyShortRangePreview(instrumentation: Instrumentation, report: S
                 checkNotNull(controlWorker).submit {}.get(15, TimeUnit.SECONDS)
                 checkNotNull(releaseWorker).submit {}.get(15, TimeUnit.SECONDS)
                 onMain {}
+                qualifyNativeShuttlePcm(result)
                 val helperCosts = JSONArray()
                 val combinedCosts = JSONArray()
                 result.put("combined_render_cost", JSONObject().put("sample_rate", fastSampleRate)
@@ -1239,4 +1240,81 @@ internal fun verifyShortRangePreview(instrumentation: Instrumentation, report: S
     failure?.let { throw it }
     report.append("PASS ").append(selector)
         .append(" bounded native-head/callback/retirement evidence; audible quality and pipeline latency unverified\n")
+}
+
+private fun qualifyNativeShuttlePcm(result: JSONObject) {
+    check(Looper.myLooper() != Looper.getMainLooper())
+    fun sha(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256")
+        .digest(bytes).joinToString("") { "%02x".format(it.toInt() and 255) }
+    fun bits(samples: FloatArray): ByteArray = ByteBuffer.allocate(samples.size * 4)
+        .order(ByteOrder.LITTLE_ENDIAN).also { buffer -> samples.forEach { buffer.putInt(it.toRawBits()) } }.array()
+    fun pcm(samples: FloatArray): ByteArray = ByteBuffer.allocate(samples.size * 2)
+        .order(ByteOrder.LITTLE_ENDIAN).also { buffer -> samples.forEach {
+            buffer.putShort(it.roundToInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort())
+        } }.array()
+    val cases = JSONArray()
+    val proof = JSONObject().put("passed", false)
+        .put("scope", "active process ABI; direct native filter versus unchanged Kotlin scalar converter; not sound quality or timing")
+        .put("process_arch", System.getProperty("os.arch") ?: "unknown")
+        .put("process_is_64_bit", android.os.Process.is64Bit())
+        .put("cases", cases)
+    result.put("native_fir_qualification", proof)
+    for ((frames, outputs) in listOf(7 to 2, 257 to 234, 2534 to 2304, 6912 to 2304)) {
+        for (channels in 1..2) for (reverse in listOf(false, true)) {
+            val first = 13
+            val input = ByteArray((frames + 26) * channels * 2)
+            repeat(input.size / 2) { index ->
+                val value = when (index % 11) {
+                    0 -> -32768
+                    1 -> 32767
+                    2 -> 0
+                    else -> (index * 7919 + index / 3).toShort().toInt()
+                }
+                input[index * 2] = value.toByte()
+                input[index * 2 + 1] = (value shr 8).toByte()
+            }
+            val step = (frames - 1).toDouble() / (outputs - 1).toDouble()
+            val converter = PcmRateConverter(frames, step) { frame, channel ->
+                val oriented = if (reverse) frames - 1 - frame else frame
+                val offset = ((first + oriented) * channels + channel) * 2
+                ((input[offset].toInt() and 255) or (input[offset + 1].toInt() shl 8)).toShort().toFloat()
+            }
+            val reference = FloatArray(outputs * channels)
+            repeat(outputs) { frame ->
+                val position = frame.toDouble() * (frames - 1).toDouble() / (outputs - 1).toDouble()
+                repeat(channels) { channel -> reference[frame * channels + channel] = converter.sample(position, channel) }
+            }
+            for (sampleFrames in listOf(outputs, minOf(17, outputs)).distinct()) {
+                val row = JSONObject().put("source_frames", frames).put("output_frames", outputs)
+                    .put("sample_frames", sampleFrames).put("first_source_frame", first)
+                    .put("channels", channels).put("reverse", reverse)
+                    .put("source_step_bits", java.lang.Long.toHexString(step.toRawBits()))
+                    .put("input_sha256", sha(input)).put("passed", false)
+                cases.put(row)
+                val actual = checkNotNull(ShuttlePcmNative.filter(input, first, frames, channels, reverse,
+                    outputs, sampleFrames, step)) { "Native FIR unavailable for $row" }
+                val expected = reference.copyOf(sampleFrames * channels)
+                check(actual.size == expected.size) { "Native FIR output size: $row" }
+                val actualBits = bits(actual)
+                val expectedBits = bits(expected)
+                val actualPcm = pcm(actual)
+                val expectedPcm = pcm(expected)
+                row.put("native_float_sha256", sha(actualBits)).put("reference_float_sha256", sha(expectedBits))
+                    .put("native_pcm_sha256", sha(actualPcm)).put("reference_pcm_sha256", sha(expectedPcm))
+                check(actualBits.contentEquals(expectedBits)) { "Native FIR Float bits differ: $row" }
+                check(actualPcm.contentEquals(expectedPcm)) { "Native FIR rounded/clamped PCM differs: $row" }
+                row.put("native_nonnull", true).put("passed", true)
+            }
+        }
+    }
+    var linearGates = 0
+    for (channels in 1..2) for (reverse in listOf(false, true)) {
+        val input = ByteArray(31 * channels * 2) { (it * 73).toByte() }
+        check(ShuttlePcmNative.filter(input, 0, 31, channels, reverse, 31, 31, 1.0) == null) {
+            "Unit-step shuttle must retain the Kotlin linear path"
+        }
+        linearGates++
+    }
+    check(cases.length() == 28 && linearGates == 4)
+    proof.put("native_cases", cases.length()).put("linear_gate_cases", linearGates).put("passed", true)
 }

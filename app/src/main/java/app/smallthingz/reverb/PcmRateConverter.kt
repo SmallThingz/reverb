@@ -14,6 +14,7 @@ internal const val PCM_MAX_FILTER_RADIUS = 4096
 
 internal fun checkPcmConversionNotInterrupted() {
     if (Thread.currentThread().isInterrupted) throw InterruptedIOException("PCM conversion cancelled")
+    checkPcmConversionAdmission()
 }
 
 /** Validate in Double before converting or allocating from a supplied sample-rate ratio. */
@@ -173,6 +174,9 @@ internal class PcmRateConverter(
                 }
             }
         }
+
+        /** Read-only JNI input; the shuttle copies these exact Float bits before any callback. */
+        internal fun kernelTableForShuttle(): FloatArray = table
 
         private fun kernel(distance: Double): Double {
             val position = abs(distance) * TABLE_STEPS_PER_LOBE

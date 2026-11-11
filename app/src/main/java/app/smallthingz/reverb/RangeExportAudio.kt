@@ -285,6 +285,17 @@ internal fun transformShuttlePcm16(input: ByteArray, signedRate: Float, channelC
         frame * channelCount + channel,
         value.roundToInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()),
     )
+    val sourceStep = if (outputFrames == 1) speed.toDouble() else
+        (inputFrames - 1).toDouble() / (outputFrames - 1)
+    ShuttlePcmNative.filter(input, 0, inputFrames, channelCount, reverse,
+        outputFrames, outputFrames, sourceStep)?.let { samples ->
+        for (frame in 0 until outputFrames) {
+            if ((frame and 127) == 0) checkPcmConversionNotInterrupted()
+            for (channel in 0 until channelCount) write(frame, channel, samples[frame * channelCount + channel])
+        }
+        checkPcmConversionNotInterrupted()
+        return output
+    }
     if (outputFrames == 1) {
         val converter = PcmRateConverter(inputFrames, speed.toDouble(), ::readOriented)
         for (channel in 0 until channelCount) {
@@ -609,6 +620,7 @@ internal class TimelineAudioPreviewController(
             targetSampleRate: Int,
             selectedStartSeconds: Double,
             selectedEndSeconds: Double,
+            checkAdmission: () -> Unit,
         ): ByteArray?
     }
 
@@ -624,6 +636,7 @@ internal class TimelineAudioPreviewController(
             targetSampleRate: Int,
             selectedStartSeconds: Double,
             selectedEndSeconds: Double,
+            checkAdmission: () -> Unit,
         ): ByteArray? {
             val lease = snapshot.acquireRange(startSeconds, endSeconds) ?: return null
             val expectedBytes = ((endSeconds - startSeconds).coerceAtLeast(0.0) *
@@ -632,15 +645,17 @@ internal class TimelineAudioPreviewController(
                 .coerceAtLeast(0)
             val raw = ByteArrayOutputStream(expectedBytes)
             try {
-                lease.readNormalized(
-                    targetSampleRate = targetSampleRate,
-                    targetChannelCount = channelCount,
-                    targetSampleFormat = PcmSampleFormat.PCM_16,
-                    maximumOutputFrames = Long.MAX_VALUE,
-                    allowOutsideRangeContext = false,
-                ) { array, offset, count ->
-                    raw.write(array, offset, count)
-                    count
+                withPcmConversionAdmission(checkAdmission) {
+                    lease.readNormalized(
+                        targetSampleRate = targetSampleRate,
+                        targetChannelCount = channelCount,
+                        targetSampleFormat = PcmSampleFormat.PCM_16,
+                        maximumOutputFrames = Long.MAX_VALUE,
+                        allowOutsideRangeContext = false,
+                    ) { array, offset, count ->
+                        raw.write(array, offset, count)
+                        count
+                    }
                 }
             } finally {
                 snapshot.releaseChildRangeBestEffort(lease)
@@ -665,11 +680,14 @@ internal class TimelineAudioPreviewController(
             targetSampleRate: Int,
             selectedStartSeconds: Double,
             selectedEndSeconds: Double,
+            checkAdmission: () -> Unit,
         ): ByteArray? =
-            reader.readRange(startSeconds, endSeconds, targetSampleRate,
-                recordingShuttleFrameRange(selectedStartSeconds, selectedEndSeconds,
-                    reader.layout.sampleRate, reader.layout.frameCount, trimRounding))
-                .takeIf { it.isNotEmpty() }
+            withPcmConversionAdmission(checkAdmission) {
+                reader.readRange(startSeconds, endSeconds, targetSampleRate,
+                    recordingShuttleFrameRange(selectedStartSeconds, selectedEndSeconds,
+                        reader.layout.sampleRate, reader.layout.frameCount, trimRounding))
+                    .takeIf { it.isNotEmpty() }
+            }
 
         override fun close() { if (ownsReader) reader.close() }
     }
@@ -1219,7 +1237,7 @@ internal class TimelineAudioPreviewController(
                         .coerceAtMost(upper)
                     checkShuttleCurrent()
                     val pcm = timeShuttleStage(token, { PreviewShuttleStage.READ_NORMALIZE }) {
-                        source.readPcm16(cacheStart, cacheEnd, shuttleSampleRate, lower, upper)
+                        source.readPcm16(cacheStart, cacheEnd, shuttleSampleRate, lower, upper, ::checkShuttleCurrent)
                     } ?: return null
                     checkShuttleCurrent()
                     val actualDuration = pcm.size.toDouble() /
@@ -1232,18 +1250,20 @@ internal class TimelineAudioPreviewController(
                     sourceWindow = window
                 }
                 val selected = timeShuttleStage(token, { PreviewShuttleStage.RENDER_GRAIN }) {
-                    renderShuttlePcm16(
-                        input = window.pcm,
-                        windowStartSeconds = window.startSeconds,
-                        rangeStartSeconds = startSeconds,
-                        rangeEndSeconds = endSeconds,
-                        sampleRate = shuttleSampleRate,
-                        channelCount = channelCount,
-                        previousTail = previousTail,
-                        signedRate = rate,
-                        selectedStartSeconds = lower,
-                        selectedEndSeconds = upper,
-                    )
+                    withPcmConversionAdmission(::checkShuttleCurrent) {
+                        renderShuttlePcm16(
+                            input = window.pcm,
+                            windowStartSeconds = window.startSeconds,
+                            rangeStartSeconds = startSeconds,
+                            rangeEndSeconds = endSeconds,
+                            sampleRate = shuttleSampleRate,
+                            channelCount = channelCount,
+                            previousTail = previousTail,
+                            signedRate = rate,
+                            selectedStartSeconds = lower,
+                            selectedEndSeconds = upper,
+                        )
+                    }
                 }
                 return selected.takeIf { it.isNotEmpty() }
             }

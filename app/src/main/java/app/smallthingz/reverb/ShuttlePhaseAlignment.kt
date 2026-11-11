@@ -95,7 +95,10 @@ internal fun alignedShuttleStartFrame(
     // A single full candidate check shares the same per-frame kernel across stereo channels.
     // Near-unity correlation makes this a conservative phase repair; transient-heavy overlaps
     // retain their original source position instead of risking shifted or repeated attacks.
-    val converter = PcmRateConverter(grainFrames, sourceSpan / outputSpan, PcmFrameSamples { frame, channel ->
+    val nativeSamples = ShuttlePcmNative.filter(window, best, grainFrames, channelCount, signedRate < 0f,
+        outputFrames, overlap, sourceSpan / outputSpan)
+    val converter = if (nativeSamples != null) null else
+        PcmRateConverter(grainFrames, sourceSpan / outputSpan, PcmFrameSamples { frame, channel ->
         val oriented = if (signedRate >= 0f) frame else grainFrames - 1 - frame
         read(window, best + oriented, channel).toFloat()
     })
@@ -106,10 +109,11 @@ internal fun alignedShuttleStartFrame(
     var aMinR = Double.POSITIVE_INFINITY; var aMaxR = Double.NEGATIVE_INFINITY
     var bMinR = Double.POSITIVE_INFINITY; var bMaxR = Double.NEGATIVE_INFINITY
     for (frame in 0 until overlap) {
+        if ((frame and 127) == 0) checkPcmConversionNotInterrupted()
         val position = frame.toDouble() * sourceSpan / outputSpan
         for (channel in 0 until channelCount) {
             val a = read(previousTail, frame, channel)
-            val b = converter.sample(position, channel).roundToInt()
+            val b = (nativeSamples?.get(frame * channelCount + channel) ?: converter!!.sample(position, channel)).roundToInt()
                 .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toDouble()
             if (channel == 0) {
                 aaL += a * a; bbL += b * b; abL += a * b; aSumL += a; bSumL += b
