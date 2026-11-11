@@ -110,10 +110,14 @@ internal class NativePagerContentInViewOwner(
                 pager.scroll {
                     animation.value = calculateScrollDelta(viewportAdjustment)
                     animation.animateToZero(
-                        beforeFrame = { delta ->
-                            val consumed = if (pager.rtl) -scrollBy(-delta) else scrollBy(delta)
-                            if (abs(consumed) < abs(delta)) animationJob.cancel(
-                                "Scroll animation cancelled because scroll was not consumed ($consumed < $delta)")
+                        beforeFrame = frame@{ delta ->
+                            // A queued frame may outlive the focus-origin request that produced it.
+                            val liveDistance = calculateScrollDelta(viewportAdjustment)
+                            if (abs(liveDistance) <= .5f) return@frame
+                            val applied = delta.coerceIn(minOf(0f, liveDistance), maxOf(0f, liveDistance))
+                            val consumed = if (pager.rtl) -scrollBy(-applied) else scrollBy(applied)
+                            if (abs(consumed) < abs(applied)) animationJob.cancel(
+                                "Scroll animation cancelled because scroll was not consumed ($consumed < $applied)")
                         },
                         afterFrame = {
                             requests.resumeAndRemoveWhile { it == null || isMaxVisible(it) }

@@ -1,6 +1,9 @@
 package app.smallthingz.reverb
 
 import smallthingz.ui.scroll.NativeBringIntoViewParent
+import smallthingz.ui.scroll.nativeFocusRectangleBounds
+import smallthingz.ui.scroll.nativeIsAutomaticFocusRectangle
+import smallthingz.ui.scroll.nativeChildRectangleBounds
 import smallthingz.ui.scroll.nativeBringIntoViewLocalRect
 import smallthingz.ui.scroll.nativeBringIntoViewSpec
 import smallthingz.ui.scroll.toNativeBringIntoViewRect
@@ -64,6 +67,7 @@ internal class NativeOnboardingPlacedPagerViewport(
     override val bringIntoViewView: View get() = this
     private var attachedScope: CoroutineScope? = null
     private var focusedDescendant: View? = null
+    private var focusGeneration = 0L
     private val contentInView = NativePagerContentInViewOwner(pager, frames,
         { requireNotNull(attachedScope) }, ::focusedBounds,
         NativePagerBringIntoViewSpec(pager, nativeBringIntoViewSpec(context)))
@@ -186,9 +190,25 @@ internal class NativeOnboardingPlacedPagerViewport(
     }
 
     override fun requestChildRectangleOnScreen(child: View, rectangle: Rect, immediate: Boolean): Boolean {
-        val requested = ComposeRect(rectangle.left.toFloat(), rectangle.top.toFloat(),
-            rectangle.right.toFloat(), rectangle.bottom.toFloat())
-        attachedScope?.launch { bringDescendantIntoView(child) { requested } }
+        val bounds = nativeChildRectangleBounds(child, rectangle)
+        attachedScope?.launch { bringDescendantIntoView(child, bounds) }
+        return true
+    }
+
+    override fun requestChildRectangleOnScreen(
+        child: View, rectangle: Rect, immediate: Boolean, source: Int,
+    ): Boolean {
+        if (source != View.RECTANGLE_ON_SCREEN_REQUEST_SOURCE_INPUT_FOCUS) {
+            return requestChildRectangleOnScreen(child, rectangle, immediate)
+        }
+        // Android 16 QPR2 can send undefined getLocalVisibleRect output for an offscreen view.
+        // Our guarded requestChildFocus already reveals full bounds; caller rectangles stay independent.
+        if (nativeIsAutomaticFocusRectangle(this)) return true
+        val generation = focusGeneration
+        val bounds = nativeFocusRectangleBounds(this, child, rectangle) {
+            generation == focusGeneration
+        } ?: return false
+        attachedScope?.launch { bringDescendantIntoView(child, bounds) }
         return true
     }
 
@@ -196,6 +216,7 @@ internal class NativeOnboardingPlacedPagerViewport(
         super.requestChildFocus(child, focused)
         if (focusedDescendant === focused) return
         focusedDescendant = focused
+        val generation = ++focusGeneration
         // Each FocusableNode makes ONE request. A nested native vertical viewport already owns
         // that launch and propagates it to this responder; do not launch a duplicate here.
         var ancestor = focused.parent
@@ -204,8 +225,10 @@ internal class NativeOnboardingPlacedPagerViewport(
             ancestor = ancestor.parent
         }
         attachedScope?.launch {
+            if (generation != focusGeneration || findFocus() !== focused) return@launch
             bringDescendantIntoView(focused) {
-                if (focused.isAttachedToWindow) ComposeRect(0f, 0f, focused.width.toFloat(), focused.height.toFloat())
+                if (generation == focusGeneration && focusedDescendant === focused &&
+                    findFocus() === focused && focused.isAttachedToWindow) ComposeRect(0f, 0f, focused.width.toFloat(), focused.height.toFloat())
                 else null
             }
         }
@@ -214,6 +237,7 @@ internal class NativeOnboardingPlacedPagerViewport(
     override fun clearChildFocus(child: View) {
         super.clearChildFocus(child)
         focusedDescendant = null
+        focusGeneration++
         // Release a source focus pin when native focus leaves the page. No delayed reservation.
         requestLayout()
     }
@@ -251,6 +275,7 @@ internal class NativeOnboardingPlacedPagerViewport(
 
     override fun onDetachedFromWindow() {
         focusedDescendant = null
+        focusGeneration++
         attachedScope?.cancel()
         attachedScope = null
         overscroll.dispose()
