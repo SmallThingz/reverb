@@ -181,19 +181,67 @@ internal fun verifyNativeUiConsistencyCurrent(instrumentation: Instrumentation, 
                 host.fixtureRoot.addView(permissionScreen, FrameLayout.LayoutParams(width, -1))
             }
             awaitNativeParityDraw(instrumentation, permissionScreen)
-            val viewport = main { descendants(permissionScreen).filterIsInstance<smallthingz.ui.scroll.NativeVerticalViewport>().first() }
-            repeat(4) {
-                main { viewport.performAccessibilityAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD, null) }
-                awaitNativeParityDraw(instrumentation, permissionScreen)
+            val placement = JSONObject().put("dark", dark)
+            val placements = result.optJSONArray("permission_viewports") ?: JSONArray().also {
+                result.put("permission_viewports", it)
             }
+            placements.put(placement)
+            val targetLabels = listOf(R.string.storage_settings_title,
+                R.string.settings_audio_read_missing, R.string.settings_all_files_optional).map { themed.getString(it) }
+            val viewport = main {
+                descendants(permissionScreen).filterIsInstance<OnboardingPageContentView>()
+                    .single { it.page == 0 && it.isAttachedToWindow }.sourceVerticalViewport
+            }
+            val targets = main {
+                val paragraphs = descendants(viewport).filterIsInstance<smallthingz.ui.text.view.ParagraphView>().toList()
+                targetLabels.map { text -> paragraphs.single { it.getText().toString() == text } }
+            }
+            fun bounds(rect: Rect) = JSONArray(listOf(rect.left, rect.top, rect.right, rect.bottom))
+            main {
+                val rectangles = targets.map { title -> Rect(0, 0, title.width, title.height).also {
+                    viewport.offsetDescendantRectToMyCoords(title, it)
+                } }
+                val top = rectangles.minOf { it.top }
+                val bottom = rectangles.maxOf { it.bottom }
+                val beforeScroll = viewport.state.value
+                val requested = (beforeScroll + (top + bottom - viewport.height) / 2)
+                    .coerceIn(0, viewport.state.maxValue)
+                placement.put("page", 0).put("viewport_width", viewport.width).put("viewport_height", viewport.height)
+                    .put("scroll_before", beforeScroll).put("scroll_max", viewport.state.maxValue)
+                    .put("target_union_top_before", top).put("target_union_bottom_before", bottom)
+                    .put("target_union_fits", viewport.width > 0 && viewport.height > 0 &&
+                        targets.all { it.width > 0 && it.height > 0 } && bottom - top <= viewport.height)
+                    .put("requested_scroll", requested)
+                // Rendering fixture placement, not accessibility-scroll or touch qualification.
+                viewport.state.scrollBy((requested - beforeScroll).toFloat())
+            }
+            awaitNativeParityDraw(instrumentation, permissionScreen)
             val permissionLabels = main {
-                descendants(permissionScreen).filterIsInstance<smallthingz.ui.text.view.ParagraphView>()
-                    .filter { it.isShown && it.getGlobalVisibleRect(Rect()) }.map { it.getText().toString() }.toSet()
+                val clip = Rect()
+                val viewportVisible = viewport.getGlobalVisibleRect(clip)
+                placement.put("scroll_after", viewport.state.value).put("viewport_visible", viewportVisible)
+                    .put("viewport_global_bounds", bounds(clip))
+                val rows = JSONArray().also { placement.put("titles", it) }
+                targets.mapNotNull { title ->
+                    val global = Rect()
+                    val visible = title.isShown && title.getGlobalVisibleRect(global)
+                    val clipped = Rect(global)
+                    val clippedVisible = visible && viewportVisible && clipped.intersect(clip)
+                    if (!clippedVisible) clipped.setEmpty()
+                    rows.put(JSONObject().put("text", title.getText().toString())
+                        .put("attached", title.isAttachedToWindow).put("shown", title.isShown)
+                        .put("width", title.width).put("height", title.height)
+                        .put("global_visible", visible).put("global_bounds", bounds(global))
+                        .put("clipped_visible", clippedVisible).put("clipped_bounds", bounds(clipped)))
+                    title.getText().toString().takeIf { title.isAttachedToWindow && clippedVisible }
+                }.toSet()
             }
-            check(themed.getString(R.string.storage_settings_title) in permissionLabels)
-            check(themed.getString(R.string.settings_audio_read_missing) in permissionLabels)
-            check(themed.getString(R.string.settings_all_files_optional) in permissionLabels)
+            // Retain the actual frame even when a subsequent visibility assertion fails.
             capture("${if (dark) "dark" else "light"}-missing-permissions", permissionScreen, dark)
+            check(placement.getBoolean("target_union_fits")) { "Permission titles do not fit the measured viewport: $placement" }
+            check(themed.getString(R.string.storage_settings_title) in permissionLabels) { "Missing Storage: $placement" }
+            check(themed.getString(R.string.settings_audio_read_missing) in permissionLabels) { "Missing audio access: $placement" }
+            check(themed.getString(R.string.settings_all_files_optional) in permissionLabels) { "Missing all-files access: $placement" }
             main { permissionScreen.close(); host.fixtureRoot.removeView(permissionScreen) }
 
             val storageSection = main {
