@@ -83,16 +83,16 @@ class LibraryRowMotionTest {
         val channel = libraryColorTween(start)
         channel.target(target, 1f)
         channel.frame(0L, 1f)
-        channel.frame(90_000_000L, 1f)
+        channel.frame(80_000_000L, 1f)
         val expected = lerp(androidx.compose.ui.graphics.Color(start.value),
             androidx.compose.ui.graphics.Color(target.value), FastOutSlowInEasing.transform(.5f))
         assertEquals(expected.value, channel.value.value)
         val before = channel.value
         channel.target(start, 1f)
         assertEquals(before, channel.value)
-        channel.frame(90_000_000L, 1f)
+        channel.frame(80_000_000L, 1f)
         assertEquals(before, channel.value)
-        channel.frame(270_000_000L, 1f)
+        channel.frame(240_000_000L, 1f)
         assertEquals(start, channel.value)
     }
 

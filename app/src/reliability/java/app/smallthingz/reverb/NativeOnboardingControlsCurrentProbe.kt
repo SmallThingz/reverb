@@ -50,10 +50,12 @@ internal fun verifyNativeOnboardingControlsCurrent(instrumentation: Instrumentat
             awaitNativeParityDraw(instrumentation, host.fixtureRoot)
             val runtime = NativeAboutWindowRuntime(host).apply { setStarted(true) }
             var view: NativeOnboardingScreenView? = null
+            var caseFailure: Throwable? = null
             try {
                 lateinit var state: OnboardingPageContentState
                 var levels = 0
                 var calibrationRequests = 0
+                var calibrationCancels = 0
                 var curveEdits = 0
                 var forbidden = 0
                 var finishCalibration: () -> Unit = { error("Calibration fixture not initialized") }
@@ -89,7 +91,7 @@ internal fun verifyNativeOnboardingControlsCurrent(instrumentation: Instrumentat
                         override fun beginHeld(): Boolean { forbidden++; return false }
                         override fun completeTap() { forbidden++ }
                         override fun finishHeld() { forbidden++ }
-                        override fun cancel() = cancelCalibration()
+                        override fun cancel() { calibrationCancels++; cancelCalibration() }
                     }
                     cancelCalibration = {
                         update(state.copy(silenceState = checkNotNull(state.silenceState).copy(
@@ -146,11 +148,48 @@ internal fun verifyNativeOnboardingControlsCurrent(instrumentation: Instrumentat
                     // drains. Await its actual scroll owner before any direct geometry fixture.
                     awaitNativeParityDraw(instrumentation, screen)
                     val deadline = SystemClock.uptimeMillis() + 4_000L
+                    var lastFailedPredicate: JSONObject? = null
                     while (!nativeParityOnMain(instrumentation) {
-                        !viewport.state.isScrollInProgress && !viewport.isLayoutRequested &&
-                            !target.isLayoutRequested && target.getGlobalVisibleRect(Rect())
+                        val idle = !viewport.state.isScrollInProgress
+                        val viewportReady = if (idle) !viewport.isLayoutRequested else null
+                        val targetReady = if (viewportReady == true) !target.isLayoutRequested else null
+                        val visible = if (targetReady == true) target.getGlobalVisibleRect(Rect()) else null
+                        val accepted = visible == true
+                        if (!accepted) lastFailedPredicate = JSONObject()
+                            .put("uptime_ms", SystemClock.uptimeMillis()).put("scroll_idle", idle)
+                            .put("viewport_layout_clear", viewportReady ?: JSONObject.NULL)
+                            .put("target_layout_clear", targetReady ?: JSONObject.NULL)
+                            .put("target_visible", visible ?: JSONObject.NULL)
+                        accepted
                     }) {
-                        check(SystemClock.uptimeMillis() < deadline)
+                        try { check(SystemClock.uptimeMillis() < deadline) }
+                        catch (primary: Throwable) {
+                            try {
+                                result.put("visibility_timeout", nativeParityOnMain(instrumentation) {
+                                    val clip = Rect(); val targetRect = Rect()
+                                    JSONObject().put("dark", dark).put("target_class", target.javaClass.name)
+                                        .put("last_failed_predicate", checkNotNull(lastFailedPredicate))
+                                        .put("predicate_null_means", "not evaluated due to original short-circuit order")
+                                        .put("target", currentOnboardingFocusFacts(target))
+                                        .put("target_layout_requested", target.isLayoutRequested)
+                                        .put("viewport_layout_requested", viewport.isLayoutRequested)
+                                        .put("scroll_in_progress", viewport.state.isScrollInProgress)
+                                        .put("scroll_value", viewport.state.value).put("scroll_max", viewport.state.maxValue)
+                                        .put("target_visible", target.getGlobalVisibleRect(targetRect))
+                                        .put("target_rect", targetRect.toShortString())
+                                        .put("viewport_visible", viewport.getGlobalVisibleRect(clip))
+                                        .put("viewport_rect", clip.toShortString())
+                                        .put("focus_class", screen.rootView.findFocus()?.javaClass?.name ?: JSONObject.NULL)
+                                        .put("target_owns_focus", screen.rootView.findFocus() === target)
+                                        .put("uptime_ms", SystemClock.uptimeMillis())
+                                })
+                                publish()
+                                val bitmap = captureNativeParityContent(instrumentation, host) { screen }
+                                try { saveNativeParityBitmap(directory, "${if (dark) "dark-small" else "light"}-visibility-timeout.png", bitmap) }
+                                finally { bitmap.recycle() }
+                            } catch (evidence: Throwable) { if (evidence !== primary) primary.addSuppressed(evidence) }
+                            throw primary
+                        }
                         awaitNativeParityDraw(instrumentation, screen)
                     }
                     awaitNativeParityDraw(instrumentation, screen)
@@ -184,15 +223,23 @@ internal fun verifyNativeOnboardingControlsCurrent(instrumentation: Instrumentat
                 main {
                     val points = currentOnboardingCurvePoints(curve)
                     check(points.size == 11 && points.all { it.db == 0 })
-                    check(!curve.isEnabled)
-                    val before = curveEdits
-                    check(!curve.performAccessibilityAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD, null))
-                    check(curveEdits == before)
+                    check(curve.isEnabled)
                 }
                 capture("uncalibrated-eleven-zero-knots")
-                val calibrationContainer = nativeParityOnMain(instrumentation) {
-                    checkNotNull(all().filterIsInstance<SettingsSilenceView>().single().calibrationPointerNode).view
+                val manualCurve = nativeParityOnMain(instrumentation) {
+                    check(checkNotNull(state.silenceState).sampledPeaks == null)
+                    val before = curveEdits
+                    val originalPoints = currentOnboardingCurvePoints(curve)
+                    check(curve.performAccessibilityAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD, null))
+                    val edited = currentOnboardingCurvePoints(curve)
+                    check(curveEdits == before + 1 && edited != originalPoints && edited.size == 11)
+                    check(edited == checkNotNull(state.silenceState).config.points)
+                    JSONObject().put("without_histogram", true).put("action_handled", true)
+                        .put("before", JSONArray(originalPoints.map { it.toString() }))
+                        .put("after", JSONArray(edited.map { it.toString() }))
                 }
+                val silence = nativeParityOnMain(instrumentation) { all().filterIsInstance<SettingsSilenceView>().single() }
+                val calibrationContainer = nativeParityOnMain(instrumentation) { checkNotNull(silence.calibrationPointerNode).view }
                 // Offscreen source nodes are intentionally absent. Scroll the real control first,
                 // then require its ordinary exposed accessibility action and label.
                 visible(calibrationContainer)
@@ -207,52 +254,102 @@ internal fun verifyNativeOnboardingControlsCurrent(instrumentation: Instrumentat
                         } } finally { @Suppress("DEPRECATION") node.recycle() }
                     }
                 }
+                // This route models an explicitly keyboard-focused native action, not TalkBack
+                // or a bare semantic click while Android has no focused View.
+                val calibrationFocus = nativeParityOnMain(instrumentation) {
+                    val before = currentOnboardingFocusFacts(calibrationAction)
+                    val accepted = calibrationAction.requestFocusFromTouch()
+                    check(accepted && screen.findFocus() === calibrationAction)
+                    JSONObject().put("before", before).put("request_focus_return", accepted)
+                        .put("after", currentOnboardingFocusFacts(calibrationAction))
+                }
+                result.put("calibration_focus_pending", calibrationFocus.put("dark", dark))
                 visible(calibrationAction)
+                val keyActivations = JSONArray()
+                fun activateCalibration() {
+                    check(screen.findFocus() === calibrationAction && calibrationAction.isEnabled)
+                    val now = SystemClock.uptimeMillis()
+                    check(calibrationAction.dispatchKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER, 0)))
+                    check(calibrationAction.dispatchKeyEvent(KeyEvent(now, SystemClock.uptimeMillis(), KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER, 0)))
+                    check(screen.findFocus() === calibrationAction)
+                    keyActivations.put(JSONObject().put("down_handled", true).put("up_handled", true)
+                        .put("focus_retained", true).put("key", "ENTER"))
+                }
+                val calibration = JSONObject().put("dark", dark).put("focus_setup", calibrationFocus)
+                    .put("activation", "synthetic focused own-view KeyEvent down/up; not physical keyboard or TalkBack")
+                    .put("key_activations", keyActivations)
+                result.put("calibration_pending", calibration)
+                val initialGeometry = nativeParityOnMain(instrumentation) {
+                    currentOnboardingCalibrationGeometry(calibrationContainer, calibrationAction, silence)
+                }
+                fun calibrationEvidence(stage: String, label: String, progress: Float?) {
+                    try { main {
+                    val geometry = currentOnboardingCalibrationGeometry(calibrationContainer, calibrationAction, silence)
+                    val node = checkNotNull(calibrationAction.createAccessibilityNodeInfo())
+                    try {
+                        val stateDescription = androidx.core.view.accessibility.AccessibilityNodeInfoCompat.wrap(node).stateDescription
+                        val range = node.rangeInfo
+                        val bounds = Rect(); node.getBoundsInScreen(bounds)
+                        val viewport = generateSequence(calibrationAction.parent as? View) { it.parent as? View }
+                            .filterIsInstance<NativeVerticalViewport>().first()
+                        val clip = Rect(); check(viewport.getGlobalVisibleRect(clip))
+                        val hasLabel = currentOnboardingViews(calibrationAction).any { child ->
+                            val info = child.createAccessibilityNodeInfo() ?: return@any false
+                            try { info.text?.toString() == label || info.contentDescription?.toString() == label }
+                            finally { @Suppress("DEPRECATION") info.recycle() }
+                        }
+                        calibration.put(stage, JSONObject().put("geometry", JSONArray(geometry))
+                            .put("initial_geometry", JSONArray(initialGeometry)).put("label", label).put("label_found", hasLabel)
+                            .put("state_description", stateDescription?.toString() ?: JSONObject.NULL)
+                            .put("range_current", range?.current?.toDouble() ?: JSONObject.NULL)
+                            .put("enabled", node.isEnabled).put("clickable", node.isClickable).put("visible", node.isVisibleToUser)
+                            .put("bounds", JSONArray(listOf(bounds.left, bounds.top, bounds.right, bounds.bottom)))
+                            .put("viewport_clip", JSONArray(listOf(clip.left, clip.top, clip.right, clip.bottom)))
+                            .put("focus", currentOnboardingFocusFacts(calibrationAction))
+                            .put("focus_retained", screen.findFocus() === calibrationAction)
+                            .put("scroll_value", viewport.state.value).put("scroll_in_progress", viewport.state.isScrollInProgress))
+                        check(screen.findFocus() === calibrationAction) { "Calibration action lost input focus at $stage" }
+                        check(!viewport.state.isScrollInProgress) { "Calibration viewport is still scrolling at $stage" }
+                        check(geometry == initialGeometry) { "Calibration changed its settled geometry at $stage" }
+                        check(hasLabel && node.isEnabled && node.isClickable && node.isVisibleToUser)
+                        check(!bounds.isEmpty && clip.contains(bounds)) { "Calibration semantics escaped the actual viewport clip" }
+                        if (progress == null) check(stateDescription.isNullOrEmpty() && range == null)
+                        else {
+                            check(stateDescription?.toString() == "50%")
+                            check(range != null && range.type == AccessibilityNodeInfo.RangeInfo.RANGE_TYPE_FLOAT &&
+                                range.min == 0f && range.max == 1f && range.current == progress)
+                            check(!curve.isEnabled)
+                        }
+                    } finally { @Suppress("DEPRECATION") node.recycle() }
+                    } } catch (primary: Throwable) {
+                        try { publish(); capture("calibration-$stage-failure") }
+                        catch (evidence: Throwable) { if (evidence !== primary) primary.addSuppressed(evidence) }
+                        throw primary
+                    }
+                }
+                calibrationEvidence("idle", host.getString(R.string.silence_calibrate), null)
                 main {
-                    check(calibrationAction.performAccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, null))
+                    activateCalibration()
                     check(calibrationRequests == 1)
                 }
                 awaitNativeParityDraw(instrumentation, screen)
-                val progress = nativeParityOnMain(instrumentation) { all().filterIsInstance<SettingsCalibrationProgressView>().single() }
-                visible(progress)
-                lateinit var progressViewport: NativeVerticalViewport
-                val placement = JSONObject().put("dark", dark)
-                result.put("progress_edge_pending", placement)
+                calibrationEvidence("running", host.getString(R.string.cancel), .5f)
+                capture("calibration-running-filled-button")
                 main {
-                    progressViewport = generateSequence(progress.parent as? View) { it.parent as? View }
-                        .filterIsInstance<NativeVerticalViewport>().first()
-                    val clip = Rect(); check(progressViewport.getGlobalVisibleRect(clip))
-                    val position = IntArray(2); progress.getLocationOnScreen(position)
-                    val delta = position[1] - (clip.bottom + 5f * progress.resources.displayMetrics.density)
-                    placement.put("before", currentOnboardingProgressGeometry(progress, progressViewport))
-                    check(!progressViewport.state.isScrollInProgress && !progressViewport.isLayoutRequested &&
-                        !progress.isLayoutRequested) { "Progress placement requires the completed scroll/layout owner" }
-                    val consumed = progressViewport.state.scrollBy(delta)
-                    placement.put("requested_delta", delta.toDouble()).put("consumed_delta", consumed.toDouble())
-                        .put("immediate", currentOnboardingProgressGeometry(progress, progressViewport))
-                    check(kotlin.math.abs(consumed - delta) < 1.5f) {
-                        "Fixture cannot place the progress semantics-only edge inside the actual scroll range"
-                    }
+                    activateCalibration()
+                    check(calibrationCancels == 1 && !checkNotNull(state.silenceState).calibrating)
                 }
                 awaitNativeParityDraw(instrumentation, screen)
-                val progressEdge = nativeParityOnMain(instrumentation) {
-                    val clip = Rect(); check(progressViewport.getGlobalVisibleRect(clip))
-                    val position = IntArray(2); progress.getLocationOnScreen(position)
-                    val semantic = progress.semanticsBoundsInView()
-                    placement.put("after_draw", currentOnboardingProgressGeometry(progress, progressViewport))
-                    check(position[1] >= clip.bottom && position[1] + semantic.top < clip.bottom)
-                    val node = checkNotNull(progress.createAccessibilityNodeInfo())
-                    try {
-                        val bounds = Rect(); node.getBoundsInScreen(bounds)
-                        check(node.isVisibleToUser && bounds.height() > 0 && bounds.bottom <= clip.bottom)
-                        JSONObject().put("visual_top", position[1]).put("viewport_bottom", clip.bottom)
-                            .put("semantic_local_top", semantic.top).put("visible_to_user", node.isVisibleToUser)
-                            .put("bounds", JSONArray(listOf(bounds.left, bounds.top, bounds.right, bounds.bottom)))
-                            .put("placement", "actual viewport scrollBy; only expanded semantic padding intersects viewport")
-                    } finally { @Suppress("DEPRECATION") node.recycle() }
+                calibrationEvidence("cancelled", host.getString(R.string.silence_calibrate), null)
+                main {
+                    activateCalibration()
+                    check(calibrationRequests == 2 && checkNotNull(state.silenceState).calibrating)
                 }
-                capture("calibration-progress-semantic-edge")
+                awaitNativeParityDraw(instrumentation, screen)
+                calibrationEvidence("restarted", host.getString(R.string.cancel), .5f)
                 main { finishCalibration() }
+                awaitNativeParityDraw(instrumentation, screen)
+                calibrationEvidence("completed", host.getString(R.string.silence_calibrate), null)
                 visible(curve)
                 val calibratedPoints = nativeParityOnMain(instrumentation) {
                     val expected = checkNotNull(state.silenceState).config.points
@@ -268,8 +365,8 @@ internal fun verifyNativeOnboardingControlsCurrent(instrumentation: Instrumentat
                 capture("synthetic-calibrated-editable")
                 visible(calibrationAction)
                 main {
-                    check(calibrationAction.performAccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, null))
-                    check(calibrationRequests == 2 && checkNotNull(state.silenceState).calibrating)
+                    activateCalibration()
+                    check(calibrationRequests == 3 && checkNotNull(state.silenceState).calibrating)
                 }
                 visible(slider)
                 val focusSetup = JSONObject().put("request_attempted", false)
@@ -300,6 +397,7 @@ internal fun verifyNativeOnboardingControlsCurrent(instrumentation: Instrumentat
                 val offscreen = nativeParityOnMain(instrumentation) {
                     val oldLevel = state.compressionLevel; val oldLevels = levels
                     val oldCurve = curveEdits; val oldCalibration = calibrationRequests
+                    val oldCancels = calibrationCancels; val oldSilence = state.silenceState
                     check(slider.isAttachedToWindow) { "Retained-control regression requires the actual attached offscreen slider" }
                     val focused = slider.hasFocus()
                     screen.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_RIGHT))
@@ -307,9 +405,11 @@ internal fun verifyNativeOnboardingControlsCurrent(instrumentation: Instrumentat
                     slider.performAccessibilityAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS.id,
                         Bundle().apply { putFloat(AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE, 1f) })
                     curve.performAccessibilityAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD, null)
-                    calibrationAction.performAccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, null)
+                    check(calibrationAction.createAccessibilityNodeInfo() == null) { "Clipped calibration action remained exposed" }
+                    check(!calibrationAction.performAccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, null))
                     check(state.compressionLevel == oldLevel && levels == oldLevels)
                     check(curveEdits == oldCurve && calibrationRequests == oldCalibration)
+                    check(calibrationCancels == oldCancels && state.silenceState == oldSilence)
                     JSONObject().put("attached", true).put("focused_after_back", focused)
                         .put("draft_and_callbacks_unchanged", true).put("dispatch", "own-root key and retained semantic actions, not hardware keyboard")
                 }
@@ -374,18 +474,32 @@ internal fun verifyNativeOnboardingControlsCurrent(instrumentation: Instrumentat
                 cases.put(JSONObject().put("dark", dark).put("font_scale", if (dark) 1.3 else 1.0)
                     .put("compression_levels", JSONArray(listOf(0, 8, 3))).put("compression_callbacks", levels).put("slider_pointer", pointer)
                     .put("uncalibrated_knots", 11).put("synthetic_calibration_callbacks", calibrationRequests)
-                    .put("curve_edit_callbacks", curveEdits).put("calibrated_points", calibratedPoints).put("progress_semantic_edge", progressEdge).put("focus_setup", focusSetup).put("offscreen_actions", offscreen).put("reentry_text_actions", restoredTextActions).put("preferences_unchanged", true))
+                    .put("curve_edit_callbacks", curveEdits).put("manual_curve", manualCurve)
+                    .put("calibration_cancel_callbacks", calibrationCancels).put("calibrated_points", calibratedPoints).put("calibration_button", calibration).put("focus_setup", focusSetup).put("offscreen_actions", offscreen).put("reentry_text_actions", restoredTextActions).put("preferences_unchanged", true))
                 publish()
-            } finally {
-                nativeParityOnMain(instrumentation) {
+            } catch (error: Throwable) { caseFailure = error; throw error }
+            finally {
+                try { nativeParityOnMain(instrumentation) {
                     try { view?.close() } finally { try { runtime.close() } finally { host.finish() } }
+                } } catch (cleanup: Throwable) {
+                    val primary = caseFailure
+                    if (primary == null) throw cleanup
+                    if (cleanup !== primary) primary.addSuppressed(cleanup)
                 }
             }
         }
         check(cases.length() == 2)
         result.put("passed", true)
     } catch (error: Throwable) { failure = error; result.put("failure", error.stackTraceToString()) }
-    finally { publish(); report.appendLine("ONBOARDING_CONTROLS_EVIDENCE ${directory.absolutePath}") }
+    finally {
+        try { publish() } catch (evidence: Throwable) {
+            val primary = failure
+            if (primary == null) failure = evidence
+            else if (evidence !== primary) primary.addSuppressed(evidence)
+        } finally {
+            report.appendLine("ONBOARDING_CONTROLS_EVIDENCE ${directory.absolutePath}")
+        }
+    }
     failure?.let { throw it }
     report.appendLine("PASS native_onboarding_controls_current shared compression, eleven-knot states and Android Bundle draft restoration")
 }
@@ -412,23 +526,15 @@ private fun currentOnboardingFocusFacts(target: View): JSONObject {
         .put("bounds", JSONArray(listOf(bounds.left, bounds.top, bounds.right, bounds.bottom)))
 }
 
-private fun currentOnboardingProgressGeometry(
-    progress: SettingsCalibrationProgressView,
-    viewport: NativeVerticalViewport,
-): JSONObject {
-    val clip = Rect()
-    val hasClip = viewport.getGlobalVisibleRect(clip)
-    val position = IntArray(2); progress.getLocationOnScreen(position)
-    val semantic = progress.semanticsBoundsInView()
-    return JSONObject().put("has_viewport_clip", hasClip)
-        .put("visual_top", position[1]).put("visual_bottom", position[1] + progress.height)
-        .put("viewport_top", clip.top).put("viewport_bottom", clip.bottom)
-        .put("semantic_local_top", semantic.top.toDouble()).put("semantic_local_bottom", semantic.bottom.toDouble())
-        .put("scroll", viewport.state.value).put("max_scroll", viewport.state.maxValue)
-        .put("viewport_size", viewport.state.viewportSize).put("content_size", viewport.state.contentSize)
-        .put("scroll_in_progress", viewport.state.isScrollInProgress)
-        .put("viewport_layout_requested", viewport.isLayoutRequested)
-        .put("progress_layout_requested", progress.isLayoutRequested)
+private fun currentOnboardingCalibrationGeometry(container: View, action: View, silence: View): List<Int> {
+    check(!container.isLayoutRequested && !action.isLayoutRequested && !silence.isLayoutRequested) {
+        "Calibration geometry requires completed layout"
+    }
+    fun bounds(view: View): List<Int> {
+        val position = IntArray(2); view.getLocationOnScreen(position)
+        return listOf(position[0], position[1], position[0] + view.width, position[1] + view.height)
+    }
+    return bounds(container) + bounds(action) + silence.height
 }
 
 private fun currentOnboardingSliderGesture(root: NativeOnboardingScreenView, slider: View): JSONObject {

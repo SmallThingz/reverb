@@ -22,7 +22,7 @@ import kotlin.math.roundToLong
 internal typealias LibraryTweenValue<T, V> = smallthingz.ui.animation.AnimatedValue<T, V>
 internal typealias LibraryTransitionValue<T, V> = smallthingz.ui.animation.TransitionValue<T, V>
 
-// Reverb owns the selected-row and content-size durations; the samplers are generic.
+// Color uses the shared UI duration; Reverb owns the alpha and content-size durations.
 internal fun libraryColorTween(initial: Color) = LibraryTweenValue(initial,
     (Color.VectorConverter)(initial.colorSpace),
     tween<Color>((smallthingz.ui.animation.ColorTransition.DURATION_NANOS / 1_000_000).toInt(), easing = FastOutSlowInEasing),
