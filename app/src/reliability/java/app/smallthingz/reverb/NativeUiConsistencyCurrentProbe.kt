@@ -296,34 +296,68 @@ internal fun verifyNativeUiConsistencyCurrent(instrumentation: Instrumentation, 
                 descendants(toolbar).filterIsInstance<ReverbTopBarIconAction>()
                     .map { it.bindAccessibility(textOwner.textWindow, geometry, ::sourceNode) }.toList()
             }
+            val expectedActionLabels = setOf(themed.getString(R.string.share_recording),
+                themed.getString(R.string.delete_recording))
+            val parentEvidence = JSONArray()
             val actionNodes = main {
                 descendants(toolbar).mapNotNull { view ->
-                    if (view !is NativeMergedRowAccessibilityHost) return@mapNotNull null
-                    val info = view.createAccessibilityNodeInfo() ?: return@mapNotNull null
+                    if (view !is NativeMergedRowAccessibilityHost || view !is ViewGroup) return@mapNotNull null
+                    val parent = JSONObject().put("view_class", view.javaClass.name)
+                    parentEvidence.put(parent)
+                    val info = view.createAccessibilityNodeInfo()
+                    parent.put("present", info != null)
+                    if (info == null) return@mapNotNull null
                     try {
-                        val label = (info.contentDescription ?: info.text)?.toString().orEmpty()
-                        if (label !in setOf(themed.getString(R.string.share_recording),
-                                themed.getString(R.string.delete_recording))) return@mapNotNull null
+                        // The clickable parent advertises the Icon's description as a real child.
+                        val advertised = ArrayList<View>().also(view::addChildrenForAccessibility)
+                        val children = advertised.mapNotNull childNode@ { child ->
+                            val childInfo = child.createAccessibilityNodeInfo() ?: return@childNode null
+                            try {
+                                val childBounds = Rect().also(childInfo::getBoundsInScreen)
+                                JSONObject().put("label", (childInfo.contentDescription ?: childInfo.text)?.toString().orEmpty())
+                                    .put("visible", childInfo.isVisibleToUser)
+                                    .put("bounds", childBounds.toShortString())
+                                    .put("width_px", childBounds.width()).put("height_px", childBounds.height())
+                            } finally { @Suppress("DEPRECATION") childInfo.recycle() }
+                        }
+                        val labels = children.filter { it.getString("label") in expectedActionLabels }
                         val bounds = Rect().also(info::getBoundsInScreen)
-                        JSONObject().put("label", label).put("clickable", info.isClickable)
-                            .put("enabled", info.isEnabled).put("bounds", bounds.toShortString())
+                        parent.put("parent_label", (info.contentDescription ?: info.text)?.toString().orEmpty())
+                            .put("children", JSONArray(children)).put("matching_label_count", labels.size)
+                            .put("clickable", info.isClickable).put("enabled", info.isEnabled)
+                            .put("visible", info.isVisibleToUser).put("bounds", bounds.toShortString())
+                            .put("width_px", bounds.width()).put("height_px", bounds.height())
                             .put("width_dp", bounds.width() / density.density)
                             .put("height_dp", bounds.height() / density.density)
+                        val label = labels.singleOrNull() ?: return@mapNotNull null
+                        parent.put("label", label.getString("label"))
+                            .put("label_visible", label.getBoolean("visible"))
+                            .put("label_width_px", label.getInt("width_px"))
+                            .put("label_height_px", label.getInt("height_px"))
                     } finally { @Suppress("DEPRECATION") info.recycle() }
                 }.toList()
             }
-            check(actionNodes.size == 2) { "Expected separately exposed Share and Delete nodes: $actionNodes" }
-            for (node in actionNodes) {
-                check(node.getBoolean("clickable") && node.getBoolean("enabled"))
-                check(node.getDouble("width_dp") >= 48.0 && node.getDouble("height_dp") >= 48.0) { "Selection action below 48dp: $node" }
-            }
+            val minimumActionPixels = (48f * density.density).roundToInt()
             scenes.put(JSONObject().put("name", "${if (dark) "dark" else "light"}-grouped-selection")
                 .put("png", "${if (dark) "dark" else "light"}-grouped-selection.png")
                 .put("dark", dark).put("width_dp", 320).put("font_scale", 1.3)
+                .put("minimum_action_pixels", minimumActionPixels)
+                .put("observed_parent_nodes", parentEvidence)
                 .put("separate_action_nodes", JSONArray(actionNodes)))
+            // Capture the actual toolbar even if exposure or hit-geometry assertions fail.
             val bitmap = captureNativeParityContent(instrumentation, host) { toolbar }
             try { saveNativeParityBitmap(directory, "${if (dark) "dark" else "light"}-grouped-selection.png", bitmap) }
             finally { bitmap.recycle() }
+            check(actionNodes.size == 2 && actionNodes.map { it.getString("label") }.toSet() == expectedActionLabels) {
+                "Expected separately exposed Share and Delete parents with description children: $parentEvidence"
+            }
+            for (node in actionNodes) {
+                check(node.getBoolean("clickable") && node.getBoolean("enabled") && node.getBoolean("visible"))
+                check(node.getBoolean("label_visible") && node.getInt("label_width_px") > 0 && node.getInt("label_height_px") > 0)
+                check(node.getInt("width_px") >= minimumActionPixels && node.getInt("height_px") >= minimumActionPixels) {
+                    "Selection action below rounded 48dp minimum $minimumActionPixels px: $node"
+                }
+            }
             main {
                 toolbarAccessibility.asReversed().forEach(AutoCloseable::close)
                 toolbar.bind(LibraryToolbarState(0, false, true, false),
