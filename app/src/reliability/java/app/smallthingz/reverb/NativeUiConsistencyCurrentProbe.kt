@@ -20,6 +20,7 @@ import smallthingz.ui.geometry.Offset
 import smallthingz.ui.geometry.Rect as ComposeRect
 import java.io.File
 import java.util.Locale
+import kotlin.math.roundToInt
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -88,6 +89,21 @@ internal fun verifyNativeUiConsistencyCurrent(instrumentation: Instrumentation, 
                         val row = title.parent as ViewGroup
                         val action = (0 until row.childCount).map(row::getChildAt)
                             .filterIsInstance<SettingsCalibrationActionView>().single()
+                        // Independently measure the inline candidate with the same text/typography.
+                        // Final title geometry may already be stacked and cannot establish inline fit.
+                        fun px(dp: Int) = (dp * density.density).roundToInt()
+                        val icon = row.getChildAt(0)
+                        val available = (row.width - 2 * px(15)).coerceAtLeast(0)
+                        val firstGap = px(12).coerceAtMost((available - icon.width).coerceAtLeast(0))
+                        val secondGap = px(12).coerceAtMost((available - icon.width - firstGap - action.width).coerceAtLeast(0))
+                        val inlineWidth = (available - icon.width - firstGap - action.width - secondGap).coerceAtLeast(0)
+                        val inlineTitle = environment.paragraph(themed, title.getText().toString(), ReverbTextRole.BODY_MEDIUM)
+                        inlineTitle.layoutDirection = expectedDirection
+                        inlineTitle.measure(View.MeasureSpec.makeMeasureSpec(inlineWidth, View.MeasureSpec.EXACTLY),
+                            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED))
+                        val inlineLines = requireNotNull(inlineTitle.currentParagraph).lineCount
+                        val inlineHeight = inlineTitle.measuredHeight
+                        val inlineFits = inlineWidth > 0 && (inlineLines <= 2 || inlineHeight <= action.height)
                         val entry = JSONObject().put("width_dp", widthDp).put("font_scale", scale)
                             .put("rtl", rtl).put("label", title.getText().toString())
                             .put("title_width_px", title.width).put("title_height_px", title.height)
@@ -96,6 +112,8 @@ internal fun verifyNativeUiConsistencyCurrent(instrumentation: Instrumentation, 
                             .put("row_direction", row.layoutDirection).put("title_direction", title.layoutDirection)
                             .put("action_direction", action.layoutDirection).put("action_label_direction", action.textView.layoutDirection)
                             .put("stacked", action.top >= title.bottom)
+                            .put("inline_width_px", inlineWidth).put("inline_height_px", inlineHeight)
+                            .put("inline_line_count", inlineLines).put("inline_fits", inlineFits)
                         storageMeasurements.put(entry)
                         check(section.isAttachedToWindow && row.isAttachedToWindow && title.isAttachedToWindow && action.isAttachedToWindow) {
                             "Storage measurement must use the attached native hierarchy: $entry"
@@ -116,8 +134,8 @@ internal fun verifyNativeUiConsistencyCurrent(instrumentation: Instrumentation, 
                         check(action.top >= title.bottom || action.right <= title.left || title.right <= action.left) {
                             "Permission title and action overlap: $entry"
                         }
-                        if (widthDp == 320 && scale == 1.3f) check(action.top < title.bottom) {
-                            "Ordinary compact permission row was unnecessarily stacked: $entry"
+                        check((action.top < title.bottom) == inlineFits) {
+                            "Permission row disagrees with independently measured inline fit: $entry"
                         }
                     }
                 } finally {

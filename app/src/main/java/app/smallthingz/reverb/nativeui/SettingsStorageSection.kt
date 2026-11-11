@@ -164,8 +164,8 @@ private class SettingsStoragePermissionRow(
         val inlineTitleWidth=(available-icon.measuredWidth-firstGap-action.measuredWidth-secondGap).coerceAtLeast(0)
         title.measure(exact(inlineTitleWidth),unspecified())
         // Keep ordinary one/two-line labels compact; move the action before text becomes a sliver.
-        val twoLineHeight=2*title.intrinsicTextHeight(title.maxIntrinsicTextWidth().coerceAtLeast(1))
-        stackedAction=inlineTitleWidth==0||title.measuredHeight>max(twoLineHeight,action.measuredHeight)
+        val inlineLineCount=title.currentParagraph?.lineCount?:Int.MAX_VALUE
+        stackedAction=inlineTitleWidth==0||(inlineLineCount>2&&title.measuredHeight>action.measuredHeight)
         if(stackedAction)title.measure(exact((available-icon.measuredWidth-firstGap).coerceAtLeast(0)),unspecified())
         rowHeight=max(icon.measuredHeight,title.measuredHeight)
         if(!stackedAction)rowHeight=max(rowHeight,action.measuredHeight)
