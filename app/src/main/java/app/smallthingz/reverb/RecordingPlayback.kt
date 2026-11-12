@@ -95,8 +95,12 @@ internal object RecordingPlayback {
             service?.ownsRecording(recording) == true, pending != null)
     }
     fun canScrub(recording: RecordingEntity): Boolean = currentScrubKey(recording) != null
-    fun acquireScrub(recording: RecordingEntity): RecordingScrubAuthority? =
-        currentScrubKey(recording)?.let(scrubAuthorities::acquire)
+    fun acquireScrub(recording: RecordingEntity): RecordingScrubAuthority? {
+        val key = currentScrubKey(recording) ?: return null
+        val value = mutableState.value
+        return scrubAuthorities.acquire(key,
+            resumePlayback = !key.retainedIdle && (value.playing || value.wantsPlayback))
+    }
     fun isScrubCurrent(recording: RecordingEntity, authority: RecordingScrubAuthority): Boolean =
         scrubAuthorities.owns(authority) && currentScrubKey(recording) == authority.key
     fun finishScrub(authority: RecordingScrubAuthority) = scrubAuthorities.finish(authority)

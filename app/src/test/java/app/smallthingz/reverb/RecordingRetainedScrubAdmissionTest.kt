@@ -53,4 +53,18 @@ class RecordingRetainedScrubAdmissionTest {
         assertFalse(retainedLease.active)
     }
 
+    @Test fun compatibleHandoffKeepsCapturedResumeButNewPausedGestureDoesNotInheritIt() {
+        val registry = RecordingScrubAuthorities()
+        val playingKey = RecordingScrubKey(7, 3)
+        val playing = registry.acquire(playingKey, resumePlayback = true)
+        registry.published(playingKey) // Suspension for this gesture keeps its transport revision.
+        assertTrue(playing.resumePlayback)
+        val pausedKey = playingKey.copy(transportIntentRevision = 4)
+        registry.published(pausedKey)
+        val paused = registry.acquire(pausedKey, resumePlayback = false)
+        assertFalse(playing.active)
+        assertFalse(paused.resumePlayback)
+        assertTrue(registry.owns(paused))
+    }
+
 }

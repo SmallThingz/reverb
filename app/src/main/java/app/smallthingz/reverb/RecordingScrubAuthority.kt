@@ -13,7 +13,11 @@ internal interface RecordingScrubQuietHandle {
 }
 
 /** One ordinary gesture; its exact native registration may change during a bounded restart. */
-internal class RecordingScrubAuthority internal constructor(val key: RecordingScrubKey) {
+internal class RecordingScrubAuthority internal constructor(
+    val key: RecordingScrubKey,
+    /** Playback intent at admission; gesture-induced suspension must not overwrite it. */
+    val resumePlayback: Boolean = false,
+) {
     private val lock = Any()
     private var handle: RecordingScrubQuietHandle? = null
     @Volatile var active = true
@@ -52,9 +56,9 @@ internal class RecordingScrubAuthority internal constructor(val key: RecordingSc
 internal class RecordingScrubAuthorities {
     private var current: RecordingScrubAuthority? = null
 
-    fun acquire(key: RecordingScrubKey): RecordingScrubAuthority {
+    fun acquire(key: RecordingScrubKey, resumePlayback: Boolean = false): RecordingScrubAuthority {
         revoke()
-        return RecordingScrubAuthority(key).also { current = it }
+        return RecordingScrubAuthority(key, resumePlayback).also { current = it }
     }
 
     fun published(key: RecordingScrubKey?) {

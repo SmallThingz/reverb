@@ -475,8 +475,9 @@ internal class NativeRecordingInlinePlayerController(
                     RecordingPlayback.state.value.positionMillis else currentPosition
             }
             playbackBookkeeping.fineSeekPosition.reset()
-            val resumeAfterScrub = (trimMode || ordinaryScrubAuthority?.key?.retainedIdle == false) &&
-                (isPlaying || trimPlaybackStarting || playbackBookkeeping.seeks.resume)
+            val resumeAfterScrub = if (trimMode) {
+                isPlaying || trimPlaybackStarting || playbackBookkeeping.seeks.resume
+            } else ordinaryScrubAuthority?.resumePlayback == true
             cancelPendingTrimStart()
             playbackBookkeeping.resumeAfterScrub = resumeAfterScrub
             playbackBookkeeping.revokeSeekResume()
@@ -831,17 +832,16 @@ internal class NativeRecordingInlinePlayerController(
         private fun beginWaveform(x: Float, width: Float) {
             if (!trimMode && !beginOrdinaryScrub()) return
             playbackBookkeeping.fineSeekPosition.reset()
-            val resumeAfterScrub = (trimMode || ordinaryScrubAuthority?.key?.retainedIdle == false) &&
-                (isPlaying || trimPlaybackStarting || playbackBookkeeping.seeks.resume)
+            val resumeAfterScrub = if (trimMode) {
+                isPlaying || trimPlaybackStarting || playbackBookkeeping.seeks.resume
+            } else ordinaryScrubAuthority?.resumePlayback == true
             cancelPendingTrimStart()
             playbackBookkeeping.resumeAfterScrub = resumeAfterScrub
             playbackBookkeeping.revokeSeekResume()
-            if (isPlaying) {
-                if (trimMode || ordinaryScrubAuthority?.key?.retainedIdle == false) {
-                    runCatching { pauseStartedMediaPlayer(forGesture = true) }
-                }
-                isPlaying = false
+            if (if (trimMode) isPlaying else ordinaryScrubAuthority?.resumePlayback == true) {
+                runCatching { pauseStartedMediaPlayer(forGesture = true) }
             }
+            isPlaying = false
             isScrubbing = true
             val initialMillis = (duration.toFloat() * (x / width).coerceIn(0f, 1f)).toInt()
             val threshold = if (trimMode) (duration.toFloat() * (24f * hostView.resources.displayMetrics.density) / width)
