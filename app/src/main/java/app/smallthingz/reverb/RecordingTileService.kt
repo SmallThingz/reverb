@@ -14,7 +14,6 @@ import android.service.quicksettings.TileService
 import androidx.core.content.ContextCompat
 import androidx.core.content.edit
 import java.util.EnumMap
-import java.util.EnumSet
 import java.util.IdentityHashMap
 import java.util.concurrent.Executors
 
@@ -28,6 +27,8 @@ internal data class RecordingTileSnapshot(
     val loopingSeconds: Float = 0f,
     val commandGeneration: Long = Long.MIN_VALUE,
     val captureGenerationPending: Boolean = false,
+    // False for cold/failure placeholders; trust travels with the retained counters.
+    val durationCountersKnown: Boolean = false,
 )
 
 internal enum class RecordingTileCaptureState { UNAVAILABLE, GENERATION_PENDING, RECORDING }
@@ -110,6 +111,7 @@ internal fun recordingTileSnapshot(
     loopingSeconds: Float = 0f,
     commandGeneration: Long = Long.MIN_VALUE,
     captureGenerationPending: Boolean = false,
+    durationCountersKnown: Boolean = false,
 ): RecordingTileSnapshot = RecordingTileSnapshot(
     listening = isTileCaptureActuallyRecording(listeningIntentEnabled, runtimeCaptureActive),
     activeBuffer = activeBuffer,
@@ -120,6 +122,7 @@ internal fun recordingTileSnapshot(
     loopingSeconds = loopingSeconds,
     commandGeneration = commandGeneration,
     captureGenerationPending = listeningIntentEnabled && !runtimeCaptureActive && captureGenerationPending,
+    durationCountersKnown = durationCountersKnown,
 )
 
 internal fun recordingTileClickAction(
@@ -149,12 +152,16 @@ internal fun recordingTileQueuedClickAction(
 internal fun stoppedRecordingTileSnapshot(
     persisted: RecordingTileSnapshot,
     live: RecordingTileSnapshot?,
-): RecordingTileSnapshot = persisted.copy(
-    listening = false,
-    captureGenerationPending = false,
-    oneShotSeconds = live?.oneShotSeconds ?: persisted.oneShotSeconds,
-    loopingSeconds = live?.loopingSeconds ?: persisted.loopingSeconds,
-)
+): RecordingTileSnapshot {
+    val durations = live?.takeIf { it.durationCountersKnown } ?: persisted
+    return persisted.copy(
+        listening = false,
+        captureGenerationPending = false,
+        oneShotSeconds = durations.oneShotSeconds,
+        loopingSeconds = durations.loopingSeconds,
+        durationCountersKnown = durations.durationCountersKnown,
+    )
+}
 
 internal fun recordingTileSnapshotAfterClear(
     previous: RecordingTileSnapshot,
@@ -174,6 +181,7 @@ internal fun failClosedRecordingTileSnapshot(
     loopingEnabled = false,
     oneShotSeconds = previous?.oneShotSeconds ?: 0f,
     loopingSeconds = previous?.loopingSeconds ?: 0f,
+    durationCountersKnown = previous?.durationCountersKnown == true,
 )
 
 internal fun runtimeRecordingTileFallbackSnapshot(
@@ -353,6 +361,14 @@ internal class RecordingTileHandoffController {
     }
 }
 
+internal class RecordingTileClearToken internal constructor(
+    internal val buffer: ReverbService.BufferSlot,
+) {
+    internal var resolved = false
+    internal var observed: RecordingTileSnapshot? = null
+    internal var oneShotFull = false
+}
+
 internal object RecordingQuickTileStateCache {
     private val stateLock = Any()
     private val oneShotFullPreferenceLock = Any()
@@ -370,24 +386,41 @@ internal object RecordingQuickTileStateCache {
 
     private var runtimeOwner: Any? = null
     private var runtimeOwnerStopped = false
-    private val pendingClearedBuffers = EnumSet.noneOf(ReverbService.BufferSlot::class.java)
+    private val pendingClears = EnumMap<ReverbService.BufferSlot, RecordingTileClearToken>(ReverbService.BufferSlot::class.java)
+    private var completedClearGeneration = 0L
+    private var oneShotClearGeneration = 0L
 
     /** The token has no Service/Context reference and is claimed before any store observation. */
     fun beginRuntime(owner: Any) {
         synchronized(stateLock) {
             runtimeOwner = owner
             runtimeOwnerStopped = false
-            pendingClearedBuffers.clear()
             cachedSnapshot = failClosedRecordingTileSnapshot(cachedSnapshot)
             stateGeneration++
             runtimeAuthoritative = false
         }
     }
 
-    fun publish(owner: Any, snapshot: RecordingTileSnapshot): Boolean {
+    fun observationGeneration(): Long = synchronized(stateLock) { completedClearGeneration }
+
+    fun oneShotFullObservationGeneration(): Long = synchronized(stateLock) { oneShotClearGeneration }
+
+    fun publish(
+        owner: Any,
+        snapshot: RecordingTileSnapshot,
+        expectedGeneration: Long? = null,
+        durationsObserved: Boolean = false,
+    ): Boolean {
         synchronized(stateLock) {
             if (runtimeOwner !== owner || runtimeOwnerStopped) return false
-            cachedSnapshot = snapshot
+            if (expectedGeneration != null && expectedGeneration != completedClearGeneration) return false
+            if (durationsObserved && snapshot.durationCountersKnown) {
+                pendingClears.values.forEach {
+                    it.observed = snapshot
+                    it.oneShotFull = snapshot.oneShotFull
+                }
+            }
+            cachedSnapshot = applyPendingClears(snapshot)
             stateGeneration++
             runtimeAuthoritative = true
             return true
@@ -413,13 +446,15 @@ internal object RecordingQuickTileStateCache {
         )
     }
 
-    fun observeRuntimeOneShotFull(context: Context, owner: Any, full: Boolean) {
+    fun observeRuntimeOneShotFull(context: Context, owner: Any, full: Boolean, expectedGeneration: Long? = null) {
         // Load preferences before taking the cache lock; only process-local apply is inside it.
         val preferences = getRecorderPreferences(context.applicationContext)
         preferences.contains(PrefKey.QUICK_TILE_ONE_SHOT_FULL.name)
         synchronized(oneShotFullPreferenceLock) {
             synchronized(stateLock) {
                 if (runtimeOwner !== owner || runtimeOwnerStopped) return
+                if (expectedGeneration != null && expectedGeneration != oneShotClearGeneration) return
+                pendingClears[ReverbService.BufferSlot.ONE_SHOT]?.oneShotFull = full
                 observeRuntimeOneShotFullLocked(preferences, full)
             }
         }
@@ -586,20 +621,42 @@ internal object RecordingQuickTileStateCache {
             loopingSeconds = cachedTileDurationSeconds(
                 prefs.safeLong(PrefKey.QUICK_TILE_LOOPING_DURATION_MILLIS, 0L),
             ),
+            durationCountersKnown = true,
         )
     }
 
     private fun applyPendingClears(snapshot: RecordingTileSnapshot): RecordingTileSnapshot =
-        pendingClearedBuffers.fold(snapshot, ::recordingTileSnapshotAfterClear)
+        pendingClears.values.fold(snapshot) { current, clear ->
+            val observed = clear.observed
+            when (clear.buffer) {
+                ReverbService.BufferSlot.ONE_SHOT -> current.copy(
+                    oneShotSeconds = observed?.oneShotSeconds ?: 0f,
+                    oneShotFull = clear.oneShotFull,
+                )
+                ReverbService.BufferSlot.LOOPING -> current.copy(loopingSeconds = observed?.loopingSeconds ?: 0f)
+            }
+        }
 
-    fun recordBufferCleared(context: Context, owner: Any, bufferSlot: ReverbService.BufferSlot) {
-        val appContext = context.applicationContext
+    fun beginBufferClear(owner: Any, bufferSlot: ReverbService.BufferSlot): RecordingTileClearToken? =
         synchronized(stateLock) {
-            if (runtimeOwner !== owner) return
-            cachedSnapshot = recordingTileSnapshotAfterClear(
-                cachedSnapshot ?: failClosedRecordingTileSnapshot(), bufferSlot,
-            )
-            pendingClearedBuffers += bufferSlot
+            if (runtimeOwner !== owner || runtimeOwnerStopped) return@synchronized null
+            RecordingTileClearToken(bufferSlot)
+        }
+
+    fun cancelBufferClear(token: RecordingTileClearToken) {
+        synchronized(stateLock) { token.resolved = true }
+    }
+
+    fun recordBufferCleared(context: Context, token: RecordingTileClearToken) {
+        val appContext = context.applicationContext
+        val bufferSlot = token.buffer
+        synchronized(stateLock) {
+            if (token.resolved) return
+            token.resolved = true
+            completedClearGeneration++
+            if (bufferSlot == ReverbService.BufferSlot.ONE_SHOT) oneShotClearGeneration++
+            pendingClears[bufferSlot] = token
+            cachedSnapshot = applyPendingClears(cachedSnapshot ?: failClosedRecordingTileSnapshot())
             stateGeneration++
             // A terminal correction does not reclaim runtime authority after Service teardown.
             // Pending clears also mask any persisted read admitted before this write completes.
@@ -609,17 +666,20 @@ internal object RecordingQuickTileStateCache {
             val editor = preferences.edit()
             synchronized(oneShotFullPreferenceLock) {
                 synchronized(stateLock) {
-                    if (runtimeOwner !== owner) return@execute
+                    if (pendingClears[bufferSlot] !== token) return@execute
+                    val observed = token.observed
                     if (bufferSlot == ReverbService.BufferSlot.ONE_SHOT) {
-                        observeRuntimeOneShotFullLocked(preferences, false)
+                        observeRuntimeOneShotFullLocked(preferences, token.oneShotFull)
                     }
                     // Never persist the other buffer from an old Clear snapshot.
                     editor.apply {
                         putLong(if (bufferSlot == ReverbService.BufferSlot.ONE_SHOT)
                             PrefKey.QUICK_TILE_ONE_SHOT_DURATION_MILLIS
-                        else PrefKey.QUICK_TILE_LOOPING_DURATION_MILLIS, 0L)
+                        else PrefKey.QUICK_TILE_LOOPING_DURATION_MILLIS,
+                            quickTileDurationMillis(if (bufferSlot == ReverbService.BufferSlot.ONE_SHOT)
+                                observed?.oneShotSeconds ?: 0f else observed?.loopingSeconds ?: 0f))
                     }.apply()
-                    pendingClearedBuffers -= bufferSlot
+                    pendingClears.remove(bufferSlot)
                 }
             }
             RecordingQuickTiles.refreshCachedSnapshot(appContext, true)
@@ -640,6 +700,7 @@ internal object RecordingQuickTileStateCache {
             if (runtimeOwner !== owner) return
             // Use the current counters, including a Clear accepted after this task was queued.
             val snapshot = cachedSnapshot ?: return
+            if (!snapshot.durationCountersKnown) return
             editor.apply {
                 putLong(PrefKey.QUICK_TILE_ONE_SHOT_DURATION_MILLIS,
                     quickTileDurationMillis(snapshot.oneShotSeconds))

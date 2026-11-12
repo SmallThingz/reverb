@@ -2151,6 +2151,7 @@ class FormattingAndHistoryMathTest {
             loopingEnabled = true,
             oneShotSeconds = 1f,
             loopingSeconds = 2f,
+            durationCountersKnown = true,
         )
         val staleLive = RecordingTileSnapshot(
             listening = true,
@@ -2160,6 +2161,7 @@ class FormattingAndHistoryMathTest {
             loopingEnabled = false,
             oneShotSeconds = 11f,
             loopingSeconds = 22f,
+            durationCountersKnown = true,
         )
         assertEquals(
             persisted.copy(oneShotSeconds = 11f, loopingSeconds = 22f),

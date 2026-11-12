@@ -1422,12 +1422,13 @@ open class ReverbService : Service() {
     private fun syncOneShotFullQuickTileOnAudioThread(refreshTiles: Boolean = true) {
         check(audioHandler.looper == Looper.myLooper())
         if (serviceDestroying) return
+        val cacheGeneration = RecordingQuickTileStateCache.oneShotFullObservationGeneration()
         val full = oneShotBufferEnabled && oneShotAudioChunkStore.isFull()
         // Record every authoritative store observation, not only preference transitions.
         // Settings may temporarily make the process-local preference equal to this value before
         // a failed commit; the runtime generation must still advance so rollback cannot restore
         // stale Full state over the live store observation.
-        RecordingQuickTileStateCache.observeRuntimeOneShotFull(this, quickTileStateOwner, full)
+        RecordingQuickTileStateCache.observeRuntimeOneShotFull(this, quickTileStateOwner, full, cacheGeneration)
         publishQuickTileSnapshotOnAudioThread(refreshTiles = refreshTiles)
     }
 
@@ -4079,6 +4080,7 @@ open class ReverbService : Service() {
         check(audioHandler.looper == Looper.myLooper())
         // Read store counters before taking the intent lock. Input, destination and command
         // must form one sample so a queued generation adoption cannot masquerade as Stop.
+        val durationsKnown = ::loopingAudioChunkStore.isInitialized && ::oneShotAudioChunkStore.isInitialized
         val oneShotFull = oneShotBufferEnabled && oneShotAudioChunkStore.isFull()
         val oneShotSeconds = availableBufferedDurationSeconds(BufferSlot.ONE_SHOT).toFloat()
         val loopingSeconds = availableBufferedDurationSeconds(BufferSlot.LOOPING).toFloat()
@@ -4096,6 +4098,7 @@ open class ReverbService : Service() {
                 loopingSeconds = loopingSeconds,
                 commandGeneration = commandGeneration,
                 captureGenerationPending = captureState == RecordingTileCaptureState.GENERATION_PENDING,
+                durationCountersKnown = durationsKnown,
             )
         }
     }
@@ -4113,8 +4116,10 @@ open class ReverbService : Service() {
                 loopingEnabled = loopingBufferEnabled,
             )
         }
+        val cacheGeneration = RecordingQuickTileStateCache.observationGeneration()
+        var durationsObserved = false
         val snapshot = try {
-            buildRecordingTileSnapshotOnAudioThread()
+            buildRecordingTileSnapshotOnAudioThread().also { durationsObserved = it.durationCountersKnown }
         } catch (error: Exception) {
             Log.w(TAG, "Unable to refresh quick tile snapshot", error)
             synchronized(listeningIntentLock) {
@@ -4129,7 +4134,7 @@ open class ReverbService : Service() {
         val published = synchronized(listeningIntentLock) {
             recordingTileSnapshotMayPublish(serviceDestroying, snapshot.commandGeneration,
                 listeningCommandGeneration.get()) &&
-                RecordingQuickTileStateCache.publish(quickTileStateOwner, snapshot)
+                RecordingQuickTileStateCache.publish(quickTileStateOwner, snapshot, cacheGeneration, durationsObserved)
         }
         if (published) {
             // A newer command owns its replacement publication. Dispatch is a current-cache
@@ -4536,6 +4541,8 @@ open class ReverbService : Service() {
             BufferClearOperation(
                 id = nextBufferClearOperationId.getAndIncrement(),
                 bufferSlot = bufferSlot,
+                tileClearToken = RecordingQuickTileStateCache.beginBufferClear(quickTileStateOwner, bufferSlot)
+                    ?: return@synchronized null,
             ).also { accepted ->
                 activeBufferClearOperation = accepted
                 bufferClearStatus = BufferClearStatus(
@@ -4715,7 +4722,11 @@ open class ReverbService : Service() {
                 finishCancelledBufferClear(operation, totalBytes, totalChunks)
                 return
             }
-            val initial = store.peekSnapshot()
+            val initial = synchronized(store) {
+                store.peekSnapshot().also {
+                    if (it == null) RecordingQuickTileStateCache.recordBufferCleared(this, operation.tileClearToken)
+                }
+            }
             totalBytes = initial?.filledBytes ?: 0L
             totalChunks = initial?.chunkCount ?: 0
             updateBufferClearStatus(
@@ -4761,7 +4772,12 @@ open class ReverbService : Service() {
                     ) {
                         null
                     } else {
-                        store.clearOneChunk()
+                        // Keep physical completion and its cache fence ahead of store close/handoff.
+                        synchronized(store) {
+                            store.clearOneChunk().also {
+                                if (it.complete) RecordingQuickTileStateCache.recordBufferCleared(this, operation.tileClearToken)
+                            }
+                        }
                     }
                 }
 
@@ -5046,6 +5062,7 @@ open class ReverbService : Service() {
             true
         }
         if (!finished) return
+        if (phase != BufferClearPhase.COMPLETED) RecordingQuickTileStateCache.cancelBufferClear(operation.tileClearToken)
         // Completed or partially cancelled Clear can remove a parked lease boundary. Recheck
         // even when no storage work remains so that its retention lifetime can settle.
         scheduleRetentionMaintenanceIfNeeded()
@@ -5058,17 +5075,11 @@ open class ReverbService : Service() {
         phase: BufferClearPhase,
     ) {
         if (serviceDestroying) {
-            if (phase == BufferClearPhase.COMPLETED) {
-                RecordingQuickTileStateCache.recordBufferCleared(this, quickTileStateOwner, operation.bufferSlot)
-            }
             return
         }
         if (!::audioHandler.isInitialized) return
         audioHandler.post {
             if (serviceDestroying) {
-                if (phase == BufferClearPhase.COMPLETED) {
-                    RecordingQuickTileStateCache.recordBufferCleared(this, quickTileStateOwner, operation.bufferSlot)
-                }
                 return@post
             }
             if (operation.bufferSlot == BufferSlot.ONE_SHOT) {
@@ -5984,6 +5995,7 @@ open class ReverbService : Service() {
     private data class BufferClearOperation(
         val id: Long,
         val bufferSlot: BufferSlot,
+        val tileClearToken: RecordingTileClearToken,
         val cancelRequested: AtomicBoolean = AtomicBoolean(false),
         val cancellationReportsFailure: AtomicBoolean = AtomicBoolean(false),
     )
