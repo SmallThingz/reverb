@@ -465,16 +465,18 @@ internal class NativeRecordingInlinePlayerController(
             )
 
         fun beginInlineFineSeek(shuttleRate: Float) {
-            if (!prepared || playbackBookkeeping.released || trimSaving || playbackBookkeeping.fineSeekShuttleActive ||
+            if (trimMode && !prepared || playbackBookkeeping.released || trimSaving || playbackBookkeeping.fineSeekShuttleActive ||
                 !input.screenActive || !ownsPlaybackRow() || !lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
             ) return
             if (!trimMode && !beginOrdinaryScrub()) return
             if (!trimMode) {
                 currentPosition = RecordingPlayback.state.value.playbackAnchor
-                    ?.positionAt(SystemClock.elapsedRealtime()) ?: currentPosition
+                    ?.positionAt(SystemClock.elapsedRealtime()) ?: if (ordinaryScrubAuthority?.key?.retainedIdle == true)
+                    RecordingPlayback.state.value.positionMillis else currentPosition
             }
             playbackBookkeeping.fineSeekPosition.reset()
-            val resumeAfterScrub = isPlaying || trimPlaybackStarting || playbackBookkeeping.seeks.resume
+            val resumeAfterScrub = (trimMode || ordinaryScrubAuthority?.key?.retainedIdle == false) &&
+                (isPlaying || trimPlaybackStarting || playbackBookkeeping.seeks.resume)
             cancelPendingTrimStart()
             playbackBookkeeping.resumeAfterScrub = resumeAfterScrub
             playbackBookkeeping.revokeSeekResume()
@@ -524,7 +526,7 @@ internal class NativeRecordingInlinePlayerController(
 
         fun applyInlineFineSeek(deltaSeconds: Float) {
             if (!isScrubbing || !playbackBookkeeping.fineSeekShuttleActive || !ordinaryScrubStillCurrent()) return
-            if (!prepared || !deltaSeconds.isFinite() || duration <= 0) return
+            if (trimMode && !prepared || !deltaSeconds.isFinite() || duration <= 0) return
             val target = if (trimMode) fineSeekTarget else InlineFineSeekTarget.PLAYHEAD
             val adjusted = adjustInlineFineSeekPosition(
                 position = playbackBookkeeping.fineSeekPosition,
@@ -585,7 +587,10 @@ internal class NativeRecordingInlinePlayerController(
         }
 
         fun enterTrimMode(): Boolean {
-            if (trimSaving || !canEnterInlineTrim(prepared, duration)) return false
+            if (trimSaving) return false
+            // Trim prepares its own reader, including after ordinary playback has retired idle.
+            if (trimMode) return true
+            if (!canEnterInlineTrim(duration)) return false
             input.playbackOwner?.consumeInitialAutoStart()
             playbackBookkeeping.initialAutoStartPending = false
             RecordingPlayback.pauseCurrent()
@@ -820,17 +825,23 @@ internal class NativeRecordingInlinePlayerController(
             val playback = RecordingPlayback.state.value
             authority != null && authority.active &&
                 inlineOrdinaryGestureIsCurrent(authority.key.generation, playback.generation, playback.matches(recording)) &&
-                playback.prepared && authority.key.transportIntentRevision == playback.transportIntentRevision
+                RecordingPlayback.isScrubCurrent(recording, authority)
         }
 
         private fun beginWaveform(x: Float, width: Float) {
             if (!trimMode && !beginOrdinaryScrub()) return
             playbackBookkeeping.fineSeekPosition.reset()
-            val resumeAfterScrub = isPlaying || trimPlaybackStarting || playbackBookkeeping.seeks.resume
+            val resumeAfterScrub = (trimMode || ordinaryScrubAuthority?.key?.retainedIdle == false) &&
+                (isPlaying || trimPlaybackStarting || playbackBookkeeping.seeks.resume)
             cancelPendingTrimStart()
             playbackBookkeeping.resumeAfterScrub = resumeAfterScrub
             playbackBookkeeping.revokeSeekResume()
-            if (isPlaying) { runCatching { pauseStartedMediaPlayer(forGesture = true) }; isPlaying = false }
+            if (isPlaying) {
+                if (trimMode || ordinaryScrubAuthority?.key?.retainedIdle == false) {
+                    runCatching { pauseStartedMediaPlayer(forGesture = true) }
+                }
+                isPlaying = false
+            }
             isScrubbing = true
             val initialMillis = (duration.toFloat() * (x / width).coerceIn(0f, 1f)).toInt()
             val threshold = if (trimMode) (duration.toFloat() * (24f * hostView.resources.displayMetrics.density) / width)
@@ -948,12 +959,14 @@ internal class NativeRecordingInlinePlayerController(
         private val fineSeekCancelAdjust: () -> Unit = ::pauseForLifecycle
         private var presentationFineSeekTarget = InlineFineSeekTarget.PLAYHEAD
         private var presentationFineSeekKey = "$key:$presentationFineSeekTarget"
+        private var presentationOrdinaryPrepared = false
 
         private fun currentFineSeekInteractionKey(): String {
             val target = if (trimMode) fineSeekTarget else InlineFineSeekTarget.PLAYHEAD
-            if (presentationFineSeekTarget != target) {
+            if (presentationFineSeekTarget != target || !trimMode && presentationOrdinaryPrepared != prepared) {
                 presentationFineSeekTarget = target
-                presentationFineSeekKey = "$key:$target"
+                presentationOrdinaryPrepared = prepared
+                presentationFineSeekKey = if (trimMode) "$key:$target" else "$key:$target:$prepared"
             }
             return presentationFineSeekKey
         }
@@ -972,7 +985,8 @@ internal class NativeRecordingInlinePlayerController(
                 playbackAnchor = if (isScrubbing || playbackBookkeeping.fineSeekShuttleActive) null
                     else if (trimMode) trimClock
                     else RecordingPlayback.state.value.takeIf { it.matches(recording) }?.playbackAnchor,
-                playbackDisplayActive = displayActive)
+                playbackDisplayActive = displayActive,
+                seekReady = if (trimMode) prepared else RecordingPlayback.canScrub(recording))
             val fineSeek = SpringFineSeekBinding((prepared || !trimMode) && !trimSaving, isPlaying || trimPlaybackStarting, duration.toFloat() / 1000f,
                 currentFineSeekInteractionKey(), fineSeekTogglePlayback, fineSeekInteractionStart,
                 fineSeekBeginAdjust, fineSeekAdjust, fineSeekUpdateShuttle, fineSeekEndAdjust, fineSeekCancelAdjust)

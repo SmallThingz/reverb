@@ -16,6 +16,7 @@ internal data class InlineWaveformPointerBinding(
     val begin: (Float, Float) -> Unit,
     val move: (Float, Float) -> Unit,
     val finish: (normalRelease: Boolean) -> Unit,
+    val ready: Boolean = key.prepared,
 )
 
 /** MAIN-pass awaitEachGesture/awaitFirstDown(requireUnconsumed=false), without platform slop. */
@@ -49,7 +50,7 @@ internal class InlineWaveformPointerOwner {
             if (event.changes.isEmpty() || event.changes.any { !it.changedToDown }) return
             val down = event.changes.first()
             awaitAllUp = true
-            if (!current.key.prepared || live.saving || width <= 0) return
+            if (!live.ready || live.saving || width <= 0) return
             down.consume()
             pointer = down.id
             current.begin(down.position.x, width.toFloat())

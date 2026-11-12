@@ -1,6 +1,10 @@
 package app.smallthingz.reverb
 
-internal data class RecordingScrubKey(val generation: Long, val transportIntentRevision: Long)
+internal data class RecordingScrubKey(
+    val generation: Long,
+    val transportIntentRevision: Long,
+    val retainedIdle: Boolean = false,
+)
 
 /** Implementations contain native quiet ownership only, never a row, controller or UI callback. */
 internal interface RecordingScrubQuietHandle {
@@ -62,6 +66,11 @@ internal class RecordingScrubAuthorities {
     fun finish(authority: RecordingScrubAuthority) {
         if (current === authority) current = null
         authority.revoke()
+    }
+
+    /** Old service destruction must not revoke an independent retained-cursor reader. */
+    fun retireServiceOwner() {
+        if (current?.key?.retainedIdle != true) revoke()
     }
 
     fun revoke() {

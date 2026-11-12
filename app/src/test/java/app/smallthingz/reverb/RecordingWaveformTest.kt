@@ -509,10 +509,10 @@ class RecordingWaveformTest {
         assertEquals("meeting notes trim", trimmedRecordingBaseName("meeting notes.wav"))
     }
     @Test
-    fun inlineTrim_requiresPreparedRealDuration() {
-        assertFalse(canEnterInlineTrim(prepared = false, durationMillis = 120_000))
-        assertFalse(canEnterInlineTrim(prepared = true, durationMillis = 0))
-        assertTrue(canEnterInlineTrim(prepared = true, durationMillis = 120_000))
+    fun inlineTrim_requiresPositiveDurationForIndependentPreparation() {
+        assertFalse(canEnterInlineTrim(durationMillis = -1))
+        assertFalse(canEnterInlineTrim(durationMillis = 0))
+        assertTrue(canEnterInlineTrim(durationMillis = 120_000))
     }
 
 

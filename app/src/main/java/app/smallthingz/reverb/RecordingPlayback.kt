@@ -74,10 +74,13 @@ internal object RecordingPlayback {
         service = owner
     }
     internal fun detach(owner: RecordingPlaybackService) {
-        if (service === owner) { scrubAuthorities.revoke(); service = null }
+        if (service === owner) { scrubAuthorities.retireServiceOwner(); service = null }
     }
     internal fun revokeScrub(owner: RecordingPlaybackService) {
         if (service === owner) scrubAuthorities.revoke()
+    }
+    internal fun retireServiceScrub(owner: RecordingPlaybackService) {
+        if (service === owner) scrubAuthorities.retireServiceOwner()
     }
     internal fun publish(owner: RecordingPlaybackService, value: RecordingPlaybackState) {
         if (service !== owner) return
@@ -86,23 +89,49 @@ internal object RecordingPlayback {
             ?.let { RecordingScrubKey(it.generation, it.transportIntentRevision) })
         mutableState.value = value
     }
-    fun acquireScrub(recording: RecordingEntity): RecordingScrubAuthority? {
+    private fun currentScrubKey(recording: RecordingEntity): RecordingScrubKey? {
         val value = mutableState.value
-        if (service?.ownsRecording(recording) != true || !value.matches(recording) || !value.prepared) return null
-        return scrubAuthorities.acquire(RecordingScrubKey(value.generation, value.transportIntentRevision))
+        return recordingScrubAdmission(value, value.matches(recording),
+            service?.ownsRecording(recording) == true, pending != null)
     }
+    fun canScrub(recording: RecordingEntity): Boolean = currentScrubKey(recording) != null
+    fun acquireScrub(recording: RecordingEntity): RecordingScrubAuthority? =
+        currentScrubKey(recording)?.let(scrubAuthorities::acquire)
+    fun isScrubCurrent(recording: RecordingEntity, authority: RecordingScrubAuthority): Boolean =
+        scrubAuthorities.owns(authority) && currentScrubKey(recording) == authority.key
     fun finishScrub(authority: RecordingScrubAuthority) = scrubAuthorities.finish(authority)
     fun pause(recording: RecordingEntity) {
         if (pending?.recording?.let { samePlaybackRecording(it, recording) } == true) pending = null
-        service?.pauseMatching(recording)
+        if (!pauseRetained(recording)) service?.pauseMatching(recording)
     }
-    fun pauseCurrent() { pending = null; service?.pauseCurrent() }
+    fun pauseCurrent() {
+        pending = null
+        scrubAuthorities.revoke()
+        val recording = mutableState.value.recording
+        if (recording == null || !pauseRetained(recording)) service?.pauseCurrent()
+    }
+    private fun pauseRetained(recording: RecordingEntity): Boolean {
+        if (currentScrubKey(recording)?.retainedIdle != true) return false
+        updateRetainedPosition(mutableState.value.positionMillis)
+        return true
+    }
+    private fun updateRetainedPosition(positionMillis: Int) {
+        scrubAuthorities.revoke()
+        val value = mutableState.value
+        mutableState.value = value.copy(
+            positionMillis = positionMillis.coerceIn(0, value.durationMillis),
+            transportIntentRevision = value.transportIntentRevision + 1L,
+            playbackAnchor = null,
+        )
+    }
     fun suspendForGesture(recording: RecordingEntity, authority: RecordingScrubAuthority) {
         if (scrubAuthorities.owns(authority)) service?.suspendForGestureMatching(recording,
             authority.key.generation, authority.key.transportIntentRevision)
     }
     fun seek(recording: RecordingEntity, positionMillis: Int, resume: Boolean) {
-        service?.seekMatching(recording, positionMillis, resume)
+        if (!resume && currentScrubKey(recording)?.retainedIdle == true) {
+            updateRetainedPosition(positionMillis)
+        } else service?.seekMatching(recording, positionMillis, resume)
     }
     fun stop(recording: RecordingEntity) {
         if (pending?.recording?.let { samePlaybackRecording(it, recording) } == true) pending = null
@@ -133,4 +162,19 @@ internal fun reportPlaybackFailure(context: Context, error: Throwable) {
     android.util.Log.w("RecordingPlayback", "Saved recording playback failed", error)
     AppFeedbackCenter.post(actionableErrorMessage(context,
         context.getString(R.string.recording_playback_failed), error), FeedbackTone.ERROR)
+}
+
+/** A retained cursor can use the independent preview reader without starting MediaPlayer. */
+internal fun recordingScrubAdmission(
+    state: RecordingPlaybackState,
+    matchingRecording: Boolean,
+    serviceOwnsRecording: Boolean,
+    pendingStart: Boolean,
+): RecordingScrubKey? {
+    if (!matchingRecording || pendingStart || state.durationMillis <= 0) return null
+    if (state.prepared) {
+        return if (serviceOwnsRecording) RecordingScrubKey(state.generation, state.transportIntentRevision) else null
+    }
+    if (serviceOwnsRecording || state.playing || state.wantsPlayback) return null
+    return RecordingScrubKey(state.generation, state.transportIntentRevision, retainedIdle = true)
 }

@@ -49,6 +49,7 @@ internal data class LibraryPlayerUiState(
     val preparing: Boolean = false,
     val playbackAnchor: PlaybackPositionAnchor? = null,
     val playbackDisplayActive: Boolean = true,
+    val seekReady: Boolean = prepared,
 ) {
     val trimBackProgress: Float get() = if (trimMode && !trimSaving && backGestureActive) backProgress.coerceIn(0f, 1f) else 0f
     val collapseProgress: Float get() = if (!trimMode && !trimSaving && backGestureActive) backProgress.coerceIn(0f, 1f) else 0f
@@ -255,13 +256,14 @@ private class PlayerTimeline(context: Context, private var environment: ReverbVi
     fun bind(value: ReverbViewEnvironment, next: LibraryPlayerUiState, callbacks: LibraryPlayerActions) {
         input.bind(InlineWaveformPointerBinding(
             InlineWaveformPointerKey(next.recordingRevisionKey, next.durationMillis, next.prepared, next.trimMode),
-            next.trimSaving, callbacks.waveformBegin, callbacks.waveformMove, callbacks.waveformFinish))
+            next.trimSaving, callbacks.waveformBegin, callbacks.waveformMove, callbacks.waveformFinish,
+            ready = next.seekReady))
         val geometryChanged = environment.textDensity.density != value.textDensity.density || state?.trimMode != next.trimMode
         environment = value; state = next
         playbackClock.bind(next.recordingRevisionKey, next.trimMode,
             if (next.prepared) next.playbackAnchor else null)
         playbackClock.setDisplayActive(next.playbackDisplayActive, SystemClock.elapsedRealtime())
-        playhead.bind(value, next.prepared && next.durationMillis > 0)
+        playhead.bind(value, next.seekReady && next.durationMillis > 0)
         first.visibility = if (next.trimMode) VISIBLE else GONE
         waveform.setPalette(ProgressiveWaveformPalette(value.palette.primary, value.palette.onSurfaceVariant, value.palette.tertiary))
         if (next.trimMode && second == null) second = ReverbTimelineMarkerView(context, value).also(::addView)

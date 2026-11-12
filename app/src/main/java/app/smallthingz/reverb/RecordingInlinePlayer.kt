@@ -6,8 +6,7 @@ import java.io.Closeable
 import java.io.FileDescriptor
 import java.util.concurrent.atomic.AtomicBoolean
 
-internal fun canEnterInlineTrim(prepared: Boolean, durationMillis: Int): Boolean =
-    prepared && durationMillis > 0
+internal fun canEnterInlineTrim(durationMillis: Int): Boolean = durationMillis > 0
 
 internal enum class InlineFineSeekTarget {
     PLAYHEAD,

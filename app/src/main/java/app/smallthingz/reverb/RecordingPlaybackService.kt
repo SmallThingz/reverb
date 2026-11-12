@@ -474,7 +474,7 @@ class RecordingPlaybackService : Service() {
     }
 
     private fun releaseTransport() {
-        RecordingPlayback.revokeScrub(this)
+        RecordingPlayback.retireServiceScrub(this)
         quietStart?.cancel()
         quietStart = null
         quietStartPending = false

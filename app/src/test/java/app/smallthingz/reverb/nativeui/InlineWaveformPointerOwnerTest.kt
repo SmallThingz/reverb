@@ -107,4 +107,28 @@ class InlineWaveformPointerOwnerTest {
         assertEquals(listOf("begin:36.0/100.0", "finish:true"), calls)
     }
 
+    @Test fun retainedReadinessAdmitsDownWithoutChangingPreparedPointerIdentity() {
+        val calls = mutableListOf<String>(); val owner = InlineWaveformPointerOwner()
+        val retained = binding(calls, key.copy(prepared = false)).copy(ready = true)
+        owner.bind(retained)
+        val down = event(); owner.dispatch(down, 100)
+        assertTrue(down.changes.single().consumed)
+        owner.bind(retained)
+        owner.dispatch(event(x = 44f, wasPressed = true), 100)
+        owner.dispatch(event(pressed = false, wasPressed = true), 100)
+        assertEquals(listOf("begin:12.0/100.0", "move:44.0/100.0", "finish:true"), calls)
+    }
+
+    @Test fun preparedToRetainedIdleCancelsHeldPointerBeforeNewRetainedGesture() {
+        val calls = mutableListOf<String>(); val owner = InlineWaveformPointerOwner()
+        owner.bind(binding(calls)); owner.dispatch(event(), 100)
+        owner.bind(binding(calls, key.copy(prepared = false)).copy(ready = true))
+        owner.dispatch(event(x = 44f, wasPressed = true), 100)
+        owner.dispatch(event(pressed = false, wasPressed = true), 100)
+        assertEquals(listOf("begin:12.0/100.0", "finish:false"), calls)
+        owner.dispatch(event(id = 2), 100)
+        owner.dispatch(event(id = 2, pressed = false, wasPressed = true), 100)
+        assertEquals(listOf("begin:12.0/100.0", "finish:false", "begin:12.0/100.0", "finish:true"), calls)
+    }
+
 }
