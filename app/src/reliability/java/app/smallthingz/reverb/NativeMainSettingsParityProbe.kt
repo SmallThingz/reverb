@@ -708,6 +708,251 @@ private fun cleanupMainParity(render: MainSettingsParityRender?, host: NativePar
     failure?.let { throw it }
 }
 
+/** Current-only pointer diagnosis; the injected picker never opens external UI or returns a tree. */
+internal fun verifyNativeSettingsFolderPointer(instrumentation: Instrumentation, report: StringBuilder) {
+    val context = instrumentation.targetContext
+    check(context.packageName == "app.smallthingz.reverb.uitheme.reliability")
+    check(context.applicationContext.javaClass == Application::class.java)
+    val preferences = getRecorderPreferences(context)
+    val original = preferences.all.toMap()
+    val directory = File(context.filesDir, "native-settings-folder-pointer-${System.currentTimeMillis()}")
+    check(directory.mkdir())
+    val cases = JSONArray()
+    val launches = JSONArray()
+    val pointerEvents = JSONArray()
+    val evidence = JSONObject().put("selector", "native_settings_folder_pointer").put("passed", false)
+        .put("cases", cases).put("synthetic_launches", launches).put("pointer_events", pointerEvents)
+        .put("scope", "Actual Main pointer root and Settings owner; synthetic null picker result, no external UI or grant")
+        .put("limitations", "Fresh QA state, not normal47 historical state; delayed press count is not hit proof; no MAIN/FINAL consumption observer")
+    fun publish() = writeQaEvidenceAtomically(File(directory, "result.json")) {
+        it.write(evidence.toString(2).toByteArray(Charsets.UTF_8))
+    }
+    fun <T> main(action: () -> T): T = nativeParityOnMain(instrumentation, action)
+    fun field(owner: Any, name: String): Any? = owner.javaClass.getDeclaredField(name).run {
+        isAccessible = true; get(owner)
+    }
+    fun bounds(view: View): Rect {
+        val location = IntArray(2); view.getLocationOnScreen(location)
+        return Rect(location[0], location[1], location[0] + view.width, location[1] + view.height)
+    }
+    fun rect(value: Rect) = JSONArray(listOf(value.left, value.top, value.right, value.bottom))
+    var host: NativeParityActivity? = null
+    var render: MainSettingsParityRender? = null
+    var pickerResult: ((android.net.Uri?) -> Unit)? = null
+    var failure: Throwable? = null
+    publish()
+    try {
+        val activity = launchCurrentUiSmokeActivity(instrumentation).also { host = it }
+        val current = main {
+            MainSettingsParityRender(activity, false, AppThemeMode.LIGHT, false, null,
+                syntheticDirectoryRegistration = { result ->
+                    check(pickerResult == null)
+                    pickerResult = result
+                    NativeDirectoryPickerRegistration(launch = { uri ->
+                        launches.put(JSONObject().put("uptime_ms", SystemClock.uptimeMillis())
+                            .put("initial_uri", uri?.toString() ?: JSONObject.NULL))
+                    }, unregister = { pickerResult = null })
+                })
+        }.also { render = it }
+        fun settle() { awaitNativeParityDraw(instrumentation, current.board); instrumentation.waitForIdleSync() }
+        fun await(label: String, condition: () -> Boolean) {
+            val deadline = SystemClock.uptimeMillis() + 5_000
+            while (!main(condition)) {
+                check(SystemClock.uptimeMillis() < deadline) { "Timed out: $label" }
+                settle()
+            }
+        }
+        fun capture(name: String) {
+            val bitmap = captureNativeParityContent(instrumentation, activity) { current.board }
+            try { saveNativeParityBitmap(directory, name, bitmap) } finally { bitmap.recycle() }
+        }
+        fun dispatch(kind: Int, down: Long, x: Float, y: Float): Boolean = main {
+            check(activity.hasWindowFocus() && current.board.isShown)
+            val origin = IntArray(2); current.board.getLocationOnScreen(origin)
+            val event = android.view.MotionEvent.obtain(down, SystemClock.uptimeMillis(), kind,
+                x, y, 0)
+            try {
+                event.source = android.view.InputDevice.SOURCE_TOUCHSCREEN
+                event.offsetLocation(-origin[0].toFloat(), -origin[1].toFloat())
+                pointerEvents.put(JSONObject().put("action", kind).put("down_ms", down)
+                    .put("event_ms", event.eventTime).put("raw", JSONArray(listOf(event.rawX, event.rawY)))
+                    .put("local", JSONArray(listOf(event.x, event.y))).put("board_origin", JSONArray(origin.toList())))
+                current.board.dispatchTouchEvent(event)
+            } finally { event.recycle() }
+        }
+        await("Home Settings action") {
+            activity.hasWindowFocus() && current.actionCount(activity.getString(R.string.open_settings)) == 1
+        }
+        for (index in 0..1) {
+            val samples = JSONArray()
+            val row = JSONObject().put("case", if (index == 0) "fresh" else "retained_reopen_root_scrolled")
+                .put("passed", false).put("samples", samples)
+            cases.put(row)
+            main { current.click(activity.getString(R.string.open_settings)) }
+            lateinit var settings: NativeSettingsScreenContent
+            await("fresh Settings readiness") {
+                mainParityViews(current.board).filterIsInstance<NativeSettingsScreenContent>()
+                    .firstOrNull { it.inputAllowed }?.also { settings = it } != null
+            }
+            val owner = settings.owner
+            main {
+                val viewport = checkNotNull(settings.listViewport)
+                val position = SettingsSectionKey.visible(owner.batteryOptimizationRestricted).indexOf(SettingsSectionKey.STORAGE)
+                check(position >= 0)
+                (viewport.layoutManager as LinearLayoutManager).scrollToPositionWithOffset(position, 0)
+            }
+            lateinit var action: SettingsStorageActionView
+            await("attached Storage action") {
+                mainParityViews(settings).filterIsInstance<SettingsStorageSection>().firstOrNull { it.isShown }
+                    ?.let { field(it, "choose") as SettingsStorageActionView }?.also { action = it } != null
+            }
+            val visual = main { action.visual }
+            // This is an actual list scroll after placement, not a guessed number of async wheel ticks.
+            main {
+                val viewport = checkNotNull(settings.listViewport)
+                viewport.scrollBy(0, bounds(visual).centerY() - bounds(viewport).centerY())
+            }
+            settle()
+            fun awaitChooseGeometry() {
+                var lastBounds: Rect? = null
+                var stableFrames = 0
+                await("stable visible Choose geometry") {
+                    val next = bounds(visual)
+                    stableFrames = if (next == lastBounds) stableFrames + 1 else 0
+                    lastBounds = next
+                    val visible = Rect()
+                    stableFrames >= 2 && !visual.isLayoutRequested && visual.getGlobalVisibleRect(visible) &&
+                        visible.contains(next.centerX(), next.centerY()) && settings.inputAllowed
+                }
+            }
+            awaitChooseGeometry()
+            if (index == 1) {
+                // Begin over the non-action path label, using the actual Main root scroll owner.
+                val scrollStart = main {
+                    val section = mainParityViews(settings).filterIsInstance<SettingsStorageSection>().single { it.isShown }
+                    val path = field(section, "path") as View
+                    val target = bounds(path); val visible = Rect()
+                    check(path.getGlobalVisibleRect(visible) && visible.contains(target.centerX(), target.centerY()))
+                    target
+                }
+                val scrollDown = SystemClock.uptimeMillis()
+                val x = scrollStart.exactCenterX(); var y = scrollStart.exactCenterY()
+                val before = main { checkNotNull(settings.listViewport).computeVerticalScrollOffset() }
+                val dy = main {
+                    val viewport = checkNotNull(settings.listViewport)
+                    val direction = if (viewport.canScrollVertically(1)) -1 else 1
+                    48f * activity.resources.displayMetrics.density * direction
+                }
+                var scrollFailure: Throwable? = null
+                var active = true
+                try {
+                    row.put("scroll_down_dispatched", dispatch(android.view.MotionEvent.ACTION_DOWN, scrollDown, x, y))
+                    repeat(3) {
+                        SystemClock.sleep(64); y += dy / 3
+                        dispatch(android.view.MotionEvent.ACTION_MOVE, scrollDown, x, y)
+                    }
+                    // A bounded slow drag, followed by a stationary MOVE; never poll away an internal flag.
+                    SystemClock.sleep(64); dispatch(android.view.MotionEvent.ACTION_MOVE, scrollDown, x, y)
+                    row.put("scroll_up_dispatched", dispatch(android.view.MotionEvent.ACTION_UP, scrollDown, x, y))
+                    active = false
+                } catch (error: Throwable) { scrollFailure = error }
+                finally {
+                    scrollFailure = captureNativeParityCleanup(scrollFailure) {
+                        if (active) dispatch(android.view.MotionEvent.ACTION_CANCEL, scrollDown, x, y)
+                    }
+                    main { row.put("scroll_offset_before", before)
+                        .put("scroll_offset_after_up", checkNotNull(settings.listViewport).computeVerticalScrollOffset()) }
+                    publish()
+                }
+                scrollFailure?.let { throw it }
+                awaitChooseGeometry()
+            }
+            val controller = main { checkNotNull(field(action, "controller")) }
+            var actionCalls = 0
+            var downActive = false
+            val down = SystemClock.uptimeMillis()
+            val target = main { bounds(visual) }
+            row.put("target_screen", JSONArray(listOf(target.exactCenterX(), target.exactCenterY())))
+                .put("target_view_class", visual.javaClass.name)
+            val beforeLaunches = main { launches.length() }
+            val originallyClickable = main {
+                check(!visual.hasOnClickListeners()) { "Owned fixture already has a platform click listener" }
+                visual.isClickable.also { old ->
+                    // Existing performClick calls super, then the real owner callback; do not replace it.
+                    visual.setOnClickListener { actionCalls++ }
+                    visual.isClickable = old
+                }
+            }
+            fun snapshot(label: String) = main {
+                val state = owner.state
+                val visible = Rect(); val shown = visual.getGlobalVisibleRect(visible)
+                samples.put(JSONObject().put("stage", label).put("uptime_ms", SystemClock.uptimeMillis())
+                    .put("activation", System.identityHashCode(state.activation)).put("active", state.active)
+                    .put("hydrated", state.hydrated).put("interaction_ready", state.interactionReady)
+                    .put("persisting", state.persisting).put("input_allowed", settings.inputAllowed)
+                    .put("enabled", visual.isEnabled).put("window_focused", activity.hasWindowFocus())
+                    .put("shown", shown).put("bounds", rect(bounds(visual))).put("visible_bounds", rect(visible))
+                    .put("pointer_owned", field(controller, "pointer") != null)
+                    .put("owns_touch_stream", field(controller, "ownsTouchStream"))
+                    .put("delivered_presses", (field(controller, "deliveredPresses") as Set<*>).size)
+                    .put("action_calls", actionCalls).put("launch_calls", launches.length() - beforeLaunches)
+                    .put("picker_state", JSONArray(owner.draft.directoryPicker.save()))
+                    .put("list_scroll_state", checkNotNull(settings.listViewport).scrollState))
+            }
+            fun motion(kind: Int): Boolean = dispatch(kind, down, target.exactCenterX(), target.exactCenterY())
+            var caseFailure: Throwable? = null
+            try {
+                snapshot("before_down"); publish()
+                downActive = true
+                row.put("down_dispatched", motion(android.view.MotionEvent.ACTION_DOWN))
+                snapshot("after_down")
+                settle(); snapshot("before_up")
+                row.put("up_dispatched", motion(android.view.MotionEvent.ACTION_UP))
+                downActive = false
+                snapshot("after_up"); publish()
+                capture("$index-after-tap.png")
+                row.put("screenshot", "$index-after-tap.png")
+                // Preserve both cases even when the first tap reaches no action/launch boundary.
+                row.put("passed", main {
+                    actionCalls == 1 && launches.length() == beforeLaunches + 1 &&
+                        (index == 0 || row.getInt("scroll_offset_after_up") != row.getInt("scroll_offset_before"))
+                })
+            } catch (error: Throwable) { caseFailure = error }
+            finally {
+                caseFailure = captureNativeParityCleanup(caseFailure) {
+                    if (downActive) motion(android.view.MotionEvent.ACTION_CANCEL)
+                }
+                caseFailure = captureNativeParityCleanup(caseFailure) { main {
+                    visual.setOnClickListener(null); visual.isClickable = originallyClickable
+                    checkNotNull(pickerResult).invoke(null)
+                } }
+                caseFailure = captureNativeParityCleanup(caseFailure) { snapshot("after_null_result"); publish() }
+            }
+            caseFailure?.let { throw it }
+            main { activity.onBackPressedDispatcher.onBackPressed() }
+            await("Settings closed") { !owner.state.active }
+            await("Home action after close") { current.actionCount(activity.getString(R.string.open_settings)) == 1 }
+        }
+        main { check(current.forbiddenCalls == 0) }
+        check(preferences.all == original) { "Folder diagnostic changed QA preferences" }
+        check((0 until cases.length()).all { cases.getJSONObject(it).getBoolean("passed") }) {
+            "Folder pointer action/launch count differs; inspect saved boundary samples"
+        }
+        evidence.put("passed", true)
+    } catch (error: Throwable) { failure = error }
+    finally {
+        failure = captureNativeParityCleanup(failure) { main { render?.close() } }
+        failure = captureNativeParityCleanup(failure) { render?.awaitClosed() }
+        failure = captureNativeParityCleanup(failure) { main { host?.finish() } }
+        failure = captureNativeParityCleanup(failure) { check(preferences.all == original) }
+        if (failure != null) evidence.put("passed", false).put("failure", failure!!.stackTraceToString())
+        publish()
+        report.appendLine("SETTINGS_FOLDER_POINTER_EVIDENCE ${directory.absolutePath}")
+    }
+    failure?.let { throw it }
+    report.appendLine("PASS native_settings_folder_pointer two real-root synthetic taps and null picker callbacks")
+}
+
 @OptIn(ExperimentalComposeViewContextApi::class)
 internal class MainSettingsParityRender(
     private val activity: NativeParityActivity,
@@ -716,6 +961,7 @@ internal class MainSettingsParityRender(
     private val systemDark: Boolean,
     private val commonGrain: NativeParityCommonGrainSession?,
     private val readableSelection: Boolean = false,
+    private val syntheticDirectoryRegistration: (((android.net.Uri?) -> Unit) -> NativeDirectoryPickerRegistration)? = null,
 ) : AutoCloseable {
     val board = FrameLayout(activity)
     private val density = Density(activity.resources.displayMetrics.density, activity.resources.configuration.fontScale)
@@ -796,8 +1042,9 @@ internal class MainSettingsParityRender(
             val view = NativeMainScreenView.create(activity, environment(), NativeMainScreenInput(false, false),
                 activity, activity.onBackPressedDispatcher, frames.scope,
                 NativeActivityAccessibilityManager(activity), board, text, null, ::forbidden, ::themeChanged,
-                registerDirectoryResult = {
-                    NativeDirectoryPickerRegistration(launch = { forbidden() }, unregister = {})
+                registerDirectoryResult = { result ->
+                    syntheticDirectoryRegistration?.invoke(result)
+                        ?: NativeDirectoryPickerRegistration(launch = { forbidden() }, unregister = {})
                 }, releaseInputFocus = {})
             native = view
             board.addView(view, FrameLayout.LayoutParams(-1, -1))
@@ -941,6 +1188,16 @@ internal class MainSettingsParityRender(
         release { runtime?.close() }
         release { board.removeAllViews(); (board.parent as? ViewGroup)?.removeView(board) }
         failure?.let { throw it }
+    }
+
+    fun awaitClosed() {
+        check(closed && !reference)
+        check(android.os.Looper.myLooper() != android.os.Looper.getMainLooper())
+        kotlinx.coroutines.runBlocking {
+            kotlinx.coroutines.withTimeout(5_000) {
+                checkNotNull(runtime?.scope?.coroutineContext?.get(kotlinx.coroutines.Job)).join()
+            }
+        }
     }
 }
 
