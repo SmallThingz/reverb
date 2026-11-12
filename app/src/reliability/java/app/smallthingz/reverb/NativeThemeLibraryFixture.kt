@@ -72,6 +72,7 @@ internal class NativeThemeLibraryFixture(
         recycled.close()
         recycled.bind(jobs[1], environment, ReverbRecordingGroupEdges(first = false, last = false))
         check(descendants(recycled.row).count { it is ReverbIncidentLoadingView } == 1)
+        verifyNativeLibraryExpansionMeasurement(context, environment, scope, inputRoot)
         verify()
     }
 

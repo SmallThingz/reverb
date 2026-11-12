@@ -228,11 +228,14 @@ internal class ReverbLibraryRecordingRow(
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         surface.measure(widthMeasureSpec, heightMeasureSpec)
-        val natural = IntSize(surface.measuredWidth, surface.measuredHeight)
+        // The viewport already animates its measured height. Retargeting the outer tween with
+        // every viewport frame makes the row lag behind its surface and overlap its neighbour.
+        val expansionHeight = column.measuredExpansionHeight.coerceAtMost(surface.measuredHeight)
+        val natural = IntSize(surface.measuredWidth, surface.measuredHeight - expansionHeight)
         val size = outerSizeMotion ?: librarySizeTween(natural).also { outerSizeMotion = it }
         size.target(natural, frames.durationScale)
         setMeasuredDimension(resolveSize(size.value.width, widthMeasureSpec),
-            resolveSize(size.value.height, heightMeasureSpec))
+            resolveSize(size.value.height + expansionHeight, heightMeasureSpec))
         scheduleFrame()
     }
 
@@ -332,6 +335,9 @@ internal class ReverbLibraryRecordingRow(
 /** Source Column: both summary and inline content share the one selection-alpha layer. */
 private class RecordingCardColumn(context: Context, private val body: View) : ViewGroup(context) {
     private var expansion: View? = null
+    val measuredExpansionHeight: Int
+        get() = expansion?.takeIf { it.parent === this && it.visibility != GONE }?.measuredHeight
+            ?.coerceAtMost((measuredHeight - body.measuredHeight).coerceAtLeast(0)) ?: 0
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         clipChildren = false
