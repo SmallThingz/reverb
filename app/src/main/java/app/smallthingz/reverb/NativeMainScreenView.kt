@@ -340,7 +340,8 @@ internal class NativeMainScreenView private constructor(
 
     private fun settingsInput() = NativeSettingsScreenInput(navigation.showSettings,
         BufferSlot.fromStorageCode(navigation.settingsBufferTargetCode),
-        NativeSettingsInsets(visualInsets.left, visualInsets.top, visualInsets.right, visualInsets.bottom))
+        NativeSettingsInsets(visualInsets.left, visualInsets.top, visualInsets.right,
+            maxOf(visualInsets.bottom, windowInsets.getInsets(WindowInsetsCompat.Type.ime()).bottom)))
 
     private fun createLibrary() {
         val content = ReverbLibraryScreenContent(context, environment, libraryInput(),

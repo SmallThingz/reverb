@@ -981,6 +981,10 @@ internal class MainSettingsParityRender(
         }
     }
     private var insetBinding: NativeWindowInsetsBinding? = null
+    var lastRealWindowInsetsForProbe: androidx.core.view.WindowInsetsCompat? = null
+        private set
+    var realWindowInsetsRevisionForProbe = 0L
+        private set
     private var closed = false
     var forbiddenCalls = 0
         private set
@@ -1048,13 +1052,37 @@ internal class MainSettingsParityRender(
                 }, releaseInputFocus = {})
             native = view
             board.addView(view, FrameLayout.LayoutParams(-1, -1))
-            insetBinding = NativeWindowInsetsBinding(board) { view.setWindowInsets(it) }
+            insetBinding = NativeWindowInsetsBinding(board) {
+                lastRealWindowInsetsForProbe = it
+                realWindowInsetsRevisionForProbe++
+                view.setWindowInsets(it)
+            }
             view.start()
         }
         } catch (error: Throwable) {
             try { close() } catch (cleanup: Throwable) { if (cleanup !== error) error.addSuppressed(cleanup) }
             throw error
         }
+    }
+
+    /** QA-only delivered-inset injection; retire the real listener during synthetic cases. */
+    fun injectWindowInsetsForProbe(insets: androidx.core.view.WindowInsetsCompat) {
+        check(!reference && !closed)
+        insetBinding?.close()
+        insetBinding = null
+        checkNotNull(native).setWindowInsets(insets)
+    }
+
+    fun restoreWindowInsetsAfterProbe() {
+        check(!reference && !closed && insetBinding == null)
+        lastRealWindowInsetsForProbe = null
+        val root = checkNotNull(native)
+        insetBinding = NativeWindowInsetsBinding(board) {
+            lastRealWindowInsetsForProbe = it
+            realWindowInsetsRevisionForProbe++
+            root.setWindowInsets(it)
+        }
+        board.requestApplyInsets()
     }
 
     private fun forbidden() {
