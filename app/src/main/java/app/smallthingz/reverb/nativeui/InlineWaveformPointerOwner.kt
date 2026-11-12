@@ -1,6 +1,11 @@
 package app.smallthingz.reverb.nativeui
 
 import smallthingz.ui.input.phase.NativeDragPointerEvent
+import smallthingz.ui.geometry.Size
+
+/** Boundary markers straddle the waveform edges; keep their outer halves touchable. */
+internal fun inlineWaveformMinimumTouchTarget(width: Float, minimum: Float, trimMode: Boolean): Size =
+    Size(if (trimMode) width + minimum else minimum, minimum)
 
 /** Exact released pointerInput keys; trimSaving is read live and does not restart the detector. */
 internal data class InlineWaveformPointerKey(

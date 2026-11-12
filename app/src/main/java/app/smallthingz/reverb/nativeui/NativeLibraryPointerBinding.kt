@@ -163,7 +163,8 @@ internal class NativeLibraryPointerBinding(
         private val shieldNodes = shield?.let(::listOf) ?: emptyList()
         override val placed get() = view.isAttachedToWindow && view.isLaidOut && view.visibility == View.VISIBLE
         override val size get() = Size(view.width.toFloat(), view.height.toFloat())
-        override val minimumTouchTarget get() = Size(48f * density, 48f * density)
+        override val minimumTouchTarget get() = (view as? PlayerTimeline)?.minimumTouchTarget
+            ?: Size(48f * density, 48f * density)
         override val childrenInHitOrder get() = children(view)
         override fun screenToLocal(screen: Offset) = geometry.coordinates(view).local(screen)
         override val nodes: List<NativeViewPhasePointerNode>

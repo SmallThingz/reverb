@@ -237,7 +237,7 @@ private class PlayerColumn(context: Context, private var environment: ReverbView
 }
 
 /** Source MAIN-pass waveform gesture; no platform slop or competing stock click handler. */
-private class PlayerTimeline(context: Context, private var environment: ReverbViewEnvironment) :
+internal class PlayerTimeline(context: Context, private var environment: ReverbViewEnvironment) :
     ViewGroup(context), NativeViewPhasePointerNode {
     override val view: View get() = this
     private val waveform = ProgressiveWaveformView(context)
@@ -248,6 +248,8 @@ private class PlayerTimeline(context: Context, private var environment: ReverbVi
     private var state: LibraryPlayerUiState? = null
     private var frame: ProgressiveWaveformFrame? = null
     private val input = InlineWaveformPointerOwner()
+    val minimumTouchTarget get() = inlineWaveformMinimumTouchTarget(
+        width.toFloat(), 48f * environment.textDensity.density, state?.trimMode == true)
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         clipChildren = false
