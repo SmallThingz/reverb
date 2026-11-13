@@ -94,6 +94,9 @@ internal class ReverbGroupLayout(
     /** Surface's content layer, rather than its outer draw/border layer. Read-only identity. */
     val pointerContent: ViewGroup get() = content
 
+    /** The sampled fill currently painted, including an in-flight palette transition. */
+    val paintedFillColor: Int get() = fillPaint.color
+
     fun setPalette(@ColorInt field: Int, @ColorInt border: Int) {
         val motion=paletteTransition ?: ViewColorTransition(this,intArrayOf(field,border),{
             paletteTransition?.let { applyPalette(it.color(0),it.color(1)) }

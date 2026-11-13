@@ -9,6 +9,7 @@ internal class ReverbSegmentedPresentation(context: Context) : NativeSegmentedPr
     override val surface = ReverbGroupLayout(context, 30f)
     override fun setContent(content: View) = surface.addRow(content, ReverbGroupLayout.LayoutParams(-1, -2))
     override fun bindSurface(palette: ControlPalette) = surface.setPalette(palette.surface, palette.outline)
+    override val paintedSurfaceColor: Int get() = surface.paintedFillColor
 }
 
 internal fun segmentedPalette(value: ReverbViewEnvironment): ControlPalette = value.palette.let {
