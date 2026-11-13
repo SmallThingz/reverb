@@ -18,6 +18,7 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewGroup
+import android.view.ViewTreeObserver
 import android.view.inputmethod.InputMethodManager
 import androidx.activity.OnBackPressedDispatcher
 import smallthingz.ui.runtime.MonotonicFrameClock
@@ -78,6 +79,23 @@ internal class NativeMainScreenView private constructor(
     private var visualInsets = Insets.NONE
     private var statusInsets = Insets.NONE
     private var navigationBottom = 0
+    private var settingsBottomInset = 0
+    private val settingsWindowBounds = android.graphics.Rect()
+    private val settingsScreenLocation = IntArray(2)
+    private val settingsWindowLocation = IntArray(2)
+    private var settingsGeometryWidth = -1
+    private var settingsGeometryHeight = -1
+    private var settingsWindowOriginX = 0
+    private var settingsWindowOriginY = 0
+    // Window relayout/configuration can change metrics without changing this constrained child.
+    private val settingsWindowLayout = ViewTreeObserver.OnGlobalLayoutListener { settingsGeometryWidth = -1 }
+    private val settingsGeometry = ViewTreeObserver.OnPreDrawListener {
+        if (closed || settings == null || !navigation.showSettings ||
+            windowInsets.getInsets(WindowInsetsCompat.Type.ime()).bottom == 0 || !updateSettingsBottomInset()) true else {
+            settings?.bind(settingsInput(), environment)
+            false // Lay out the changed viewport before publishing this frame.
+        }
+    }
     private var librarySnapshot = emptyList<RecordingEntity>()
     private var libraryRefreshGeneration = 0
     private var captureOwner: NativeCaptureUiOwner? = null
@@ -214,6 +232,7 @@ internal class NativeMainScreenView private constructor(
         statusInsets = insets.getInsets(WindowInsetsCompat.Type.statusBars())
         navigationBottom = insets.getInsets(WindowInsetsCompat.Type.navigationBars()).bottom
         incidents.setStatusBarInsets(statusInsets)
+        updateSettingsBottomInset()
         requestRender()
         requestLayout()
     }
@@ -340,8 +359,47 @@ internal class NativeMainScreenView private constructor(
 
     private fun settingsInput() = NativeSettingsScreenInput(navigation.showSettings,
         BufferSlot.fromStorageCode(navigation.settingsBufferTargetCode),
-        NativeSettingsInsets(visualInsets.left, visualInsets.top, visualInsets.right,
-            maxOf(visualInsets.bottom, windowInsets.getInsets(WindowInsetsCompat.Type.ime()).bottom)))
+        NativeSettingsInsets(visualInsets.left, visualInsets.top, visualInsets.right, settingsBottomInset))
+
+    private fun updateSettingsBottomInset(): Boolean {
+        val ime = windowInsets.getInsets(WindowInsetsCompat.Type.ime()).bottom
+        settings?.sectionContent?.setImeVisible(ime > 0)
+        var bottom = maxOf(visualInsets.bottom, ime)
+        if (ime == 0) settingsGeometryWidth = -1
+        if (android.os.Build.VERSION.SDK_INT >= 30 && ime > 0 && isAttachedToWindow && height > 0) {
+            getLocationOnScreen(settingsScreenLocation)
+            getLocationInWindow(settingsWindowLocation)
+            val originX = settingsScreenLocation[0] - settingsWindowLocation[0]
+            val originY = settingsScreenLocation[1] - settingsWindowLocation[1]
+            if (settingsGeometryWidth != width || settingsGeometryHeight != height ||
+                settingsWindowOriginX != originX || settingsWindowOriginY != originY) {
+                settingsWindowBounds.set(context.getSystemService(android.view.WindowManager::class.java).currentWindowMetrics.bounds)
+                settingsGeometryWidth = width; settingsGeometryHeight = height
+                settingsWindowOriginX = originX; settingsWindowOriginY = originY
+            }
+            if (!settingsWindowBounds.isEmpty) {
+                // Pan/resize can already avoid part of the same window-relative IME occlusion.
+                val protectedBottom = settingsWindowBounds.bottom - bottom
+                bottom = (settingsScreenLocation[1] + height - protectedBottom).coerceIn(0, bottom)
+            }
+        }
+        if (settingsBottomInset == bottom) return false
+        settingsBottomInset = bottom
+        return true
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        settingsGeometryWidth = -1
+        viewTreeObserver.addOnPreDrawListener(settingsGeometry)
+        viewTreeObserver.addOnGlobalLayoutListener(settingsWindowLayout)
+    }
+
+    override fun onDetachedFromWindow() {
+        viewTreeObserver.removeOnPreDrawListener(settingsGeometry)
+        viewTreeObserver.removeOnGlobalLayoutListener(settingsWindowLayout)
+        super.onDetachedFromWindow()
+    }
 
     private fun createLibrary() {
         val content = ReverbLibraryScreenContent(context, environment, libraryInput(),
@@ -717,6 +775,8 @@ internal class NativeMainScreenView private constructor(
     override fun close() {
         if (closed) return
         closed = true
+        viewTreeObserver.removeOnPreDrawListener(settingsGeometry)
+        viewTreeObserver.removeOnGlobalLayoutListener(settingsWindowLayout)
         var failure: Throwable? = null
         fun release(action: () -> Unit) { try { action() } catch (error: Throwable) {
             if (failure == null) failure = error else if (failure !== error) failure!!.addSuppressed(error)

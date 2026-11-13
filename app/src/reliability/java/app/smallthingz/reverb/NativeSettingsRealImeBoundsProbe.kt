@@ -82,6 +82,7 @@ internal fun verifyNativeSettingsRealImeBounds(
         val protectedInsets = metrics.windowInsets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout() or WindowInsets.Type.ime())
         val rootBounds = bounds(root)
         val listBounds = bounds(list)
+        val visibleWindowFrame = Rect().also(root::getWindowVisibleDisplayFrame)
         val expectedListBottom = minOf(rootBounds.bottom, metrics.bounds.bottom - protectedInsets.bottom)
         val retained = views(screen).filterIsInstance<SettingsRetentionInputView>().any { it === editor }
         val choose = views(screen).filterIsInstance<SettingsStorageActionView>().firstOrNull { action ->
@@ -91,11 +92,13 @@ internal fun verifyNativeSettingsRealImeBounds(
             .put("delivered_ime_bottom", delivered.getInsets(WindowInsetsCompat.Type.ime()).bottom)
             .put("delivered_ime_visible", delivered.isVisible(WindowInsetsCompat.Type.ime()))
             .put("window_bounds", metrics.bounds.json()).put("window_protected_bottom", protectedInsets.bottom)
+            .put("window_visible_frame", visibleWindowFrame.json())
             .put("decor_bounds", bounds(host.window.decorView).json()).put("root_bounds", rootBounds.json())
             .put("list_bounds", listBounds.json()).put("expected_list_bottom", expectedListBottom)
             .put("list_bottom_matches_remaining_occlusion", listBounds.bottom == expectedListBottom)
             .put("editor_identity", System.identityHashCode(editor)).put("editor_retained", retained)
             .put("editor_bounds", bounds(editor).json()).put("editor_focused", editor.hasFocus())
+            .put("editor_inside_list", listBounds.contains(bounds(editor)))
             .put("editor_visible", editor.getGlobalVisibleRect(Rect())).put("raw_text", editor.text.toString())
             .put("selection_start", editor.selectionStart).put("selection_end", editor.selectionEnd)
             .put("current_focus_identity", root.findFocus()?.let(System::identityHashCode) ?: JSONObject.NULL)
@@ -122,7 +125,7 @@ internal fun verifyNativeSettingsRealImeBounds(
                 delivered.getInsets(WindowInsetsCompat.Type.ime()).bottom > 0 && !root.isLayoutRequested && !list.isLayoutRequested
         }
         val shown = snapshot("shown")
-        check(shown.getBoolean("editor_retained") && shown.getBoolean("editor_visible"))
+        check(shown.getBoolean("editor_retained") && shown.getBoolean("editor_visible") && shown.getBoolean("editor_inside_list"))
         main { check(editor.text.toString() == raw && (editor.selectionStart to editor.selectionEnd) == focusedSelection) }
         check(shown.getBoolean("list_bottom_matches_remaining_occlusion")) { "Actual IME root/list geometry double-deducts or overlaps; see evidence" }
     } catch (error: Throwable) { failure = error }
@@ -140,7 +143,7 @@ internal fun verifyNativeSettingsRealImeBounds(
             }
             val hidden = snapshot("hidden")
             check(hidden.getBoolean("list_bottom_matches_remaining_occlusion"))
-            if (focusedSelection != null) check(hidden.getBoolean("editor_retained") && hidden.getBoolean("editor_focused") && hidden.getBoolean("editor_visible"))
+            if (focusedSelection != null) check(hidden.getBoolean("editor_retained") && hidden.getBoolean("editor_focused") && hidden.getBoolean("editor_visible") && hidden.getBoolean("editor_inside_list"))
             main {
                 check(editor.text.toString() == raw && screen.owner.snapshot == baseline && !screen.owner.state.hasUnsavedChanges)
                 if (focusedSelection != null) check((editor.selectionStart to editor.selectionEnd) == focusedSelection)

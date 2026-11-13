@@ -1,6 +1,8 @@
 package app.smallthingz.reverb.nativeui
 
 import android.content.Context
+import android.graphics.Rect
+import android.view.ViewTreeObserver
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
@@ -53,9 +55,22 @@ internal class SettingsSectionListView(
         setHasFixedSize(false)
     }
     private var closed=false
+    private var cancelledFocusReveal:View?=null
+    private val focusRectangle=Rect()
+    private var lastFocusedLeaf:View?=null
+    private var imeVisible=false
+    private val focusChanged=ViewTreeObserver.OnGlobalFocusChangeListener { _,_ ->
+        val focused=list.findFocus()
+        if(lastFocusedLeaf!==focused) {
+            lastFocusedLeaf=focused
+            cancelledFocusReveal=null
+        }
+    }
     init {
         importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO
         addView(list,LayoutParams(-1,-1))
+        // An intentional drag, wheel or accessibility scroll owns the viewport until focus changes.
+        list.sourceOnUserScroll={cancelledFocusReveal=list.findFocus()}
         applyPadding()
     }
     fun bind(restricted:Boolean,next:ReverbViewEnvironment) {
@@ -87,9 +102,48 @@ internal class SettingsSectionListView(
     private fun applyPadding() {
         list.setPadding(0,0,0,(24f*environment.textDensity.density).roundToInt())
     }
+    fun setImeVisible(visible:Boolean) {
+        if(imeVisible==visible)return
+        imeVisible=visible
+        cancelledFocusReveal=null
+    }
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        lastFocusedLeaf=list.findFocus()
+        viewTreeObserver.addOnGlobalFocusChangeListener(focusChanged)
+    }
+    override fun onDetachedFromWindow() {
+        viewTreeObserver.removeOnGlobalFocusChangeListener(focusChanged)
+        lastFocusedLeaf=null;cancelledFocusReveal=null
+        super.onDetachedFromWindow()
+    }
+    override fun onLayout(changed:Boolean,l:Int,t:Int,r:Int,b:Int) {
+        val focused=list.findFocus()
+        if(focused==null)cancelledFocusReveal=null
+        val oldHeight=list.height
+        val reveal=focused!=null && focused!==list && focused!==cancelledFocusReveal &&
+            focused.onCheckIsTextEditor() && oldHeight>0
+        var wasVisible=false
+        if(reveal) {
+            focusRectangle.set(0,0,focused!!.width,focused.height)
+            list.offsetDescendantRectToMyCoords(focused,focusRectangle)
+            wasVisible=focusRectangle.top>=0 && focusRectangle.bottom<=oldHeight
+        }
+        super.onLayout(changed,l,t,r,b)
+        if(!wasVisible || list.height>=oldHeight || list.findFocus()!==focused)return
+        val child=list.findContainingItemView(focused!!) as? ViewGroup ?:return
+        focusRectangle.set(0,0,focused.width,focused.height)
+        child.offsetDescendantRectToMyCoords(focused,focusRectangle)
+        // Reveal the retained editor inside RV only; do not request another window pan or focus.
+        list.requestChildRectangleOnScreen(child,focusRectangle,true)
+    }
     override fun close() {
         if(closed)return
         closed=true
+        list.sourceOnUserScroll=null
+        viewTreeObserver.removeOnGlobalFocusChangeListener(focusChanged)
+        lastFocusedLeaf=null
+        cancelledFocusReveal=null
         list.stopScroll()
         list.adapter=null
         rows.close()

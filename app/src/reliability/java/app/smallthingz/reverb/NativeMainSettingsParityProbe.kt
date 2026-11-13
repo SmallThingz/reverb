@@ -962,8 +962,44 @@ internal class MainSettingsParityRender(
     private val commonGrain: NativeParityCommonGrainSession?,
     private val readableSelection: Boolean = false,
     private val syntheticDirectoryRegistration: (((android.net.Uri?) -> Unit) -> NativeDirectoryPickerRegistration)? = null,
+    private val productionWindowFocus: Boolean = false,
 ) : AutoCloseable {
-    val board = FrameLayout(activity)
+    private var boardFocus: NativeSourceFocusPolicy? = null
+    val board = object : FrameLayout(activity) {
+        init {
+            if (productionWindowFocus) {
+                // Same focus owner and full-window child geometry as NativeActivityContentView.
+                clipChildren = false
+                clipToPadding = false
+                importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
+                isFocusable = true
+                isFocusableInTouchMode = true
+                defaultFocusHighlightEnabled = false
+                boardFocus = NativeSourceFocusPolicy(this,
+                    takeOwnerFocus = { super.requestFocus(FOCUS_DOWN, null) },
+                    clearOwnerFocus = { super.clearFocus() })
+            }
+        }
+        override fun focusableViewAvailable(view: View) {
+            if (boardFocus?.reportsAvailability(view) != false) super.focusableViewAvailable(view)
+        }
+        override fun requestFocus(direction: Int, previouslyFocusedRect: Rect?): Boolean =
+            boardFocus?.requestFocus(direction, previouslyFocusedRect) ?: super.requestFocus(direction, previouslyFocusedRect)
+        override fun requestChildFocus(child: View, focused: View) {
+            super.requestChildFocus(child, focused)
+            boardFocus?.childFocused(focused)
+        }
+        override fun clearChildFocus(child: View) {
+            super.clearChildFocus(child)
+            boardFocus?.childCleared(child)
+        }
+        override fun dispatchKeyEvent(event: KeyEvent): Boolean =
+            if (boardFocus?.hasPendingInvalidation == true) false else super.dispatchKeyEvent(event)
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            boardFocus?.beforeMeasure()
+            super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+        }
+    }
     private val density = Density(activity.resources.displayMetrics.density, activity.resources.configuration.fontScale)
     private val resolver = createFontFamilyResolver(activity)
     private val previewState = mutableStateOf<AppThemeMode?>(null)
@@ -1049,7 +1085,7 @@ internal class MainSettingsParityRender(
                 registerDirectoryResult = { result ->
                     syntheticDirectoryRegistration?.invoke(result)
                         ?: NativeDirectoryPickerRegistration(launch = { forbidden() }, unregister = {})
-                }, releaseInputFocus = {})
+                }, releaseInputFocus = { if (productionWindowFocus) board.findFocus()?.clearFocus() })
             native = view
             board.addView(view, FrameLayout.LayoutParams(-1, -1))
             insetBinding = NativeWindowInsetsBinding(board) {
@@ -1210,6 +1246,7 @@ internal class MainSettingsParityRender(
             }
         }
         release { compose?.disposeComposition() }
+        release { boardFocus?.close() }
         release { native?.close() }
         release { insetBinding?.close() }
         release { activity.lifecycle.removeObserver(runtimeLifecycle) }
