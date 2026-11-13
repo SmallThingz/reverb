@@ -16,8 +16,18 @@ internal inline fun ReverbNoiseDrawable(
 ): ReverbNoiseDrawable = smallthingz.ui.graphics.NoiseDrawable(backgroundColor, seed)
 
 /** Animate only the retained background paint; procedural grain stays cached. */
-internal fun ReverbNoiseDrawable.colorTransition(view:View,initial:Int):ViewColorTransition {
+internal fun ReverbNoiseDrawable.colorTransition(
+    view:View,initial:Int,onPaintChanged:(()->Unit)?=null,
+):ViewColorTransition {
     lateinit var motion:ViewColorTransition
-    motion=ViewColorTransition(view,intArrayOf(initial),{setBackgroundColor(motion.color(0))})
+    var published = initial
+    motion=ViewColorTransition(view,intArrayOf(initial),{
+        val color = motion.color(0)
+        setBackgroundColor(color)
+        if (color != published) {
+            published = color
+            onPaintChanged?.invoke()
+        }
+    })
     return motion
 }

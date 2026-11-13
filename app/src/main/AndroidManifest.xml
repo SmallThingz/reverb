@@ -5,6 +5,8 @@
     <!-- Basic functionality -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
@@ -56,6 +58,18 @@
             android:noHistory="true"
             android:taskAffinity=""
             android:theme="@style/Theme.Reverb.QuickTileAction" />
+
+        <receiver android:name=".BootCompletedReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <activity android:name=".BootResumeActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity="${applicationId}.bootresume"
+            android:theme="@style/Theme.Reverb" />
 
         <service
             android:name=".ReverbService"

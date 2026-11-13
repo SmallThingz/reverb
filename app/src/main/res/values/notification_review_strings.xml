@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_resume_notification_blocked">Resume reminders are blocked. Review notification access.</string>
+    <string name="settings_notification_access">Review notification access</string>
+    <string name="settings_notification_access_failed">Could not open notification settings</string>
+    <string name="onboarding_restart_resume_title">Resume recording after restart</string>
+    <string name="onboarding_restart_resume_body">Allow display over other apps. Reverb briefly opens after a restart to resume recording.</string>
+    <string name="settings_restart_access_missing">Allow Reverb to briefly open and resume recording after a restart.</string>
+    <string name="settings_restart_access">Review restart access</string>
+    <string name="settings_restart_access_failed">Could not open restart access settings</string>
+    <string name="settings_restart_test">Test restart</string>
+    <string name="settings_restart_test_ready">Test recording restart from the background or lock screen.</string>
+    <string name="settings_restart_test_armed">Leave Reverb or lock your phone. Reverb will try to record after 30 seconds. Returning cancels the test.</string>
+    <string name="settings_restart_test_unavailable">Stop recording and allow microphone and restart access before testing.</string>
+    <string name="settings_restart_test_failed">Could not prepare the restart test</string>
+    <string name="restart_access_not_now">Not now</string>
+    <string name="restart_invitation_read_failed">Could not check the restart access reminder</string>
+    <string name="restart_invitation_save_failed">Could not save your restart access reminder choice</string>
+</resources>

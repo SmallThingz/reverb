@@ -55,6 +55,7 @@ internal class NativeActivityContentView(
     private var loading: ReverbIncidentLoadingView? = null
     private var feedback: NativeAppFeedbackHostView? = null
     private var denied: ReverbPermissionDeniedDialog? = null
+    private var restartInvitation: CaptureTextSheet? = null
     private var remainingMainState = restoredMain
     private var remainingOnboardingState = restoredOnboarding
     private var closed = false
@@ -63,7 +64,9 @@ internal class NativeActivityContentView(
     private var renderAgain = false
     private var windowInsets = WindowInsetsCompat.Builder().build()
     private val noise = ReverbNoiseDrawable(resources, initialEnvironment.palette.surface)
-    private val noiseColor=noise.colorTransition(this,initialEnvironment.palette.surface)
+    private val noiseColor=noise.colorTransition(this,initialEnvironment.palette.surface) {
+        main?.invalidateSettingsTextSurface()
+    }
     private val hostClip = NativeTextSemanticsClipPolicy { view ->
         when {
             view.parent is ReverbGroupLayout -> NativeTextSemanticsClip.Rectangle(
@@ -134,6 +137,7 @@ internal class NativeActivityContentView(
         if (snapshot.showingOnboarding) {
             retireMain()
             retireDenied()
+            retireRestartInvitation()
             val page = snapshot.page
             if (page == null) {
                 retireOnboarding()
@@ -193,6 +197,7 @@ internal class NativeActivityContentView(
             current.bind(NativeMainScreenInput(snapshot.requiredPermissionsGranted, snapshot.showPermissionDenied), environment)
             deliverPlaybackRequest()
             if (snapshot.showPermissionDenied) {
+                retireRestartInvitation()
                 val microphoneAllowed = activity.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) ==
                     android.content.pm.PackageManager.PERMISSION_GRANTED
                 val storageAllowed = !requiresLegacyPublicStoragePermission() ||
@@ -203,7 +208,23 @@ internal class NativeActivityContentView(
                 ).also { denied = it; it.show() }
                 modal.bindEnvironment(environment)
                 modal.bind(microphoneAllowed, storageAllowed, owner::dismissPermissionDenied, openApplicationSettings)
-            } else retireDenied()
+            } else {
+                retireDenied()
+                if (snapshot.showRestartAccessInvitation) {
+                    val title = context.getString(R.string.onboarding_restart_resume_title)
+                    val message = context.getString(R.string.onboarding_restart_resume_body)
+                    val dismiss = { owner.respondToRestartInvitation(false) }
+                    val modal = restartInvitation ?: CaptureTextSheet(this, environment, title, message, dismiss) { host ->
+                        listOf(
+                            LibrarySheetButton(context, host, false, context.getString(R.string.restart_access_not_now), dismiss),
+                            LibrarySheetButton(context, host, true, context.getString(R.string.background_review), onClick = {
+                                owner.respondToRestartInvitation(true)
+                            }),
+                        )
+                    }.also { restartInvitation = it; it.show() }
+                    modal.bind(title, message, environment, dismiss)
+                } else retireRestartInvitation()
+            }
         }
         deliverInsets()
         requestLayout()
@@ -322,6 +343,7 @@ internal class NativeActivityContentView(
     private fun retireLoading() { loading?.let { loading = null; removeView(it) } }
     private fun retireFeedback() { feedback?.let { feedback = null; removeView(it); it.close() } }
     private fun retireDenied() { denied?.let { denied = null; it.close() } }
+    private fun retireRestartInvitation() { restartInvitation?.let { restartInvitation = null; it.close() } }
 
     override fun close() {
         if (closed) return
@@ -337,6 +359,7 @@ internal class NativeActivityContentView(
         }
         release { sourceFocus?.close() }
         release(::retireDenied)
+        release(::retireRestartInvitation)
         release(::retireMain)
         release(::retireFeedback)
         release(::retireLoading)

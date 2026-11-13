@@ -963,6 +963,7 @@ internal class MainSettingsParityRender(
     private val readableSelection: Boolean = false,
     private val syntheticDirectoryRegistration: (((android.net.Uri?) -> Unit) -> NativeDirectoryPickerRegistration)? = null,
     private val productionWindowFocus: Boolean = false,
+    private val animatedSurfaceForProbe: Boolean = false,
 ) : AutoCloseable {
     private var boardFocus: NativeSourceFocusPolicy? = null
     val board = object : FrameLayout(activity) {
@@ -1026,6 +1027,9 @@ internal class MainSettingsParityRender(
         private set
     val effectiveDark: Boolean get() = mainParityDark(previewState.value ?: initialMode, systemDark)
     private val noise = ReverbNoiseDrawable(activity.resources, palette().surface)
+    private val noiseColor = if (animatedSurfaceForProbe) noise.colorTransition(board, palette().surface) {
+        native?.invalidateSettingsTextSurface()
+    } else null
 
     init {
         try {
@@ -1143,7 +1147,8 @@ internal class MainSettingsParityRender(
         callbacks.put(mode?.name ?: JSONObject.NULL)
         previewState.value = mode
         if (closed) return
-        noise.setBackgroundColor(palette().surface)
+        if (noiseColor == null) noise.setBackgroundColor(palette().surface)
+        else noiseColor.retarget(palette().surface)
         applyWindowAppearance()
         native?.bind(NativeMainScreenInput(false, false), environment())
     }
@@ -1246,6 +1251,7 @@ internal class MainSettingsParityRender(
             }
         }
         release { compose?.disposeComposition() }
+        release { noiseColor?.close() }
         release { boardFocus?.close() }
         release { native?.close() }
         release { insetBinding?.close() }
@@ -1372,7 +1378,7 @@ private fun awaitMainParityAction(instrumentation: Instrumentation, host: Native
     }
     error("Main/Settings did not expose enabled '$label' within 100 observed frame boundaries")
 }
-private fun settledMainParityBitmap(instrumentation: Instrumentation, host: NativeParityActivity,
+internal fun settledMainParityBitmap(instrumentation: Instrumentation, host: NativeParityActivity,
                                     render: MainSettingsParityRender, directory: File, failedName: String): Bitmap {
     // Main's released settle tween is 220ms. Observe at least that source duration under the
     // unchanged animator scale before testing pixel stability; an initially unchanged frame is

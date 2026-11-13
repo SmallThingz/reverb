@@ -258,8 +258,11 @@ private class SettingsAudioDropdownView<T>(
 
     private fun publishColors() {
         val colors=colorMotion ?: return
-        fill.color=colors.color(0);title.setTextColor(colors.color(1));selected.setTextColor(colors.color(2))
-        arrow.setTintImmediately(colors.color(3));divider.color=colors.color(4);rippleColor=colors.color(5)
+        fill.color=colors.color(0)
+        title.setTextColor(transitionInk(colors,fill.color,colors.color(1)))
+        selected.setTextColor(transitionInk(colors,fill.color,colors.color(2)))
+        arrow.setTintImmediately(transitionInk(colors,fill.color,colors.color(3)))
+        divider.color=colors.color(4);rippleColor=colors.color(5)
         invalidate()
     }
 

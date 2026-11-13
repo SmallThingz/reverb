@@ -55,8 +55,10 @@ internal class ReverbGroupLayout(
     private var progressFraction = 0f
 
     fun setBackgroundProgress(fraction: Float, color: Int) {
+        val wasCovered=progressFraction>0f
         progressFraction = fraction.takeIf { it.isFinite() }?.coerceIn(0f, 1f) ?: 0f
         progressPaint.color = color
+        if(wasCovered!=(progressFraction>0f))invalidateSettingsTextContrast(this)
         invalidate()
     }
 
@@ -96,6 +98,9 @@ internal class ReverbGroupLayout(
 
     /** The sampled fill currently painted, including an in-flight palette transition. */
     val paintedFillColor: Int get() = fillPaint.color
+    /** Progress overlays are not a uniform text underlay; leave their existing ink owner intact. */
+    val paintedTextSurface: Long get() = if (progressFraction == 0f)
+        smallthingz.ui.controls.textSurfaceRange(fillPaint.color) else 0L
 
     fun setPalette(@ColorInt field: Int, @ColorInt border: Int) {
         val motion=paletteTransition ?: ViewColorTransition(this,intArrayOf(field,border),{
@@ -111,8 +116,10 @@ internal class ReverbGroupLayout(
     }
 
     private fun applyPalette(field:Int,border:Int) {
+        val fillChanged = fillPaint.color != field
         if (fillPaint.color != field || borderPaint.color != border) {
             fillPaint.color = field
+            if (fillChanged) invalidateSettingsTextContrast(this)
             borderPaint.color = border
             invalidate()
         }

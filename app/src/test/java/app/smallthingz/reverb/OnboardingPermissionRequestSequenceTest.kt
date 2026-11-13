@@ -104,13 +104,14 @@ class OnboardingPermissionRequestSequenceTest {
 
     @Test fun completionNeverClaimsTheNextPermissionAndExplicitTapCanRetry() {
         val sequence = OnboardingPermissionRequestSequence()
+        val allMissing = missing.copy(overlayAllowed = false)
         for (permission in OnboardingPermission.entries) {
-            assertFalse(sequence.claimManual(permission, missing, false))
-            assertTrue(sequence.claimManual(permission, missing, true))
+            assertFalse(sequence.claimManual(permission, allMissing, false))
+            assertTrue(sequence.claimManual(permission, allMissing, true))
             sequence.completed(permission)
             sequence.leftForeground(); sequence.returnedToForeground()
             assertNull(sequence.pending)
-            assertTrue(sequence.claimManual(permission, missing, true))
+            assertTrue(sequence.claimManual(permission, allMissing, true))
             sequence.completed(permission)
             assertNull(sequence.pending)
         }
@@ -200,7 +201,7 @@ class OnboardingPermissionRequestSequenceTest {
     }
 
     @Test fun settingsReviewWorksForEveryRuntimePermissionAndBlocksOverlapUntilReturn() {
-        for (permission in OnboardingPermission.entries.filter { it != OnboardingPermission.BATTERY && it != OnboardingPermission.ALL_FILES }) {
+        for (permission in OnboardingPermission.entries.filter { it != OnboardingPermission.BATTERY && it != OnboardingPermission.ALL_FILES && it != OnboardingPermission.OVERLAY }) {
             val sequence = OnboardingPermissionRequestSequence()
             assertTrue(sequence.claimManual(permission, missing, true))
             assertTrue(sequence.beginSettingsReview(previouslyRequested = true, showsRationale = false))
@@ -353,6 +354,57 @@ class OnboardingPermissionRequestSequenceTest {
         assertTrue(ready.isReadyForHighlightedContinue())
         assertTrue(ready.copy(recoveryAllowed = false, allFilesAllowed = true).isReadyForHighlightedContinue())
         assertFalse(ready.copy(recoveryAllowed = false).isReadyForHighlightedContinue())
+    }
+
+    @Test fun overlayReviewRequiresDepartureAndDenialDoesNotAutomaticallyRepeat() {
+        val ready = missing.copy(microphoneAllowed = true, storageRequired = false, recoveryAllowed = true,
+            notificationsAllowed = true, batteryOptimizationAllowed = true, overlayAllowed = false)
+        val sequence = OnboardingPermissionRequestSequence()
+        assertNull(sequence.claimNext(ready, false))
+        assertEquals(OnboardingPermission.OVERLAY, sequence.claimNext(ready, true))
+        sequence.beginOverlayReview()
+        sequence.returnedToForeground()
+        assertEquals(OnboardingPermission.OVERLAY, sequence.pending)
+        sequence.leftForeground(); sequence.returnedToForeground()
+        repeat(3) {
+            sequence.leftForeground(); sequence.returnedToForeground()
+            assertNull(sequence.claimNext(ready, true))
+        }
+        assertTrue(sequence.claimManual(OnboardingPermission.OVERLAY, ready, true))
+        assertFalse(sequence.beginSettingsReview(true, false))
+    }
+
+    @Test fun overlayReviewSurvivesRecreationWithoutReopeningTheSettingsPage() {
+        val status = missing.copy(overlayAllowed = false)
+        val original = OnboardingPermissionRequestSequence(OnboardingPermission.entries.toSet())
+        assertTrue(original.claimManual(OnboardingPermission.OVERLAY, status, true))
+        original.beginOverlayReview(); original.leftForeground()
+        val restored = OnboardingPermissionRequestSequence(
+            OnboardingPermissionRequestSequence.attemptedFromMask(original.attemptedMask),
+            original.pending, original.batteryLeftForeground, original.settingsReview, original.settingsLeftForeground)
+        assertNull(restored.claimNext(status, true))
+        restored.returnedToForeground()
+        assertNull(restored.pending)
+        assertNull(restored.claimNext(status, true))
+        assertFalse(restored.claimManual(OnboardingPermission.OVERLAY, status.copy(overlayAllowed = true), true))
+    }
+
+    @Test fun failedOverlayLaunchReleasesItsReviewWithoutLosingEarlierAttemptBits() {
+        val original = OnboardingPermissionRequestSequence(OnboardingPermissionRequestSequence.attemptedFromMask(63))
+        assertTrue(original.claimManual(OnboardingPermission.OVERLAY, missing.copy(overlayAllowed = false), true))
+        original.beginOverlayReview()
+        original.completed(OnboardingPermission.OVERLAY)
+        assertFalse(original.settingsReview)
+        assertFalse(original.settingsLeftForeground)
+        assertEquals(127, original.attemptedMask)
+        assertEquals(OnboardingPermission.entries.take(6).toSet(), OnboardingPermissionRequestSequence.attemptedFromMask(63))
+    }
+
+    @Test fun overlayRemainsOptionalForContinueBecauseNotificationFallbackExists() {
+        val ready = missing.copy(microphoneAllowed = true, storageAllowed = true,
+            recoveryAllowed = true, notificationsAllowed = true, overlayAllowed = false)
+        assertTrue(ready.isReadyForHighlightedContinue())
+        assertTrue(ready.copy(overlayAllowed = true).isReadyForHighlightedContinue())
     }
 
 }

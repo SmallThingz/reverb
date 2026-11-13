@@ -303,6 +303,7 @@ internal class ReverbTopBarIconAction(
     internal val accessibilityAction: View get() = leaf
     /** The existing clipped leaf background can carry feedback beneath its glyph and ripple. */
     internal val visual: View get() = leaf
+    internal fun invalidateTextSurfaceInk() = leaf.invalidate()
     init {
         // The source size modifier does not clip an overflowing minimum-layout residual.
         clipChildren = false
@@ -390,7 +391,12 @@ private class ReverbTopBarActionLeaf(
     private val identity = Any()
     private var click: (() -> Unit)? = null
     private var icon = ReverbIconDrawable(glyph, environment.textDensity.density, environment.palette.ink)
-    private val colorMotion=colorTransition(environment.palette.ink) {icon.setTint(it);invalidate()}
+    private var publishedTint=environment.palette.ink
+    private val colorMotion=colorTransition(environment.palette.ink) {publishTint();invalidate()}
+    private fun publishTint() {
+        val ink=smallthingz.ui.controls.textSurfaceForeground(settingsTextSurface(this),colorMotion.color(0))
+        if(publishedTint!=ink){publishedTint=ink;icon.setTint(ink)}
+    }
     private var incidentMorph: LibraryBackIncidentMorph? = null
     private var incidentProgress = 0f
     private var incidentAlert = false
@@ -440,7 +446,7 @@ private class ReverbTopBarActionLeaf(
         isFocusable = enabled
         colorMotion.retarget(if (enabled) tint else reverbColorWithAlpha(tint, .38f))
         incidentColorMotion?.retarget(if (incidentAlert) value.palette.error else value.palette.muted)
-        icon.setTint(colorMotion.color(0))
+        publishTint()
         indication.updateColor(value.palette.ink)
         controller.bind(NativeClickBinding(identity, enabled, onClick = { performClick() }))
         updateGeometry(width, height)
@@ -451,6 +457,8 @@ private class ReverbTopBarActionLeaf(
         if (glyph == next) return
         glyph = next
         icon = ReverbIconDrawable(next, environment.textDensity.density, colorMotion.color(0))
+        publishedTint=colorMotion.color(0)
+        publishTint()
         updateGeometry(width, height)
         invalidate()
     }
@@ -498,6 +506,7 @@ private class ReverbTopBarActionLeaf(
         indication.onMeasured(w, h, environment.textDensity.density)
     }
     override fun onDraw(canvas: Canvas) {
+        publishTint()
         if (incidentProgress <= 0f) icon.draw(canvas)
         else incidentMorph?.draw(canvas, icon.bounds, incidentProgress,
             ColorUtils.blendARGB(colorMotion.color(0), checkNotNull(incidentColorMotion).color(0), incidentProgress),

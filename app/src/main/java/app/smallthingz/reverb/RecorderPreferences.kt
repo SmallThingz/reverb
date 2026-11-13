@@ -318,9 +318,15 @@ internal fun decodeDurableCaptureIntentPreferences(
     return DurableCaptureIntentPreferences(enabled = enabled, bufferSlot = bufferSlot)
 }
 
+// SharedPreferences publishes its process map before commit/rollback finishes. Readers must
+// share the recorder transaction monitor to avoid consuming that temporary authority.
+internal val captureIntentPreferenceLock = Any()
+
 internal fun readDurableCaptureIntentPreferences(
     prefs: SharedPreferences,
-): DurableCaptureIntentPreferences = decodeDurableCaptureIntentPreferences(prefs.all)
+): DurableCaptureIntentPreferences = synchronized(captureIntentPreferenceLock) {
+    decodeDurableCaptureIntentPreferences(prefs.all)
+}
 
 internal fun readCaptureBufferSlotPreference(prefs: SharedPreferences): ReverbService.BufferSlot? {
     val encoded = prefs.safeInt(PrefKey.CAPTURE_BUFFER_SLOT, Int.MIN_VALUE)

@@ -215,6 +215,7 @@ internal class SettingsRetentionInputView private constructor(
     }
 
     override fun onDraw(canvas: Canvas) {
+        publishTextInk()
         cursorDrawable.beginTextDraw()
         try {
             super.onDraw(canvas)
@@ -278,8 +279,12 @@ internal class SettingsRetentionInputView private constructor(
     private fun direction(): LayoutDirection =
         if (layoutDirection == LAYOUT_DIRECTION_RTL) LayoutDirection.Rtl else LayoutDirection.Ltr
 
+    private fun publishTextInk() {
+        val ink = smallthingz.ui.controls.textSurfaceForeground(settingsTextSurface(this),colorMotion.color(0))
+        if (currentTextColor != ink) setTextColor(ink)
+    }
     private fun applyColors() {
-        setTextColor(colorMotion.color(0))
+        publishTextInk()
         val primary=colorMotion.color(1)
         highlightColor=(primary and 0x00ffffff) or (0x66 shl 24)
         if(Build.VERSION.SDK_INT>=29)cursorDrawable.bind(2f*environment.textDensity.density,primary)

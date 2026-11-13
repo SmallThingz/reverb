@@ -1,6 +1,8 @@
 package app.smallthingz.reverb
 
 import android.content.ActivityNotFoundException
+import android.app.KeyguardManager
+import android.os.PowerManager
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
@@ -65,7 +67,11 @@ class MainActivity : ComponentActivity() {
 
     private val runtimeLifecycle = object : DefaultLifecycleObserver {
         override fun onStart(owner: LifecycleOwner) { runtime.setStarted(true) }
-        override fun onResume(owner: LifecycleOwner) { deliverPlaybackRequest() }
+        override fun onResume(owner: LifecycleOwner) {
+            deliverPlaybackRequest()
+            BootResumeActivity.mainVisibilityChanged(this@MainActivity)
+        }
+        override fun onPause(owner: LifecycleOwner) { BootResumeActivity.mainVisibilityChanged(this@MainActivity) }
         override fun onStop(owner: LifecycleOwner) { runtime.setStarted(false) }
     }
 
@@ -242,8 +248,26 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        BootResumeActivity.mainStarted(this, ::captureWindowVisible)
         owner.onStart()
     }
+
+    override fun onStop() {
+        BootResumeActivity.mainStopped(this, applicationContext)
+        super.onStop()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        BootResumeActivity.mainVisibilityChanged(this)
+    }
+
+    private fun captureWindowVisible(): Boolean = !closed && ::content.isInitialized && mainWindowCanResumeCapture(
+        resumed = lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED),
+        attached = content.isAttachedToWindow, shown = content.isShown, focused = content.hasWindowFocus(),
+        interactive = getSystemService(PowerManager::class.java)?.isInteractive == true,
+        keyguardLocked = getSystemService(KeyguardManager::class.java)?.isKeyguardLocked != false,
+    )
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
@@ -313,7 +337,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private fun AppThemeMode.nativeIsDark(systemDark: Boolean) = when (this) {
+internal fun AppThemeMode.nativeIsDark(systemDark: Boolean) = when (this) {
     AppThemeMode.SYSTEM -> systemDark
     AppThemeMode.LIGHT -> false
     AppThemeMode.DARK -> true

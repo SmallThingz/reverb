@@ -48,7 +48,8 @@ internal class NativeSettingsScreenContent(
     private val changedNodes:()->Unit,
 ):ViewGroup(context),AutoCloseable,NativeSourceFocusEntryBoundary {
     private var input=initial
-    private var environment=initialEnvironment
+    private var sourceEnvironment=initialEnvironment
+    private var environment=initialEnvironment.forSettings()
     private var closed=false
     private var started=false
     private var publishing=false
@@ -62,7 +63,6 @@ internal class NativeSettingsScreenContent(
     private var pendingRetentionFocus=false
     private var focusKeyInitialized=false
     private var previousFocusBuffer:ReverbService.BufferSlot?=null
-    private var previousBatteryRestricted=false
     val topBar=ReverbSettingsTopBarView(context,environment,animationScope) {inputRoot}
     private val deleteSheet=NativeSettingsTileDeleteSheet(this) {environment}
     private val sections=NativeSettingsSections(context,owner,{environment},lifecycleOwner.lifecycle,
@@ -97,10 +97,14 @@ internal class NativeSettingsScreenContent(
         started=true
         owner.start(::publish)
     }
-    fun bind(next:NativeSettingsScreenInput,nextEnvironment:ReverbViewEnvironment=environment) {
+    fun bind(next:NativeSettingsScreenInput,nextEnvironment:ReverbViewEnvironment=sourceEnvironment) {
         if(closed)return
         val geometryChanged=input.insets!=next.insets
-        input=next;environment=nextEnvironment
+        input=next
+        if(sourceEnvironment!==nextEnvironment) {
+            sourceEnvironment=nextEnvironment
+            environment=nextEnvironment.forSettings()
+        }
         owner.setActive(next.active)
         if(started)publish()
         if(geometryChanged)requestLayout()
@@ -127,11 +131,9 @@ internal class NativeSettingsScreenContent(
         importantForAccessibility=if(inputAllowed||state.hydrationPending)IMPORTANT_FOR_ACCESSIBILITY_NO
             else IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
         val focusBuffer=input.focusRetention
-        val batteryRestricted=owner.batteryOptimizationRestricted
-        if(!focusKeyInitialized||previousFocusBuffer!=focusBuffer||previousBatteryRestricted!=batteryRestricted) {
+        if(!focusKeyInitialized||previousFocusBuffer!=focusBuffer) {
             focusKeyInitialized=true
             previousFocusBuffer=focusBuffer
-            previousBatteryRestricted=batteryRestricted
             if(input.focusRetention!=null)pendingRetentionFocus=true
         }
         if(!state.hydrated) {
@@ -146,15 +148,18 @@ internal class NativeSettingsScreenContent(
         }
         if(topBar.parent==null)addView(topBar)
         val currentList=list?:SettingsSectionListView(context,sections,environment,
-            owner.batteryOptimizationRestricted,savedPosition,::structureChanged).also {
+            true,savedPosition,::structureChanged).also {
             list=it;addView(it,0);lastSections=null;structureChanged()
         }
         val sectionValues=SectionValues(state,owner.errors,owner.exportPathText,owner.canMove,
-            owner.settingsCommitBlocked,owner.batteryOptimizationRestricted,owner.allFilesAllowed,owner.audioReadAllowed,environment,input.focusRetention)
+            owner.settingsCommitBlocked,owner.batteryOptimizationRestricted,owner.resumeNotificationBlocked,owner.restartAccessMissing,
+            owner.restartTestArmed,owner.restartTestPending,
+            owner.allFilesAllowed,owner.audioReadAllowed,environment,input.focusRetention)
         val tileEditorChanged=tileEditorPublication.changed(owner.quickTileEditorState)
         if(lastSections!=sectionValues) {
             lastSections=sectionValues
-            currentList.bind(owner.batteryOptimizationRestricted,environment)
+            // Restart testing remains reachable even when every permission is granted.
+            currentList.bind(true,environment)
         } else {
             // Back can close the child without changing the parent draft or firing the tile owner.
             if(tileEditorChanged)currentList.bindSection(SettingsSectionKey.QUICK_TILES)
@@ -263,7 +268,10 @@ internal class NativeSettingsScreenContent(
         failure?.let {throw it}
     }
     private data class SectionValues(val state:SettingsDraftPresentation,val errors:NativeSettingsRetentionErrors,
-        val path:String,val canMove:Boolean,val commitBlocked:Boolean,val restricted:Boolean,val allFilesAllowed:Boolean,val audioReadAllowed:Boolean,val environment:ReverbViewEnvironment,
+        val path:String,val canMove:Boolean,val commitBlocked:Boolean,val batteryRestricted:Boolean,
+        val notificationBlocked:Boolean,val restartAccessMissing:Boolean,
+        val restartTestArmed:Boolean,val restartTestPending:Boolean,
+        val allFilesAllowed:Boolean,val audioReadAllowed:Boolean,val environment:ReverbViewEnvironment,
         val focus:ReverbService.BufferSlot?)
     private data class TopBarValues(val activation:Any,val changed:Boolean,val persisting:Boolean,
         val calibrating:Boolean,val tileOpen:Boolean,val durationPending:Boolean,val backHint:Any?,

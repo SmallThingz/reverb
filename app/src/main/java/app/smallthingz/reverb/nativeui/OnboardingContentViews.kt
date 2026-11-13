@@ -50,12 +50,16 @@ internal class OnboardingIconView(
     private var currentIcon = icon
     private var glyph = ReverbIconDrawable(icon, resources.displayMetrics.density, color)
     private var displayedColor=color
+    private var publishedTint=color
+    var useTextSurfaceContrast=false
+        set(value) { if(field!=value){field=value;invalidate()} }
     private var colorTransition:ViewColorTransition?=null
     init { importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO; isFocusable = false }
     fun bind(icon: ReverbIcon, color: Int) {
         if (currentIcon != icon) {
             currentIcon = icon
             glyph = ReverbIconDrawable(icon, resources.displayMetrics.density, color)
+            publishedTint=color
             glyph.setBounds(0, 0, width, height)
         }
         glyph.layoutDirection = layoutDirection
@@ -65,13 +69,18 @@ internal class OnboardingIconView(
         applyTint()
         invalidate()
     }
-    private fun applyTint() {colorTransition?.let {displayedColor=it.color(0)};glyph.setTint(displayedColor);invalidate()}
+    private fun publishTint() {
+        val ink = if (!useTextSurfaceContrast || colorTransition == null) displayedColor else
+            smallthingz.ui.controls.textSurfaceForeground(settingsTextSurface(this),displayedColor)
+        if (publishedTint != ink) { publishedTint=ink;glyph.setTint(ink) }
+    }
+    private fun applyTint() {colorTransition?.let {displayedColor=it.color(0)};publishTint();invalidate()}
     fun setTintImmediately(color:Int) {
         colorTransition?.close();colorTransition=null;displayedColor=color;applyTint()
     }
     fun bindImmediately(icon:ReverbIcon,color:Int) {
         if(currentIcon!=icon) {
-            currentIcon=icon;glyph=ReverbIconDrawable(icon,resources.displayMetrics.density,color)
+            currentIcon=icon;glyph=ReverbIconDrawable(icon,resources.displayMetrics.density,color);publishedTint=color
             glyph.setBounds(0,0,width,height)
         }
         glyph.layoutDirection=layoutDirection
@@ -83,7 +92,10 @@ internal class OnboardingIconView(
         glyph.layoutDirection = layoutDirection
         invalidate()
     }
-    override fun onDraw(canvas: Canvas) { glyph.draw(canvas) }
+    override fun onDraw(canvas: Canvas) {
+        publishTint()
+        glyph.draw(canvas)
+    }
 
     fun bindDescriptionAccessibility(window: PlainTextAccessibilityWindowScope, exposed: () -> Boolean): AutoCloseable =
         bindDescriptionAccessibility(window, null, exposed)

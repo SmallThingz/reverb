@@ -39,6 +39,7 @@ internal class SettingsRetentionValueView(
     init {
         importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO
         icon.importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO
+        icon.useTextSurfaceContrast=true
         addView(icon);addView(heading);addView(editor);addView(unit);addView(estimate)
         bindTypography()
     }

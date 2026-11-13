@@ -93,7 +93,7 @@ internal class NativeCaptureSheets(
     }
 }
 
-private class CaptureTextSheet(
+internal class CaptureTextSheet(
     anchor: View,
     environment: ReverbViewEnvironment,
     title: String,

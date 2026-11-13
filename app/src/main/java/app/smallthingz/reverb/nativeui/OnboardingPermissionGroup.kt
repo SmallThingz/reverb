@@ -9,7 +9,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
 import app.smallthingz.reverb.R
 
-internal enum class OnboardingPermission { MICROPHONE, STORAGE, RECOVERY, NOTIFICATIONS, BATTERY, ALL_FILES }
+internal enum class OnboardingPermission { MICROPHONE, STORAGE, RECOVERY, NOTIFICATIONS, BATTERY, ALL_FILES, OVERLAY }
 
 internal data class OnboardingPermissionStatus(
     val microphoneAllowed: Boolean,
@@ -24,9 +24,10 @@ internal data class OnboardingPermissionStatus(
     val interactionEnabled: Boolean,
     val allFilesAvailable: Boolean = false,
     val allFilesAllowed: Boolean = false,
+    val overlayAllowed: Boolean = true,
 )
 
-/** All-files access and battery exemption do not gate the released footer highlight. */
+/** Optional all-files, battery and restart access do not gate the footer highlight. */
 internal fun OnboardingPermissionStatus.isReadyForHighlightedContinue(): Boolean =
     microphoneAllowed && storageAllowed &&
         (!recoveryRequired || recoveryAllowed || allFilesAllowed) &&
@@ -95,6 +96,9 @@ internal class OnboardingPermissionGroup(
             add(PermissionRowState(OnboardingPermission.BATTERY, "B",
                 context.getString(R.string.onboarding_background_title), context.getString(R.string.onboarding_background_body),
                 status.batteryOptimizationAllowed, status.interactionEnabled))
+            add(PermissionRowState(OnboardingPermission.OVERLAY, "R",
+                context.getString(R.string.onboarding_restart_resume_title), context.getString(R.string.onboarding_restart_resume_body),
+                status.overlayAllowed, status.interactionEnabled, ReverbIcon.BackgroundWarning))
         }
         val present = states.mapTo(mutableSetOf()) { it.kind }
         rows.keys.filterNot(present::contains).forEach { kind ->
@@ -154,8 +158,11 @@ private class PermissionRow(
     private var state: PermissionRowState? = null
     private val allowLabel = context.getString(R.string.allow)
     override val accessibilityClickLabel: CharSequence get() =
-        if (state?.kind == OnboardingPermission.ALL_FILES) context.getString(R.string.all_files_access_settings)
-        else allowLabel
+        when (state?.kind) {
+            OnboardingPermission.ALL_FILES -> context.getString(R.string.all_files_access_settings)
+            OnboardingPermission.OVERLAY -> context.getString(R.string.settings_restart_access)
+            else -> allowLabel
+        }
     val canRequestNow: Boolean get() = state?.let { it.canRequest && !it.allowed } == true
 
     init { onActivate = { state?.takeIf { canRequestNow }?.let { request(it.kind) } } }
@@ -163,14 +170,16 @@ private class PermissionRow(
     fun bind(value: PermissionRowState, palette: ReverbPalette) {
         state = value
         (trailing as OnboardingIconView).bind(
-            if (value.kind == OnboardingPermission.ALL_FILES) ReverbIcon.Settings
+            if (value.kind == OnboardingPermission.ALL_FILES || value.kind == OnboardingPermission.OVERLAY && !value.allowed) ReverbIcon.Settings
             else if (value.allowed) ReverbIcon.Checked else ReverbIcon.Unchecked,
             if (value.allowed) palette.primary else palette.onSurfaceVariant,
         )
         bindCard(value.title, value.body, canRequestNow, palette)
-        trailing.contentDescription = if (value.kind == OnboardingPermission.ALL_FILES)
-            context.getString(R.string.all_files_access_settings)
-        else context.getString(if (value.allowed) R.string.onboarding_allowed else R.string.allow)
+        trailing.contentDescription = when {
+            value.kind == OnboardingPermission.ALL_FILES -> context.getString(R.string.all_files_access_settings)
+            value.kind == OnboardingPermission.OVERLAY && !value.allowed -> context.getString(R.string.settings_restart_access)
+            else -> context.getString(if (value.allowed) R.string.onboarding_allowed else R.string.allow)
+        }
         trailing.importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
         trailing.isScreenReaderFocusable = false
     }

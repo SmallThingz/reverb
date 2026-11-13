@@ -296,6 +296,8 @@ open class ReverbService : Service() {
 
     @Volatile
     private var audioRecordGeneration = Long.MIN_VALUE
+    @Volatile private var bootCaptureConfirmation: BootCaptureConfirmation? = null
+    private var bootResumeNoticeConfirmed = false
     // A vacant input slot still has an owner during synchronous recovery. Every release,
     // including a vacant one, invalidates older operations so null cannot alias a successor.
     private val audioRecordReleaseGeneration = AtomicLong()
@@ -318,6 +320,8 @@ open class ReverbService : Service() {
     private val listeningCommandGeneration = AtomicLong()
     // Accepted explicit intent retires queued foreground work without changing healthy PCM.
     private val foregroundAdmissionGeneration = AtomicLong()
+    // Read and written only under listeningIntentLock; Main cancellation cannot replace this receipt.
+    private var lastAcceptedRestartTestControlEpoch = 0L
     // Command versions also advance for harmless destination changes. This separate epoch
     // advances only when capture continuity breaks, so an in-flight read can survive a buffer
     // handoff without surviving Stop -> Start or failure boundaries.
@@ -339,10 +343,10 @@ open class ReverbService : Service() {
     @Volatile private var captureInitializationPending = true
     @Volatile private var captureStoresAdmitted = false
     @Volatile private var captureStoresReady = false
-    private val listeningIntentLock = Any()
+    private val listeningIntentLock = captureIntentPreferenceLock
     @Volatile private var durableListeningIntentEnabled = false
     @Volatile private var durableCaptureBufferSlot: BufferSlot? = null
-    private var durableCaptureIntentAuthorityValid = false
+    @Volatile private var durableCaptureIntentAuthorityValid = false
 
     @Volatile
     private var foregroundStartBlocked = false
@@ -582,6 +586,8 @@ open class ReverbService : Service() {
     }
 
     override fun onDestroy() {
+        bootCaptureConfirmation?.close()
+        bootCaptureConfirmation = null
         // Accepted Settings posts precede the terminal audio close; later callers cannot enqueue.
         synchronized(settingsAdmissionLock) { settingsAdmissionClosed = true }
         // Retire cheap export admission before taking any durability-held intent monitor.
@@ -790,6 +796,33 @@ open class ReverbService : Service() {
                 retentionMaintenanceState.isActive(),
         )
 
+    private fun retainUiCaptureCommandLifetime(): Boolean {
+        // The intent carries no command. A replacement Service must never replay
+        // a tap admitted by this exact instance.
+        val retained = startService(
+            Intent(this, javaClass)
+                .setAction(ACTION_UI_CAPTURE_KEEPALIVE),
+        ) != null
+        if (retained && quickTileCommandNeedsMicrophoneForeground(foregroundServiceTypes)) {
+            try {
+                val exporting = hasActiveExport()
+                promoteForeground(
+                    foregroundServiceTypes or foregroundServiceTypesForWork(
+                        listening = true,
+                        exporting = exporting,
+                    ),
+                    exporting = exporting,
+                )
+            } catch (error: RuntimeException) {
+                // Reservation supports a delayed Start's foreground eligibility.
+                // It must not prevent Stop. The original durable Start path still
+                // handles promotion failure by preserving intent and pausing capture.
+                Log.w(TAG, "Unable to reserve microphone foreground for Capture command", error)
+            }
+        }
+        return retained
+    }
+
     internal fun requestCaptureBlobTap(
         bufferSlot: BufferSlot,
         feedback: CaptureCommandFeedback<UiCaptureCommandResult>,
@@ -801,32 +834,7 @@ open class ReverbService : Service() {
         val control = captureControlFence.snapshot()
         val accepted = try {
             captureCommands.submit(
-                retainLifetime = {
-                    // The intent carries no command. A replacement Service must never replay
-                    // a tap admitted by this exact instance.
-                    val retained = startService(
-                        Intent(this, javaClass)
-                            .setAction(ACTION_UI_CAPTURE_KEEPALIVE),
-                    ) != null
-                    if (retained && quickTileCommandNeedsMicrophoneForeground(foregroundServiceTypes)) {
-                        try {
-                            val exporting = hasActiveExport()
-                            promoteForeground(
-                                foregroundServiceTypes or foregroundServiceTypesForWork(
-                                    listening = true,
-                                    exporting = exporting,
-                                ),
-                                exporting = exporting,
-                            )
-                        } catch (error: RuntimeException) {
-                            // Reservation supports a delayed Start's foreground eligibility.
-                            // It must not prevent Stop. The original durable Start path still
-                            // handles promotion failure by preserving intent and pausing capture.
-                            Log.w(TAG, "Unable to reserve microphone foreground for Capture command", error)
-                        }
-                    }
-                    retained
-                },
+                retainLifetime = ::retainUiCaptureCommandLifetime,
                 enqueue = { work -> postCaptureWork(
                     onRejected = { rejectCaptureCommandWork(work) }) { work.run() } },
                 onIdle = {
@@ -1050,7 +1058,10 @@ open class ReverbService : Service() {
                 // or user switch must be able to replace this marker before either snapshot emits.
                 RecordingQuickTiles.beginHandoff(previousActiveBuffer, bufferSlot, resolvedGeneration)
             }
-            if (resolvedGeneration != null) captureControlFence.recordAcceptedControl(expectedControl)
+            if (resolvedGeneration != null) {
+                lastAcceptedRestartTestControlEpoch = BootResumeActivity.invalidateRestartTest()
+                captureControlFence.recordAcceptedControl(expectedControl)
+            }
             publishCaptureIngress()
             resolvedGeneration
         }
@@ -1245,6 +1256,8 @@ open class ReverbService : Service() {
                 }
             }
             if (acceptedGeneration != null) {
+                lastAcceptedRestartTestControlEpoch = BootResumeActivity.invalidateRestartTest()
+                if (!enabled) BootResumeNotification.dismiss(this)
                 foregroundAdmissionGeneration.incrementAndGet()
                 foregroundCaptureRetryGate.resetForExplicitIntent()
                 captureControlFence.recordAcceptedControl(expectedControl)
@@ -1453,6 +1466,7 @@ open class ReverbService : Service() {
             durableCaptureBufferSlot = decoded.bufferSlot
             durableCaptureIntentAuthorityValid = true
         }
+        if (!decoded.enabled) BootResumeNotification.dismiss(this)
     }
 
     private fun loadConfiguredPreferences() {
@@ -3530,7 +3544,10 @@ open class ReverbService : Service() {
                 }
                 persistenceFailureBlocked = true
             }
-            if (committed) durableListeningIntentEnabled = false
+            if (committed) {
+                durableListeningIntentEnabled = false
+                BootResumeNotification.dismiss(this)
+            }
             // Keep known-Stop incident state in the same lifetime transaction as the intent.
             // onDestroy takes this lock before it can classify an armed marker as interrupted.
             val incidentStopPersisted = committed && try {
@@ -3836,6 +3853,25 @@ open class ReverbService : Service() {
             id.frameBytes, id.sampleRate)
         processCapturedAudio(bytes, 0, packet.byteCount, slot, id.continuityGeneration,
             packet.endedAtNanos, packet.captureStartedAtNanos, owner, startedMillis)
+        if ((!bootResumeNoticeConfirmed || bootCaptureConfirmation != null) && packet.byteCount > 0 &&
+            bootCaptureIsCurrent(id.commandGeneration, id.continuityGeneration, input)) {
+            if (!bootResumeNoticeConfirmed) {
+                bootResumeNoticeConfirmed = true
+                BootResumeNotification.dismiss(this)
+            }
+            val confirmation = bootCaptureConfirmation
+            if (confirmation != null && confirmation.accepts(id.commandGeneration, id.continuityGeneration,
+                    packet.endedAtNanos, packet.byteCount)) {
+                bootCaptureConfirmation = null
+                if (!mainHandler.post {
+                    val current = appUiForeground && bootCaptureIsCurrent(
+                        id.commandGeneration, id.continuityGeneration, input)
+                    if (current && confirmation.active) Log.i("BootResumeActivity",
+                        "pcm-confirmed generation=${id.commandGeneration} continuity=${id.continuityGeneration}")
+                    confirmation.deliver(current)
+                }) confirmation.close()
+            }
+        }
         if (!serviceDestroying && state == STATE_LISTENING &&
             id.continuityGeneration == captureContinuityGeneration.get()) {
             publishVisualization(bytes, 0, packet.byteCount, slot,
@@ -4025,6 +4061,7 @@ open class ReverbService : Service() {
             // Runtime capture has failed regardless of preference persistence. Keep this Service's
             // in-memory intent disabled and authority invalid on commit failure; a later Service
             // may retry the prior durable intent only after decoding the restored/disk state.
+            if (committed) BootResumeNotification.dismiss(this)
             listeningCommandGeneration.incrementAndGet()
             captureContinuityGeneration.incrementAndGet()
             state = STATE_READY
@@ -4258,6 +4295,110 @@ open class ReverbService : Service() {
             stopSelfResult = { stopSelfResult(it) },
             stopForeground = { stopForegroundTracked() },
         )
+    }
+
+    private fun bootCaptureIsCurrent(command: Long, continuity: Long, input: CaptureIoCoordinator.Input): Boolean =
+        // Main-thread acknowledgement must never wait for a recorder preference commit/rollback.
+        // These runtime fields are volatile; monotonic generations reject a superseded snapshot.
+        !serviceDestroying && !persistenceFailureBlocked && !foregroundStartBlocked && state == STATE_LISTENING &&
+            durableCaptureIntentAuthorityValid && durableListeningIntentEnabled &&
+            captureIo.currentInput() === input && audioRecord === input.record &&
+            foregroundServiceTypes and ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE != 0 &&
+            command == listeningCommandGeneration.get() && continuity == captureContinuityGeneration.get()
+
+    internal fun requestRestartTest(test: RestartTestArm, visible: () -> Boolean,
+        completed: (RestartTestResult) -> Unit) {
+        check(Looper.myLooper() == Looper.getMainLooper())
+        val requestEpoch = BootResumeActivity.restartTestControlEpoch()
+        val delivered = AtomicBoolean()
+        fun rejection(): RestartTestResult = if (BootResumeActivity.restartTestCurrent(test))
+            RestartTestResult.Rejected(requestEpoch, getString(R.string.boot_resume_test_rejected)) else RestartTestResult.Superseded
+        fun deliver(result: RestartTestResult) {
+            if (!delivered.compareAndSet(false, true)) return
+            mainHandler.post {
+                completed(currentRestartTestResult(result, BootResumeActivity.restartTestControlEpoch(),
+                    foregroundAdmissionGeneration.get(), visible(), !serviceDestroying && durableListeningIntentEnabled))
+            }
+        }
+        if (serviceDestroying || !visible() || !BootResumeActivity.restartTestCurrent(test)) {
+            deliver(rejection())
+            return
+        }
+        val accepted = try {
+            captureCommands.submit(
+                retainLifetime = ::retainUiCaptureCommandLifetime,
+                enqueue = { work -> postCaptureWork(
+                    onRejected = { rejectCaptureCommandWork(work) }) { work.run() } },
+                onIdle = { mainHandler.post { releaseCaptureCommandStartedLifetimeIfIdle() } },
+                onRejected = { deliver(rejection()) },
+            ) {
+                val outcome = recorderErrors.captureCommand<RestartTestResult> {
+                    try {
+                        synchronized(listeningIntentLock) {
+                            val stopped = !serviceDestroying && appUiForeground && visible() &&
+                                durableCaptureIntentAuthorityValid && !durableListeningIntentEnabled &&
+                                state != STATE_LISTENING && audioRecord == null &&
+                                BootResumeActivity.restartPrerequisitesAvailable(this) &&
+                                !readDurableCaptureIntentPreferences(getRecorderPreferences(this)).enabled
+                            if (!stopped) rejection()
+                            else if (!BootResumeActivity.claimRestartTest(test, stopped = true)) RestartTestResult.Superseded
+                            else if (enableListening(durableCaptureBufferSlot ?: activeBufferSlot).accepted)
+                                RestartTestResult.Started(RestartTestAdmission(foregroundAdmissionGeneration.get(),
+                                    lastAcceptedRestartTestControlEpoch))
+                            else RestartTestResult.Rejected(requestEpoch, getString(R.string.boot_resume_test_rejected))
+                        }
+                    } catch (error: Exception) {
+                        RecordingIncidentStore.recordUnexpectedErrorInBackground(this, "Apply restart test", error)
+                        reportError(userFacingError(getString(R.string.boot_resume_test_rejected), error))
+                        RestartTestResult.Rejected(requestEpoch)
+                    }
+                }
+                val result = outcome.result
+                val message = outcome.errorMessage
+                deliver(if (message == null) result else when (result) {
+                    is RestartTestResult.Started -> RestartTestResult.Rejected(result.admission.testControlEpoch, message)
+                    is RestartTestResult.Rejected -> result.copy(message = message)
+                    RestartTestResult.Superseded -> result
+                })
+            }
+        } catch (error: RuntimeException) {
+            deliver(RestartTestResult.Rejected(requestEpoch,
+                userFacingError(getString(R.string.boot_resume_test_rejected), error)))
+            false
+        }
+        if (!accepted) {
+            deliver(rejection())
+            mainHandler.post { releaseCaptureCommandStartedLifetimeIfIdle() }
+        }
+    }
+
+    internal fun confirmBootResumeCapture(afterNanos: Long, expectedAdmissionGeneration: Long? = null,
+        confirmed: () -> Unit): java.io.Closeable {
+        val admissionGeneration = expectedAdmissionGeneration ?: foregroundAdmissionGeneration.get()
+        val confirmation = BootCaptureConfirmation(afterNanos) {
+            if (admissionGeneration == foregroundAdmissionGeneration.get()) confirmed()
+        }
+        if (serviceDestroying || !audioHandler.post {
+            val mayConfirm = synchronized(listeningIntentLock) {
+                val allowed = confirmation.active && !serviceDestroying && appUiForeground &&
+                    durableCaptureIntentAuthorityValid && durableListeningIntentEnabled &&
+                    admissionGeneration == foregroundAdmissionGeneration.get()
+                if (allowed) confirmation.arm(listeningCommandGeneration.get(), captureContinuityGeneration.get())
+                allowed
+            }
+            if (!mayConfirm) {
+                confirmation.close()
+                return@post
+            }
+            bootCaptureConfirmation?.close()
+            bootCaptureConfirmation = confirmation
+        }) confirmation.close()
+        return java.io.Closeable {
+            confirmation.close()
+            audioHandler.post {
+                if (bootCaptureConfirmation === confirmation) bootCaptureConfirmation = null
+            }
+        }
     }
 
     fun getState(callback: StateCallback) {

@@ -52,6 +52,7 @@ internal class OnboardingPermissionRequestSequence(
     /** A denied runtime request with no rationale cannot show another system prompt. */
     fun beginSettingsReview(previouslyRequested: Boolean, showsRationale: Boolean): Boolean {
         if (pending == null || pending == OnboardingPermission.BATTERY || pending == OnboardingPermission.ALL_FILES ||
+            pending == OnboardingPermission.OVERLAY ||
             !previouslyRequested || showsRationale) return false
         settingsReview = true
         return true
@@ -60,6 +61,11 @@ internal class OnboardingPermissionRequestSequence(
     /** Special access uses the same persisted departure/return boundary as runtime Settings reviews. */
     fun beginAllFilesReview() {
         check(pending == OnboardingPermission.ALL_FILES)
+        settingsReview = true
+    }
+
+    fun beginOverlayReview() {
+        check(pending == OnboardingPermission.OVERLAY)
         settingsReview = true
     }
 
@@ -89,13 +95,14 @@ internal class OnboardingPermissionRequestSequence(
         OnboardingPermission.NOTIFICATIONS -> status.notificationPermissionRequired && !status.notificationsAllowed
         OnboardingPermission.BATTERY -> !status.batteryOptimizationAllowed
         OnboardingPermission.ALL_FILES -> status.allFilesAvailable && !status.allFilesAllowed
+        OnboardingPermission.OVERLAY -> !status.overlayAllowed
     }
 
     companion object {
         // Enum ordinals are saved in attemptedMask; append new values and order requests separately.
         private val requestOrder = listOf(OnboardingPermission.MICROPHONE, OnboardingPermission.STORAGE,
             OnboardingPermission.ALL_FILES, OnboardingPermission.RECOVERY,
-            OnboardingPermission.NOTIFICATIONS, OnboardingPermission.BATTERY)
+            OnboardingPermission.NOTIFICATIONS, OnboardingPermission.BATTERY, OnboardingPermission.OVERLAY)
         private fun bit(permission: OnboardingPermission): Int = 1 shl permission.ordinal
         fun attemptedFromMask(mask: Int): Set<OnboardingPermission> =
             OnboardingPermission.entries.filterTo(mutableSetOf()) { mask and bit(it) != 0 }

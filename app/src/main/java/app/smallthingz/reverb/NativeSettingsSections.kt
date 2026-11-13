@@ -14,8 +14,6 @@ import smallthingz.ui.components.NativeSegmentedPresentation
 import smallthingz.ui.components.NativeThemeSelector
 import smallthingz.ui.controls.ControlPalette
 import kotlinx.coroutines.CoroutineScope
-import kotlin.math.max
-import kotlin.math.min
 import kotlin.math.roundToInt
 
 /** Direct released section bindings; the list owns each keyed section's actual lifetime. */
@@ -53,10 +51,18 @@ internal class NativeSettingsSections(
 
     private fun background(): NativeSettingsSection {
         var activation = owner.state.activation
-        val body = SettingsBackgroundWarningView(context, environment(), inputRoot) { owner.reviewBattery(activation) }
+        val body = SettingsBackgroundWarningView(context, environment(), inputRoot,
+            owner.batteryOptimizationRestricted, owner.resumeNotificationBlocked, owner.restartAccessMissing,
+            owner.restartTestArmed, owner.restartTestPending,
+            { owner.reviewBattery(activation) }, { owner.reviewResumeNotifications(activation) },
+            { owner.restartAction(activation) })
         return object : NativeSettingsSection {
             override val view = body
-            override fun bind() { activation = owner.state.activation; body.bind(environment()) }
+            override fun bind() {
+                activation = owner.state.activation
+                body.bind(environment(), owner.batteryOptimizationRestricted, owner.resumeNotificationBlocked,
+                    owner.restartAccessMissing, owner.restartTestArmed, owner.restartTestPending)
+            }
             override fun close() = body.close()
         }
     }
@@ -345,33 +351,64 @@ internal class NativeSettingsSections(
     }
 }
 
-/** BatteryOptimizationUi's restricted branch; this item exists only while restricted. */
+/** Permission reviews and the optional restart test share one compact surface. */
 private class SettingsBackgroundWarningView(
     context: Context,
     private var environment: ReverbViewEnvironment,
     inputRoot: () -> View?,
-    review: () -> Unit,
+    batteryRestricted: Boolean,
+    notificationBlocked: Boolean,
+    restartAccessMissing: Boolean,
+    restartTestArmed: Boolean,
+    restartTestPending: Boolean,
+    reviewBattery: () -> Unit,
+    reviewNotifications: () -> Unit,
+    reviewRestart: () -> Unit,
 ) : ViewGroup(context), AutoCloseable {
-    private val icon = OnboardingIconView(context, ReverbIcon.BackgroundWarning, environment.palette.tertiary)
-    private val text = environment.paragraph(context, context.getString(R.string.background_use_restricted),
-        ReverbTextRole.BODY_MEDIUM, environment.palette.onSurface)
-    private val action = SettingsCalibrationActionView(context, environment, inputRoot, action = review)
-    private val row = Row(context)
+    private val battery = SettingsPermissionReviewRow(context, environment, inputRoot,
+        ReverbIcon.BackgroundWarning, R.string.background_use_restricted, R.string.background_review,
+        R.string.background_review, reviewBattery)
+    private val notifications = SettingsPermissionReviewRow(context, environment, inputRoot,
+        ReverbIcon.BackgroundWarning, R.string.settings_resume_notification_blocked, R.string.background_review,
+        R.string.settings_notification_access, reviewNotifications)
+    private val notificationLayout = ReverbGroupLayout.LayoutParams(-1, -2)
+    private val restart = SettingsPermissionReviewRow(context, environment, inputRoot,
+        ReverbIcon.BackgroundWarning, R.string.settings_restart_access_missing, R.string.background_review,
+        R.string.settings_restart_access, reviewRestart)
+    private val restartLayout = ReverbGroupLayout.LayoutParams(-1, -2)
     private val group = ReverbGroupLayout(context, 14f)
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
-        icon.importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
-        row.addView(icon); row.addView(text); row.addView(action)
-        group.addRow(row, ReverbGroupLayout.LayoutParams(-1, -2))
+        group.addRow(battery, ReverbGroupLayout.LayoutParams(-1, -2))
+        group.addRow(notifications, notificationLayout)
+        group.addRow(restart, restartLayout)
         addView(group)
-        bind(environment)
+        bind(environment, batteryRestricted, notificationBlocked, restartAccessMissing, restartTestArmed, restartTestPending)
     }
-    fun bind(next: ReverbViewEnvironment) {
+    fun bind(next: ReverbViewEnvironment, batteryRestricted: Boolean, notificationBlocked: Boolean,
+        restartAccessMissing: Boolean, restartTestArmed: Boolean, restartTestPending: Boolean) {
         environment = next
         group.setPalette(next.palette.field, next.palette.border)
-        icon.bind(ReverbIcon.BackgroundWarning, next.palette.tertiary)
-        next.bindParagraphStyle(text, ReverbTextRole.BODY_MEDIUM, next.palette.onSurface)
-        action.bind(context.getString(R.string.background_review), true, next)
+        battery.visibility = if (batteryRestricted) VISIBLE else GONE
+        notifications.visibility = if (notificationBlocked) VISIBLE else GONE
+        restart.visibility = VISIBLE
+        notificationLayout.dividerTop = batteryRestricted && notificationBlocked
+        restartLayout.dividerTop = batteryRestricted || notificationBlocked
+        battery.bind(next, batteryRestricted)
+        notifications.bind(next, notificationBlocked)
+        val action = when {
+            restartTestArmed -> R.string.cancel
+            restartAccessMissing -> R.string.background_review
+            else -> R.string.settings_restart_test
+        }
+        val title = when {
+            restartTestArmed -> R.string.settings_restart_test_armed
+            restartAccessMissing -> R.string.settings_restart_access_missing
+            else -> R.string.settings_restart_test_ready
+        }
+        restart.bind(next, !restartTestPending, title, action,
+            if (restartAccessMissing && !restartTestArmed) R.string.settings_restart_access else action,
+            if (restartAccessMissing) ReverbIcon.BackgroundWarning else ReverbIcon.Reset)
         requestLayout()
     }
     override fun onMeasure(w: Int, h: Int) {
@@ -382,34 +419,6 @@ private class SettingsBackgroundWarningView(
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
         group.layout(dp(16), dp(12), width - dp(16), dp(12) + group.measuredHeight)
     }
-    override fun close() = action.close()
+    override fun close() { battery.close(); notifications.close(); restart.close() }
     private fun dp(value: Int) = (value * environment.textDensity.density).roundToInt()
-    private inner class Row(context: Context) : ViewGroup(context) {
-        private var rowHeight = 0
-        private var gap1 = 0
-        private var gap2 = 0
-        init { importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO }
-        override fun onMeasure(w: Int, h: Int) {
-            val width = MeasureSpec.getSize(w)
-            val available = (width - 2 * dp(15)).coerceAtLeast(0)
-            icon.measure(exact(min(dp(22), available)), exact(dp(22)))
-            gap1 = min(dp(12), (available - icon.measuredWidth).coerceAtLeast(0))
-            action.measure(atMost((available - icon.measuredWidth - gap1).coerceAtLeast(0)), unspecified())
-            gap2 = min(dp(12), (available - icon.measuredWidth - gap1 - action.measuredWidth).coerceAtLeast(0))
-            text.measure(exact((available - icon.measuredWidth - gap1 - action.measuredWidth - gap2).coerceAtLeast(0)), unspecified())
-            rowHeight = max(icon.measuredHeight, max(text.measuredHeight, action.measuredHeight))
-            setMeasuredDimension(width, 2 * dp(13) + rowHeight)
-        }
-        override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
-            var start = dp(15)
-            fun place(child: View) {
-                val x = if (layoutDirection == LAYOUT_DIRECTION_RTL) width - start - child.measuredWidth else start
-                val y = dp(13) + ((rowHeight - child.measuredHeight) / 2f).roundToInt()
-                child.layout(x, y, x + child.measuredWidth, y + child.measuredHeight)
-            }
-            place(icon); start += icon.measuredWidth + gap1
-            place(text); start += text.measuredWidth + gap2
-            place(action)
-        }
-    }
 }

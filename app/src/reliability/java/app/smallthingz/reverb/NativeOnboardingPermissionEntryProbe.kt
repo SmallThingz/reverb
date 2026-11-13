@@ -41,10 +41,11 @@ internal fun verifyNativeOnboardingPermissionEntry(instrumentation: Instrumentat
     val initialGrants = grants()
     val initialBatteryExemption = isIgnoringBatteryOptimizations(context)
     val initialAllFilesAccess = hasAllFilesAccess()
+    val initialOverlayAccess = BootResumeActivity.overlayAvailable(context)
     // Persisted enum ordinals are not request order: ALL_FILES was appended for compatibility.
     val expectedOrder = listOf(OnboardingPermission.MICROPHONE, OnboardingPermission.STORAGE,
         OnboardingPermission.ALL_FILES, OnboardingPermission.RECOVERY,
-        OnboardingPermission.NOTIFICATIONS, OnboardingPermission.BATTERY).filter { permission -> when (permission) {
+        OnboardingPermission.NOTIFICATIONS, OnboardingPermission.BATTERY, OnboardingPermission.OVERLAY).filter { permission -> when (permission) {
         OnboardingPermission.MICROPHONE -> initialGrants[Manifest.permission.RECORD_AUDIO] != PackageManager.PERMISSION_GRANTED
         OnboardingPermission.STORAGE -> requiresLegacyPublicStoragePermission() &&
             initialGrants[Manifest.permission.WRITE_EXTERNAL_STORAGE] != PackageManager.PERMISSION_GRANTED
@@ -53,6 +54,7 @@ internal fun verifyNativeOnboardingPermissionEntry(instrumentation: Instrumentat
             if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_AUDIO else Manifest.permission.READ_EXTERNAL_STORAGE
         ] != PackageManager.PERMISSION_GRANTED
         OnboardingPermission.BATTERY -> !initialBatteryExemption
+        OnboardingPermission.OVERLAY -> !initialOverlayAccess
         OnboardingPermission.NOTIFICATIONS -> Build.VERSION.SDK_INT >= 33 &&
             initialGrants[Manifest.permission.POST_NOTIFICATIONS] != PackageManager.PERMISSION_GRANTED
     } }
@@ -79,6 +81,7 @@ internal fun verifyNativeOnboardingPermissionEntry(instrumentation: Instrumentat
         .put("initial_grants", JSONObject(initialGrants))
         .put("initial_battery_exemption", initialBatteryExemption)
         .put("initial_all_files_access", initialAllFilesAccess)
+        .put("initial_overlay_access", initialOverlayAccess)
         .put("expected_request_order", JSONArray(expectedOrder.map { it.name }))
         .put("overall_deadline_uptime_ms", overallDeadline)
         .put("scope", "Actual MainActivity launch, automatic claims, manually declined runtime dialogs and external Settings reviews, recreation and microphone retry")
@@ -196,6 +199,7 @@ internal fun verifyNativeOnboardingPermissionEntry(instrumentation: Instrumentat
         val denied = await(480_000) { it.getInt("attempted") == expected && it.getString("pending").isEmpty() && it.getBoolean("focused") }
         check(grants() == initialGrants) { "First case requires observed denial, not an invented denial callback" }
         check(isIgnoringBatteryOptimizations(context) == initialBatteryExemption) { "Battery exemption changed during denial case" }
+        check(BootResumeActivity.overlayAvailable(context) == initialOverlayAccess) { "Overlay access changed during denial case" }
         check(denied.getBoolean("showing_onboarding"))
         automaticPhase = false
         noService()
@@ -231,6 +235,7 @@ internal fun verifyNativeOnboardingPermissionEntry(instrumentation: Instrumentat
         check(finalGrants == initialGrants + (Manifest.permission.RECORD_AUDIO to PackageManager.PERMISSION_GRANTED))
         check(isIgnoringBatteryOptimizations(context) == initialBatteryExemption) { "Microphone-only retry changed battery exemption" }
         check(hasAllFilesAccess() == initialAllFilesAccess) { "Microphone-only retry changed all-files access" }
+        check(BootResumeActivity.overlayAvailable(context) == initialOverlayAccess) { "Microphone-only retry changed overlay access" }
         check(prefs.all == before) { "Permission observation unexpectedly changed durable recorder preferences" }
         noService()
         result.put("final_grants", JSONObject(finalGrants))
@@ -246,6 +251,7 @@ internal fun verifyNativeOnboardingPermissionEntry(instrumentation: Instrumentat
             result.put("final_grants", JSONObject(grants())).put("preferences_preserved", prefs.all == before)
                 .put("final_battery_exemption", isIgnoringBatteryOptimizations(context))
                 .put("final_all_files_access", hasAllFilesAccess())
+                .put("final_overlay_access", BootResumeActivity.overlayAvailable(context))
             nativeParityOnMain(instrumentation) {
                 for (activity in live.toList()) {
                     val state = Bundle()

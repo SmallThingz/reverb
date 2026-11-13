@@ -41,9 +41,9 @@ internal class SettingsStorageSection(
         context.getString(R.string.choose_folder),inputRoot,onChooseFolder)
     private val move=SettingsStorageActionView(context,environment,null,
         context.getString(R.string.move_recordings),inputRoot,onMoveRecordings)
-    private val audioRead=SettingsStoragePermissionRow(context,environment,inputRoot,ReverbIcon.AudioFile,
+    private val audioRead=SettingsPermissionReviewRow(context,environment,inputRoot,ReverbIcon.AudioFile,
         R.string.settings_audio_read_missing,R.string.background_review,R.string.audio_read_access_settings,onAudioReadAccess)
-    private val allFiles=SettingsStoragePermissionRow(context,environment,inputRoot,ReverbIcon.Folder,
+    private val allFiles=SettingsPermissionReviewRow(context,environment,inputRoot,ReverbIcon.Folder,
         R.string.settings_all_files_optional,R.string.settings_manage_access,R.string.all_files_access_settings,onAllFilesAccess)
     private val body=StorageBody(context)
     init {
@@ -123,14 +123,14 @@ internal class SettingsStorageSection(
 }
 
 /** Same compact icon/title/action arrangement as the background-access warning, sharing group borders. */
-private class SettingsStoragePermissionRow(
+internal class SettingsPermissionReviewRow(
     context:Context,
     private var environment:ReverbViewEnvironment,
     inputRoot:()->View?,
     private val glyph:ReverbIcon,
-    titleResource:Int,
+    private val titleResource:Int,
     private val actionResource:Int,
-    actionDescriptionResource:Int,
+    private val actionDescriptionResource:Int,
     request:()->Unit,
 ):ViewGroup(context),AutoCloseable {
     private val icon=OnboardingIconView(context,glyph,environment.palette.tertiary)
@@ -147,10 +147,14 @@ private class SettingsStoragePermissionRow(
         action.textView.contentDescription=context.getString(actionDescriptionResource)
         addView(icon);addView(title);addView(action)
     }
-    fun bind(next:ReverbViewEnvironment,enabled:Boolean) {
+    fun bind(next:ReverbViewEnvironment,enabled:Boolean,titleResource:Int=this.titleResource,
+        actionResource:Int=this.actionResource,actionDescriptionResource:Int=this.actionDescriptionResource,
+        glyph:ReverbIcon=this.glyph) {
         environment=next
         icon.bind(glyph,next.palette.tertiary)
+        title.setText(context.getString(titleResource))
         next.bindParagraphStyle(title,ReverbTextRole.BODY_MEDIUM,next.palette.onSurface)
+        action.textView.contentDescription=context.getString(actionDescriptionResource)
         action.bind(context.getString(actionResource),enabled,next)
         requestLayout()
     }

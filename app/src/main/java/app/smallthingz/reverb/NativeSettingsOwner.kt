@@ -1,6 +1,7 @@
 package app.smallthingz.reverb
 
 import android.content.Context
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
 import android.os.Environment
@@ -10,6 +11,7 @@ import android.view.View
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -66,6 +68,14 @@ internal class NativeSettingsOwner(
     var canMove = false
         private set
     var batteryOptimizationRestricted = !isIgnoringBatteryOptimizations(context)
+        private set
+    var resumeNotificationBlocked = !BootResumeNotification.deliveryAvailable(context)
+        private set
+    var restartAccessMissing = !BootResumeActivity.overlayAvailable(context)
+        private set
+    var restartTestArmed = BootResumeActivity.restartTestArmed()
+        private set
+    var restartTestPending = false
         private set
     var allFilesAllowed = hasAllFilesAccess()
         private set
@@ -509,6 +519,61 @@ internal class NativeSettingsOwner(
         if (!openBatteryOptimizationReview(context)) feedback(R.string.no_app_available)
     }
 
+    fun reviewResumeNotifications(owner: Any) {
+        if (!acceptsInput(owner)) return
+        try {
+            context.startActivity(BootResumeNotification.reviewIntent(context))
+        } catch (error: ActivityNotFoundException) {
+            feedback(R.string.settings_notification_access_failed, error)
+        } catch (error: SecurityException) {
+            feedback(R.string.settings_notification_access_failed, error)
+        }
+    }
+
+    fun reviewRestartAccess(owner: Any) {
+        if (!acceptsInput(owner)) return
+        try {
+            context.startActivity(BootResumeActivity.overlayReviewIntent(context))
+        } catch (error: ActivityNotFoundException) {
+            feedback(R.string.settings_restart_access_failed, error)
+        } catch (error: SecurityException) {
+            feedback(R.string.settings_restart_access_failed, error)
+        }
+    }
+
+    fun restartAction(owner: Any) {
+        if (!acceptsInput(owner) || restartTestPending) return
+        if (restartTestArmed || BootResumeActivity.restartTestArmed()) {
+            BootResumeActivity.cancelRestartTest()
+            restartTestArmed = false
+            notifyChanged()
+            return
+        }
+        if (!BootResumeActivity.overlayAvailable(context)) {
+            reviewRestartAccess(owner)
+            return
+        }
+        restartTestPending = true
+        notifyChanged()
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            try {
+                if (BootResumeActivity.armRestartTest(context.applicationContext)) {
+                    AppFeedbackCenter.post(context.getString(R.string.settings_restart_test_armed), FeedbackTone.SUCCESS)
+                } else {
+                    feedback(R.string.settings_restart_test_unavailable)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                feedback(R.string.settings_restart_test_failed, error)
+            } finally {
+                restartTestPending = false
+                restartTestArmed = BootResumeActivity.restartTestArmed()
+                notifyChanged()
+            }
+        }
+    }
+
     fun moveExistingRecordings(renderedActivation: Any) {
         if (!acceptsInput(renderedActivation) || !canMove || settingsCommitBlocked) return
         val current = state
@@ -579,6 +644,9 @@ internal class NativeSettingsOwner(
 
     private fun refreshBattery() {
         batteryOptimizationRestricted = !isIgnoringBatteryOptimizations(context)
+        resumeNotificationBlocked = !BootResumeNotification.deliveryAvailable(context)
+        restartAccessMissing = !BootResumeActivity.overlayAvailable(context)
+        restartTestArmed = BootResumeActivity.restartTestArmed()
         allFilesAllowed = hasAllFilesAccess()
         audioReadAllowed = hasRecordingAudioReadPermission(context)
         notifyChanged()

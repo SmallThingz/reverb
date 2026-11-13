@@ -4,6 +4,8 @@
         android:targetPackage="${applicationId}" android:functionalTest="true" />
     <application android:name="android.app.Application" android:label="Reverb current UI smoke"
         tools:replace="android:name,android:label">
+        <receiver android:name="app.smallthingz.reverb.BootCompletedReceiver" android:enabled="false" />
+        <activity android:name="app.smallthingz.reverb.BootResumeActivity" android:enabled="false" />
         <activity android:name="app.smallthingz.reverb.NativeParityActivity" android:exported="false"
             android:screenOrientation="landscape" android:theme="@style/Theme.Reverb" />
         <activity android:name="app.smallthingz.reverb.MainActivity" android:enabled="false"

@@ -22,7 +22,12 @@ internal class ReverbViewEnvironment(
     val textDensity: Density,
     val sharedFontResolver: FontFamily.Resolver,
     val palette: ReverbPalette,
+    private val settingsTextContrast: Boolean = false,
 ) {
+    /** Same immutable typography/palette, scoped once per Settings environment identity. */
+    fun forSettings():ReverbViewEnvironment = if(settingsTextContrast)this else
+        ReverbViewEnvironment(textDensity,sharedFontResolver,palette,true)
+
     /** Direct factory: returns the real View, without a feature-specific wrapper. */
     @MainThread
     fun paragraph(
@@ -36,7 +41,7 @@ internal class ReverbViewEnvironment(
         initialDensity = textDensity,
         initialFontResolver = sharedFontResolver,
         initialTextColor = textColor,
-    ).also { it.setText(text) }
+    ).also { it.setText(text); bindTextContrast(it,textColor) }
 
     /**
      * Explicit host rebind after replacing this environment. No registry retains Views or roles.
@@ -49,6 +54,16 @@ internal class ReverbViewEnvironment(
         @ColorInt textColor: Int = palette.ink,
     ) {
         view.setTypography(ReverbParagraphStyles[role], textDensity, sharedFontResolver)
+        bindTextContrast(view,textColor)
         view.animateTextColor(textColor)
+    }
+
+    /** Only owned neutral labels opt in. Error/accent/custom colors retain their renderer. */
+    private fun bindTextContrast(view:ParagraphView,color:Int) {
+        if(!settingsTextContrast||(color!=palette.onSurface&&color!=palette.onSurfaceVariant)) {
+            view.paintedTextSurface=null
+        } else if(view.paintedTextSurface==null) {
+            view.paintedTextSurface=java.util.function.LongSupplier { settingsTextSurface(view) }
+        }
     }
 }

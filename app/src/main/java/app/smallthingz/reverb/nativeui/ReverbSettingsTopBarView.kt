@@ -66,7 +66,9 @@ internal class ReverbSettingsTopBarView(
     private var insets = NativeSettingsTopBarInsets(0, 0, 0)
     private val noise = ReverbNoiseDrawable(resources, initialEnvironment.palette.surface,
         ReverbNoiseDrawable.SEED_TOP_BAR)
-    private val noiseColor = noise.colorTransition(this, initialEnvironment.palette.surface)
+    private val noiseColor = noise.colorTransition(this, initialEnvironment.palette.surface) {
+        invalidateSettingsTextContrast(this)
+    }
     private val content = TopBarContent(context, initialEnvironment, inputRoot)
     private var hint: Any? = null
     private var hintJob: Job? = null

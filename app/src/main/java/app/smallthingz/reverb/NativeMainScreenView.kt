@@ -329,6 +329,12 @@ internal class NativeMainScreenView private constructor(
         if (navigation.retainLibrary(libraryMotion.panelProgress) && library == null) createLibrary()
     }
 
+    /** Root background publication targets only the retained Settings branch. */
+    internal fun invalidateSettingsTextSurface() {
+        val content=settings?:return
+        invalidateSettingsTextContrast(content)
+    }
+
     private fun createSettings() {
         val owner = NativeSettingsOwner(context, windowRoot, lifecycleOwner.lifecycle, scope,
             navigation.showSettings, restored?.settingsDraft.orEmpty(), restored?.directoryPicker,

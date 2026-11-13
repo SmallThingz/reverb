@@ -23,8 +23,10 @@ import app.smallthingz.reverb.nativeui.SettingsSilenceActions
 import app.smallthingz.reverb.nativeui.SettingsSilenceState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -51,6 +53,7 @@ internal data class NativeOnboardingScreenSnapshot(
     val finishing: Boolean,
     val requiredPermissionsGranted: Boolean,
     val showPermissionDenied: Boolean,
+    val showRestartAccessInvitation: Boolean = false,
 )
 
 /**
@@ -60,8 +63,8 @@ internal data class NativeOnboardingScreenSnapshot(
  * the released onboarding setup point. Activity forwards onStart, the four result callbacks and
  * onSaveInstanceState; close at Activity disposal/onDestroy, NOT merely on onboarding completion:
  * the existing permission flow continues on Home using the same result/requested-flag owner.
- * No launcher registration order changes,
- * new permission contract, permission escalation, renderer, Composition or process-wide state.
+ * No runtime launcher registration order changes or additional runtime permission contract.
+ * Overlay access uses the existing visible first-page special-access request/return lifecycle.
  *
  * Permission prompts advance automatically on the first page. Only the atomic Finish transaction
  * publishes the buffer and audio choices.
@@ -84,6 +87,9 @@ internal class NativeOnboardingScreenOwner(
     private var storageRequested = savedInstanceState?.getBoolean(STATE_STORAGE_REQUESTED) ?: false
     private var recoveryRequested = savedInstanceState?.getBoolean(STATE_RECOVERY_REQUESTED) ?: false
     private var notificationsRequested = savedInstanceState?.getBoolean(STATE_NOTIFICATIONS_REQUESTED) ?: false
+    private var notificationRequestPending = savedInstanceState?.getBoolean(STATE_NOTIFICATION_PENDING) ?: false
+    private var restartInvitationLoaded = false
+    private var restartInvitationLoad: Job? = null
     private val restoredDraft = savedInstanceState?.getBundle(STATE_DRAFT)?.let(::Bundle)
     private val permissionSequence = OnboardingPermissionRequestSequence(
         attempted = if (savedInstanceState?.containsKey(STATE_PERMISSION_ATTEMPTS) == true) {
@@ -113,6 +119,7 @@ internal class NativeOnboardingScreenOwner(
     private var recoveryAllowed = false
     private var allFilesAllowed = false
     private var batteryAllowed = false
+    private var overlayAllowed = false
     private var showPermissionDenied = false
     private var showingOnboarding = onboardingPendingForUi(
         finishState = processOnboardingFinish.state.value,
@@ -167,7 +174,7 @@ internal class NativeOnboardingScreenOwner(
 
     private val lifecycleObserver = LifecycleEventObserver { _, event ->
         when (event) {
-            Lifecycle.Event.ON_PAUSE -> permissionSequence.leftForeground()
+            Lifecycle.Event.ON_PAUSE -> { permissionSequence.leftForeground(); publish() }
             Lifecycle.Event.ON_RESUME -> {
                 permissionSequence.returnedToForeground()
                 val previouslyMicrophoneAllowed = microphoneAllowed
@@ -183,6 +190,7 @@ internal class NativeOnboardingScreenOwner(
                     // Settings may return through pause/resume without another onStart (multi-window).
                     beginPermissionFlow()
                 }
+                if (!showingOnboarding) refreshRestartInvitation()
                 publish()
             }
             else -> Unit
@@ -230,7 +238,7 @@ internal class NativeOnboardingScreenOwner(
                 )
             } else null
             return NativeOnboardingScreenSnapshot(showingOnboarding, page, finishing,
-                requiredPermissionsGranted, showPermissionDenied)
+                requiredPermissionsGranted, showPermissionDenied, restartInvitationVisible())
         }
 
     fun attach() {
@@ -304,6 +312,8 @@ internal class NativeOnboardingScreenOwner(
         permissionSequence.completed(OnboardingPermission.NOTIFICATIONS)
         // Deliberately use the actual result, as the released callback does, rather than reread.
         notificationAllowed = granted
+        notificationRequestPending = false
+        if (!showingOnboarding) refreshRestartInvitation()
         publish()
         schedulePermissionPrompt()
     }
@@ -311,6 +321,66 @@ internal class NativeOnboardingScreenOwner(
     fun dismissPermissionDenied() {
         if (closed) return
         showPermissionDenied = false
+        publish()
+    }
+
+    fun respondToRestartInvitation(review: Boolean) {
+        if (closed || !restartInvitationVisible()) return
+        persistRestartOffer(review)
+    }
+
+    private fun restartInvitationVisible(): Boolean = RestartAccessInvitation.state.shouldShow(
+        restartInvitationLoaded,
+        !closed && !showingOnboarding && requiredPermissionsGranted && !showPermissionDenied &&
+            !notificationRequestPending && activity.currentFocus?.onCheckIsTextEditor() != true &&
+            activity.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED),
+        overlayAllowed,
+    )
+
+    private fun refreshRestartInvitation() {
+        if (closed || showingOnboarding) return
+        overlayAllowed = BootResumeActivity.overlayAvailable(activity)
+        if (restartInvitationLoaded || restartInvitationLoad != null) return
+        restartInvitationLoad = scope.launch {
+            try {
+                withContext(Dispatchers.IO) { RestartAccessInvitation.readHandled(appContext) }
+                restartInvitationLoaded = true
+            } catch (error: CancellationException) { throw error }
+            catch (error: Exception) {
+                AppFeedbackCenter.post(actionableErrorMessage(appContext,
+                    appContext.getString(R.string.restart_invitation_read_failed), error), FeedbackTone.ERROR)
+            } finally {
+                restartInvitationLoad = null
+                if (!closed) publish()
+            }
+        }
+    }
+
+    private fun persistRestartOffer(reviewAfterCommit: Boolean) {
+        if (!RestartAccessInvitation.state.acceptDecision()) return
+        // Reserve synchronously before dispatch: a recreated owner cannot re-offer during this write.
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            withContext(NonCancellable) {
+                val failure = withContext(Dispatchers.IO) {
+                    try {
+                        check(RestartAccessInvitation.persistHandled(appContext)) { "Preference commit returned false" }
+                        null
+                    } catch (error: Exception) { error }
+                }
+                if (failure != null) AppFeedbackCenter.post(actionableErrorMessage(appContext,
+                    appContext.getString(R.string.restart_invitation_save_failed), failure), FeedbackTone.ERROR)
+                else if (reviewAfterCommit && !closed && activity.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+                    try { activity.startActivity(BootResumeActivity.overlayReviewIntent(activity)) }
+                    catch (error: ActivityNotFoundException) {
+                        AppFeedbackCenter.post(actionableErrorMessage(activity,
+                            activity.getString(R.string.settings_restart_access_failed), error), FeedbackTone.ERROR)
+                    } catch (error: SecurityException) {
+                        AppFeedbackCenter.post(actionableErrorMessage(activity,
+                            activity.getString(R.string.settings_restart_access_failed), error), FeedbackTone.ERROR)
+                    }
+                }
+            }
+        }
         publish()
     }
 
@@ -349,6 +419,7 @@ internal class NativeOnboardingScreenOwner(
         outState.putBoolean(STATE_STORAGE_REQUESTED, storageRequested)
         outState.putBoolean(STATE_RECOVERY_REQUESTED, recoveryRequested)
         outState.putBoolean(STATE_NOTIFICATIONS_REQUESTED, notificationsRequested)
+        outState.putBoolean(STATE_NOTIFICATION_PENDING, notificationRequestPending)
         outState.putInt(STATE_PERMISSION_ATTEMPTS, permissionSequence.attemptedMask)
         outState.putString(STATE_PERMISSION_PENDING, permissionSequence.pending?.name)
         outState.putBoolean(STATE_BATTERY_LEFT_FOREGROUND, permissionSequence.batteryLeftForeground)
@@ -364,7 +435,8 @@ internal class NativeOnboardingScreenOwner(
         OnboardingPermissionStatus(
             microphoneAllowed, requiresLegacyPublicStoragePermission(), storageAllowed,
             recordingAudioReadPermission() != null, recoveryAllowed,
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU, notificationAllowed, batteryAllowed, enabled, supportsAllFilesAccess(), allFilesAllowed,
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU, notificationAllowed, batteryAllowed, enabled,
+            supportsAllFilesAccess(), allFilesAllowed, overlayAllowed,
         )
 
     private fun requestPermission(permission: OnboardingPermission) {
@@ -394,14 +466,14 @@ internal class NativeOnboardingScreenOwner(
                     OnboardingPermission.STORAGE -> Manifest.permission.WRITE_EXTERNAL_STORAGE
                     OnboardingPermission.RECOVERY -> recordingAudioReadPermission()
                     OnboardingPermission.NOTIFICATIONS -> Manifest.permission.POST_NOTIFICATIONS
-                    OnboardingPermission.BATTERY, OnboardingPermission.ALL_FILES -> null
+                    OnboardingPermission.BATTERY, OnboardingPermission.ALL_FILES, OnboardingPermission.OVERLAY -> null
                 }
                 val requested = when (permission) {
                     OnboardingPermission.MICROPHONE -> microphoneRequested
                     OnboardingPermission.STORAGE -> storageRequested
                     OnboardingPermission.RECOVERY -> recoveryRequested
                     OnboardingPermission.NOTIFICATIONS -> notificationsRequested
-                    OnboardingPermission.BATTERY, OnboardingPermission.ALL_FILES -> false
+                    OnboardingPermission.BATTERY, OnboardingPermission.ALL_FILES, OnboardingPermission.OVERLAY -> false
                 }
                 if (name != null && permissionSequence.beginSettingsReview(requested,
                         activity.shouldShowRequestPermissionRationale(name))) {
@@ -440,6 +512,11 @@ internal class NativeOnboardingScreenOwner(
                     permissionSequence.completed(permission)
                     AppFeedbackCenter.post(activity.getString(R.string.no_app_available), FeedbackTone.ERROR)
                 }
+                OnboardingPermission.OVERLAY -> {
+                    persistRestartOffer(reviewAfterCommit = false)
+                    permissionSequence.beginOverlayReview()
+                    activity.startActivity(BootResumeActivity.overlayReviewIntent(activity))
+                }
             }
         } catch (failure: Exception) {
             permissionSequence.completed(permission)
@@ -448,7 +525,8 @@ internal class NativeOnboardingScreenOwner(
                     !activity.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)))
             if (!expected) RecordingIncidentStore.recordUnexpectedErrorInBackground(
                 appContext, "onboarding permission request", failure)
-            AppFeedbackCenter.post(actionableErrorMessage(activity, activity.getString(R.string.no_app_available), failure), FeedbackTone.ERROR)
+            val message = if (permission == OnboardingPermission.OVERLAY) R.string.settings_restart_access_failed else R.string.no_app_available
+            AppFeedbackCenter.post(actionableErrorMessage(activity, activity.getString(message), failure), FeedbackTone.ERROR)
         }
         if (permissionSequence.pending == null) schedulePermissionPrompt()
     }
@@ -456,6 +534,7 @@ internal class NativeOnboardingScreenOwner(
     private fun pageChanged(page: Int) {
         if (closed || visiblePage == page) return
         visiblePage = page
+        if (page == 0 && !overlayAllowed) persistRestartOffer(reviewAfterCommit = false)
         if (page != 2 && calibration.running) calibration.cancel()
         schedulePermissionPrompt()
     }
@@ -611,7 +690,7 @@ internal class NativeOnboardingScreenOwner(
         }
         requiredPermissionsGranted = true
         showPermissionDenied = false
-        maybeRequestNotificationPermission()
+        if (!maybeRequestNotificationPermission()) refreshRestartInvitation()
     }
 
     private fun maybeRequestNotificationPermission(): Boolean {
@@ -621,6 +700,7 @@ internal class NativeOnboardingScreenOwner(
             return false
         }
         notificationsRequested = true
+        notificationRequestPending = true
         launchers.notifications.launch(Manifest.permission.POST_NOTIFICATIONS)
         return true
     }
@@ -630,6 +710,7 @@ internal class NativeOnboardingScreenOwner(
         allFilesAllowed = hasAllFilesAccess()
         recoveryAllowed = hasMediaRecoveryPermission()
         batteryAllowed = isIgnoringBatteryOptimizations(activity)
+        overlayAllowed = BootResumeActivity.overlayAvailable(activity)
     }
 
     private fun hasRequiredPermissions(): Boolean = hasMicrophonePermission() && hasLegacyStoragePermission()
@@ -663,6 +744,7 @@ internal class NativeOnboardingScreenOwner(
         const val STATE_STORAGE_REQUESTED = "storage_permission_requested"
         const val STATE_RECOVERY_REQUESTED = "recovery_permission_requested"
         const val STATE_NOTIFICATIONS_REQUESTED = "notification_permission_requested"
+        const val STATE_NOTIFICATION_PENDING = "notification_permission_pending"
         const val STATE_DRAFT = "native_onboarding_draft"
         const val STATE_PERMISSION_ATTEMPTS = "native_onboarding_permission_attempts"
         const val STATE_PERMISSION_PENDING = "native_onboarding_permission_pending"
