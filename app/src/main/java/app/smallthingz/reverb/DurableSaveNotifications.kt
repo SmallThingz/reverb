@@ -2,7 +2,6 @@ package app.smallthingz.reverb
 
 import android.Manifest
 import android.app.Notification
-import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
@@ -21,7 +20,7 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
 internal const val DURABLE_SAVE_NOTIFICATION_ID = 44
-private const val DURABLE_SAVE_CHANNEL = "durable-save-progress"
+private val DURABLE_SAVE_CHANNEL = ReverbNotificationChannel.SAVE_PROGRESS.id
 private const val DURABLE_SAVE_TAG_PREFIX = "reverb-save-job:"
 
 /** A UUID remains the identity; equal numeric hashes can never replace another pending job. */
@@ -42,8 +41,7 @@ internal object DurableSaveNotifications {
             combine(DurableSaveJobs.state, DurableSaveJobs.readiness) { jobs, readiness -> jobs to readiness }
                 .collect { (jobs, readiness) ->
                     try {
-                        manager.createNotificationChannel(NotificationChannel(DURABLE_SAVE_CHANNEL,
-                            app.getString(R.string.saving), NotificationManager.IMPORTANCE_LOW))
+                        ReverbNotificationChannels.ensure(app, ReverbNotificationChannel.SAVE_PROGRESS)
                         val desired = jobs.filter(::durableSaveNeedsProgressNotification)
                             .associateBy(PendingSave::id)
                         val explicitlyFinished = jobs.filterNot(::durableSaveNeedsProgressNotification)

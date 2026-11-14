@@ -3,7 +3,7 @@
     tools:ignore="MissingTranslation">
     <string name="app_name" translatable="false">Reverb</string>
     <string name="recording_saved">Saved</string>
-    <string name="recording_playback_channel">Recording playback</string>
+    <string name="recording_playback_channel">Saved recording playback</string>
     <string name="recording_playback_preparing">Preparing audio</string>
     <string name="recording_playback_playing">Playing recording</string>
     <string name="recording_playback_paused">Playback paused</string>

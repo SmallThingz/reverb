@@ -2,7 +2,6 @@ package app.smallthingz.reverb
 
 import android.Manifest
 import android.app.Notification
-import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
@@ -94,13 +93,7 @@ internal inline fun deliverDetachedSaveSuccess(
 }
 
 private fun ensureCaptureResultNotificationChannel(context: Context) {
-    context.getSystemService(NotificationManager::class.java)?.createNotificationChannel(
-        NotificationChannel(
-            ReverbService.NOTIFICATION_CHANNEL_ID,
-            context.getString(R.string.app_name),
-            NotificationManager.IMPORTANCE_DEFAULT,
-        ),
-    )
+    ReverbNotificationChannels.ensure(context, ReverbNotificationChannel.SAVE_RESULTS)
 }
 
 class NotifyFileReceiver(

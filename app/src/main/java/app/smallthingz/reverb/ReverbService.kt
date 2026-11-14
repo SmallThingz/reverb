@@ -2,7 +2,6 @@ package app.smallthingz.reverb
 
 import android.annotation.SuppressLint
 import android.app.Notification
-import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
@@ -5858,14 +5857,7 @@ open class ReverbService : Service() {
     private fun isDebuggableBuild(): Boolean = BuildConfig.DEBUG
 
     private fun createNotificationChannel() {
-        val notificationManager = getSystemService(NotificationManager::class.java) ?: return
-        notificationManager.createNotificationChannel(
-            NotificationChannel(
-                BACKGROUND_NOTIFICATION_CHANNEL_ID,
-                getString(R.string.app_name),
-                NotificationManager.IMPORTANCE_LOW,
-            ),
-        )
+        ReverbNotificationChannels.ensure(this, ReverbNotificationChannel.BACKGROUND)
     }
 
     @SuppressLint("WakelockTimeout")

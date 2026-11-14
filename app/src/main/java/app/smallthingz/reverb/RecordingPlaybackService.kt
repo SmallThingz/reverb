@@ -1,7 +1,6 @@
 package app.smallthingz.reverb
 
 import android.app.Notification
-import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
@@ -104,8 +103,7 @@ class RecordingPlaybackService : Service() {
         ContextCompat.registerReceiver(this, noisy, IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY),
             ContextCompat.RECEIVER_NOT_EXPORTED)
         noisyRegistered = true
-        getSystemService(NotificationManager::class.java).createNotificationChannel(
-            NotificationChannel(CHANNEL, getString(R.string.recording_playback_channel), NotificationManager.IMPORTANCE_LOW))
+        ReverbNotificationChannels.ensure(this, ReverbNotificationChannel.PLAYBACK)
         RecordingPlayback.attach(this)
     }
 
@@ -544,7 +542,7 @@ class RecordingPlaybackService : Service() {
         private const val ACTION_PLAY = "app.smallthingz.reverb.playback.PLAY"
         private const val ACTION_PAUSE = "app.smallthingz.reverb.playback.PAUSE"
         private const val ACTION_STOP = "app.smallthingz.reverb.playback.STOP"
-        private const val CHANNEL = "saved_recording_playback"
+        private val CHANNEL = ReverbNotificationChannel.PLAYBACK.id
         private const val NOTIFICATION_ID = 7391
     }
 }

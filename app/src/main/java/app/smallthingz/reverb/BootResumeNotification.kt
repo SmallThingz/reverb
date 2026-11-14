@@ -1,7 +1,6 @@
 package app.smallthingz.reverb
 
 import android.Manifest
-import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
@@ -18,7 +17,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 internal object BootResumeNotification {
-    private const val CHANNEL_ID = "recording-resume"
+    private val CHANNEL_ID = ReverbNotificationChannel.RESTART_REMINDERS.id
     private const val NOTIFICATION_ID = 45
     private val worker = ThreadPoolExecutor(0, 1, 10L, TimeUnit.SECONDS, LinkedBlockingQueue<Runnable>()) {
         runnable -> Thread(runnable, "reverb-boot-notice").apply { isDaemon = true }
@@ -95,8 +94,7 @@ internal object BootResumeNotification {
 
     private fun post(context: Context) {
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
-        manager.createNotificationChannel(NotificationChannel(CHANNEL_ID,
-            context.getString(R.string.boot_resume_channel), NotificationManager.IMPORTANCE_LOW))
+        ReverbNotificationChannels.ensure(context, ReverbNotificationChannel.RESTART_REMINDERS)
         if (!deliveryAvailable(context)) return
         // Opening the ordinary app re-reads current capture intent. This token never carries Start authority.
         val intent = Intent(context, MainActivity::class.java).apply {

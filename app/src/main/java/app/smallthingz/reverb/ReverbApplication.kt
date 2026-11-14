@@ -1,6 +1,7 @@
 package app.smallthingz.reverb
 
 import android.app.Application
+import android.content.res.Configuration
 import android.os.Process
 import android.util.Log
 import kotlin.system.exitProcess
@@ -9,6 +10,7 @@ class ReverbApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         installUnexpectedErrorHandler()
+        ReverbNotificationChannels.refreshExisting(this)
         QuickSaveTileOptions.refresh(this)
         Thread({
             runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND) }
@@ -35,6 +37,11 @@ class ReverbApplication : Application() {
             },
             "reverb-incident-recovery",
         ).apply { isDaemon = true }.start()
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        ReverbNotificationChannels.refreshExisting(this)
     }
 
     private fun installUnexpectedErrorHandler() {
