@@ -47,6 +47,7 @@ class MainActivity : ComponentActivity() {
     private var themeJob: Job? = null
     private var closed = false
     private var renderedDark: Boolean? = null
+    private var windowPaletteDark: Boolean? = null
     private lateinit var environment: ReverbViewEnvironment
     private lateinit var directoryResultKey: String
     private var deletionConsentToken: String? = null
@@ -158,6 +159,7 @@ class MainActivity : ComponentActivity() {
             },
         )
         setContentView(content)
+        configureWindow()
         applyWindowPalette(dark)
         content.bind(owner.snapshot, environment)
         owner.attach()
@@ -226,6 +228,8 @@ class MainActivity : ComponentActivity() {
     private fun publishTheme() {
         if (closed) return
         val dark = themePresentation.mode.nativeIsDark(systemDark())
+        // Request the independently rendered system icons before rebinding the content palette.
+        applyWindowPalette(dark)
         if (renderedDark != dark) {
             renderedDark = dark
             // A palette preview retains the current Density/resolver and every live native owner.
@@ -233,19 +237,22 @@ class MainActivity : ComponentActivity() {
                 ReverbPalette.resolve(this, dark))
             content.bind(owner.snapshot, environment)
         }
-        applyWindowPalette(dark)
     }
 
     @Suppress("DEPRECATION")
-    private fun applyWindowPalette(dark: Boolean) {
-        // Exactly ReverbThemeBase's own-window SideEffect; no system/night/accessibility setting.
+    private fun configureWindow() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         window.statusBarColor = Color.TRANSPARENT
         window.navigationBarColor = Color.TRANSPARENT
+    }
+
+    private fun applyWindowPalette(dark: Boolean) {
+        if (windowPaletteDark == dark) return
         WindowCompat.getInsetsController(window, content).apply {
             isAppearanceLightStatusBars = !dark
             isAppearanceLightNavigationBars = !dark
         }
+        windowPaletteDark = dark
     }
 
     override fun onStart() {
