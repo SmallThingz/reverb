@@ -53,7 +53,7 @@ import smallthingz.ui.controls.ControlPalette
 class BootResumeActivity : ComponentActivity() {
     private lateinit var root: BootResumeContentView
     private var launch: BootResumeLaunch? = null
-    private val admission = BootResumeActivityAdmission()
+    private var admission = BootResumeActivityAdmission()
     private val serviceUiOwner = CaptureServiceUiOwner()
     private val foregroundOwner = Any()
     private var checkJob: Job? = null
@@ -86,12 +86,14 @@ class BootResumeActivity : ComponentActivity() {
         retirePendingBootLaunch(pendingLaunch, startedMains.refreshVisibility())
         val candidate = pendingLaunch.get()
         if (savedInstanceState != null || candidate == null || candidate.id != intent.getStringExtra(EXTRA_LAUNCH) ||
-            !candidate.allowed() || SystemClock.elapsedRealtime() - candidate.createdAtMillis > TIMEOUT_MILLIS ||
+            !candidate.current(startedMains.visibilityRevision) ||
+            SystemClock.elapsedRealtime() - candidate.createdAtMillis !in 0L until TIMEOUT_MILLIS ||
             !pendingLaunch.compareAndSet(candidate, null)) {
             finish()
             return
         }
         launch = candidate
+        admission = BootResumeActivityAdmission(candidate.createdAtMillis, TIMEOUT_MILLIS)
         setShowWhenLocked(true)
         setTurnScreenOn(true)
         val palette = ReverbPalette.resolve(this, dark)
@@ -99,7 +101,7 @@ class BootResumeActivity : ComponentActivity() {
         root = BootResumeContentView(this, palette, ::openReverb)
         setContentView(root)
         root.viewTreeObserver.addOnDrawListener(drawListener)
-        root.postDelayed(timeout, TIMEOUT_MILLIS)
+        root.postDelayed(timeout, admission.remainingMillis(SystemClock.elapsedRealtime()))
     }
 
     override fun onResume() {
@@ -110,11 +112,14 @@ class BootResumeActivity : ComponentActivity() {
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (!::root.isInitialized || closed) return
-        if (hasFocus) maybeBind() else if (admission.admitted) closeAttempt()
+        if (hasFocus) maybeBind()
+        else if (admission.departed(SystemClock.elapsedRealtime())) closeAttempt()
     }
 
     override fun onPause() {
-        if (::root.isInitialized) closeAttempt()
+        // Android may queue a sleep pause before the initial window has ever become visible.
+        // Once foreground was observed, departure is terminal even while its IO check is pending.
+        if (::root.isInitialized && (isFinishing || admission.departed(SystemClock.elapsedRealtime()))) closeAttempt()
         super.onPause()
     }
 
@@ -125,13 +130,18 @@ class BootResumeActivity : ComponentActivity() {
         super.onDestroy()
     }
 
-    private fun visible(): Boolean = !closed && drawn && lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) &&
+    private fun visible(): Boolean = !closed && !isFinishing && !isDestroyed && drawn &&
+        lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) &&
         root.isAttachedToWindow && root.isShown && root.hasWindowFocus() &&
         getSystemService(PowerManager::class.java)?.isInteractive == true &&
         storageUnlocked(this)
 
     private fun maybeBind() {
-        if (!visible() || admission.admitted || checkJob != null) return
+        if (isFinishing || isDestroyed) { closeAttempt(); return }
+        val now = SystemClock.elapsedRealtime()
+        if (!admission.current(now)) { closeAttempt(reportFailure = true); return }
+        if (!admission.admitted && !admission.current(now, launchCurrent())) { closeAttempt(); return }
+        if (!admission.observeForeground(visible(), now) || admission.admitted || checkJob != null) return
         checkJob = lifecycleScope.launch {
             val enabled = withContext(Dispatchers.IO) {
                 runCatching { readDurableCaptureIntentPreferences(getRecorderPreferences(applicationContext)).enabled }
@@ -140,23 +150,26 @@ class BootResumeActivity : ComponentActivity() {
             }
             checkJob = null
             val test = launch?.test
-            if (enabled != (test == null) || launch?.allowed() != true || !permissionsAvailable(this@BootResumeActivity)) {
+            if (!admission.current(SystemClock.elapsedRealtime())) { closeAttempt(reportFailure = true); return@launch }
+            if (enabled != (test == null) || !launchCurrent() || !permissionsAvailable(this@BootResumeActivity)) {
                 closeAttempt(reportFailure = enabled == null || !permissionsAvailable(this@BootResumeActivity))
                 return@launch
             }
-            if (!visible() || !admission.admit(visible = true)) return@launch
+            if (!admission.admit(visible(), SystemClock.elapsedRealtime())) return@launch
             startedAfterNanos = System.nanoTime()
             captureAdmissionOpen.set(true)
             Log.i("BootResumeActivity", "visible-admission after-draw elapsedMs=${SystemClock.elapsedRealtime()}")
             binding = serviceUiOwner.bind(this@BootResumeActivity, this@BootResumeActivity, root,
-                isAlive = { !closed && visible() },
+                isAlive = { !closed && admission.withinDeadline(SystemClock.elapsedRealtime()) && visible() },
                 callbacks = object : CaptureServiceUiOwner.BindingCallbacks {
                     override fun connected(connectedService: ReverbService) {
-                        if (!visible()) { closeAttempt(); return }
+                        if (!admission.current(SystemClock.elapsedRealtime()) || !visible()) { closeAttempt(); return }
                         foreground = serviceUiOwner.foregroundLease(connectedService,
                             this@BootResumeActivity, root, foregroundOwner)
                         if (test == null) confirmCapture(connectedService)
-                        else connectedService.requestRestartTest(test, captureAdmissionOpen::get) { result ->
+                        else connectedService.requestRestartTest(test, {
+                            captureAdmissionOpen.get() && admission.withinDeadline(SystemClock.elapsedRealtime())
+                        }) { result ->
                             when (result) {
                                 is RestartTestResult.Started -> if (visible()) {
                                     testControlEpoch = result.admission.testControlEpoch
@@ -178,9 +191,12 @@ class BootResumeActivity : ComponentActivity() {
         }
     }
 
+    private fun launchCurrent(): Boolean = launch?.current(startedMains.visibilityRevision) == true
+
     private fun confirmCapture(service: ReverbService, epoch: Long? = null) {
         confirmation = service.confirmBootResumeCapture(startedAfterNanos, epoch) {
-            if (visible() && (testControlEpoch == null || testControlEpoch == restartTestControlEpoch())) {
+            if (admission.current(SystemClock.elapsedRealtime()) && visible() &&
+                (testControlEpoch == null || testControlEpoch == restartTestControlEpoch())) {
                 Log.i("BootResumeActivity", "finish-after-confirmed-pcm elapsedMs=${SystemClock.elapsedRealtime()}")
                 closeAttempt()
             }
@@ -334,7 +350,8 @@ class BootResumeActivity : ComponentActivity() {
                 if (test != null && restartTestCurrent(test)) { restartTests.retire(test); reportTestFailure(context) }
                 return
             }
-            val token = BootResumeLaunch(UUID.randomUUID().toString(), SystemClock.elapsedRealtime(), allowed, test)
+            val token = BootResumeLaunch(UUID.randomUUID().toString(), SystemClock.elapsedRealtime(), allowed, test,
+                startedMains.visibilityRevision)
             if (!pendingLaunch.compareAndSet(null, token)) return
             testHandler.postDelayed({
                 if (pendingLaunch.compareAndSet(token, null) && test != null && restartTestCurrent(test)) {
@@ -365,7 +382,9 @@ class BootResumeActivity : ComponentActivity() {
 }
 
 internal data class BootResumeLaunch(val id: String, val createdAtMillis: Long, val allowed: () -> Boolean,
-    val test: RestartTestArm?)
+    val test: RestartTestArm?, val mainVisibilityRevision: Long = 0L) {
+    fun current(visibleMainRevision: Long): Boolean = allowed() && mainVisibilityRevision == visibleMainRevision
+}
 
 internal fun retirePendingBootLaunch(pending: AtomicReference<BootResumeLaunch?>, mainVisible: Boolean) {
     if (!mainVisible) return
@@ -442,12 +461,21 @@ internal class StartedMainOwners {
     private val owners = IdentityHashMap<Any, () -> Boolean>()
     @Volatile var anyStarted = false
         private set
+    @Volatile var visibilityRevision = 0L
+        private set
+    private var lastVisible = false
     fun start(owner: Any, visible: () -> Boolean = { false }) { owners[owner] = visible; anyStarted = true }
     fun contains(owner: Any): Boolean = owners.containsKey(owner)
-    fun refreshVisibility(): Boolean = owners.values.any { it() }
+    fun refreshVisibility(): Boolean {
+        val visible = owners.values.any { it() }
+        if (visible && !lastVisible) visibilityRevision++
+        lastVisible = visible
+        return visible
+    }
     fun stop(owner: Any): Boolean {
         val removed = owners.remove(owner) != null
         anyStarted = owners.isNotEmpty()
+        if (!anyStarted) lastVisible = false
         return removed && !anyStarted
     }
 }
@@ -503,12 +531,32 @@ internal class BootResumeContentView(
     }
 }
 
-internal class BootResumeActivityAdmission {
+internal class BootResumeActivityAdmission(
+    private val createdAtMillis: Long = 0L,
+    private val timeoutMillis: Long = 15_000L,
+) {
     var admitted = false
         private set
     private var abandoned = false
-    fun admit(visible: Boolean): Boolean {
-        if (!visible || admitted || abandoned) return false
+    private var foregroundObserved = false
+    fun withinDeadline(nowMillis: Long): Boolean = nowMillis - createdAtMillis in 0L until timeoutMillis
+    fun current(nowMillis: Long, allowed: Boolean = true): Boolean {
+        if (!allowed || !withinDeadline(nowMillis)) abandoned = true
+        return !abandoned
+    }
+    fun remainingMillis(nowMillis: Long): Long =
+        (timeoutMillis - (nowMillis - createdAtMillis)).coerceIn(0L, timeoutMillis)
+    fun observeForeground(visible: Boolean, nowMillis: Long): Boolean {
+        if (!current(nowMillis) || !visible) return false
+        foregroundObserved = true
+        return true
+    }
+    fun departed(nowMillis: Long): Boolean {
+        if (!current(nowMillis) || foregroundObserved) { abandon(); return true }
+        return false
+    }
+    fun admit(visible: Boolean, nowMillis: Long = 0L): Boolean {
+        if (!observeForeground(visible, nowMillis) || admitted) return false
         admitted = true
         return true
     }

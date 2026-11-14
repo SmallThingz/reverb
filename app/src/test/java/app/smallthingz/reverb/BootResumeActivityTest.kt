@@ -9,6 +9,77 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
 class BootResumeActivityTest {
+    @Test fun initialSleepPauseCanWaitForActualForegroundWithoutBindingWhileHidden() {
+        val admission = BootResumeActivityAdmission(createdAtMillis = 100L)
+        // First resume, queued sleep pause, then second resume before the first real draw.
+        assertFalse(admission.observeForeground(visible = false, nowMillis = 110L))
+        assertFalse(admission.departed(120L))
+        assertFalse(admission.admit(visible = false, nowMillis = 130L))
+        assertFalse(admission.departed(140L))
+        assertFalse(admission.admitted)
+        assertTrue(admission.observeForeground(visible = true, nowMillis = 150L))
+        assertTrue(admission.admit(visible = true, nowMillis = 160L))
+        assertFalse(admission.admit(visible = true, nowMillis = 170L))
+    }
+
+    @Test fun departureDuringDurableReadCannotAdmitAfterFocusReturns() {
+        val admission = BootResumeActivityAdmission(createdAtMillis = 100L)
+        assertTrue(admission.observeForeground(visible = true, nowMillis = 110L))
+        assertFalse(admission.admitted) // The durable read has not returned yet.
+        assertTrue(admission.departed(120L))
+        assertFalse(admission.admit(visible = true, nowMillis = 130L))
+    }
+
+    @Test fun delayedWakeCallbacksCannotExtendOriginalDeadline() {
+        val admission = BootResumeActivityAdmission(createdAtMillis = 100L)
+        assertFalse(admission.departed(110L))
+        assertEquals(10L, admission.remainingMillis(15_090L))
+        // No Handler timeout has run while asleep; the resume itself checks elapsed time.
+        assertFalse(admission.withinDeadline(15_100L)) // Also used by the queued Start admission callback.
+        assertFalse(admission.observeForeground(visible = true, nowMillis = 15_100L))
+        assertFalse(admission.admit(visible = true, nowMillis = 15_101L))
+        assertEquals(0L, admission.remainingMillis(20_000L))
+        assertFalse(admission.current(120L)) // A stale earlier callback cannot resurrect it.
+    }
+
+    @Test fun stopRevokesWaitingLaunchBeforeAnyVisibleAdmission() {
+        val admission = BootResumeActivityAdmission(createdAtMillis = 100L)
+        var allowed = true
+        val launch = BootResumeLaunch("boot", 100L, { allowed }, null)
+        assertFalse(admission.departed(110L))
+        allowed = false
+        assertFalse(admission.current(120L, launch.current(0L)))
+        allowed = true
+        assertFalse(admission.admit(visible = true, nowMillis = 130L))
+    }
+
+    @Test fun mainVisibilityTakeoverStaysTerminalAfterMainBecomesHidden() {
+        val owners = StartedMainOwners()
+        var visible = false
+        owners.start(Any()) { visible }
+        val launch = BootResumeLaunch("boot", 100L, { true }, null, owners.visibilityRevision)
+        val admission = BootResumeActivityAdmission(createdAtMillis = 100L)
+        assertFalse(owners.refreshVisibility())
+        assertTrue(admission.current(110L, launch.current(owners.visibilityRevision)))
+        visible = true
+        assertTrue(owners.refreshVisibility())
+        val revision = owners.visibilityRevision
+        assertTrue(owners.refreshVisibility())
+        assertEquals(revision, owners.visibilityRevision)
+        visible = false
+        assertFalse(owners.refreshVisibility())
+        assertFalse(admission.current(120L, launch.current(owners.visibilityRevision)))
+        assertFalse(admission.admit(visible = true, nowMillis = 130L))
+    }
+
+    @Test fun backOrDestructionDuringInitialWaitRemainsTerminal() {
+        val admission = BootResumeActivityAdmission(createdAtMillis = 100L)
+        assertFalse(admission.departed(110L))
+        admission.abandon()
+        assertFalse(admission.observeForeground(visible = true, nowMillis = 120L))
+        assertFalse(admission.admit(visible = true, nowMillis = 130L))
+    }
+
     @Test fun hiddenWindowCannotConsumeAdmission() {
         val admission = BootResumeActivityAdmission()
         assertFalse(admission.admit(visible = false))
