@@ -1,5 +1,7 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.components.NativeModalWindowRuntime
+
 import android.content.ActivityNotFoundException
 import android.app.KeyguardManager
 import android.os.PowerManager
@@ -40,7 +42,7 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
     private lateinit var owner: NativeOnboardingScreenOwner
     private lateinit var themePresentation: ThemePresentationOwner
-    private lateinit var runtime: NativeAboutWindowRuntime
+    private lateinit var runtime: NativeModalWindowRuntime
     private lateinit var content: NativeActivityContentView
     private var themeJob: Job? = null
     private var closed = false
@@ -118,7 +120,7 @@ class MainActivity : ComponentActivity() {
         val dark = themePresentation.mode.nativeIsDark(systemDark())
         renderedDark = dark
         environment = ReverbViewEnvironment(Density(this), createFontFamilyResolver(this), ReverbPalette.resolve(this, dark))
-        runtime = NativeAboutWindowRuntime(this)
+        runtime = NativeModalWindowRuntime(this)
         lifecycle.addObserver(runtimeLifecycle)
         runtime.setStarted(lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
 

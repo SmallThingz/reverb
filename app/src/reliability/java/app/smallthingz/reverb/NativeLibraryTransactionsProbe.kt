@@ -1066,7 +1066,11 @@ private class TransactionBoard(
             val descendants = transactionViews(focusRoot())
             val viewport = descendants.filterIsInstance<smallthingz.ui.scroll.NativeVerticalViewport>().single()
             val target: View = when (part) {
-                "title" -> descendants.filterIsInstance<app.smallthingz.reverb.nativeui.NativeSheetAppContent>().single().titleView
+                "title" -> descendants.single {
+                    it.javaClass.name == "smallthingz.ui.components.NativeSheetContent"
+                }.let { content ->
+                    content.javaClass.getDeclaredField("titleView").apply { isAccessible = true }.get(content) as View
+                }
                 "editor" -> descendants.filterIsInstance<android.widget.EditText>().single()
                 "actions" -> descendants.filterIsInstance<app.smallthingz.reverb.nativeui.LibrarySheetActions>().single()
                 else -> error("Unknown Rename part")

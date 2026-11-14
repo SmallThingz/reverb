@@ -1,9 +1,9 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.input.phase.NativePointerLayerShape
+import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.interaction.view.isNativeClickActivationKey
-
 import smallthingz.ui.geometry.roundedGroupGeometry
-
 import smallthingz.ui.interaction.view.NativeClickBinding
 import smallthingz.ui.interaction.view.NativeClickEnvironment
 import smallthingz.ui.interaction.view.RowIndication
@@ -97,7 +97,7 @@ internal class ReverbIncidentCardView(
     private var binding: Binding? = null
     private var menuCreated = false
     private var menuLifetime = Any()
-    private val surface = ReverbGroupLayout(context, cornerRadiusDp = 18f)
+    private val surface = NativeGroupLayout(context, cornerRadiusDp = 18f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
     private val body = IncidentBody(context, initialAppearance,
         onPrimaryAction = { performPrimaryAction(); true },
         onOpenMenu = { openMenu(); true })
@@ -137,7 +137,7 @@ internal class ReverbIncidentCardView(
             }
         }
         if (Build.VERSION.SDK_INT >= 29) isForceDarkAllowed = false
-        surface.addRow(body, ReverbGroupLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+        surface.addRow(body, NativeGroupLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         addView(surface, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         body.setOnClickListener { performPrimaryAction() }
         body.setOnLongClickListener { openMenu(); true }

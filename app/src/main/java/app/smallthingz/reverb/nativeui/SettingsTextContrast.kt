@@ -1,5 +1,6 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeGroupLayout
 import android.view.View
 import android.view.ViewGroup
 import smallthingz.ui.text.view.ParagraphView
@@ -17,7 +18,7 @@ internal fun settingsTextSurface(view: View): Long {
     while (parent != null) {
         if (parent is NativeSettingsScreenContent) settings = true
         if (!found) {
-            if (parent is ReverbGroupLayout) {
+            if (parent is NativeGroupLayout) {
                 surface = parent.paintedTextSurface
                 found = true
             } else {

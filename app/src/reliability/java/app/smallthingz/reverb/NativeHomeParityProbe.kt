@@ -1,7 +1,6 @@
 package app.smallthingz.reverb
 
 import smallthingz.ui.input.phase.NativeClickPhaseHost
-
 import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
 import smallthingz.ui.text.view.NativeTextSemanticsClip
 import smallthingz.ui.text.view.NativeTextSemanticsClipPolicy
@@ -74,7 +73,7 @@ import app.smallthingz.reverb.nativeui.ReverbPalette
 import app.smallthingz.reverb.nativeui.ReverbViewEnvironment
 import app.smallthingz.reverb.nativeui.HomeBufferSegment
 import app.smallthingz.reverb.nativeui.NativeWindowTextAccessibilityOwner
-import app.smallthingz.reverb.nativeui.ReverbGroupLayout
+import smallthingz.ui.components.NativeGroupLayout
 import app.smallthingz.reverb.nativeui.ReverbHomeControlSurface
 import java.io.File
 import java.util.concurrent.CountDownLatch
@@ -993,7 +992,7 @@ private fun clickHomeTabNode(root: View, reference: Boolean, label: String): Boo
 private fun bindHomeParityAccessibility(host: NativeParityActivity, home: ReverbHomeScreenView,
                                        minimum: Float): AutoCloseable {
     fun clip(view: View): NativeTextSemanticsClip = home.topBar.sourceClip(view) ?: when {
-        (view.parent is ReverbGroupLayout && (view.parent as ReverbGroupLayout).pointerContent === view) ||
+        (view.parent is NativeGroupLayout && (view.parent as NativeGroupLayout).pointerContent === view) ||
             view is ReverbHomeControlSurface -> NativeTextSemanticsClip.Rectangle(
                 smallthingz.ui.geometry.Rect(0f, 0f, view.width.toFloat(), view.height.toFloat()))
         else -> NativeTextSemanticsClip.Unclipped

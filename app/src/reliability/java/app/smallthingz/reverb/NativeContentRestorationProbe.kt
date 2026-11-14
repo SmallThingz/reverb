@@ -1,5 +1,7 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.components.NativeModalWindowRuntime
+
 import android.app.Instrumentation
 import android.os.Bundle
 import android.os.Parcel
@@ -139,7 +141,7 @@ internal fun verifyNativeContentRestoration(instrumentation: Instrumentation, re
 }
 
 private class RestorationLane(private val host: NativeParityActivity) : AutoCloseable {
-    private val runtime = NativeAboutWindowRuntime(host)
+    private val runtime = NativeModalWindowRuntime(host)
     private val lifecycle = LifecycleEventObserver { _, _ ->
         runtime.setStarted(host.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
     }

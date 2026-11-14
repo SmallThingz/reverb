@@ -1,5 +1,7 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.components.NativeModalWindowRuntime
+
 import smallthingz.ui.text.view.ParagraphView
 import android.app.Application
 import android.app.Instrumentation
@@ -43,7 +45,7 @@ internal fun verifyNativeThemeMatrix(instrumentation: Instrumentation, report: S
             val mode = if (dark) AppThemeMode.DARK else AppThemeMode.LIGHT
             val name = if (dark) "dark" else "light"
             val palette = ReverbPalette.resolve(host, dark)
-            val runtime = nativeParityOnMain(instrumentation) { NativeAboutWindowRuntime(host).apply { setStarted(true) } }
+            val runtime = nativeParityOnMain(instrumentation) { NativeModalWindowRuntime(host).apply { setStarted(true) } }
             try {
                 val home = nativeParityOnMain(instrumentation) {
                     val environment = nativeParityEnvironment(host,

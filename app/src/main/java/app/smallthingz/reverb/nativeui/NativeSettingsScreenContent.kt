@@ -1,12 +1,12 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeTopBarInsets
+import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.scroll.NativeVerticalNestedHost
-
 import smallthingz.ui.input.phase.NativeDragPointerChange
 import smallthingz.ui.input.phase.NativeDragPointerEvent
 import smallthingz.ui.input.phase.NativePointerPass
 import smallthingz.ui.input.phase.NativeViewPhasePointerNode
-
 import smallthingz.ui.text.view.NativeTextSemanticsClip
 import android.content.Context
 import android.graphics.Rect
@@ -173,7 +173,7 @@ internal class NativeSettingsScreenContent(
                 bar.tileOpen,bar.durationPending,{owner.navigationAction(bar.activation)},{owner.done(bar.activation)},
                 bar.backHint))
         }
-        topBar.setRemainingWindowInsets(NativeSettingsTopBarInsets(input.insets.left,input.insets.top,input.insets.right))
+        topBar.setRemainingWindowInsets(NativeTopBarInsets(input.insets.left,input.insets.top,input.insets.right))
         showHydrationPending(state.hydrationPending)
         if(pendingRetentionFocus) {
             pendingRetentionFocus=false
@@ -216,7 +216,7 @@ internal class NativeSettingsScreenContent(
         return when {
             view===listViewport||view is SettingsExpansionView->
                 NativeTextSemanticsClip.Rectangle(smallthingz.ui.geometry.Rect(0f,0f,view.width.toFloat(),view.height.toFloat()))
-            view.parent is ReverbGroupLayout&&(view.parent as ReverbGroupLayout).pointerContent===view->
+            view.parent is NativeGroupLayout&&(view.parent as NativeGroupLayout).pointerContent===view->
                 NativeTextSemanticsClip.Rectangle(smallthingz.ui.geometry.Rect(0f,0f,view.width.toFloat(),view.height.toFloat()))
             else->NativeTextSemanticsClip.Unclipped
         }

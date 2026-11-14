@@ -1,9 +1,8 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.interaction.view.isNativeClickActivationKey
-
 import smallthingz.ui.geometry.roundedGroupGeometry
-
 import smallthingz.ui.interaction.view.NativeClickBinding
 import smallthingz.ui.interaction.view.NativeClickEnvironment
 import smallthingz.ui.interaction.view.NativeClickIndication
@@ -47,11 +46,11 @@ internal class SettingsWakeLockView(
     inputRoot:()->View?,
     onChecked:(Boolean)->Unit,
 ):ViewGroup(context),AutoCloseable {
-    private val surface=ReverbGroupLayout(context,20f)
+    private val surface=NativeGroupLayout(context,20f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
     private val row=WakeLockRow(context,checked,environment,inputRoot,onChecked)
     init {
         importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO
-        surface.addRow(row,ReverbGroupLayout.LayoutParams(-1,-2))
+        surface.addRow(row,NativeGroupLayout.LayoutParams(-1,-2))
         surface.setPalette(environment.palette.field,environment.palette.border)
         addView(surface)
     }

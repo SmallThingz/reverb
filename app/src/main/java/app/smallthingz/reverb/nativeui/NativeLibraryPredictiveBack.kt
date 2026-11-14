@@ -4,6 +4,8 @@
  */
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.animation.predictiveBackCommitDurationMillis
+
 import androidx.activity.BackEventCompat
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.OnBackPressedDispatcher
@@ -12,7 +14,6 @@ import smallthingz.ui.animation.core.FastOutSlowInEasing
 import smallthingz.ui.animation.core.tween
 import smallthingz.ui.runtime.MonotonicFrameClock
 import androidx.lifecycle.LifecycleOwner
-import app.smallthingz.reverb.predictiveBackCommitDurationMillis
 import app.smallthingz.reverb.predictiveBackHorizontalDirection
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope

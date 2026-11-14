@@ -1,5 +1,9 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.components.NativeWindowInsetsBinding
+
+import smallthingz.ui.components.NativeModalWindowRuntime
+
 import smallthingz.ui.text.view.NativeTextSemanticsClip
 import smallthingz.ui.text.view.NativeTextSemanticsClipPolicy
 import android.animation.ValueAnimator
@@ -1009,7 +1013,7 @@ internal class MainSettingsParityRender(
     private var nativeText: NativeWindowTextAccessibilityOwner? = null
     private var compose: ComposeView? = null
     private var compositionContext: ComposeViewContext? = null
-    private var runtime: NativeAboutWindowRuntime? = null
+    private var runtime: NativeModalWindowRuntime? = null
     private val runtimeLifecycle = LifecycleEventObserver { _, event ->
         when (event) {
             Lifecycle.Event.ON_START -> runtime?.setStarted(true)
@@ -1075,7 +1079,7 @@ internal class MainSettingsParityRender(
             view.createComposition(context)
             board.addView(view, FrameLayout.LayoutParams(-1, -1))
         } else {
-            val frames = NativeAboutWindowRuntime(activity)
+            val frames = NativeModalWindowRuntime(activity)
             runtime = frames
             activity.lifecycle.addObserver(runtimeLifecycle)
             frames.setStarted(activity.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))

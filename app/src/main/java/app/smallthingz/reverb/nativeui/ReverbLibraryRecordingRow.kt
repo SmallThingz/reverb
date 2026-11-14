@@ -1,9 +1,9 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeGroupLayout
+import smallthingz.ui.components.NativeGroupEdges
 import smallthingz.ui.interaction.view.isNativeClickActivationKey
-
 import smallthingz.ui.geometry.roundedGroupGeometry
-
 import smallthingz.ui.interaction.view.NativeClickBinding
 import smallthingz.ui.interaction.view.NativeClickEnvironment
 import smallthingz.ui.interaction.view.RowIndication
@@ -45,7 +45,7 @@ internal data class LibraryRecordingRow(
     val selected: Boolean,
     val selectionActive: Boolean,
     val interactionsEnabled: Boolean,
-    val edges: ReverbRecordingGroupEdges?,
+    val edges: NativeGroupEdges?,
     val expanded: Boolean = false,
 )
 
@@ -82,7 +82,7 @@ internal data class LibraryRecordingRowFrame(
 /**
  * RecordingSummaryCard with the source selection, visibility and outer-size motion. The real row is the click host; its 72dp leading child is a
  * separate click host. The parent list supplies current scroll interest and owns row recycling.
- * Group edges/outline use the narrow ReverbGroupLayout proposal supplied alongside this file.
+ * Group edges/outline use the narrow NativeGroupLayout proposal supplied alongside this file.
  */
 internal class ReverbLibraryRecordingRow(
     context: Context,
@@ -93,7 +93,7 @@ internal class ReverbLibraryRecordingRow(
     private var environment = initialEnvironment
     private var row: LibraryRecordingRow? = null
     private var actions: LibraryRecordingRowActions? = null
-    private val surface = ReverbGroupLayout(context)
+    private val surface = NativeGroupLayout(context, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
     private val body = RecordingRowBody(context, initialEnvironment)
     private val column = RecordingCardColumn(context, body)
     private var selectionMotion: LibrarySelectionMotion? = null
@@ -146,7 +146,7 @@ internal class ReverbLibraryRecordingRow(
         visibility = INVISIBLE
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         if (Build.VERSION.SDK_INT >= 29) isForceDarkAllowed = false
-        surface.addRow(column, ReverbGroupLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+        surface.addRow(column, NativeGroupLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         addView(surface, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         body.sourceClick = { activate(); true }
         body.leading.sourceClick = { activate(); true }
@@ -177,7 +177,7 @@ internal class ReverbLibraryRecordingRow(
         }
         row = value
         actions = callbacks
-        surface.setRecordingGroupEdges(value.edges)
+        surface.setJoinedEdges(value.edges)
         body.bind(value, callbacks)
         bindInputs()
         checkNotNull(selectionMotion).target(LibraryRecordingRowFrame.target(value, environment.palette),
@@ -206,11 +206,11 @@ internal class ReverbLibraryRecordingRow(
         body.setTrailingContent(trailingContent)
     }
     val paragraphLeaves: List<ParagraphView> get() = body.paragraphLeaves
-    val summarySurface: ReverbGroupLayout get() = surface
+    val summarySurface: NativeGroupLayout get() = surface
 
     fun setFrame(frame: LibraryRecordingRowFrame) {
         surface.setPaletteImmediately(frame.background, frame.border)
-        surface.setRecordingSeparatorColor(environment.palette.border)
+        surface.setJoinedSeparatorColor(environment.palette.border)
         column.alpha = frame.contentAlpha
         body.leading.setColors(frame.disc, frame.icon)
     }

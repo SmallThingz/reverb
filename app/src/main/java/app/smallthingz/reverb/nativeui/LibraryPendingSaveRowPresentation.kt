@@ -1,8 +1,8 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeGroupEdges
 import smallthingz.ui.interaction.view.readCachedAnimatorDurationScale
 import app.smallthingz.reverb.safeReportedErrorDetail
-
 import android.content.Context
 import android.view.View
 import smallthingz.ui.animation.smoothProgressSpring
@@ -60,7 +60,7 @@ internal class LibraryPendingSaveRowPresentation(
         motion.retarget(target)
     }
 
-    fun bind(save: PendingSave, environment: ReverbViewEnvironment, edges: ReverbRecordingGroupEdges? = null) {
+    fun bind(save: PendingSave, environment: ReverbViewEnvironment, edges: NativeGroupEdges? = null) {
         row.setEnvironment(environment)
         progress.setColor(environment.palette.primary)
         row.setSummarySlots(if (save.phase == SavePhase.FAILED) null else progress, null)
@@ -99,7 +99,7 @@ internal class LibraryPendingSaveRowPresentation(
 internal fun pendingSaveRecordingRow(
     context: Context,
     save: PendingSave,
-    edges: ReverbRecordingGroupEdges? = null,
+    edges: NativeGroupEdges? = null,
 ): LibraryRecordingRow {
     val phase = context.getString(when (save.phase) {
         SavePhase.QUEUED -> R.string.save_job_queued

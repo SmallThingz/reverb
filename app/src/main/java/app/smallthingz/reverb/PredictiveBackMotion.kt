@@ -1,17 +1,9 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.animation.predictiveBackCommitDurationMillis
+
 import androidx.activity.BackEventCompat
 import kotlin.math.roundToInt
-
-private const val PREDICTIVE_BACK_COMMIT_MAX_DURATION_MS = 220
-
-internal fun predictiveBackCommitDurationMillis(progress: Float): Int {
-    val remaining = 1f - progress.coerceIn(0f, 1f)
-    if (remaining <= 0f) return 0
-    return (PREDICTIVE_BACK_COMMIT_MAX_DURATION_MS * remaining)
-        .roundToInt()
-        .coerceAtLeast(1)
-}
 
 internal suspend inline fun continuePredictiveBackCommit(
     currentProgress: Float,

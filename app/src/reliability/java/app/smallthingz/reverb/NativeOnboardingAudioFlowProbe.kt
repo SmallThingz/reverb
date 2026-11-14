@@ -1,5 +1,7 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.components.NativeModalWindowRuntime
+
 import smallthingz.ui.scroll.NativeVerticalViewport
 
 import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
@@ -297,7 +299,7 @@ private class OnboardingAudioQaFixture(
     private val restoreOff: Boolean = false,
     page: Int = 0,
 ) : AutoCloseable {
-    private val runtime = NativeAboutWindowRuntime(host).apply { setStarted(true) }
+    private val runtime = NativeModalWindowRuntime(host).apply { setStarted(true) }
     val view: NativeOnboardingScreenView
     val render: ScreenParityRender
     var permissionRequests = 0

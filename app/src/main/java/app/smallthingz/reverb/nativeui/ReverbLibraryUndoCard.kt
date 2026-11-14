@@ -1,5 +1,6 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeGroupLayout
 import android.content.Context
 import android.view.View
 import android.view.ViewGroup
@@ -17,11 +18,11 @@ import kotlin.math.roundToInt
  * 16dp horizontal and12dp vertical outer padding. This card never owns that full-screen hit box.
  */
 internal class ReverbLibraryUndoCard(context: Context, private var environment: ReverbViewEnvironment, inputRoot: View) : ViewGroup(context) {
-    private val surface = ReverbGroupLayout(context, 18f)
+    private val surface = NativeGroupLayout(context, 18f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
     private val row = LibraryUndoRow(context, environment, inputRoot)
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
-        surface.addRow(row, ReverbGroupLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+        surface.addRow(row, NativeGroupLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         addView(surface)
     }
     fun bind(value: ReverbViewEnvironment, message: String, onUndo: () -> Unit) {

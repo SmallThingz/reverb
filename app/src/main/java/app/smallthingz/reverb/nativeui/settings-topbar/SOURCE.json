@@ -13,5 +13,14 @@
   "appbar_source_sha256": "a2fc1d9e990df4c4725a0925e2b67c31157d5771c620cd56c5de9c8b1b0f5fec",
   "tests_written": 5,
   "tests_executed": false,
-  "insets": "systemBars.union(displayCutout), horizontal+top, subtract upstream consumed once"
+  "insets": "systemBars.union(displayCutout), horizontal+top, subtract upstream consumed once",
+  "shared_extraction": {
+    "library": "native-ui",
+    "geometry": "smallthingz.ui.components.NativeCenteredTopBarLayout",
+    "insets": "smallthingz.ui.components.NativeTopBarInsets",
+    "rounded_action": "smallthingz.ui.components.NativeTopBarAction",
+    "standard_action": "smallthingz.ui.components.NativeStandardIconButtonView",
+    "tests": "Geometry/inset assertions moved to NativeCenteredTopBarGeometryTest; Done policy remains in app NativeSettingsTopBarGeometryTest",
+    "provenance": "native-ui/SOURCE-controls.json"
+  }
 }

@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeTopBarInsets
+import smallthingz.ui.components.NativeCenteredTopBarLayout
 import smallthingz.ui.interaction.view.readCachedAnimatorDurationScale
 import smallthingz.ui.text.view.NativePlainTextViewGeometry
 import smallthingz.ui.text.view.NativeSourceAccessibilityNode
@@ -7,7 +9,6 @@ import smallthingz.ui.text.view.NativeTextSemanticsClip
 import smallthingz.ui.text.view.ParagraphView
 import smallthingz.ui.text.view.PlainTextAccessibilityWindowScope
 import android.content.Context
-import android.graphics.Canvas
 import android.graphics.drawable.ColorDrawable
 import android.os.Build
 import android.view.MotionEvent
@@ -24,9 +25,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlin.math.max
-import kotlin.math.min
-import kotlin.math.roundToInt
 
 /**
  * Values projected by SettingsScreen's existing draft/save owner. Callbacks retain all original
@@ -63,7 +61,7 @@ internal class ReverbSettingsTopBarView(
     private val animationScope: CoroutineScope,
     inputRoot: () -> View?,
 ) : ViewGroup(context), AutoCloseable {
-    private var insets = NativeSettingsTopBarInsets(0, 0, 0)
+    private var insets = NativeTopBarInsets(0, 0, 0)
     private val noise = ReverbNoiseDrawable(resources, initialEnvironment.palette.surface,
         ReverbNoiseDrawable.SEED_TOP_BAR)
     private val noiseColor = noise.colorTransition(this, initialEnvironment.palette.surface) {
@@ -145,7 +143,7 @@ internal class ReverbSettingsTopBarView(
         cancelInput()
     }
 
-    fun setRemainingWindowInsets(value: NativeSettingsTopBarInsets) {
+    fun setRemainingWindowInsets(value: NativeTopBarInsets) {
         require(value.left >= 0 && value.top >= 0 && value.right >= 0)
         if (value == insets) return
         insets = value
@@ -193,30 +191,17 @@ internal class ReverbSettingsTopBarView(
 
     private class TopBarContent(
         context: Context,
-        private var environment: ReverbViewEnvironment,
+        environment: ReverbViewEnvironment,
         inputRoot: () -> View?,
-    ) : ViewGroup(context) {
-        val navigation = ReverbTopBarIconAction(context, environment, inputRoot, ReverbIcon.Back,
-            R.string.onboarding_back, selectionWrapper = true, rolePresent = true)
-        val title = environment.paragraph(context, context.getString(R.string.settings_title),
-            ReverbTextRole.TITLE_LARGE, environment.palette.onSurface)
-        val done = ReverbTopBarIconAction(context, environment, inputRoot, ReverbIcon.Check,
-            R.string.done, selectionWrapper = true, rolePresent = true)
-        private var logicalHeight = 0
-        private var titleWrapperWidth = 0
-        private var navigationWrapperWidth = 0
-        private var actionWrapperWidth = 0
-        private var navigationPadding = 0
-        private var actionPadding = 0
-        private var titlePadding = 0
-
-        init {
-            importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
-            clipChildren = false; clipToPadding = false
-            addView(navigation); addView(title); addView(done)
-        }
+        val navigation: ReverbTopBarIconAction = ReverbTopBarIconAction(context, environment, inputRoot,
+            ReverbIcon.Back, R.string.onboarding_back, selectionWrapper = true, rolePresent = true),
+        val title: ParagraphView = environment.paragraph(context, context.getString(R.string.settings_title),
+            ReverbTextRole.TITLE_LARGE, environment.palette.onSurface),
+        val done: ReverbTopBarIconAction = ReverbTopBarIconAction(context, environment, inputRoot,
+            ReverbIcon.Check, R.string.done, selectionWrapper = true, rolePresent = true),
+    ) : NativeCenteredTopBarLayout(context, environment.textDensity.density, navigation, title, done) {
         fun bind(value: ReverbViewEnvironment, state: SettingsTopBarBinding) {
-            environment = value
+            bindDensity(value.textDensity.density)
             val colors = value.palette
             value.bindParagraphStyle(title, ReverbTextRole.TITLE_LARGE, colors.onSurface)
             title.setText(context.getString(R.string.settings_title))
@@ -225,55 +210,9 @@ internal class ReverbSettingsTopBarView(
             navigation.bind(value, true, colors.muted, colors.border, state.onNavigation)
             done.bind(value, state.doneEnabled, colors.muted, colors.border, state.onDone)
         }
-        private fun dp(value: Float) = (value * environment.textDensity.density).roundToInt()
-        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-            val w = MeasureSpec.getSize(widthMeasureSpec)
-            val maxH = if (MeasureSpec.getMode(heightMeasureSpec) == MeasureSpec.UNSPECIFIED) Int.MAX_VALUE
-                else MeasureSpec.getSize(heightMeasureSpec)
-            val childH = if (maxH == Int.MAX_VALUE) unspecified() else atMost(maxH)
-            navigationPadding = dp(4f)
-            actionPadding = dp(4f)
-            navigation.measure(atMost((w - navigationPadding).coerceAtLeast(0)), childH)
-            done.measure(atMost((w - actionPadding).coerceAtLeast(0)), childH)
-            navigationWrapperWidth = min(w, navigation.measuredWidth + navigationPadding)
-            actionWrapperWidth = min(w, done.measuredWidth + actionPadding)
-            val titleMax = (w - navigationWrapperWidth - actionWrapperWidth).coerceAtLeast(0)
-            titlePadding = dp(4f)
-            title.measure(atMost((titleMax - titlePadding * 2).coerceAtLeast(0)), childH)
-            titleWrapperWidth = min(titleMax, title.measuredWidth + titlePadding * 2)
-            logicalHeight = max(dp(64f), title.measuredHeight)
-            setMeasuredDimension(w, resolveSize(logicalHeight, heightMeasureSpec))
-        }
-        override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
-            val rtl = layoutDirection == LAYOUT_DIRECTION_RTL
-            val p = settingsTopBarPlacement(width, logicalHeight, navigationWrapperWidth,
-                navigation.measuredHeight, titleWrapperWidth, title.measuredHeight,
-                actionWrapperWidth, done.measuredHeight, environment.textDensity.density, rtl)
-            // Placeable apparentToRealOffset centers a source layout that exceeds constraints.
-            val yOffset = (height - logicalHeight) / 2
-            val nx = p.navigationX + if (rtl)
-                navigationWrapperWidth - navigation.measuredWidth - navigationPadding else navigationPadding
-            navigation.layout(nx, p.navigationY + yOffset, nx + navigation.measuredWidth,
-                p.navigationY + yOffset + navigation.measuredHeight)
-            val tx = p.titleX + if (rtl) titleWrapperWidth - title.measuredWidth - titlePadding else titlePadding
-            title.layout(tx, p.titleY + yOffset, tx + title.measuredWidth,
-                p.titleY + yOffset + title.measuredHeight)
-            val ax = p.actionX + if (rtl) actionWrapperWidth - done.measuredWidth else 0
-            done.layout(ax, p.actionY + yOffset, ax + done.measuredWidth,
-                p.actionY + yOffset + done.measuredHeight)
-        }
-        override fun draw(canvas: Canvas) {
-            val save = canvas.save()
-            try {
-                // Source windowInsetsPadding precedes clipToBounds: status/cutout area stays clear.
-                canvas.clipRect(0, 0, width, height)
-                super.draw(canvas)
-            } finally { canvas.restoreToCount(save) }
-        }
     }
+
     private companion object {
         fun exact(size: Int) = MeasureSpec.makeMeasureSpec(size, MeasureSpec.EXACTLY)
-        fun atMost(size: Int) = MeasureSpec.makeMeasureSpec(size, MeasureSpec.AT_MOST)
-        fun unspecified() = MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
     }
 }

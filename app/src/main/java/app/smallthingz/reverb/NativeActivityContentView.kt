@@ -1,5 +1,8 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.components.NativeWindowInsetsBinding
+
+import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.text.view.NativePlainTextViewGeometry
 import smallthingz.ui.text.view.NativeSourceAccessibilityNode
 import smallthingz.ui.text.view.NativeTextSemanticsClip
@@ -9,7 +12,6 @@ import smallthingz.ui.text.view.ParagraphView
 import smallthingz.ui.text.view.PlainTextAccessibilityGeometry
 import smallthingz.ui.text.view.nativeMergedRoleBoundsInScreen
 import app.smallthingz.reverb.nativeui.colorTransition
-
 import android.content.Context
 import android.graphics.Rect
 import android.net.Uri
@@ -69,7 +71,7 @@ internal class NativeActivityContentView(
     }
     private val hostClip = NativeTextSemanticsClipPolicy { view ->
         when {
-            view.parent is ReverbGroupLayout -> NativeTextSemanticsClip.Rectangle(
+            view.parent is NativeGroupLayout -> NativeTextSemanticsClip.Rectangle(
                 ComposeRect(0f, 0f, view.width.toFloat(), view.height.toFloat()))
             else -> onboarding?.sourceWindowTextClip(view) ?: NativeTextSemanticsClip.Unclipped
         }
@@ -216,8 +218,8 @@ internal class NativeActivityContentView(
                     val dismiss = { owner.respondToRestartInvitation(false) }
                     val modal = restartInvitation ?: CaptureTextSheet(this, environment, title, message, dismiss) { host ->
                         listOf(
-                            LibrarySheetButton(context, host, false, context.getString(R.string.restart_access_not_now), dismiss),
-                            LibrarySheetButton(context, host, true, context.getString(R.string.background_review), onClick = {
+                            LibrarySheetButton(context, host, environment, false, context.getString(R.string.restart_access_not_now), dismiss),
+                            LibrarySheetButton(context, host, environment, true, context.getString(R.string.background_review), onClick = {
                                 owner.respondToRestartInvitation(true)
                             }),
                         )

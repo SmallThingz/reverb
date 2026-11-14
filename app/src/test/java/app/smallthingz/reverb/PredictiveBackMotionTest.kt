@@ -1,5 +1,7 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.animation.predictiveBackCommitDurationMillis
+
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse

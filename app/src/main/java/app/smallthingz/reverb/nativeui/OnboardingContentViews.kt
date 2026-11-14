@@ -1,5 +1,6 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.text.view.MergedRowAccessibility
 import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
 import smallthingz.ui.text.view.NativeMergedRowAccessibilityState
@@ -165,7 +166,7 @@ internal class OnboardingMarker(
     icon: ReverbIcon? = null,
     marker: String? = null,
 ) {
-    val view = ReverbGroupLayout(context, cornerRadiusDp = 14f)
+    val view = NativeGroupLayout(context, cornerRadiusDp = 14f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
     internal val text = if (icon == null) ParagraphView(context, style, density, resolver, 0).apply {
         setText(marker.orEmpty())
     } else null
@@ -193,7 +194,7 @@ internal class OnboardingMarker(
         }
     }
     init {
-        view.addRow(content, ReverbGroupLayout.LayoutParams(-1, -1))
+        view.addRow(content, NativeGroupLayout.LayoutParams(-1, -1))
         view.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         text?.isScreenReaderFocusable = false
     }

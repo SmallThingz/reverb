@@ -1,5 +1,7 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.components.NativeModalWindowRuntime
+
 import smallthingz.ui.scroll.NativeVerticalNestedHost
 import smallthingz.ui.scroll.NativeVerticalScrollSource
 
@@ -31,7 +33,7 @@ internal fun verifyNativeLibraryRevealInputCancellation(instrumentation: Instrum
     check(context.applicationContext.javaClass == Application::class.java)
     val preferences = getRecorderPreferences(context).all.toMap()
     val host = launchCurrentUiSmokeActivity(instrumentation)
-    val runtime = nativeParityOnMain(instrumentation) { NativeAboutWindowRuntime(host).apply { setStarted(true) } }
+    val runtime = nativeParityOnMain(instrumentation) { NativeModalWindowRuntime(host).apply { setStarted(true) } }
     var recycler: ReverbLibraryRecyclerView? = null
     var owner: NativeLibraryScrollOwner? = null
     var failure: Throwable? = null

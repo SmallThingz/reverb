@@ -76,6 +76,7 @@ class ReliabilityInstrumentation : Instrumentation() {
                 check(targetContext.applicationContext.javaClass == android.app.Application::class.java &&
                     requestedTest in setOf("native_rename_editor_current", "native_click_ripple_current", "native_retention_input_parity", "native_retention_keyboard", "native_icon_parity", "native_settings_library_selectors", "native_theme_matrix", "native_settings_calibration_current", "current_media_delete_consent",
                         "native_silence_blob_current", "native_silence_diagnostic_current", "native_blob_feel_current", "native_material_progress_current", "native_library_admission", "native_library_expansion_measurement", "native_library_expansion_clipping", "native_segmented_contrast", "native_settings_theme_contrast", "native_restart_permission_ui", "native_settings_ime_bounds",
+                        "native_action_sheet_dismissal_current",
                         "range_preview_short_end", "range_preview_short_controls", "range_preview_short_retirement", "range_preview_normalization_sampling", "native_ui_consistency_current", "native_settings_hydration_current", "native_settings_folder_pointer")) {
                     "Current UI smoke accepts only explicit current UI selectors with plain Application"
                 }
@@ -110,6 +111,7 @@ class ReliabilityInstrumentation : Instrumentation() {
                 "native_transaction_fixture_recovery",
                 "range_preview_short_end", "range_preview_short_controls", "range_preview_short_retirement", "range_preview_normalization_sampling",
                 "native_ui_consistency_current", "native_settings_hydration_current", "native_settings_folder_pointer",
+                "native_action_sheet_dismissal_current",
             )) {
                 "The native-parity APK requires an explicit isolated fixture"
             }
@@ -355,6 +357,9 @@ class ReliabilityInstrumentation : Instrumentation() {
             } else if (requestedTest == "native_restart_permission_ui") {
                 executed++
                 verifyNativeRestartPermissionUi(this, report)
+            } else if (requestedTest == "native_action_sheet_dismissal_current") {
+                executed++
+                verifyNativeActionSheetDismissalCurrent(this, report)
             } else if (requestedTest == "native_settings_ime_bounds") {
                 executed++
                 verifyNativeSettingsImeBounds(this, report)

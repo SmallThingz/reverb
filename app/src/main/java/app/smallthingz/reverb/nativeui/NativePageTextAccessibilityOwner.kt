@@ -1,5 +1,6 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
 import smallthingz.ui.text.view.NativePlainTextViewGeometry
 import smallthingz.ui.text.view.NativeSourceAccessibilityNode
@@ -136,8 +137,8 @@ internal class NativeWindowTextAccessibilityOwner(
                 // These exact native ancestors implement Surface graphicsLayer(clip=true).
                 // Source rectInParent clips semantics to the rectangular layer extent even when
                 // drawing uses a rounded outline. Keep the clip at the actual content ancestor.
-                view.isWithin(page) && view.parent is ReverbGroupLayout &&
-                    (view.parent as ReverbGroupLayout).getChildAt(0) === view ->
+                view.isWithin(page) && view.parent is NativeGroupLayout &&
+                    (view.parent as NativeGroupLayout).getChildAt(0) === view ->
                     NativeTextSemanticsClip.Rectangle(Rect(0f, 0f, view.width.toFloat(), view.height.toFloat()))
                 view.isWithin(page) -> NativeTextSemanticsClip.Unclipped
                 else -> hostClips.localClip(view)

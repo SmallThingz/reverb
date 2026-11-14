@@ -13,3 +13,16 @@ ReverbStandardIconButtonView is one direct standard IconButton leaf:48dp minimum
 Accessibility uses the window's existing cursor and geometry, with mandatory actual source-node facts. For the inner40dp action those facts must include float48dp expanded touch bounds, separately from the role's visual40dp bounds and described24dp glyph. The source is a generic merging clickable parent, described Icon, then fake Button role. Exact child enumeration uses the updated shared helper. The native host must preserve content clip semantics and source visibility independently from presence/hidden state. No opaque semantic ID equivalence or TalkBack pass is claimed.
 
 Five focused tests cover odd-width full-bar centering/RTL, asymmetric action correction, multiline height placement, inset union/subtraction and all Done-enabled predicates. They are written, not executed. Actual A/B must cover physical density Light/Dark, top/cutout insets, narrow/large-font title wrapping, Back↔Undo, pending disabled Done tint, key/hover/ripple and described icon semantics. Very short externally forced height and tiny width remain layout-edge qualification cases; no tolerance or screenshots were used to alter source geometry.
+
+## Shared component ownership
+
+The active layout and input implementations now belong to `smallthingz.ui`.
+`NativeCenteredTopBarLayout` owns title/navigation/action measurement and placement;
+`NativeTopBarInsets` owns the remaining-inset calculation. The app retains Settings
+state, glyph selection, hints and the existing outer input shield.
+`NativeTopBarAction` supplies the current rounded actions. The separately used
+circular action is `NativeStandardIconButtonView`; `ReverbStandardIconButtonView`
+only binds Reverb glyphs and colors. Four geometry/inset assertions moved with the
+library implementation; the Done-enabled policy test remains app-owned. Historical
+source hashes above remain evidence of the original implementation, not hashes of
+the extracted files. See `native-ui/SOURCE-controls.json` for the extraction map.

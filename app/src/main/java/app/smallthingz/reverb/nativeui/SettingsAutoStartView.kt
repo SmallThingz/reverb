@@ -1,5 +1,6 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeGroupLayout
 import android.content.Context
 import android.view.View
 import android.view.ViewGroup
@@ -13,7 +14,7 @@ internal class SettingsAutoStartView(
     inputRoot: () -> View?,
     changed: (Boolean) -> Unit,
 ) : ViewGroup(context), AutoCloseable {
-    private val group = ReverbGroupLayout(context, 20f)
+    private val group = NativeGroupLayout(context, 20f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
     private val toggle = SettingsToggleRowView(context, context.getString(R.string.auto_start_title),
         false, false, environment, inputRoot, dimDisabledText = true, changed = changed)
     private val summary = environment.paragraph(context, context.getString(R.string.auto_start_summary),
@@ -26,7 +27,7 @@ internal class SettingsAutoStartView(
     }
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
-        group.addRow(body, ReverbGroupLayout.LayoutParams(-1, -2))
+        group.addRow(body, NativeGroupLayout.LayoutParams(-1, -2))
         addView(group)
     }
     fun bind(checked: Boolean, enabled: Boolean, permissionPending: Boolean, unavailable: Boolean,

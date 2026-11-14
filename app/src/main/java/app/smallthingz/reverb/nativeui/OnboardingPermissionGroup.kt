@@ -1,5 +1,6 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeGroupLayout
 import android.content.Context
 import android.view.View
 import smallthingz.ui.text.font.FontFamily
@@ -51,7 +52,7 @@ internal class OnboardingPermissionGroup(
     private val resolver: FontFamily.Resolver,
     private val interactions: OnboardingNativeInteractionsFactory,
 ) {
-    val view = ReverbGroupLayout(context, cornerRadiusDp = 20f)
+    val view = NativeGroupLayout(context, cornerRadiusDp = 20f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
     private val rows = linkedMapOf<OnboardingPermission, PermissionRow>()
     private var rowOrder = emptyList<OnboardingPermission>()
     private var owner: ActionOwner? = null
@@ -114,7 +115,7 @@ internal class OnboardingPermissionGroup(
         if (membershipChanged) {
             rows.values.forEach(view::removeRow)
             desiredOrder.forEachIndexed { index, kind ->
-                view.addRow(checkNotNull(rows[kind]), ReverbGroupLayout.LayoutParams(-1, -2).apply {
+                view.addRow(checkNotNull(rows[kind]), NativeGroupLayout.LayoutParams(-1, -2).apply {
                     dividerTop = index > 0
                 })
             }

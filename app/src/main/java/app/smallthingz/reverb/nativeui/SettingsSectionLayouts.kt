@@ -1,5 +1,6 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.text.view.ParagraphView
 import android.content.Context
 import android.view.View
@@ -47,7 +48,7 @@ internal class SettingsRetentionSection(
         environment.textDensity.density,inputAllowed={settingsInputAllowed(inputRoot)}).apply {
         onSelectionRequest={id->modeValues[id]?.let {onMode(it);true}?:false}
     }
-    private val surface=ReverbGroupLayout(context,23f)
+    private val surface=NativeGroupLayout(context,23f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
     private val body=RetentionBody(context,oneShotValue,loopingValue)
     private val error=environment.paragraph(context,"",ReverbTextRole.BODY_SMALL,environment.palette.error)
     private var headerHeight=0
@@ -55,7 +56,7 @@ internal class SettingsRetentionSection(
         importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO
         error.visibility=GONE
         body.addView(oneShotValue);body.addView(loopingValue);body.addView(error)
-        surface.addRow(body,ReverbGroupLayout.LayoutParams(-1,-2))
+        surface.addRow(body,NativeGroupLayout.LayoutParams(-1,-2))
         surface.setPalette(environment.palette.field,environment.palette.border)
         addView(title);addView(modes);addView(surface)
         bindMode(mode,environment)
@@ -129,10 +130,10 @@ internal class SettingsRecordingSection(
     init {
         importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO
         addView(title);addView(choices.view)
-        choices.view.addRow(outputCompression,ReverbGroupLayout.LayoutParams(-1,-2).apply{dividerTop=true})
-        choices.view.addRow(warning,ReverbGroupLayout.LayoutParams(-1,-2))
-        choices.view.addRow(skipSilence,ReverbGroupLayout.LayoutParams(-1,-2).apply{dividerTop=true})
-        choices.view.addRow(notificationSave,ReverbGroupLayout.LayoutParams(-1,-2).apply{dividerTop=true})
+        choices.view.addRow(outputCompression,NativeGroupLayout.LayoutParams(-1,-2).apply{dividerTop=true})
+        choices.view.addRow(warning,NativeGroupLayout.LayoutParams(-1,-2))
+        choices.view.addRow(skipSilence,NativeGroupLayout.LayoutParams(-1,-2).apply{dividerTop=true})
+        choices.view.addRow(notificationSave,NativeGroupLayout.LayoutParams(-1,-2).apply{dividerTop=true})
     }
     fun bind(showFlacPcmWarning:Boolean,next:ReverbViewEnvironment) {
         environment=next;bindSectionTitle(title,next)

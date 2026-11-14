@@ -1,8 +1,10 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeActionSheetContentContext
+
+import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.scroll.NativeVerticalScrollState
 import smallthingz.ui.scroll.NativeVerticalViewport
-
 import smallthingz.ui.text.view.NativeTextSemanticsClip
 import smallthingz.ui.text.view.ParagraphView
 import android.content.Context
@@ -27,9 +29,10 @@ import kotlin.math.roundToInt
 internal class ReverbRecordingInfoBody(
     context: Context,
     private val host: NativeActionSheetContentContext,
+    initialEnvironment: ReverbViewEnvironment,
     recording: RecordingEntity,
 ) : ViewGroup(context), AutoCloseable {
-    private var environment = host.environment
+    private var environment = initialEnvironment
     private val name = environment.paragraph(context, recording.displayName, ReverbTextRole.TITLE_MEDIUM,
         environment.palette.onSurface)
     private val rows = InfoRows(context, environment)
@@ -208,7 +211,7 @@ private class InfoRows(context: Context, private var environment: ReverbViewEnvi
     }
 }
 private class InfoRow(context:Context,private var environment:ReverbViewEnvironment,label:String,value:String):ViewGroup(context) {
-    val surface=ReverbGroupLayout(context,14f)
+    val surface=NativeGroupLayout(context,14f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
     val label=environment.paragraph(context,label.removeSuffix(":"),ReverbTextRole.LABEL_MEDIUM,environment.palette.onSurfaceVariant)
     val value=environment.paragraph(context,value,ReverbTextRole.BODY_MEDIUM,environment.palette.onSurface)
     private val body=object:ViewGroup(context) {
@@ -239,7 +242,7 @@ private class InfoRow(context:Context,private var environment:ReverbViewEnvironm
     init {
         importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO
         surface.setPalette(environment.palette.surfaceContainerHighest,Color.TRANSPARENT)
-        surface.addRow(body,ReverbGroupLayout.LayoutParams(LayoutParams.MATCH_PARENT,LayoutParams.WRAP_CONTENT));addView(surface)
+        surface.addRow(body,NativeGroupLayout.LayoutParams(LayoutParams.MATCH_PARENT,LayoutParams.WRAP_CONTENT));addView(surface)
     }
     fun bindEnvironment(next:ReverbViewEnvironment) {
         val densityChanged=environment.textDensity!=next.textDensity

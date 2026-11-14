@@ -1,5 +1,7 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.input.phase.NativePointerLayerShape
+import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.input.NativeAndroidInteropHost
 import smallthingz.ui.input.phase.NativeAndroidInteropNode
 import smallthingz.ui.input.phase.NativeClickPhaseHost
@@ -8,7 +10,6 @@ import smallthingz.ui.input.phase.NativeViewPhasePointerNode
 import smallthingz.ui.input.phase.NativeViewPointerHitLayout
 import smallthingz.ui.input.phase.NativeWindowPointerCoordinates
 import smallthingz.ui.input.phase.PhasePointerRoot
-
 import smallthingz.ui.text.view.NativeTextSemanticsClip
 import smallthingz.ui.text.view.NativeTextSemanticsClipPolicy
 import android.Manifest
@@ -393,9 +394,9 @@ internal class SettingsInteractionRender(
                 inputRoot = root
                 board.addView(root, FrameLayout.LayoutParams(-1, -1))
                 val leaf = createNative(this).also { native = it }
-                val wrapped = if (audioGroup) ReverbGroupLayout(activity, 16f).apply {
+                val wrapped = if (audioGroup) NativeGroupLayout(activity, 16f).apply {
                     setPalette(environment.palette.field, environment.palette.border)
-                    addRow(leaf.view, ReverbGroupLayout.LayoutParams(-1, -2))
+                    addRow(leaf.view, NativeGroupLayout.LayoutParams(-1, -2))
                 } else leaf.view
                 root.addView(wrapped, FrameLayout.LayoutParams(-1, -2).apply {
                     leftMargin = (16 * density.density).roundToInt(); rightMargin = leftMargin
@@ -403,7 +404,7 @@ internal class SettingsInteractionRender(
                 })
                 val clips = NativeTextSemanticsClipPolicy { view ->
                     if (view is SettingsExpansionView ||
-                        (view.parent is ReverbGroupLayout && (view.parent as ReverbGroupLayout).pointerContent === view))
+                        (view.parent is NativeGroupLayout && (view.parent as NativeGroupLayout).pointerContent === view))
                         NativeTextSemanticsClip.Rectangle(smallthingz.ui.geometry.Rect(0f, 0f, view.width.toFloat(), view.height.toFloat()))
                     else NativeTextSemanticsClip.Unclipped
                 }
@@ -599,7 +600,7 @@ private class SettingsInteractionPointers(
                 .map(view::getChildAt).filter { it.visibility == View.VISIBLE }.map(::entry)
         override fun screenToLocal(screen: Offset) = geometry.coordinates(view).local(screen)
         override fun withinLayerBounds(local: Offset): Boolean = when (view) {
-            is ReverbGroupLayout -> view.containsVisualPoint(local.x, local.y)
+            is NativeGroupLayout -> view.containsVisualPoint(local.x, local.y)
             is NativePointerLayerShape -> view.containsPointerLayer(local.x, local.y)
             is SettingsExpansionView -> local.x >= 0 && local.y >= 0 && local.x < view.width && local.y < view.height
             else -> true

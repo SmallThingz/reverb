@@ -1,5 +1,6 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeGroupLayout
 import android.content.Context
 import android.view.View
 import android.view.ViewGroup
@@ -33,7 +34,7 @@ internal class SettingsStorageSection(
 ):ViewGroup(context),AutoCloseable {
     private var state=initial
     private val title=settingsSectionTitle(context,R.string.storage_settings_title,environment)
-    private val surface=ReverbGroupLayout(context,20f)
+    private val surface=NativeGroupLayout(context,20f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
     private val path=environment.paragraph(context,initial.pathText,ReverbTextRole.BODY_LARGE,environment.palette.muted)
     private val reset=SettingsStorageActionView(context,environment,ReverbIcon.Reset,
         context.getString(R.string.default_folder),inputRoot,onDefaultFolder)
@@ -49,9 +50,9 @@ internal class SettingsStorageSection(
     init {
         importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO
         body.addView(path);body.addView(reset);body.addView(choose);body.addView(move)
-        surface.addRow(body,ReverbGroupLayout.LayoutParams(-1,-2))
-        surface.addRow(audioRead,ReverbGroupLayout.LayoutParams(-1,-2).apply {dividerTop=true})
-        surface.addRow(allFiles,ReverbGroupLayout.LayoutParams(-1,-2).apply {dividerTop=true})
+        surface.addRow(body,NativeGroupLayout.LayoutParams(-1,-2))
+        surface.addRow(audioRead,NativeGroupLayout.LayoutParams(-1,-2).apply {dividerTop=true})
+        surface.addRow(allFiles,NativeGroupLayout.LayoutParams(-1,-2).apply {dividerTop=true})
         addView(title);addView(surface);bind(initial,environment)
     }
     fun bind(next:SettingsStorageState,colors:ReverbViewEnvironment) {

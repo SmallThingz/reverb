@@ -1,9 +1,9 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.scroll.NativeVerticalNestedHost
 import smallthingz.ui.scroll.NativeVerticalScrollState
 import smallthingz.ui.scroll.NativeVerticalViewport
-
 import smallthingz.ui.text.view.NativeSourceAccessibilityNode
 import smallthingz.ui.text.view.ParagraphView
 import android.content.Context
@@ -100,14 +100,14 @@ internal class OnboardingPageContentView(
         R.string.onboarding_permissions_body, initialPalette.onSurfaceVariant) else null
     private val permissions = if (page == 0)
         OnboardingPermissionGroup(context, typography, density, resolver, interactions) else null
-    private val bufferGroup = if (page == 1) ReverbGroupLayout(context, cornerRadiusDp = 20f) else null
+    private val bufferGroup = if (page == 1) NativeGroupLayout(context, cornerRadiusDp = 20f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast) else null
     private val oneShot = if (page == 1)
         OnboardingBufferRow(context, typography, density, resolver, ReverbIcon.OneShot, initialPalette, interactions) else null
     private val looping = if (page == 1)
         OnboardingBufferRow(context, typography, density, resolver, ReverbIcon.Looping, initialPalette, interactions) else null
     private val bufferOrder = if (page == 1) label(context, typography.bodyMedium, density, resolver,
         R.string.onboarding_order, initialPalette.onSurfaceVariant) else null
-    private val audioGroup = if (page == 2) ReverbGroupLayout(context, cornerRadiusDp = 20f) else null
+    private val audioGroup = if (page == 2) NativeGroupLayout(context, cornerRadiusDp = 20f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast) else null
     private val silenceCallbacks = createSilenceCallbacks()
     private val compression = if (page == 2)
         SettingsOutputCompressionView(context, compressionState(initialState), environment, inputRoot,
@@ -144,8 +144,8 @@ internal class OnboardingPageContentView(
             }
             1 -> {
                 val group = checkNotNull(bufferGroup)
-                group.addRow(checkNotNull(oneShot), ReverbGroupLayout.LayoutParams(-1, -2))
-                group.addRow(checkNotNull(looping), ReverbGroupLayout.LayoutParams(-1, -2).apply { dividerTop = true })
+                group.addRow(checkNotNull(oneShot), NativeGroupLayout.LayoutParams(-1, -2))
+                group.addRow(checkNotNull(looping), NativeGroupLayout.LayoutParams(-1, -2).apply { dividerTop = true })
                 column.add(group, beforeDp = 24, fillWidth = true)
                 column.add(checkNotNull(bufferOrder), beforeDp = 18)
                 oneShot.onActivate = { activate { it.oneShotChanged(!state.oneShotEnabled) } }
@@ -153,10 +153,10 @@ internal class OnboardingPageContentView(
             }
             2 -> {
                 val group = checkNotNull(audioGroup)
-                group.addRow(checkNotNull(compression), ReverbGroupLayout.LayoutParams(-1, -2))
-                group.addRow(checkNotNull(compressionWarning), ReverbGroupLayout.LayoutParams(-2, -2))
-                group.addRow(checkNotNull(silence), ReverbGroupLayout.LayoutParams(-1, -2).apply { dividerTop = true })
-                group.addRow(checkNotNull(silenceWarning), ReverbGroupLayout.LayoutParams(-2, -2))
+                group.addRow(checkNotNull(compression), NativeGroupLayout.LayoutParams(-1, -2))
+                group.addRow(checkNotNull(compressionWarning), NativeGroupLayout.LayoutParams(-2, -2))
+                group.addRow(checkNotNull(silence), NativeGroupLayout.LayoutParams(-1, -2).apply { dividerTop = true })
+                group.addRow(checkNotNull(silenceWarning), NativeGroupLayout.LayoutParams(-2, -2))
                 column.add(group, beforeDp = 24, fillWidth = true)
             }
         }

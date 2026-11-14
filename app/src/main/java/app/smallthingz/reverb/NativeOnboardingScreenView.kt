@@ -1,13 +1,16 @@
 package app.smallthingz.reverb
 
-import smallthingz.ui.geometry.roundedGroupGeometry
+import smallthingz.ui.components.NativeWindowInsetsBinding
+import smallthingz.ui.components.NativeFloatingPredictiveMotion
 
+import smallthingz.ui.input.phase.NativePointerLayerShape
+import smallthingz.ui.components.NativeGroupLayout
+import smallthingz.ui.geometry.roundedGroupGeometry
 import smallthingz.ui.scroll.NativeVerticalPhaseBinding
 import smallthingz.ui.scroll.NativeVerticalScrollAccessibilityBinding
 import smallthingz.ui.scroll.NativeVerticalScrollState
 import smallthingz.ui.scroll.NativeVerticalViewport
 import smallthingz.ui.scroll.nativeBringIntoViewLocalRect
-
 import smallthingz.ui.input.NativeAndroidInteropHost
 import smallthingz.ui.input.phase.NativeAndroidInteropNode
 import smallthingz.ui.input.phase.NativeClickPhaseEndpoint
@@ -18,7 +21,6 @@ import smallthingz.ui.input.phase.NativeViewPhasePointerNode
 import smallthingz.ui.input.phase.NativeViewPointerHitLayout
 import smallthingz.ui.input.phase.NativeWindowPointerCoordinates
 import smallthingz.ui.input.phase.PhasePointerRoot
-
 import smallthingz.ui.text.view.NativeTextSemanticsClip
 import smallthingz.ui.text.view.NativeTextSemanticsClipPolicy
 import smallthingz.ui.text.view.NativeTextSemanticsTransformPolicy
@@ -110,7 +112,7 @@ internal class NativeOnboardingScreenView private constructor(
     private var backFrameJob: Job? = null
     private var backEdge = BackEventCompat.EDGE_NONE
     // Same released rememberPredictiveBackMotion helper as About; reuse the reviewed scalar engine.
-    private val backMotion = ReverbAboutPredictiveMotion()
+    private val backMotion = NativeFloatingPredictiveMotion()
     private val pager = NativeOnboardingPager(scope, density, onChanged = ::pagerChanged)
     private val pageArea = FrameLayout(context).apply { clipChildren = false; clipToPadding = false }
     private val overscroll = NativeHorizontalOverscroll(context, density, 0xff666666.toInt()) { invalidate() }
@@ -637,9 +639,9 @@ private class OnboardingPointerGeometry(private val environment: ReverbViewEnvir
                 target is NativeVerticalViewport -> local.y >= 0f && local.y < height && local.x >= -margin && local.x < width + margin
                 target is SettingsExpansionView -> local.x >= 0f && local.x < width && local.y >= 0f && local.y < height
                 target is NativePointerLayerShape -> target.containsPointerLayer(local.x, local.y)
-                target is ReverbGroupLayout -> target.containsVisualPoint(local.x, local.y)
+                target is NativeGroupLayout -> target.containsVisualPoint(local.x, local.y)
                 target is SettingsOutputCompressionView || target is SettingsSilenceView -> true // One outer group clips both consecutive controls.
-                target.parent is ReverbGroupLayout -> roundedGroupGeometry(width, height, environment.textDensity.density, 20f)
+                target.parent is NativeGroupLayout -> roundedGroupGeometry(width, height, environment.textDensity.density, 20f)
                     .contains(local.x, local.y)
                 root.isFooterButton(target) -> roundedGroupGeometry(width, height, environment.textDensity.density,
                     minOf(width, height) / (2f * environment.textDensity.density)).contains(local.x, local.y)

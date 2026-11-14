@@ -1,9 +1,9 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.scroll.NativeVerticalNestedHost
 import smallthingz.ui.scroll.NativeVerticalScrollState
 import smallthingz.ui.scroll.NativeVerticalViewport
-
 import android.content.Context
 import android.graphics.Canvas
 import android.view.View
@@ -206,7 +206,7 @@ private class LibraryStatusColumn(
 }
 
 private class LibraryEmptySymbol(context: Context, private var environment: ReverbViewEnvironment) : ViewGroup(context) {
-    private val surface = ReverbGroupLayout(context, 28f)
+    private val surface = NativeGroupLayout(context, 28f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
     private val glyph = object : View(context) {
         var icon = ReverbIconDrawable(ReverbIcon.Library, environment.textDensity.density,
             reverbColorWithAlpha(environment.palette.muted, .72f))
@@ -229,7 +229,7 @@ private class LibraryEmptySymbol(context: Context, private var environment: Reve
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         glyph.importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
-        surface.addRow(glyph, ReverbGroupLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        surface.addRow(glyph, NativeGroupLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
         addView(surface)
         bind(environment)
     }

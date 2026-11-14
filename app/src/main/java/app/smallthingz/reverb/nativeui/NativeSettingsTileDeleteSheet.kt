@@ -1,9 +1,9 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.input.phase.NativePointerLayerShape
 import smallthingz.ui.input.phase.NativeClickPhaseHost
 import smallthingz.ui.input.phase.NativeClickPhaseNode
 import smallthingz.ui.input.phase.NativeViewPointerHitLayout
-
 import android.view.View
 import android.view.ViewGroup
 import androidx.lifecycle.findViewTreeLifecycleOwner
@@ -16,7 +16,7 @@ internal class NativeSettingsTileDeleteSheet(
 ):AutoCloseable {
     private var owner:NativeQuickSettingsTilesOwner?=null
     private var target:QuickSettingsTileDeleteTarget?=null
-    private var dialog:ReverbActionSheetDialog?=null
+    private var dialog:smallthingz.ui.components.NativeActionSheet?=null
     private var content:QuickTileDeleteContent?=null
     private var textLease:AutoCloseable?=null
     private var actionsLease:AutoCloseable?=null
@@ -36,7 +36,7 @@ internal class NativeSettingsTileDeleteSheet(
         retire()
         owner=currentOwner;target=next
         val value=environment()
-        val sheet=ReverbActionSheetDialog(anchor,value,anchor.context.getString(R.string.tiles_ui_delete)) {
+        val sheet=createReverbActionSheet(anchor,value,anchor.context.getString(R.string.tiles_ui_delete)) {
             currentOwner.dismissDelete()
         }
         dialog=sheet

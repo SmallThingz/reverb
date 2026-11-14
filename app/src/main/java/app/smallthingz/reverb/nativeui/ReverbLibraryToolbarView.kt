@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeTopBarLayout
+import smallthingz.ui.components.NativeGroupLayout
 import android.content.Context
 import android.os.Build
 import android.view.MotionEvent
@@ -108,13 +110,13 @@ internal class ReverbLibraryToolbarView(
 }
 
 private class LibrarySelectionBar(context: Context, private var environment: ReverbViewEnvironment, inputRoot: View) :
-    ReverbTopBarActionRoutingGroup(context) {
+    NativeTopBarLayout(context) {
     private val close = ReverbTopBarIconAction(context, environment, inputRoot, ReverbIcon.Close, R.string.clear_selection, true)
     private val share = ReverbTopBarIconAction(context, environment, inputRoot, ReverbIcon.Share,
         R.string.share_recording, true, sharedSurface = true)
     private val delete = ReverbTopBarIconAction(context, environment, inputRoot, ReverbIcon.Delete,
         R.string.delete_recording, true, sharedSurface = true)
-    private val selectionActions = ReverbGroupLayout(context, 15f, LinearLayout.HORIZONTAL)
+    private val selectionActions = NativeGroupLayout(context, 15f, LinearLayout.HORIZONTAL, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
     private val title = environment.paragraph(context, "", ReverbTextRole.TITLE_MEDIUM).apply {
         setTextLayout(maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
@@ -123,8 +125,8 @@ private class LibrarySelectionBar(context: Context, private var environment: Rev
     init {
         background = noise
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
-        selectionActions.addRow(share, ReverbGroupLayout.LayoutParams(0, LayoutParams.MATCH_PARENT, 1f))
-        selectionActions.addRow(delete, ReverbGroupLayout.LayoutParams(0, LayoutParams.MATCH_PARENT, 1f).apply {
+        selectionActions.addRow(share, NativeGroupLayout.LayoutParams(0, LayoutParams.MATCH_PARENT, 1f))
+        selectionActions.addRow(delete, NativeGroupLayout.LayoutParams(0, LayoutParams.MATCH_PARENT, 1f).apply {
             dividerStart = true
         })
         addView(close); addView(title); addView(selectionActions)

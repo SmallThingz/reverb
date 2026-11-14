@@ -1,5 +1,6 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.text.view.NativeSourceAccessibilityNode
 import smallthingz.ui.text.view.NativeTextSemanticsClip
 import smallthingz.ui.text.view.NativeTextSemanticsClipPolicy
@@ -230,7 +231,7 @@ internal class NativeAppFeedbackHostView(
 }
 
 private class PassiveFeedbackCard(context: Context, initial: ReverbViewEnvironment) : ViewGroup(context) {
-    val surface = ReverbGroupLayout(context, 18f)
+    val surface = NativeGroupLayout(context, 18f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
     val pointerNodes = listOf(object : NativeViewPhasePointerNode {
         override val view: View get() = surface
         override fun dispatch(event: NativeDragPointerEvent, pass: NativePointerPass) = Unit
@@ -241,7 +242,7 @@ private class PassiveFeedbackCard(context: Context, initial: ReverbViewEnvironme
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         clipChildren = false
         clipToPadding = false
-        surface.addRow(row, ReverbGroupLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+        surface.addRow(row, NativeGroupLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         addView(surface)
     }
     fun bind(event: FeedbackEvent, environment: ReverbViewEnvironment) {

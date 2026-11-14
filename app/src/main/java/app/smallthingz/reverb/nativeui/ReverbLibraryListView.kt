@@ -1,5 +1,6 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeGroupEdges
 import android.content.Context
 import android.view.View
 import android.view.ViewGroup
@@ -288,7 +289,7 @@ internal class ReverbLibraryListView(
         val recording: RecordingEntity? = null,
         val pendingSave: PendingSave? = null,
         val retryFailedSaves: Boolean = false,
-        val edges: ReverbRecordingGroupEdges? = null,
+        val edges: NativeGroupEdges? = null,
         val row: LibraryRecordingRow? = null,
         val expandedOwner: InlinePlaybackRowOwner? = null,
         val trimRequested: Boolean = false,
@@ -327,7 +328,7 @@ internal class ReverbLibraryListView(
                 next.add(when (item) {
                     is LibraryListItem.Header -> Entry(key, id, header = item.dateLabel, compactHeader = index == 0)
                     is LibraryListItem.Pending -> Entry(key, id, pendingSave = item.save,
-                        edges = ReverbRecordingGroupEdges(
+                        edges = NativeGroupEdges(
                             first = items.getOrNull(index - 1) !is LibraryListItem.Pending,
                             last = items.getOrNull(index + 1) !is LibraryListItem.Pending))
                     is LibraryListItem.SaveRecoveryStatus -> Entry(key, id, header = item.message, compactHeader = true)
@@ -335,7 +336,7 @@ internal class ReverbLibraryListView(
                     is LibraryListItem.Recording -> {
                         recordingCount++
                         Entry(key, id, recording = item.recording,
-                            edges = ReverbRecordingGroupEdges(
+                            edges = NativeGroupEdges(
                                 first = items.getOrNull(index - 1) !is LibraryListItem.Recording,
                                 last = items.getOrNull(index + 1) !is LibraryListItem.Recording))
                     }

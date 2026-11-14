@@ -1,9 +1,8 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.scroll.NativeWindowScrollAccessibilityEvents
-
 import smallthingz.ui.input.phase.NativeClickPhaseHost
-
 import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
 import smallthingz.ui.text.view.NativeTextSemanticsClip
 import smallthingz.ui.text.view.NativeTextSemanticsClipPolicy
@@ -409,8 +408,8 @@ internal class IncidentsParityBoard(
             scrollEvents = events
             val source = NativeMainAccessibility(host.fixtureRoot, host.fixtureRoot,
                 { listOfNotNull(native) }, { false }, { view ->
-                    if (view.parent is ReverbGroupLayout &&
-                        (view.parent as ReverbGroupLayout).pointerContent === view)
+                    if (view.parent is NativeGroupLayout &&
+                        (view.parent as NativeGroupLayout).pointerContent === view)
                         NativeTextSemanticsClip.Rectangle(smallthingz.ui.geometry.Rect(
                             0f, 0f, view.width.toFloat(), view.height.toFloat()))
                     else NativeTextSemanticsClip.Unclipped

@@ -1,9 +1,10 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeActionSheetContentContext
+
+import smallthingz.ui.input.phase.NativePointerLayerShape
 import smallthingz.ui.interaction.view.isNativeClickActivationKey
-
 import smallthingz.ui.geometry.roundedGroupGeometry
-
 import smallthingz.ui.text.view.MergedRowAccessibility
 import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
 import smallthingz.ui.text.view.NativeMergedRowAccessibilityState
@@ -58,8 +59,8 @@ internal class NativeMaterialButtonHost(
         createHit(view,nodes,children,clip)
 
     companion object {
-        fun forSheet(sheet:NativeActionSheetContentContext)=NativeMaterialButtonHost(
-            sheet.environment,sheet.inputRoot,sheet.interestedParent,sheet.accessibility.cursor,
+        fun forSheet(sheet:NativeActionSheetContentContext,environment:ReverbViewEnvironment)=NativeMaterialButtonHost(
+            environment,sheet.inputRoot,sheet.interestedParent,sheet.accessibility.cursor,
             sheet.accessibility.geometry,sheet.accessibility::sourceNode,
             registerTextClip={content->
                 val a=sheet.accessibility
@@ -85,9 +86,9 @@ internal class LibrarySheetButton(
     leadingIcon: ReverbIcon? = null,
     errorColors: Boolean = false,
 ) : ViewGroup(context), AutoCloseable {
-    constructor(context:Context,host:NativeActionSheetContentContext,filled:Boolean,text:String,onClick:()->Unit,
+    constructor(context:Context,host:NativeActionSheetContentContext,environment:ReverbViewEnvironment,filled:Boolean,text:String,onClick:()->Unit,
                 leadingIcon:ReverbIcon?=null,errorColors:Boolean=false):
-        this(context,NativeMaterialButtonHost.forSheet(host),filled,text,onClick,leadingIcon,errorColors)
+        this(context,NativeMaterialButtonHost.forSheet(host,environment),filled,text,onClick,leadingIcon,errorColors)
     private var environment=host.environment
     private val surface = ButtonSurface(context,host,filled,text,onClick,leadingIcon,errorColors)
     private val click = NativeClickPhaseNode(surface,surface.nativeClickEndpoint,host.interestedParent)

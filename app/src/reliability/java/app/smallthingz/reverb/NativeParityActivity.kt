@@ -41,7 +41,7 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
-import app.smallthingz.reverb.nativeui.ReverbGroupLayout
+import smallthingz.ui.components.NativeGroupLayout
 import app.smallthingz.reverb.nativeui.ReverbGroupRow
 import app.smallthingz.reverb.nativeui.ReverbPalette
 import java.util.ArrayDeque
@@ -223,24 +223,24 @@ class NativeParityActivity : ComponentActivity() {
             FrameLayout(localContext).apply {
                 layoutDirection = direction
                 setBackgroundColor(colors.surface.toArgb())
-                val group = ReverbGroupLayout(localContext).apply {
+                val group = NativeGroupLayout(localContext).apply {
                     layoutDirection = direction
                     setPalette(palette.field, palette.border)
                     addRow(SyntheticFillView(localContext, fills[0]),
-                        ReverbGroupLayout.LayoutParams(-1, (rowHeights[0] * density).roundToInt()))
+                        NativeGroupLayout.LayoutParams(-1, (rowHeights[0] * density).roundToInt()))
                     val split = ReverbGroupRow(localContext).apply {
                         layoutDirection = direction
                         alpha = 0.65f
                         setDividerColor(palette.border)
                         addView(SyntheticFillView(localContext, fills[1]),
-                            ReverbGroupLayout.LayoutParams(0, -1, 1f))
+                            NativeGroupLayout.LayoutParams(0, -1, 1f))
                         addView(SyntheticFillView(localContext, fills[2]),
-                            ReverbGroupLayout.LayoutParams(0, -1, 1f).apply { dividerStart = true })
+                            NativeGroupLayout.LayoutParams(0, -1, 1f).apply { dividerStart = true })
                     }
-                    addRow(split, ReverbGroupLayout.LayoutParams(-1, (rowHeights[1] * density).roundToInt())
+                    addRow(split, NativeGroupLayout.LayoutParams(-1, (rowHeights[1] * density).roundToInt())
                         .apply { dividerTop = true })
                     addRow(SyntheticFillView(localContext, fills[3]),
-                        ReverbGroupLayout.LayoutParams(-1, (rowHeights[2] * density).roundToInt())
+                        NativeGroupLayout.LayoutParams(-1, (rowHeights[2] * density).roundToInt())
                             .apply { dividerTop = true })
                 }
                 val inset = (16 * density).roundToInt()

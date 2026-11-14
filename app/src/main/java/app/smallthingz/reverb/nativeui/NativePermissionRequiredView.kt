@@ -1,7 +1,8 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.input.phase.NativePointerLayerShape
+import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.geometry.roundedGroupGeometry
-
 import smallthingz.ui.interaction.view.NativeClickBinding
 import smallthingz.ui.interaction.view.NativeClickEnvironment
 import smallthingz.ui.interaction.view.RowIndication
@@ -217,7 +218,7 @@ private class PermissionContent(context:Context,private val host:NativeMaterialB
 private class PermissionLibraryAction(context:Context,private val host:NativeMaterialButtonHost,
                                       action:()->Unit):ViewGroup(context),AutoCloseable {
     private var environment=host.environment
-    private val surface=ReverbGroupLayout(context,18f)
+    private val surface=NativeGroupLayout(context,18f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
     private val visual=LibraryVisual(context)
     private var action:(()->Unit)?=action
     private val indication=RowIndication.install(visual,environment.palette.onSurface,
@@ -252,7 +253,7 @@ private class PermissionLibraryAction(context:Context,private val host:NativeMat
     init {
         importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO;clipChildren=false;clipToPadding=false
         surface.setPalette(environment.palette.surfaceContainerHigh,Color.TRANSPARENT)
-        surface.addRow(visual,ReverbGroupLayout.LayoutParams(-1,-1))
+        surface.addRow(visual,NativeGroupLayout.LayoutParams(-1,-1))
         addView(surface)
         controller.bind(NativeClickBinding(this,true,{visual.performClick()}))
     }

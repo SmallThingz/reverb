@@ -1,11 +1,13 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.components.NativeModalWindowRuntime
+
+import smallthingz.ui.components.NativeGroupLayout
+import smallthingz.ui.components.NativeGroupEdges
 import smallthingz.ui.scroll.NativeVerticalNestedHost
 import smallthingz.ui.scroll.NativeVerticalScrollSource
-
 import smallthingz.ui.input.phase.NativeDragSink
 import smallthingz.ui.input.phase.NativeViewPointerHitLayout
-
 import smallthingz.ui.interaction.view.readCachedAnimatorDurationScale
 import smallthingz.ui.text.view.NativePlainTextViewGeometry
 import smallthingz.ui.text.view.NativeSourceAccessibilityNode
@@ -35,7 +37,7 @@ internal fun verifyNativeMaterialProgress(instrumentation: Instrumentation, repo
     val samples = JSONArray()
     result.put("fill_samples", samples)
     val host = launchCurrentUiSmokeActivity(instrumentation)
-    val runtime = nativeParityOnMain(instrumentation) { NativeAboutWindowRuntime(host).apply { setStarted(true) } }
+    val runtime = nativeParityOnMain(instrumentation) { NativeModalWindowRuntime(host).apply { setStarted(true) } }
     val environment = nativeParityOnMain(instrumentation) {
         nativeParityEnvironment(host,
             androidx.compose.ui.unit.Density(host.resources.displayMetrics.density, host.resources.configuration.fontScale),
@@ -63,17 +65,17 @@ internal fun verifyNativeMaterialProgress(instrumentation: Instrumentation, repo
                 it.setPresentationActive(true)
                 it.bind(PendingSave("qa-progress", "Materializing recording", 1_700_000_000_000L,
                     80_000L, SavePhase.SAVING, 0f, codecSummary = "FLAC"), environment,
-                    ReverbRecordingGroupEdges(true, true))
+                    NativeGroupEdges(true, true))
                 host.fixtureRoot.addView(it.row, FrameLayout.LayoutParams(-1, -2))
             }
         }
         repeat(3) { draw() }
-        val field = ReverbGroupLayout::class.java.getDeclaredField("progressFraction").apply { isAccessible = true }
+        val field = NativeGroupLayout::class.java.getDeclaredField("progressFraction").apply { isAccessible = true }
         val driver = LibraryPendingSaveRowPresentation::class.java.getDeclaredField("driver").apply { isAccessible = true }
         nativeParityOnMain(instrumentation) {
             row.bind(PendingSave("qa-progress", "Materializing recording", 1_700_000_000_000L,
                 80_000L, SavePhase.SAVING, .8f, codecSummary = "FLAC"), environment,
-                ReverbRecordingGroupEdges(true, true))
+                NativeGroupEdges(true, true))
             check(row.row.paragraphLeaves.none { it.getText().contains('%') })
         }
         var previous = 0f
@@ -228,7 +230,7 @@ private fun verifyMaterialHomePending(
     instrumentation: Instrumentation,
     host: NativeParityActivity,
     environment: ReverbViewEnvironment,
-    runtime: NativeAboutWindowRuntime,
+    runtime: NativeModalWindowRuntime,
     directory: File,
     result: JSONObject,
     admittedScale: Float,

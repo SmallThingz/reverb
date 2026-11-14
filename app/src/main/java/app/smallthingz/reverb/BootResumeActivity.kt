@@ -348,7 +348,8 @@ internal class BootResumeContentView(
 
     fun showSuccess() {
         detail.text = context.getString(R.string.boot_resume_success)
-        progress.visibility = View.GONE
+        // Keep the centered logo and message anchored during the success hold.
+        progress.visibility = View.INVISIBLE
     }
 }
 

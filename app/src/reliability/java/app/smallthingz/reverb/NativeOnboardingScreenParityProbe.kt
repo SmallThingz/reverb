@@ -1,5 +1,7 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.components.NativeModalWindowRuntime
+
 import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
 import smallthingz.ui.text.view.ParagraphView
 import android.app.Application
@@ -268,7 +270,7 @@ internal fun showOnboardingScreen(
         }
         ScreenParityRender(view, true, registry::performSave, view::disposeComposition)
     } else {
-        val runtime = NativeAboutWindowRuntime(host).apply { setStarted(true) }
+        val runtime = NativeModalWindowRuntime(host).apply { setStarted(true) }
         try {
             var draft = initial
             lateinit var view: NativeOnboardingScreenView

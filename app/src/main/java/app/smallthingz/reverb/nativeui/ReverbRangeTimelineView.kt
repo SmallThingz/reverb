@@ -1,5 +1,6 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeGroupLayout
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Outline
@@ -294,7 +295,7 @@ internal class ReverbRangeTimelineView(
     }
 
     private inner class TimeBubble(context: Context) : ViewGroup(context) {
-        private val surface = ReverbGroupLayout(context, 10f)
+        private val surface = NativeGroupLayout(context, 10f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
         private val text = environment.paragraph(context, "", ReverbTextRole.LABEL_MEDIUM)
         private var renderedStyle = rangeBubbleTextStyle
         private val content = object : ViewGroup(context) {
@@ -320,7 +321,7 @@ internal class ReverbRangeTimelineView(
                         minOf(10f * density, minOf(view.width, view.height) * .5f))
                 }
             }
-            surface.addRow(content, ReverbGroupLayout.LayoutParams(-1, -1))
+            surface.addRow(content, NativeGroupLayout.LayoutParams(-1, -1))
             addView(surface)
             text.setTextLayout(true, 1, smallthingz.ui.text.style.TextOverflow.Clip)
         }

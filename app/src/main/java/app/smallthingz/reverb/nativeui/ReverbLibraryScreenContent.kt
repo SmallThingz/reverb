@@ -1,10 +1,10 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.input.phase.NativePointerLayerShape
+import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.components.NativeMenuAction
-
 import smallthingz.ui.scroll.NativeVerticalNestedHost
 import smallthingz.ui.scroll.NativeVerticalViewport
-
 import smallthingz.ui.text.view.NativeTextSemanticsClip
 import android.content.Context
 import android.view.View
@@ -391,7 +391,7 @@ internal class ReverbLibraryScreenContent(
                 NativeTextSemanticsClip.Rectangle(smallthingz.ui.geometry.Rect(-extra,0f,
                     view.width+extra,view.height.toFloat()))
             }
-            view.parent is ReverbGroupLayout && (view.parent as ReverbGroupLayout).pointerContent===view -> rectangle()
+            view.parent is NativeGroupLayout && (view.parent as NativeGroupLayout).pointerContent===view -> rectangle()
             view is NativePointerLayerShape && view.clipToOutline -> rectangle()
             else -> NativeTextSemanticsClip.Unclipped
         }

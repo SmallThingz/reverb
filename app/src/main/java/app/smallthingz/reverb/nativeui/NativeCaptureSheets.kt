@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeActionSheetContentContext
+
 import smallthingz.ui.interaction.view.readCachedAnimatorDurationScale
 import android.view.View
 import android.view.ViewGroup
@@ -38,9 +40,9 @@ internal class NativeCaptureSheets(
             if (existing == null) {
                 clear = CaptureTextSheet(anchor, next, title, message, owner::dismissClearBuffer) { context ->
                     listOf(
-                        LibrarySheetButton(anchor.context, context, false,
+                        LibrarySheetButton(anchor.context, context, next, false,
                             anchor.context.getString(R.string.cancel), owner::dismissClearBuffer),
-                        LibrarySheetButton(anchor.context, context, true,
+                        LibrarySheetButton(anchor.context, context, next, true,
                             anchor.context.getString(R.string.clear_buffer), owner::confirmClearBuffer,
                             leadingIcon = ReverbIcon.Delete, errorColors = true),
                     )
@@ -63,9 +65,9 @@ internal class NativeCaptureSheets(
             if (existing == null) {
                 clamp = CaptureTextSheet(anchor, next, title, message, owner::dismissExportClamp) { context ->
                     listOf(
-                        LibrarySheetButton(anchor.context, context, false,
+                        LibrarySheetButton(anchor.context, context, next, false,
                             anchor.context.getString(R.string.cancel), owner::dismissExportClamp),
-                        LibrarySheetButton(anchor.context, context, true,
+                        LibrarySheetButton(anchor.context, context, next, true,
                             anchor.context.getString(R.string.export), owner::proceedExportClamp),
                     )
                 }.also { it.show() }
@@ -77,7 +79,7 @@ internal class NativeCaptureSheets(
             val existing = error
             if (existing == null) {
                 error = CaptureTextSheet(anchor, next, title, message, owner::dismissError) { context ->
-                    listOf(LibrarySheetButton(anchor.context, context, true,
+                    listOf(LibrarySheetButton(anchor.context, context, next, true,
                         anchor.context.getString(R.string.close), owner::dismissError))
                 }.also { it.show() }
             } else existing.bind(title, message, next, owner::dismissError)
@@ -101,9 +103,9 @@ internal class CaptureTextSheet(
     onDismiss: () -> Unit,
     buttons: (NativeActionSheetContentContext) -> List<LibrarySheetButton>,
 ) : AutoCloseable {
-    private val dialog = ReverbActionSheetDialog(anchor, environment, title, onDismiss)
-    private val body = CaptureSheetText(dialog.contentContext, message)
-    private val actions = LibrarySheetActions(anchor.context, dialog.contentContext, buttons(dialog.contentContext))
+    private val dialog = createReverbActionSheet(anchor, environment, title, onDismiss)
+    private val body = CaptureSheetText(dialog.contentContext, environment, message)
+    private val actions = LibrarySheetActions(anchor.context, dialog.contentContext, environment, buttons(dialog.contentContext))
     private var closed = false
     init {
         dialog.setContent(body, actions, listOf(actions.hitLayout))
@@ -125,10 +127,11 @@ internal class CaptureTextSheet(
 
 private class CaptureSheetText(
     private val host: NativeActionSheetContentContext,
+    initialEnvironment: ReverbViewEnvironment,
     message: String,
 ) : ViewGroup(host.inputRoot.context), AutoCloseable {
-    private val text = host.environment.paragraph(context, message, ReverbTextRole.BODY_MEDIUM,
-        host.environment.palette.onSurfaceVariant)
+    private val text = initialEnvironment.paragraph(context, message, ReverbTextRole.BODY_MEDIUM,
+        initialEnvironment.palette.onSurfaceVariant)
     private val lease = text.bindPlainTextAccessibility(host.accessibility.cursor, host.accessibility.geometry,
         { host.accessibility.sourceNode(text) }) { host.accessibility.sourceNode(text).present }
     init { importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO; addView(text) }
@@ -153,14 +156,14 @@ private class CaptureClearProgressSheet(
     initial: BufferClearStatus,
     private val onCancel: () -> Unit,
 ) : AutoCloseable {
-    private val dialog = ReverbActionSheetDialog(anchor, environment, clearProgressTitle(anchor, initial)) {}
-    private val body = CaptureClearProgressBody(dialog.contentContext, initial)
-    private val cancel = LibrarySheetButton(anchor.context, dialog.contentContext, false,
+    private val dialog = createReverbActionSheet(anchor, environment, clearProgressTitle(anchor, initial)) {}
+    private val body = CaptureClearProgressBody(dialog.contentContext, environment, initial)
+    private val cancel = LibrarySheetButton(anchor.context, dialog.contentContext, environment, false,
         anchor.context.getString(R.string.cancel), onCancel)
-    private val actions = LibrarySheetActions(anchor.context, dialog.contentContext, listOf(cancel))
+    private val actions = LibrarySheetActions(anchor.context, dialog.contentContext, environment, listOf(cancel))
     private var closed = false
     init {
-        dialog.bindDismissalAdmission { false }
+        dialog.setDismissalAdmission { false }
         dialog.setContent(body, actions, listOf(actions.hitLayout))
         bind(initial, environment)
     }
@@ -189,9 +192,10 @@ private fun clearProgressTitle(view: View, status: BufferClearStatus) =
 /** Source Column: progress,12dp,bodyMedium detail,8dp,bodySmall cancellation note. */
 private class CaptureClearProgressBody(
     private val host: NativeActionSheetContentContext,
+    initialEnvironment: ReverbViewEnvironment,
     initial: BufferClearStatus,
 ) : ViewGroup(host.inputRoot.context), AutoCloseable {
-    private var environment = host.environment
+    private var environment = initialEnvironment
     private var progress: View? = null
     private var progressLease: AutoCloseable? = null
     private val detail = environment.paragraph(context, "", ReverbTextRole.BODY_MEDIUM,

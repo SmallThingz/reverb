@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.input.phase.NativePointerLayerShape
+import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.input.NativeAndroidInteropHost
 import smallthingz.ui.input.phase.NativeAndroidInteropNode
 import smallthingz.ui.input.phase.NativeClickPhaseHost
@@ -10,7 +12,6 @@ import smallthingz.ui.input.phase.NativePointerPass
 import smallthingz.ui.input.phase.NativeViewPhasePointerNode
 import smallthingz.ui.input.phase.NativeViewPointerHitLayout
 import smallthingz.ui.input.phase.NativeWindowPointerCoordinates
-
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
@@ -96,7 +97,7 @@ internal class NativeSettingsPointerBinding(
         }
         private val interop=if(isAndroidLeaf(view))NativeAndroidInteropNode(view,
             (view.parent as NativeAndroidInteropHost).nativeInteropRequests,suppressMovementConsumption)else null
-        private val shield=if(view is ReverbGroupLayout)object:NativeViewPhasePointerNode {
+        private val shield=if(view is NativeGroupLayout)object:NativeViewPhasePointerNode {
             override val view get()=this@Layout.view
             override fun dispatch(event:NativeDragPointerEvent,pass:NativePointerPass)=Unit
             override fun cancel()=Unit
@@ -117,7 +118,7 @@ internal class NativeSettingsPointerBinding(
             return fallbackNodes
         }
         override fun withinLayerBounds(local:Offset):Boolean=when {
-            view is ReverbGroupLayout->view.containsVisualPoint(local.x,local.y)
+            view is NativeGroupLayout->view.containsVisualPoint(local.x,local.y)
             view is NativePointerLayerShape->view.containsPointerLayer(local.x,local.y)
             view===listView-> {
                 val extra=(30f*density).roundToInt()

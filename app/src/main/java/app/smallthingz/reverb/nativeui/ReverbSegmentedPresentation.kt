@@ -1,13 +1,14 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeGroupLayout
 import android.content.Context
 import android.view.View
 import smallthingz.ui.components.NativeSegmentedPresentation
 import smallthingz.ui.controls.ControlPalette
 
 internal class ReverbSegmentedPresentation(context: Context) : NativeSegmentedPresentation {
-    override val surface = ReverbGroupLayout(context, 30f)
-    override fun setContent(content: View) = surface.addRow(content, ReverbGroupLayout.LayoutParams(-1, -2))
+    override val surface = NativeGroupLayout(context, 30f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
+    override fun setContent(content: View) = surface.addRow(content, NativeGroupLayout.LayoutParams(-1, -2))
     override fun bindSurface(palette: ControlPalette) = surface.setPalette(palette.surface, palette.outline)
     override val paintedSurfaceColor: Int get() = surface.paintedFillColor
 }

@@ -1,15 +1,15 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.input.phase.NativePointerLayerShape
+import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.scroll.NativeVerticalNestedHost
 import smallthingz.ui.scroll.NativeVerticalScrollSource
-
 import smallthingz.ui.input.phase.NativeClickPhaseHost
 import smallthingz.ui.input.phase.NativeClickPhaseNode
 import smallthingz.ui.input.phase.NativeViewPhasePointerNode
 import smallthingz.ui.input.phase.NativeViewPointerHitLayout
 import smallthingz.ui.input.phase.NativeWindowPointerCoordinates
 import smallthingz.ui.input.phase.PhasePointerRoot
-
 import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
 import smallthingz.ui.text.view.NativeTextSemanticsClip
 import android.content.Context
@@ -732,7 +732,7 @@ internal class NativeMainScreenView private constructor(
         home.topBar.sourceClip(view)?.let { return it }
         libraryToolbar?.sourceClip(view)?.let { return it }
         if (clipLeases.containsKey(view) ||
-            (view.parent is ReverbGroupLayout && (view.parent as ReverbGroupLayout).pointerContent === view) ||
+            (view.parent is NativeGroupLayout && (view.parent as NativeGroupLayout).pointerContent === view) ||
             view is ReverbHomeControlSurface) return rectangle(view)
         settings?.let { if (belongsTo(view, it)) return it.sourceClip(view) }
         library?.let { if (belongsTo(view, it)) return it.sourceClip(view) }

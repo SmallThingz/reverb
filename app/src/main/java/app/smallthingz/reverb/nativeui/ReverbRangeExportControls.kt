@@ -1,9 +1,9 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.input.phase.NativePointerLayerShape
+import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.interaction.view.isNativeClickActivationKey
-
 import smallthingz.ui.geometry.roundedGroupGeometry
-
 import smallthingz.ui.interaction.view.NativeClickBinding
 import smallthingz.ui.interaction.view.NativeClickEnvironment
 import smallthingz.ui.interaction.view.RowIndication
@@ -45,12 +45,12 @@ internal class ReverbRangeExportControls(
     scope: CoroutineScope,
 ) : ViewGroup(context) {
     private var environment = initialEnvironment
-    private val surface = ReverbGroupLayout(context, 28f)
+    private val surface = NativeGroupLayout(context, 28f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
     private val row = ControlsRow(context)
     val close = ReverbStandardIconButtonView(context, initialEnvironment, inputRoot, actionSizeDp = 50f)
-    private val pillSurface = ReverbGroupLayout(context, 16f)
+    private val pillSurface = NativeGroupLayout(context, 16f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
     private val pill = BufferPill(context, initialEnvironment)
-    private val exportSurface = ReverbGroupLayout(context, 20f)
+    private val exportSurface = NativeGroupLayout(context, 20f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
     val exportAction = ExportContent(context, initialEnvironment, inputRoot, scope)
     private var onCancel: () -> Unit = {}
     private var onExport: () -> Unit = {}
@@ -63,11 +63,11 @@ internal class ReverbRangeExportControls(
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         clipChildren = false; clipToPadding = false
         addView(surface)
-        surface.addRow(row, ReverbGroupLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        surface.addRow(row, NativeGroupLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
         row.addView(close); row.addView(pillSurface); row.addView(exportSurface)
-        pillSurface.addRow(pill, ReverbGroupLayout.LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
+        pillSurface.addRow(pill, NativeGroupLayout.LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
         exportSurface.addRow(exportAction,
-            ReverbGroupLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+            NativeGroupLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
     }
 
     fun bind(

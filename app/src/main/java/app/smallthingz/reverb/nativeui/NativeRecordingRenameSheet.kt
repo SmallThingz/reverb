@@ -25,17 +25,17 @@ internal class NativeRecordingRenameSheet(
     private var closed=false
     private val owner=NativeRecordingRenameOwner(anchor.context,recording,active,lifecycleOwner,
         parentScope,callbacks){if(ready&&!closed)render()}
-    private val dialog=ReverbActionSheetDialog(anchor,environment,
+    private val dialog=createReverbActionSheet(anchor,environment,
         anchor.context.getString(R.string.rename_recording),owner::requestDismiss)
-    private val field=ReverbRenameFieldView(anchor.context,dialog.contentContext,
+    private val field=ReverbRenameFieldView(anchor.context,dialog.contentContext,environment,
         owner.state.name,owner.state.error,{owner.state.name},owner::editName,owner::submit)
-    private val cancel=LibrarySheetButton(anchor.context,dialog.contentContext,false,
+    private val cancel=LibrarySheetButton(anchor.context,dialog.contentContext,environment,false,
         anchor.context.getString(R.string.cancel),owner::requestDismiss)
-    private val confirm=LibrarySheetButton(anchor.context,dialog.contentContext,true,
+    private val confirm=LibrarySheetButton(anchor.context,dialog.contentContext,environment,true,
         anchor.context.getString(R.string.rename_recording),owner::submit)
-    private val actions=LibrarySheetActions(anchor.context,dialog.contentContext,listOf(cancel,confirm))
+    private val actions=LibrarySheetActions(anchor.context,dialog.contentContext,environment,listOf(cancel,confirm))
     init {
-        dialog.bindDismissalAdmission { !owner.state.isRenaming }
+        dialog.setDismissalAdmission { !owner.state.isRenaming }
         dialog.setContent(field,actions,listOf(actions.hitLayout,field.hitLayout),scrollable=true)
         ready=true
         render()

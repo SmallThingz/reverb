@@ -1,5 +1,7 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.util.closePreservingPrimaryFailure
+
 import android.app.Application
 import android.app.Instrumentation
 import android.os.Debug

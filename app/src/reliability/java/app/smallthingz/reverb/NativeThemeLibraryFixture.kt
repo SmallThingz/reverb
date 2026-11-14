@@ -1,8 +1,8 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.components.NativeGroupEdges
 import smallthingz.ui.scroll.NativeVerticalNestedHost
 import smallthingz.ui.scroll.NativeVerticalScrollSource
-
 import smallthingz.ui.interaction.view.readCachedAnimatorDurationScale
 import smallthingz.ui.text.view.ParagraphView
 import android.content.Context
@@ -42,7 +42,7 @@ internal class NativeThemeLibraryFixture(
     init {
         val completedModel = LibraryRecordingRow("qa-finished", "Finished recording",
             "1:20 \u2022 8.4 MB", "10:30", false, true, true,
-            ReverbRecordingGroupEdges(first = true, last = true))
+            NativeGroupEdges(first = true, last = true))
         val forbidden: (String) -> Unit = { error("Theme fixture cannot perform recording actions") }
         completed.bind(completedModel, LibraryRecordingRowActions(forbidden, forbidden, forbidden))
         labels += completedModel.subtitle
@@ -55,7 +55,7 @@ internal class NativeThemeLibraryFixture(
                 error = "Storage unavailable", codecSummary = "FLAC"),
         )
         jobs.forEachIndexed { index, job ->
-            val edges = ReverbRecordingGroupEdges(first = index == 0, last = index == jobs.lastIndex)
+            val edges = NativeGroupEdges(first = index == 0, last = index == jobs.lastIndex)
             val model = pendingSaveRecordingRow(context, job, edges)
             check(model.recordingId == "save-job:" + job.id)
             check(!model.interactionsEnabled && !model.selected && !model.selectionActive && !model.expanded)
@@ -70,7 +70,7 @@ internal class NativeThemeLibraryFixture(
         recycled.bind(jobs[1].copy(phase = SavePhase.FAILED), environment)
         check(descendants(recycled.row).none { it is ReverbIncidentLoadingView })
         recycled.close()
-        recycled.bind(jobs[1], environment, ReverbRecordingGroupEdges(first = false, last = false))
+        recycled.bind(jobs[1], environment, NativeGroupEdges(first = false, last = false))
         check(descendants(recycled.row).count { it is ReverbIncidentLoadingView } == 1)
         verifyNativeLibraryExpansionMeasurement(context, environment, scope, inputRoot)
         verify()

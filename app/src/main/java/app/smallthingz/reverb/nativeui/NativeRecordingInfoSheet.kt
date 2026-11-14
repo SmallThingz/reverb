@@ -11,11 +11,11 @@ internal class NativeRecordingInfoSheet(
     recording:RecordingEntity,
     onDismiss:()->Unit,
 ):AutoCloseable {
-    private val dialog=ReverbActionSheetDialog(anchor,environment,
+    private val dialog=createReverbActionSheet(anchor,environment,
         anchor.context.getString(R.string.recording_info),onDismiss)
-    private val body=ReverbRecordingInfoBody(anchor.context,dialog.contentContext,recording)
-    private val actions=LibrarySheetActions(anchor.context,dialog.contentContext,listOf(
-        LibrarySheetButton(anchor.context,dialog.contentContext,true,anchor.context.getString(R.string.close),onDismiss)))
+    private val body=ReverbRecordingInfoBody(anchor.context,dialog.contentContext,environment,recording)
+    private val actions=LibrarySheetActions(anchor.context,dialog.contentContext,environment,listOf(
+        LibrarySheetButton(anchor.context,dialog.contentContext,environment,true,anchor.context.getString(R.string.close),onDismiss)))
     private var closed=false
     init {dialog.setContent(body,actions,listOf(actions.hitLayout,body.hitLayout))}
     fun show()=dialog.show()

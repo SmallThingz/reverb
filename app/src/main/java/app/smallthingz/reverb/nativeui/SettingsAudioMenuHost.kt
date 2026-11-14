@@ -1,10 +1,11 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.util.closePreservingPrimaryFailure
+
 import smallthingz.ui.components.NativePopupMenu
 import smallthingz.ui.components.NativeMenuChoices
 import smallthingz.ui.scroll.NativeVerticalScrollState
 
-import app.smallthingz.reverb.closePreservingPrimaryFailure
 
 import android.view.View
 import smallthingz.ui.runtime.MonotonicFrameClock

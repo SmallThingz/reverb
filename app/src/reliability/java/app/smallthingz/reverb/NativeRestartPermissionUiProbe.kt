@@ -1,5 +1,7 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.components.NativeActionSheet
+
 import android.app.Application
 import android.app.Instrumentation
 import android.content.ComponentName
@@ -64,23 +66,31 @@ internal fun verifyNativeRestartPermissionUi(instrumentation: Instrumentation, r
                     androidx.core.view.ViewCompat.requestApplyInsets(it)
                 }
             }
+            var pendingBrandBounds: Rect? = null
             for (completed in listOf(false, true)) {
                 if (completed) main { content.showSuccess() }
                 repeat(3) { awaitNativeParityDraw(instrumentation, content) }
                 val entry = main {
                     val brand = restartUiViews(content).filterIsInstance<ReverbBrandMarkView>().single()
                     check(brand.isShown && brand.contentDescription == context.getString(R.string.app_name))
+                    val brandBounds = Rect()
+                    check(brand.getGlobalVisibleRect(brandBounds))
+                    if (completed) check(brandBounds == pendingBrandBounds) {
+                        "Resume success moved the brand: $pendingBrandBounds -> $brandBounds"
+                    } else pendingBrandBounds = brandBounds
                     val title = restartUiViews(content).filterIsInstance<TextView>().single {
                         it.text.toString() == context.getString(if (completed) R.string.boot_resume_success else R.string.boot_resume_in_progress)
                     }
                     check(title.isAccessibilityHeading && title.isShown)
                     check(restartUiViews(content).none { it.isClickable })
                     val progress = restartUiViews(content).filterIsInstance<ProgressBar>().single()
-                    check((progress.visibility == View.GONE) == completed)
+                    check(progress.visibility == if (completed) View.INVISIBLE else View.VISIBLE)
                     JSONObject().put("name", "boot-$theme-${if (completed) "success" else "pending"}")
                         .put("heading_accessible", true).put("open_action_present", false)
                         .put("reverb_brand_visible", true).put("cancel_action_present", false)
+                        .put("brand_bounds", brandBounds.toShortString())
                         .put("boot_activity_launched", false)
+                        .also { if (completed) it.put("success_keeps_brand_position", true) }
                 }
                 val bitmap = captureNativeParityContent(instrumentation, host) { content }
                 try { saveNativeParityBitmap(directory, entry.getString("name") + "-hardware.png", bitmap) }
@@ -98,22 +108,23 @@ internal fun verifyNativeRestartPermissionUi(instrumentation: Instrumentation, r
                     context.getString(R.string.onboarding_restart_resume_body),
                     { dismissed++; sheet?.close() },
                 ) { actions ->
-                    closeButton = LibrarySheetButton(host, actions, false, context.getString(R.string.restart_access_not_now), onClick = {
+                    closeButton = LibrarySheetButton(host, actions, environment, false, context.getString(R.string.restart_access_not_now), onClick = {
                         dismissed++; sheet?.close()
                     })
-                    reviewButton = LibrarySheetButton(host, actions, true, context.getString(R.string.background_review), onClick = {
+                    reviewButton = LibrarySheetButton(host, actions, environment, true, context.getString(R.string.background_review), onClick = {
                         reviewed++; sheet?.close()
                     })
                     listOf(closeButton, reviewButton)
                 }.also { sheet = it; it.show() }
             }
             try {
-                val dialog = main { restartUiField(current, "dialog") as ReverbActionSheetDialog }
-                val state = main { restartUiField(dialog, "state") as NativeActionSheetState }
+                val dialog = main { restartUiField(current, "dialog") as NativeActionSheet }
+                val state = main { checkNotNull(restartUiField(dialog, "state")) }
                 val deadline = SystemClock.uptimeMillis() + 8000
-                while (!main { state.currentValue == NativeSheetValue.EXPANDED && !state.animationRunning && dialog.root.hasWindowFocus() }) {
+                while (!main { restartUiField(state, "currentValue").toString() == "EXPANDED" &&
+                    restartUiField(state, "dragTarget") == null && dialog.hasCurrentWindowFocus }) {
                     check(SystemClock.uptimeMillis() < deadline) { "Startup invitation did not settle in its owned window" }
-                    awaitNativeParityDraw(instrumentation, dialog.root)
+                    awaitNativeParityDraw(instrumentation, dialog.contentContext.inputRoot)
                 }
                 val buttonSemantics = main {
                     val facts = JSONArray()

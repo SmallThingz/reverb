@@ -1,8 +1,8 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.input.phase.NativeDragPointerChange
 import smallthingz.ui.input.phase.NativeViewPhasePointerNode
-
 import android.content.Context
 import android.view.View
 import android.view.ViewGroup
@@ -387,15 +387,15 @@ private class SettingsBackgroundWarningView(
     private val notifications = SettingsPermissionReviewRow(context, environment, inputRoot,
         ReverbIcon.BackgroundWarning, R.string.settings_resume_notification_blocked, R.string.background_review,
         R.string.settings_notification_access, reviewNotifications)
-    private val notificationLayout = ReverbGroupLayout.LayoutParams(-1, -2)
+    private val notificationLayout = NativeGroupLayout.LayoutParams(-1, -2)
     private val restart = SettingsPermissionReviewRow(context, environment, inputRoot,
         ReverbIcon.BackgroundWarning, R.string.settings_restart_access_missing, R.string.background_review,
         R.string.settings_restart_access, reviewRestart)
-    private val restartLayout = ReverbGroupLayout.LayoutParams(-1, -2)
-    private val group = ReverbGroupLayout(context, 14f)
+    private val restartLayout = NativeGroupLayout.LayoutParams(-1, -2)
+    private val group = NativeGroupLayout(context, 14f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
-        group.addRow(battery, ReverbGroupLayout.LayoutParams(-1, -2))
+        group.addRow(battery, NativeGroupLayout.LayoutParams(-1, -2))
         group.addRow(notifications, notificationLayout)
         group.addRow(restart, restartLayout)
         addView(group)

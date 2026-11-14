@@ -1,5 +1,6 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.text.view.ParagraphView
 import android.content.Context
 import android.graphics.Canvas
@@ -92,7 +93,7 @@ internal class SettingsQuickTilesView(
 ) : ViewGroup(context), AutoCloseable {
     private val title = environment.paragraph(context, context.getString(R.string.tiles_ui_title),
         ReverbTextRole.TITLE_MEDIUM, environment.palette.ink)
-    private val surface = ReverbGroupLayout(context, 20f)
+    private val surface = NativeGroupLayout(context, 20f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
     private val rows = TileRowsColumn(context)
     private val rowViews = QuickTileRowCache(
         create = { option -> QuickTileOptionRow(context, option, this.environment, inputRoot,
@@ -123,7 +124,7 @@ internal class SettingsQuickTilesView(
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         clipChildren = false
         clipToPadding = false
-        surface.addRow(rows, ReverbGroupLayout.LayoutParams(-1, -2))
+        surface.addRow(rows, NativeGroupLayout.LayoutParams(-1, -2))
         addView(title)
         addView(surface)
         addView(applyFirst)

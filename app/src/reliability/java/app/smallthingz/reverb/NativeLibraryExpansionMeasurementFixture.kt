@@ -1,5 +1,8 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.components.NativeModalWindowRuntime
+
+import smallthingz.ui.components.NativeGroupEdges
 import android.content.Context
 import android.app.Application
 import android.app.Instrumentation
@@ -16,7 +19,7 @@ internal fun verifyNativeLibraryExpansionMeasurement(instrumentation: Instrument
     check(context.packageName == "app.smallthingz.reverb.uitheme.reliability")
     check(context.applicationContext.javaClass == Application::class.java)
     nativeParityOnMain(instrumentation) {
-        val runtime = NativeAboutWindowRuntime(context)
+        val runtime = NativeModalWindowRuntime(context)
         try {
             val environment = nativeParityEnvironment(context,
                 androidx.compose.ui.unit.Density(context.resources.displayMetrics.density,
@@ -53,7 +56,7 @@ internal fun verifyNativeLibraryExpansionMeasurement(
     }
     val callbacks = LibraryRecordingRowActions(null, null, null)
     var model = LibraryRecordingRow("measurement-one", "Recording", "1:20", null,
-        false, false, false, ReverbRecordingGroupEdges(true, true))
+        false, false, false, NativeGroupEdges(true, true))
     row.bind(model, callbacks)
     val unspecified = View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
     val width = View.MeasureSpec.makeMeasureSpec(dp(360), View.MeasureSpec.EXACTLY)

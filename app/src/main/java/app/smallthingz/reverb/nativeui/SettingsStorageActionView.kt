@@ -1,9 +1,9 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.input.phase.NativePointerLayerShape
+import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.interaction.view.isNativeClickActivationKey
-
 import smallthingz.ui.geometry.roundedGroupGeometry
-
 import smallthingz.ui.interaction.view.NativeClickBinding
 import smallthingz.ui.interaction.view.NativeClickEnvironment
 import smallthingz.ui.interaction.view.RowIndication
@@ -45,7 +45,7 @@ internal class SettingsStorageActionView(
     private var environment=initial
     private var callback:(()->Unit)?=onClick
     private val radius=if(icon==null)12f else 14f
-    private val surface=ReverbGroupLayout(context,radius)
+    private val surface=NativeGroupLayout(context,radius, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
     private val content=ActionContent(context)
     private val indication=RowIndication.install(content,initial.palette.onSurface,{ readCachedAnimatorDurationScale(context) })
     private val controller=ViewClickController(content,object:NativeClickEnvironment {
@@ -64,7 +64,7 @@ internal class SettingsStorageActionView(
         importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO
         clipChildren=false;clipToPadding=false
         surface.setPalette(initial.palette.raised,AndroidColor.TRANSPARENT)
-        surface.addRow(content,ReverbGroupLayout.LayoutParams(-1,-2))
+        surface.addRow(content,NativeGroupLayout.LayoutParams(-1,-2))
         addView(surface)
         bind(initial,true)
     }

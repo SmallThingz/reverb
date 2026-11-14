@@ -1,5 +1,7 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.components.NativeModalWindowRuntime
+
 import android.app.Application
 import android.app.Instrumentation
 import android.content.res.Configuration
@@ -39,7 +41,7 @@ internal fun verifyNativeUiConsistencyCurrent(instrumentation: Instrumentation, 
             "compact Save-tile/notification wheel; owner initialization reads capacity preferences")))
     writeQaEvidenceAtomically(File(directory, "result.json")) { it.write(result.toString(2).toByteArray()) }
     val host = launchCurrentUiSmokeActivity(instrumentation)
-    val runtime = NativeAboutWindowRuntime(host).apply { setStarted(true) }
+    val runtime = NativeModalWindowRuntime(host).apply { setStarted(true) }
     var failure: Throwable? = null
     fun <T> main(action: () -> T): T = nativeParityOnMain(instrumentation, action)
     fun descendants(root: View): Sequence<View> = sequence {

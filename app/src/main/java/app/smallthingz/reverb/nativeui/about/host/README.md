@@ -1,5 +1,14 @@
 # Native About host successor
 
+This is a historical integration record. Window/motion/runtime now live in
+`smallthingz.ui` as `NativeFloatingDialog`, `NativeFloatingDialogMotion` and
+`NativeModalWindowRuntime`; `ReverbAboutDialog` only binds the app content and
+scroll restoration. The 14 motion tests moved to `NativeFloatingDialogMotionTest`.
+Earlier window provenance is retained in the library's
+`src/main/resource-provenance/dialog-window/`; current extraction provenance is
+`native-ui/SOURCE-dialogs.json`. Historical qualification statements below do not
+qualify the extracted implementation.
+
 Integrated into the native-screens successor after source review; these files are not yet compiled or executed.
 
 Integrated files: ReverbAboutContentView.kt, ReverbAboutDialog.kt, ReverbAboutMotion.kt, NativeAboutWindowRuntime.kt, ReverbAboutMotionTest.kt. The existing AboutDialog.kt remains the actual Compose oracle. No production caller, Home source, palette, resource, permission or device state was changed.

@@ -11,6 +11,7 @@
  */
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.text.view.ParagraphView
 import android.content.Context
 import android.graphics.Canvas
@@ -104,7 +105,7 @@ internal class SettingsAudioChoicesView(
     private val selections: SettingsAudioSelections,
     inputRoot: () -> View? = { null },
 ) : AutoCloseable {
-    val view = ReverbGroupLayout(context, cornerRadiusDp = 16f)
+    val view = NativeGroupLayout(context, cornerRadiusDp = 16f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
     private var currentPalette = palette
     private val interactions = OnboardingNativeInteractionsFactory(inputRoot)
     private fun <T> choice(kind: SettingsAudioChoice, choose: (T) -> Unit) =
@@ -123,9 +124,9 @@ internal class SettingsAudioChoicesView(
     private val inputPair = SettingsAudioChoicePair(context, source, route)
 
     init {
-        view.addRow(channel, ReverbGroupLayout.LayoutParams(-1, -2))
-        view.addRow(samplePair, ReverbGroupLayout.LayoutParams(-1, -2))
-        view.addRow(inputPair, ReverbGroupLayout.LayoutParams(-1, -2))
+        view.addRow(channel, NativeGroupLayout.LayoutParams(-1, -2))
+        view.addRow(samplePair, NativeGroupLayout.LayoutParams(-1, -2))
+        view.addRow(inputPair, NativeGroupLayout.LayoutParams(-1, -2))
         bind(initial, palette)
     }
 
@@ -168,7 +169,7 @@ internal class SettingsAudioChoicesView(
     }
 
     private fun topDivider(row: View, enabled: Boolean) {
-        val params = row.layoutParams as ReverbGroupLayout.LayoutParams
+        val params = row.layoutParams as NativeGroupLayout.LayoutParams
         if (params.dividerTop == enabled) return
         params.dividerTop = enabled
         row.requestLayout()

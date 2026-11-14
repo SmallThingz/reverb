@@ -1,15 +1,21 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeTopBarHitBounds
+import smallthingz.ui.components.NativeTopBarHitTarget
+import smallthingz.ui.components.NativeTopBarLayout
+import smallthingz.ui.input.phase.NativePointerLayerShape
+import smallthingz.ui.components.NativeTopBarAction
 import smallthingz.ui.interaction.view.isNativeClickActivationKey
-
 import smallthingz.ui.geometry.roundedGroupGeometry
-
 import smallthingz.ui.interaction.view.NativeClickBinding
 import smallthingz.ui.interaction.view.NativeClickEnvironment
 import smallthingz.ui.interaction.view.RowIndication
 import smallthingz.ui.interaction.view.RowIndicationSink
 import smallthingz.ui.interaction.view.ViewClickController
 import smallthingz.ui.interaction.view.readCachedAnimatorDurationScale
+import smallthingz.ui.text.view.NativeActionDescriptionView
+import smallthingz.ui.text.view.bindActionDescriptionAccessibility
+import smallthingz.ui.text.view.closeAccessibilityLeases
 import smallthingz.ui.text.view.MergedRowAccessibility
 import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
 import smallthingz.ui.text.view.NativeMergedRowAccessibilityState
@@ -17,8 +23,6 @@ import smallthingz.ui.text.view.NativeMergedRowRole
 import smallthingz.ui.text.view.NativePlainTextViewGeometry
 import smallthingz.ui.text.view.NativeSourceAccessibilityNode
 import smallthingz.ui.text.view.NativeTextSemanticsClip
-import smallthingz.ui.text.view.PlainTextAccessibility
-import smallthingz.ui.text.view.PlainTextAccessibilitySnapshot
 import smallthingz.ui.text.view.PlainTextAccessibilityWindowScope
 import android.content.Context
 import android.graphics.Canvas
@@ -27,9 +31,7 @@ import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Rect
 import android.os.Build
-import android.os.Bundle
 import android.view.accessibility.AccessibilityNodeInfo
-import android.view.accessibility.AccessibilityEvent
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
@@ -37,14 +39,11 @@ import android.view.ViewGroup
 import android.view.ViewOutlineProvider
 import androidx.core.graphics.ColorUtils
 import smallthingz.ui.animation.view.ViewColorTransition
-import smallthingz.ui.text.style.TextOverflow
 import app.smallthingz.reverb.R
 import smallthingz.ui.input.phase.NativeClickPhaseHost
 import smallthingz.ui.input.phase.NativeClickPhaseEndpoint
 import smallthingz.ui.input.phase.ViewClickPhaseEndpoint
-import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.roundToInt
 
 internal data class ReverbAppTopBarActions(
     val brand: () -> Unit,
@@ -58,7 +57,7 @@ internal class ReverbAppTopBarView(
     context: Context,
     initialEnvironment: ReverbViewEnvironment,
     private val nativeInputRoot: View,
-) : ReverbTopBarActionRoutingGroup(context) {
+) : NativeTopBarLayout(context) {
     private var environment = initialEnvironment
     private var back: ReverbTopBarIconAction? = null
     private var incidentAction: (() -> Unit)? = null
@@ -70,30 +69,27 @@ internal class ReverbAppTopBarView(
     private val brand = ReverbTopBarBrandAction(context, environment, nativeInputRoot)
     private val noise = ReverbNoiseDrawable(resources, environment.palette.surface, ReverbNoiseDrawable.SEED_TOP_BAR)
     private val noiseColor = noise.colorTransition(this, environment.palette.surface)
-    private var statusInset = 0
-    private var barHeight = 66f
     private var accessibilityLease: AutoCloseable? = null
     private var refreshAccessibilityBack: (() -> Unit)? = null
     private var admitAccessibilityChildren: ((ArrayList<View>, Int, (View) -> View?) -> Unit)? = null
     init {
         background = noise
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
-        addView(brand); addView(incidents); addView(settings)
+        bindMetrics(initialEnvironment.textDensity.density)
+        addView(brand, ActionLayoutParams(Slot.CENTER, minimumVisualOffset = true))
+        addView(incidents, ActionLayoutParams(Slot.START))
+        addView(settings, ActionLayoutParams(Slot.END))
         if (Build.VERSION.SDK_INT >= 29) isForceDarkAllowed = false
     }
     fun bind(value: ReverbViewEnvironment, hasIncidents: Boolean, actions: ReverbAppTopBarActions,
              statusInsetPx: Int = 0, applyStatusBarPadding: Boolean = true, barHeightDp: Float = 66f) {
-        val nextInset = if (applyStatusBarPadding) statusInsetPx else 0
-        val layoutChanged = environment.textDensity.density != value.textDensity.density ||
-            statusInset != nextInset || barHeight != barHeightDp
         environment = value
-        statusInset = nextInset
-        barHeight = barHeightDp
+        bindMetrics(value.textDensity.density, if (applyStatusBarPadding) statusInsetPx else 0, barHeightDp)
         noiseColor.retarget(value.palette.surface)
         val onBack = actions.back
         if (onBack == null) { back?.let(::removeView); back = null }
         else {
-            if (back == null) back = ReverbTopBarIconAction(context, value, nativeInputRoot, ReverbIcon.Back, R.string.back, false).also { addView(it, 0) }
+            if (back == null) back = ReverbTopBarIconAction(context, value, nativeInputRoot, ReverbIcon.Back, R.string.back, false).also { addView(it, 0, ActionLayoutParams(Slot.START)) }
             back!!.bind(value, true, value.palette.muted, value.palette.border, onBack)
         }
         settings.bind(value, true, value.palette.muted, value.palette.border, actions.settings)
@@ -103,8 +99,6 @@ internal class ReverbAppTopBarView(
         bindIncidents()
         brand.bind(value, actions.brand)
         refreshAccessibilityBack?.invoke()
-        touchDensity = value.textDensity.density
-        if (layoutChanged) requestLayout()
     }
 
     /** The retained Home bar must not expose an action behind Library, including its selection bar. */
@@ -144,7 +138,7 @@ internal class ReverbAppTopBarView(
             fixed += incidents.bindAccessibility(cursor, geometry, sourceNode)
             fixed += settings.bindAccessibility(cursor, geometry, sourceNode)
         } catch (error: Throwable) {
-            closeTopBarAccessibilityLeases(fixed.asReversed(), error)
+            closeAccessibilityLeases(fixed.asReversed(), error)
             throw error
         }
         var boundBack: ReverbTopBarIconAction? = null
@@ -163,7 +157,7 @@ internal class ReverbAppTopBarView(
         refreshAccessibilityBack = refresh
         try { refresh() } catch (error: Throwable) {
             if (refreshAccessibilityBack === refresh) refreshAccessibilityBack = null
-            closeTopBarAccessibilityLeases(listOfNotNull(backLease) + fixed.asReversed(), error)
+            closeAccessibilityLeases(listOfNotNull(backLease) + fixed.asReversed(), error)
             throw error
         }
         admitAccessibilityChildren = admitChildren
@@ -178,7 +172,7 @@ internal class ReverbAppTopBarView(
                 val retired = backLease
                 backLease = null
                 boundBack = null
-                closeTopBarAccessibilityLeases(listOfNotNull(retired) + fixed.asReversed())
+                closeAccessibilityLeases(listOfNotNull(retired) + fixed.asReversed())
             }
         }
         accessibilityLease = lease
@@ -205,9 +199,9 @@ internal class ReverbAppTopBarView(
         }
     }
 
-    private fun accessibilityAction(child: View): View? = when (child) {
-        is ReverbTopBarIconAction -> child.accessibilityAction
-        is ReverbTopBarActionLeaf, is ReverbTopBarBrandAction -> child
+    private fun accessibilityAction(child: View): View? = when {
+        child is ReverbTopBarIconAction -> child.accessibilityAction
+        child === back?.visual || child === incidents.visual || child === settings.visual || child === brand -> child
         else -> null
     }
     fun sourceClip(view: View): NativeTextSemanticsClip? = when {
@@ -215,329 +209,96 @@ internal class ReverbAppTopBarView(
         view === brand -> topBarClipBounds(view)
         else -> back?.sourceClip(view) ?: incidents.sourceClip(view) ?: settings.sourceClip(view)
     }
-    private fun dp(value: Float) = (value * environment.textDensity.density).roundToInt()
-    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        val size = dp(46f)
-        for (index in 0 until childCount) getChildAt(index).measure(appTopBarExact(size), appTopBarExact(size))
-        setMeasuredDimension(MeasureSpec.getSize(widthMeasureSpec), resolveSize(statusInset + dp(barHeight), heightMeasureSpec))
-    }
-    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
-        val inset = dp(14f)
-        val size = dp(46f)
-        val y = statusInset + ((height - statusInset - size) / 2f).roundToInt()
-        fun logical(child: View, x: Int) {
-            val physical = if (layoutDirection == LAYOUT_DIRECTION_RTL) width - x - size else x
-            child.layout(physical, y, physical + size, y + size)
-        }
-        back?.let { logical(it, inset) }
-        logical(settings, width - inset - size)
-        logical(incidents, inset)
-        val bx = ((width - size) / 2f).roundToInt()
-        // This View is the inner visual Surface; the source's outer size remains46dp.
-        val visualOffset = nativeMinimumInteractiveVisualOffset(size, dp(48f))
-        brand.layout(bx + visualOffset, y + visualOffset,
-            bx + visualOffset + size, y + visualOffset + size)
-    }
 }
 
-/** Explicit48dp minimum-target routing; never a permanent whole-screen touch delegate. */
-internal abstract class ReverbTopBarActionRoutingGroup(context: Context) : ViewGroup(context) {
-    protected var touchDensity = resources.displayMetrics.density
-    private var delegated: View? = null
-    init { clipChildren = false; clipToPadding = false }
-    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
-        if (event.actionMasked == MotionEvent.ACTION_DOWN) {
-            delegated = null
-            val eligible = ArrayList<View>(childCount)
-            val bounds = ArrayList<ReverbTopBarHitBounds>(childCount)
-            for (index in childCount - 1 downTo 0) {
-                val child = getChildAt(index)
-                if (child.visibility != VISIBLE) continue
-                val shape = when (child) {
-                    is ReverbTopBarIconAction -> child.hitBounds()
-                    is ReverbTopBarBrandAction -> ReverbTopBarHitBounds(child.left.toFloat(), child.top.toFloat(),
-                        child.width.toFloat(), child.height.toFloat(), min(child.width, child.height) / 2f)
-                    else -> continue
-                }
-                eligible += child
-                bounds += shape
-            }
-            val hit = reverbTopBarHitIndex(bounds, event.x, event.y,
-                event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER, 48f * touchDensity)
-            delegated = hit?.let(eligible::get)
-        }
-        val target = delegated ?: return super.dispatchTouchEvent(event)
-        val copy = MotionEvent.obtain(event)
-        copy.offsetLocation(-target.left.toFloat(), -target.top.toFloat())
-        val handled = try { target.dispatchTouchEvent(copy) } finally { copy.recycle() }
-        if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) delegated = null
-        return handled
-    }
-    override fun onDetachedFromWindow() { delegated = null; super.onDetachedFromWindow() }
-}
-
-/**46dp Surface,15dp corners,1dp source border,23dp icon; optional48dp selection wrapper. */
+/** Reverb glyph/palette and incident-preview binding for the shared action. */
 internal class ReverbTopBarIconAction(
     context: Context,
-    environment: ReverbViewEnvironment,
+    private var environment: ReverbViewEnvironment,
     inputRoot: () -> View?,
-    glyph: ReverbIcon,
+    private var glyph: ReverbIcon,
     description: Int,
-    private val selectionWrapper: Boolean,
+    selectionWrapper: Boolean,
     private val sharedSurface: Boolean = false,
     rolePresent: Boolean = false,
-) : ViewGroup(context) {
+) : NativeTopBarAction(context, environment.textDensity.density, inputRoot, context.getString(description),
+    selectionWrapper, sharedSurface, rolePresent, environment.palette.ink,
+    ::invalidateSettingsTextContrast, { view, tint -> smallthingz.ui.controls.textSurfaceForeground(settingsTextSurface(view), tint) }) {
     constructor(context: Context, environment: ReverbViewEnvironment, inputRoot: View,
         glyph: ReverbIcon, description: Int, selectionWrapper: Boolean, sharedSurface: Boolean = false,
         rolePresent: Boolean = false) :
         this(context, environment, { inputRoot }, glyph, description, selectionWrapper, sharedSurface, rolePresent)
-
-    private var density = environment.textDensity.density
-    private var environment = environment
-    private val surface = if (sharedSurface) null else ReverbGroupLayout(context, 15f)
-    private val leaf = ReverbTopBarActionLeaf(context, environment, inputRoot, glyph,
-        context.getString(description), if (sharedSurface) 0f else 15f, rolePresent)
+    private var icon = ReverbIconDrawable(glyph, environment.textDensity.density, environment.palette.ink)
+    private var publishedTint = environment.palette.ink
     private var incidentProgress = 0f
+    private var iconIncidentProgress = 0f
     private var incidentAlert = false
+    private var incidentMorph: LibraryBackIncidentMorph? = null
     private var surfaceMotion: ViewColorTransition? = null
-    internal val accessibilityAction: View get() = leaf
-    /** The existing clipped leaf background can carry feedback beneath its glyph and ripple. */
-    internal val visual: View get() = leaf
-    internal fun invalidateTextSurfaceInk() = leaf.invalidate()
+    private val incidentColorMotion = if (glyph == ReverbIcon.Back)
+        visual.colorTransition(environment.palette.muted) { visual.invalidate() } else null
     init {
-        // The source size modifier does not clip an overflowing minimum-layout residual.
-        clipChildren = false
-        clipToPadding = false
-        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
-        if (surface == null) addView(leaf) else {
-            surface.addRow(leaf, ReverbGroupLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
-            addView(surface)
+        iconPainter = { canvas, bounds, tint ->
+            icon.layoutDirection = visual.layoutDirection
+            icon.setBounds(bounds)
+            if (publishedTint != tint) { publishedTint = tint; icon.setTint(tint) }
+            if (iconIncidentProgress <= 0f) icon.draw(canvas)
+            else incidentMorph?.draw(canvas, bounds, iconIncidentProgress,
+                ColorUtils.blendARGB(sampledIconTint, checkNotNull(incidentColorMotion).color(0), iconIncidentProgress),
+                visual.layoutDirection == LAYOUT_DIRECTION_RTL)
         }
     }
-    fun bind(environment: ReverbViewEnvironment, enabled: Boolean, tint: Int, border: Int, onClick: () -> Unit) {
-        density = environment.textDensity.density
-        this.environment = environment
-        if (surface != null) {
+    fun bind(value: ReverbViewEnvironment, enabled: Boolean, tint: Int, border: Int, onClick: () -> Unit) {
+        if (environment.textDensity.density != value.textDensity.density) {
+            icon = ReverbIconDrawable(glyph, value.textDensity.density, tint)
+            publishedTint = tint
+            if (incidentMorph != null) incidentMorph = LibraryBackIncidentMorph(value.textDensity.density)
+        }
+        environment = value
+        if (!sharedSurface) {
             val motion = surfaceMotion ?: ViewColorTransition(this,
-                intArrayOf(environment.palette.field, border, border), ::applySurfacePalette)
-                .also { surfaceMotion = it }
-            motion.retarget(environment.palette.field, border, incidentBorder())
+                intArrayOf(value.palette.field, border, border), ::applySurfacePalette).also { surfaceMotion = it }
+            motion.retarget(value.palette.field, border, incidentBorder())
             applySurfacePalette()
         }
-        leaf.bind(environment, enabled, tint, onClick)
+        incidentColorMotion?.retarget(if (incidentAlert) value.palette.error else value.palette.muted)
+        bindAction(value.textDensity.density, enabled, tint, value.palette.ink, onClick)
     }
-    fun bindIcon(glyph: ReverbIcon, description: String) = leaf.bindIcon(glyph, description)
-    fun cancelInput() = leaf.cancelInput()
+    fun bindIcon(next: ReverbIcon, description: String) {
+        setDescription(description)
+        if (glyph == next) return
+        glyph = next
+        icon = ReverbIconDrawable(next, environment.textDensity.density, sampledIconTint)
+        publishedTint = sampledIconTint
+        visual.invalidate()
+    }
     fun setIncidentMorph(progress: Float, hasIncidents: Boolean) {
         incidentProgress = progress.coerceIn(0f, 1f)
         if (incidentAlert != hasIncidents) {
             incidentAlert = hasIncidents
             surfaceMotion?.retarget(environment.palette.field, environment.palette.border, incidentBorder())
         }
-        leaf.setIncidentMorph(incidentProgress, hasIncidents)
+        if (glyph == ReverbIcon.Back) {
+            if (incidentMorph == null) incidentMorph = LibraryBackIncidentMorph(environment.textDensity.density)
+            iconIncidentProgress = incidentProgress
+            incidentColorMotion?.retarget(if (hasIncidents) environment.palette.error else environment.palette.muted)
+            visual.invalidate()
+        }
         applySurfacePalette()
     }
     private fun incidentBorder() = if (incidentAlert)
         reverbColorWithAlpha(environment.palette.error, .55f) else environment.palette.border
     private fun applySurfacePalette() {
         val motion = surfaceMotion ?: return
-        surface?.setPaletteImmediately(motion.color(0),
-            ColorUtils.blendARGB(motion.color(1), motion.color(2), incidentProgress))
-    }
-    fun bindAccessibility(cursor: PlainTextAccessibilityWindowScope,
-        geometry: NativePlainTextViewGeometry, sourceNode: (View) -> NativeSourceAccessibilityNode): AutoCloseable =
-        leaf.bindAccessibility(cursor, geometry, sourceNode)
-    fun sourceClip(view: View): NativeTextSemanticsClip? = when (view) {
-        surface -> topBarClipBounds(view)
-        this, leaf -> NativeTextSemanticsClip.Unclipped
-        else -> null
-    }
-    internal fun hitBounds() = ReverbTopBarHitBounds(
-        left + (surface?.left ?: 0).toFloat(), top + (surface?.top ?: 0).toFloat(),
-        (surface?.width ?: width).toFloat(), (surface?.height ?: height).toFloat(),
-        if (sharedSurface) 0f else 15f * density,
-    )
-    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        val outer = ((if (selectionWrapper) 48f else 46f) * density).roundToInt()
-        val visual = ((if (sharedSurface) 48f else 46f) * density).roundToInt()
-        (surface ?: leaf).measure(appTopBarExact(visual), appTopBarExact(visual))
-        setMeasuredDimension(resolveSize(outer, widthMeasureSpec), resolveSize(outer, heightMeasureSpec))
-    }
-    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
-        if (surface == null) { leaf.layout(0, 0, width, height); return }
-        val minimum = (48f * density).roundToInt()
-        val x = ((width - surface.measuredWidth) / 2f).roundToInt() +
-            nativeMinimumInteractiveVisualOffset(surface.measuredWidth, minimum)
-        val y = ((height - surface.measuredHeight) / 2f).roundToInt() +
-            nativeMinimumInteractiveVisualOffset(surface.measuredHeight, minimum)
-        surface.layout(x, y, x + surface.measuredWidth, y + surface.measuredHeight)
-    }
-    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
-        val copy = MotionEvent.obtain(event)
-        copy.offsetLocation(-(surface?.left ?: 0).toFloat(), -(surface?.top ?: 0).toFloat())
-        return try { leaf.dispatchTouchEvent(copy) } finally { copy.recycle() }
+        setSurfacePaletteImmediately(motion.color(0), ColorUtils.blendARGB(motion.color(1), motion.color(2), incidentProgress))
     }
 }
 
-private class ReverbTopBarActionLeaf(
-    context: Context,
-    private var environment: ReverbViewEnvironment,
-    inputRoot: () -> View?,
-    private var glyph: ReverbIcon,
-    description: String,
-    private val cornerRadiusDp: Float,
-    private val rolePresent: Boolean,
-) : ViewGroup(context), NativeClickPhaseHost, NativePointerLayerShape, NativeMergedRowAccessibilityHost {
-    private val identity = Any()
-    private var click: (() -> Unit)? = null
-    private var icon = ReverbIconDrawable(glyph, environment.textDensity.density, environment.palette.ink)
-    private var publishedTint=environment.palette.ink
-    private val colorMotion=colorTransition(environment.palette.ink) {publishTint();invalidate()}
-    private fun publishTint() {
-        val ink=smallthingz.ui.controls.textSurfaceForeground(settingsTextSurface(this),colorMotion.color(0))
-        if(publishedTint!=ink){publishedTint=ink;icon.setTint(ink)}
-    }
-    private var incidentMorph: LibraryBackIncidentMorph? = null
-    private var incidentProgress = 0f
-    private var incidentAlert = false
-    private val incidentColorMotion = if (glyph == ReverbIcon.Back)
-        colorTransition(environment.palette.muted) { invalidate() } else null
-    private val descriptionView = ReverbTopBarDescriptionView(context, description)
-    private val accessibilityChildren = listOf(descriptionView)
-    override val mergedRowAccessibility = MergedRowAccessibility(
-        this, NativeMergedRowRole.BUTTON,
-        sourceState = { NativeMergedRowAccessibilityState(isEnabled, null, null,
-            accessibilityChildren, rolePresent = rolePresent) },
-        invokeSourceClick = { if (isEnabled && click != null) { click?.invoke(); true } else false },
-    )
-    private val indication = RowIndication.install(this, environment.palette.ink, { readCachedAnimatorDurationScale(context) })
-    private val controller = ViewClickController(this, object : NativeClickEnvironment {
-        override val nativeInputRoot: View? get() = inputRoot()
-        override val minimumTouchWidthPx get() = 48f * environment.textDensity.density
-        override val minimumTouchHeightPx get() = minimumTouchWidthPx
-        override fun admitDown(event: MotionEvent) = roundedGroupGeometry(width.toFloat(), height.toFloat(),
-            environment.textDensity.density, cornerRadiusDp).acceptsPointer(event.x, event.y,
-            event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER, minimumTouchWidthPx)
-        override fun interestedParent(event: MotionEvent) = false
-        override fun longPressOwnershipChanged(owns: Boolean) = Unit
-    }, RowIndicationSink(indication) { x, y, point -> point.set(x, y) })
-    override val nativeClickEndpoint: NativeClickPhaseEndpoint = ViewClickPhaseEndpoint(controller)
-    override fun containsPointerLayer(x: Float, y: Float) =
-        roundedGroupGeometry(width.toFloat(), height.toFloat(), environment.textDensity.density, cornerRadiusDp).contains(x, y)
-    init {
-        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
-        // The actual Icon child owns the description; Settings retains its explicit button role.
-        isClickable = true
-        setWillNotDraw(false)
-        accessibilityDelegate = mergedRowAccessibility
-        addView(descriptionView)
-        if (rolePresent) addView(mergedRowAccessibility.roleView)
-        setOnClickListener { if (isEnabled) click?.invoke() }
-    }
-    fun bind(value: ReverbViewEnvironment, enabled: Boolean, tint: Int, callback: () -> Unit) {
-        if (environment.textDensity.density != value.textDensity.density) {
-            icon = ReverbIconDrawable(glyph, value.textDensity.density, tint)
-            if (incidentMorph != null) incidentMorph = LibraryBackIncidentMorph(value.textDensity.density)
-            requestLayout()
-        }
-        environment = value
-        click = callback
-        isEnabled = enabled
-        isFocusable = enabled
-        colorMotion.retarget(if (enabled) tint else reverbColorWithAlpha(tint, .38f))
-        incidentColorMotion?.retarget(if (incidentAlert) value.palette.error else value.palette.muted)
-        publishTint()
-        indication.updateColor(value.palette.ink)
-        controller.bind(NativeClickBinding(identity, enabled, onClick = { performClick() }))
-        updateGeometry(width, height)
-        invalidate()
-    }
-    fun bindIcon(next: ReverbIcon, description: String) {
-        descriptionView.contentDescription = description
-        if (glyph == next) return
-        glyph = next
-        icon = ReverbIconDrawable(next, environment.textDensity.density, colorMotion.color(0))
-        publishedTint=colorMotion.color(0)
-        publishTint()
-        updateGeometry(width, height)
-        invalidate()
-    }
-    fun cancelInput() = controller.cancel()
-    fun setIncidentMorph(progress: Float, hasIncidents: Boolean) {
-        if (glyph != ReverbIcon.Back) return
-        // The toolbar binds this at rest, before gesture frames begin.
-        if (incidentMorph == null) incidentMorph = LibraryBackIncidentMorph(environment.textDensity.density)
-        incidentProgress = progress
-        if (incidentAlert != hasIncidents) {
-            incidentAlert = hasIncidents
-            incidentColorMotion?.retarget(if (hasIncidents) environment.palette.error else environment.palette.muted)
-        }
-        invalidate()
-    }
-    fun bindAccessibility(cursor: PlainTextAccessibilityWindowScope,
-        geometry: NativePlainTextViewGeometry, sourceNode: (View) -> NativeSourceAccessibilityNode): AutoCloseable =
-        bindTopBarActionAccessibility(this, mergedRowAccessibility, descriptionView, cursor, geometry, sourceNode)
-    override fun addChildrenForAccessibility(outChildren: ArrayList<View>) =
-        mergedRowAccessibility.addChildrenForAccessibility(outChildren)
-    override fun createAccessibilityNodeInfo(): AccessibilityNodeInfo? =
-        if (mergedRowAccessibility.isNodePresent()) super.createAccessibilityNodeInfo() else null
-    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        val w = MeasureSpec.getSize(widthMeasureSpec); val h = MeasureSpec.getSize(heightMeasureSpec)
-        val size = (23f * environment.textDensity.density).roundToInt()
-        descriptionView.measure(appTopBarExact(min(size, w)), appTopBarExact(min(size, h)))
-        if (rolePresent) mergedRowAccessibility.roleView.measure(appTopBarExact(w), appTopBarExact(h))
-        setMeasuredDimension(w, h)
-    }
-    override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
-        val x = ((width - descriptionView.measuredWidth) / 2f).roundToInt()
-        val y = ((height - descriptionView.measuredHeight) / 2f).roundToInt()
-        descriptionView.layout(x, y, x + descriptionView.measuredWidth, y + descriptionView.measuredHeight)
-        if (rolePresent) mergedRowAccessibility.roleView.layout(0, 0, width, height)
-    }
-    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) = updateGeometry(w, h)
-    private fun updateGeometry(w: Int, h: Int) {
-        icon.layoutDirection = layoutDirection
-        val size = (23f * environment.textDensity.density).roundToInt()
-        val glyphWidth = min(size, w)
-        val glyphHeight = min(size, h)
-        val x = ((w - glyphWidth) / 2f).roundToInt()
-        val y = ((h - glyphHeight) / 2f).roundToInt()
-        icon.setBounds(x, y, x + glyphWidth, y + glyphHeight)
-        indication.onMeasured(w, h, environment.textDensity.density)
-    }
-    override fun onDraw(canvas: Canvas) {
-        publishTint()
-        if (incidentProgress <= 0f) icon.draw(canvas)
-        else incidentMorph?.draw(canvas, icon.bounds, incidentProgress,
-            ColorUtils.blendARGB(colorMotion.color(0), checkNotNull(incidentColorMotion).color(0), incidentProgress),
-            layoutDirection == LAYOUT_DIRECTION_RTL)
-    }
-    override fun onRtlPropertiesChanged(layoutDirection: Int) { super.onRtlPropertiesChanged(layoutDirection); icon.layoutDirection = layoutDirection }
-    override fun onTouchEvent(event: MotionEvent) = controller.touch(event)
-    override fun onKeyDown(code: Int, event: KeyEvent): Boolean =
-        if (isNativeClickActivationKey(code)) controller.key(event) else super.onKeyDown(code, event)
-    override fun onKeyUp(code: Int, event: KeyEvent): Boolean =
-        if (isNativeClickActivationKey(code)) controller.key(event) else super.onKeyUp(code, event)
-    // The new non-interactive semantics child must not intercept the parent's hover observer.
-    override fun dispatchHoverEvent(event: MotionEvent): Boolean {
-        val handled = super.dispatchHoverEvent(event)
-        return controller.hover(event) || handled
-    }
-    override fun onFocusChanged(focused: Boolean, direction: Int, rect: Rect?) { super.onFocusChanged(focused, direction, rect); controller.focusChanged(focused) }
-    override fun onAttachedToWindow() {
-        super.onAttachedToWindow()
-        controller.attached()
-        controller.bind(if (click == null) null else NativeClickBinding(identity, isEnabled, onClick = { performClick() }))
-        controller.focusChanged(isFocused)
-    }
-    override fun onDetachedFromWindow() { controller.detached(); super.onDetachedFromWindow() }
-    override fun getAccessibilityClassName(): CharSequence = "android.view.View"
-}
-
-private class ReverbTopBarBrandAction(context: Context, private var environment: ReverbViewEnvironment, inputRoot: View) : ViewGroup(context), NativeClickPhaseHost, NativePointerLayerShape, NativeMergedRowAccessibilityHost {
+private class ReverbTopBarBrandAction(context: Context, private var environment: ReverbViewEnvironment, inputRoot: View) : ViewGroup(context), NativeClickPhaseHost, NativePointerLayerShape, NativeMergedRowAccessibilityHost, NativeTopBarHitTarget {
+    override fun hitBounds() = NativeTopBarHitBounds(left.toFloat(), top.toFloat(), width.toFloat(), height.toFloat(), min(width, height) / 2f)
     private val identity = Any()
     private val mark = ReverbBrandMarkView(context)
-    private val descriptionView = ReverbTopBarDescriptionView(context, context.getString(R.string.app_name))
+    private val descriptionView = NativeActionDescriptionView(context, context.getString(R.string.app_name))
     private val accessibilityChildren = listOf(descriptionView)
     override val mergedRowAccessibility = MergedRowAccessibility(
         this, NativeMergedRowRole.BUTTON,
@@ -595,7 +356,7 @@ private class ReverbTopBarBrandAction(context: Context, private var environment:
     }
     fun bindAccessibility(cursor: PlainTextAccessibilityWindowScope,
         geometry: NativePlainTextViewGeometry, sourceNode: (View) -> NativeSourceAccessibilityNode): AutoCloseable =
-        bindTopBarActionAccessibility(this, mergedRowAccessibility, descriptionView, cursor, geometry, sourceNode)
+        bindActionDescriptionAccessibility(this, mergedRowAccessibility, descriptionView, cursor, geometry, sourceNode)
     override fun addChildrenForAccessibility(outChildren: ArrayList<View>) =
         mergedRowAccessibility.addChildrenForAccessibility(outChildren)
     override fun createAccessibilityNodeInfo(): AccessibilityNodeInfo? =
@@ -634,86 +395,6 @@ private class ReverbTopBarBrandAction(context: Context, private var environment:
     override fun getAccessibilityClassName(): CharSequence = "android.view.View"
 }
 
-
-/** Actual source Icon/Image semantic child; drawing stays on the existing unchanged renderer. */
-private class ReverbTopBarDescriptionView(context: Context, description: String) : View(context) {
-    private var sourceNode: (() -> NativeSourceAccessibilityNode)? = null
-    private var text: PlainTextAccessibility? = null
-    private var token: Any? = null
-    init {
-        contentDescription = description
-        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
-        isFocusable = false
-    }
-    fun bindAccessibility(cursor: PlainTextAccessibilityWindowScope,
-        node: () -> NativeSourceAccessibilityNode): AutoCloseable {
-        val next = Any(); token = next; sourceNode = node
-        text = PlainTextAccessibility(this, cursor,
-            snapshot = { PlainTextAccessibilitySnapshot(contentDescription.toString(), { null }, { null }) },
-            exposed = { sourceNode?.invoke()?.present == true },
-            descriptionOnly = true)
-        return AutoCloseable {
-            if (token === next) { token = null; sourceNode = null; text = null }
-        }
-    }
-    override fun createAccessibilityNodeInfo(): AccessibilityNodeInfo? =
-        if (sourceNode?.invoke()?.present == false) null else super.createAccessibilityNodeInfo()
-    override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo) {
-        super.onInitializeAccessibilityNodeInfo(info)
-        // The pinned delegate suppresses Image class/focus under a merging Surface ancestor.
-        info.className = "android.view.View"
-        info.text = null
-        info.isScreenReaderFocusable = false
-        info.isFocusable = false
-        info.isClickable = false
-        info.isLongClickable = false
-        info.isEnabled = true
-        val actions = info.actionList
-        for (index in actions.size - 1 downTo 0) info.removeAction(actions[index])
-        info.addAction(if (isAccessibilityFocused) AccessibilityNodeInfo.AccessibilityAction.ACTION_CLEAR_ACCESSIBILITY_FOCUS
-            else AccessibilityNodeInfo.AccessibilityAction.ACTION_ACCESSIBILITY_FOCUS)
-        text?.populate(info)
-        sourceNode?.invoke()?.populate(info)
-    }
-    override fun performAccessibilityAction(action: Int, args: Bundle?): Boolean {
-        if (sourceNode?.invoke()?.present == false) return false
-        return text?.performAction(action, args) ?: super.performAccessibilityAction(action, args)
-    }
-    override fun onInitializeAccessibilityEvent(event: AccessibilityEvent) {
-        super.onInitializeAccessibilityEvent(event)
-        event.className = "android.view.View"
-        event.isEnabled = true
-        event.text.clear()
-        event.contentDescription = null
-    }
-    override fun getAccessibilityClassName(): CharSequence = "android.view.View"
-}
-
-private fun bindTopBarActionAccessibility(host: ViewGroup, parent: MergedRowAccessibility,
-    description: ReverbTopBarDescriptionView, cursor: PlainTextAccessibilityWindowScope,
-    geometry: NativePlainTextViewGeometry, sourceNode: (View) -> NativeSourceAccessibilityNode): AutoCloseable {
-    val parentLease = parent.bindSourceGeometry(geometry, sourceNode) { sourceNode(host).present }
-    val childLease = try { description.bindAccessibility(cursor) { sourceNode(description) } }
-    catch (error: Throwable) {
-        closeTopBarAccessibilityLeases(listOf(parentLease), error)
-        throw error
-    }
-    var closed = false
-    return AutoCloseable {
-        if (!closed) {
-            closed = true
-            closeTopBarAccessibilityLeases(listOf(childLease, parentLease))
-        }
-    }
-}
-
-private fun closeTopBarAccessibilityLeases(leases: List<AutoCloseable>, primary: Throwable? = null) {
-    var failure = primary
-    for (lease in leases) try { lease.close() } catch (error: Throwable) {
-        if (failure == null) failure = error else if (failure !== error) failure!!.addSuppressed(error)
-    }
-    failure?.let { throw it }
-}
 
 private fun topBarClipBounds(view: View): NativeTextSemanticsClip = NativeTextSemanticsClip.Rectangle(
     smallthingz.ui.geometry.Rect(0f, 0f, view.width.toFloat(), view.height.toFloat()))

@@ -1,5 +1,7 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.util.closePreservingPrimaryFailure
+
 import java.io.Closeable
 
 internal inline fun <Owner : Closeable, Child> openChildOrCloseOwner(
@@ -46,23 +48,6 @@ internal inline fun <Owner, Result> withOwnedResource(
     }
 }
 
-internal inline fun closePreservingPrimaryFailure(
-    primaryFailure: Throwable?,
-    close: () -> Unit,
-): Throwable? {
-    var failure = primaryFailure
-    try {
-        close()
-    } catch (closeError: Throwable) {
-        val primary = failure
-        if (primary == null) {
-            failure = closeError
-        } else if (closeError !== primary) {
-            primary.addSuppressed(closeError)
-        }
-    }
-    return failure
-}
 internal inline fun throwAfterClosePreservingPrimary(
     primaryFailure: Throwable,
     close: () -> Unit,

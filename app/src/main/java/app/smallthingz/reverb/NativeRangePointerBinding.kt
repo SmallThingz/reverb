@@ -8,13 +8,12 @@ import smallthingz.ui.input.phase.NativePointerPass
 import smallthingz.ui.input.phase.NativeViewPhasePointerNode
 import smallthingz.ui.input.phase.NativeViewPointerHitLayout
 import smallthingz.ui.input.phase.NativeWindowPointerCoordinates
-
 import android.view.View
 import android.view.ViewGroup
 import smallthingz.ui.geometry.Offset
 import smallthingz.ui.geometry.Size
-import app.smallthingz.reverb.nativeui.NativePointerLayerShape
-import app.smallthingz.reverb.nativeui.ReverbGroupLayout
+import smallthingz.ui.input.phase.NativePointerLayerShape
+import smallthingz.ui.components.NativeGroupLayout
 import app.smallthingz.reverb.nativeui.ReverbRangeExportContent
 import java.util.IdentityHashMap
 
@@ -92,7 +91,7 @@ internal class NativeRangePointerBinding(
         private val wheel = if (view === content.durationWheel)
             NativeAndroidInteropNode(view, content.nativeInteropRequests) else null
         private val fixedNodes: List<NativeViewPhasePointerNode> = run {
-            val surfaceShield = if (view is ReverbGroupLayout) object : NativeViewPhasePointerNode {
+            val surfaceShield = if (view is NativeGroupLayout) object : NativeViewPhasePointerNode {
                 override val view get() = this@Layout.view
                 override fun dispatch(event: NativeDragPointerEvent, pass: NativePointerPass) = Unit
                 override fun cancel() = Unit
@@ -113,7 +112,7 @@ internal class NativeRangePointerBinding(
         override val childrenInHitOrder get() = children(view)
         override fun screenToLocal(screen: Offset) = coordinates.coordinates(view).local(screen)
         override fun withinLayerBounds(local: Offset): Boolean = when (view) {
-            is ReverbGroupLayout -> view.containsVisualPoint(local.x, local.y)
+            is NativeGroupLayout -> view.containsVisualPoint(local.x, local.y)
             is NativePointerLayerShape -> view.containsPointerLayer(local.x, local.y)
             else -> true
         }

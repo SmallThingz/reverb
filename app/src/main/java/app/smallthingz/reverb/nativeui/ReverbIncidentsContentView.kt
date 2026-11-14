@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.nativeMinimumInteractiveVisualOffset
+import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.text.view.NativeSourceAccessibilityNode
 import smallthingz.ui.text.view.NativeTextSemanticsClip
 import smallthingz.ui.text.view.ParagraphView
@@ -128,7 +130,7 @@ internal class ReverbIncidentsContentView(
     fun setStatusBarInsets(insets: Insets) = header.setStatusBarInsets(insets)
     fun semanticsClip(view: View): NativeTextSemanticsClip = when {
         view === this || view === list ||
-            (view.parent is ReverbGroupLayout && (view.parent as ReverbGroupLayout).getChildAt(0) === view) ->
+            (view.parent is NativeGroupLayout && (view.parent as NativeGroupLayout).getChildAt(0) === view) ->
             NativeTextSemanticsClip.Rectangle(smallthingz.ui.geometry.Rect(0f, 0f, view.width.toFloat(), view.height.toFloat()))
         else -> NativeTextSemanticsClip.Unclipped
     }

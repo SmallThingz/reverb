@@ -7,12 +7,11 @@ import smallthingz.ui.input.phase.NativePointerPass
 import smallthingz.ui.input.phase.NativeViewPhasePointerNode
 import smallthingz.ui.input.phase.NativeViewPointerHitLayout
 import smallthingz.ui.input.phase.NativeWindowPointerCoordinates
-
 import android.view.View
 import android.view.ViewGroup
 import smallthingz.ui.geometry.Offset
 import smallthingz.ui.geometry.Size
-import app.smallthingz.reverb.nativeui.NativePointerLayerShape
+import smallthingz.ui.input.phase.NativePointerLayerShape
 import app.smallthingz.reverb.nativeui.ReverbHomeScaffoldView
 import java.util.IdentityHashMap
 

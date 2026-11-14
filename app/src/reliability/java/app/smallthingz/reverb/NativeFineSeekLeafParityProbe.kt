@@ -1,5 +1,7 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.components.NativeModalWindowRuntime
+
 import smallthingz.ui.scroll.NativeVerticalPhaseBinding
 
 import smallthingz.ui.input.phase.NativeViewPhasePointerNode
@@ -46,7 +48,6 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import app.smallthingz.reverb.nativeui.NativeAboutWindowRuntime
 import smallthingz.ui.scroll.NativeVerticalNestedHost
 import smallthingz.ui.scroll.NativeVerticalScrollSource
 import smallthingz.ui.scroll.NativeVerticalScrollState
@@ -375,7 +376,7 @@ private class FineLeafRender(private val host: NativeParityActivity, private val
     private var compose: ComposeView? = null
     private var native: ReverbSpringFineSeekView? = null
     private var vertical: NativeVerticalPhaseBinding? = null
-    private var runtime: NativeAboutWindowRuntime? = null
+    private var runtime: NativeModalWindowRuntime? = null
     private var lifecycle: LifecycleEventObserver? = null
     private var closed = false
     lateinit var root: View
@@ -413,7 +414,7 @@ private class FineLeafRender(private val host: NativeParityActivity, private val
                 }
             }
         } else {
-            val owner = NativeAboutWindowRuntime(host)
+            val owner = NativeModalWindowRuntime(host)
             runtime = owner
             val observer = LifecycleEventObserver { _, event ->
                 if (event == Lifecycle.Event.ON_START) owner.setStarted(true)

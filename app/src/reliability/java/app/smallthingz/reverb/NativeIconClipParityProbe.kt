@@ -58,7 +58,7 @@ import smallthingz.ui.scroll.NativeVerticalScrollSource
 import smallthingz.ui.scroll.NativeVerticalScrollState
 import smallthingz.ui.scroll.NativeVerticalViewport
 import app.smallthingz.reverb.nativeui.OnboardingIconView
-import app.smallthingz.reverb.nativeui.ReverbGroupLayout
+import smallthingz.ui.components.NativeGroupLayout
 import app.smallthingz.reverb.nativeui.ReverbIcon
 import app.smallthingz.reverb.nativeui.ReverbPalette
 import java.io.File
@@ -311,9 +311,9 @@ private fun showIconClipCase(host: NativeParityActivity, case: IconClipCase, ref
             val icon = OnboardingIconView(context, ReverbIcon.Unchecked, palette.onSurfaceVariant)
             nativeIcon = icon
             val body = IconClipBody(context, icon)
-            val group = if (case.grouped) ReverbGroupLayout(context, cornerRadiusDp = 20f).apply {
+            val group = if (case.grouped) NativeGroupLayout(context, cornerRadiusDp = 20f).apply {
                 setPalette(palette.field, palette.border)
-                addRow(body, ReverbGroupLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, CLIP_GROUP_HEIGHT))
+                addRow(body, NativeGroupLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, CLIP_GROUP_HEIGHT))
             } else body.apply { setBackgroundColor(palette.field) }
             val column = IconClipColumn(context, group)
             viewport = NativeVerticalViewport(context, NativeVerticalScrollState(), density.nativeParityDensity(),
@@ -339,7 +339,7 @@ private fun showIconClipCase(host: NativeParityActivity, case: IconClipCase, ref
     // and keep the platform result below as separately labelled raw evidence.
     val nativeGeometry = if (reference) null else NativePlainTextViewGeometry(root,
         NativeTextSemanticsClipPolicy { view ->
-            val group = view.parent as? ReverbGroupLayout
+            val group = view.parent as? NativeGroupLayout
             if (view === viewport || (group != null && group.getChildAt(0) === view))
                 NativeTextSemanticsClip.Rectangle(ComposeRect(
                     0f, 0f, view.width.toFloat(), view.height.toFloat()).nativeParityRect())

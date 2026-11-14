@@ -182,7 +182,7 @@ internal class NativeLibraryWindowTransition(
         val anchor = tooltipAnchor(root)
         check(anchor.isAttachedToWindow && anchor.rootView === info) { "Sheet tooltip has a different anchor" }
         if (!expected.compose) {
-            check(anchor.javaClass.name == "app.smallthingz.reverb.nativeui.NativeSheetDragHandle") {
+            check(anchor.javaClass.name == "smallthingz.ui.components.NativeSheetDragHandle") {
                 "Native Sheet tooltip anchor is not the sheet drag handle"
             }
         }
@@ -271,12 +271,12 @@ internal class NativeLibraryWindowTransition(
     }
 
     private fun expectedTooltipClass(): String = if (checkNotNull(sheetTooltip).compose)
-        "androidx.compose.ui.window.PopupLayout" else "app.smallthingz.reverb.nativeui.NativePlainTooltipWindow"
+        "androidx.compose.ui.window.PopupLayout" else "smallthingz.ui.components.NativePlainTooltipWindow"
 
     private fun tooltipAnchor(root: View): View {
         val field = when (root.javaClass.name) {
             "androidx.compose.ui.window.PopupLayout" -> "composeView"
-            "app.smallthingz.reverb.nativeui.NativePlainTooltipWindow" -> "anchor"
+            "smallthingz.ui.components.NativePlainTooltipWindow" -> "anchor"
             else -> error("Unrecognized Sheet tooltip class")
         }
         return root.javaClass.getDeclaredField(field).apply { isAccessible = true }.get(root) as View

@@ -1,12 +1,13 @@
 package app.smallthingz.reverb.nativeui
 
-import smallthingz.ui.geometry.roundedGroupGeometry
+import smallthingz.ui.components.NativeModalWindowRuntime
 
+import smallthingz.ui.components.NativeGroupLayout
+import smallthingz.ui.geometry.roundedGroupGeometry
 import smallthingz.ui.scroll.NativeVerticalNestedHost
 import smallthingz.ui.scroll.NativeVerticalScrollSource
 import smallthingz.ui.scroll.NativeVerticalScrollState
 import smallthingz.ui.scroll.NativeVerticalViewport
-
 import smallthingz.ui.interaction.view.NativeClickBinding
 import smallthingz.ui.interaction.view.NativeClickEnvironment
 import smallthingz.ui.interaction.view.RowIndication
@@ -93,12 +94,12 @@ internal class ReverbAboutContentView private constructor(
     initialAppearance: AboutContentAppearance,
     private val versionName: String,
     requestDismiss: () -> Unit,
-    private val runtime: NativeAboutWindowRuntime,
+    private val runtime: NativeModalWindowRuntime,
     initialScrollPosition: Int,
     private val input: AboutInputGeometry,
 ) : PhasePointerRoot(context, input::rootToScreen, input::coordinates, input.rootHit, input::prepare) {
     constructor(context: Context, initialAppearance: AboutContentAppearance, versionName: String,
-                requestDismiss: () -> Unit, runtime: NativeAboutWindowRuntime, initialScrollPosition: Int = 0) :
+                requestDismiss: () -> Unit, runtime: NativeModalWindowRuntime, initialScrollPosition: Int = 0) :
         this(context, initialAppearance, versionName, requestDismiss, runtime, initialScrollPosition,
             AboutInputGeometry(initialAppearance.density.density))
     private var appearance = initialAppearance
@@ -198,7 +199,7 @@ internal fun createReverbAboutContent(
     context: Context,
     appearance: AboutContentAppearance,
     requestDismiss: () -> Unit,
-    runtime: NativeAboutWindowRuntime,
+    runtime: NativeModalWindowRuntime,
     initialScrollPosition: Int = 0,
 ): ReverbAboutContentView {
     val info = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -213,7 +214,7 @@ internal fun createReverbAboutContent(
 private const val ABOUT_REPOSITORY_URL = "https://github.com/SmallThingz/reverb"
 private const val ABOUT_REPOSITORY_LABEL = "SmallThingz/reverb"
 
-private class AboutSurface(context: Context, private var appearance: AboutContentAppearance, runtime: NativeAboutWindowRuntime, initialScrollPosition: Int) : ViewGroup(context) {
+private class AboutSurface(context: Context, private var appearance: AboutContentAppearance, runtime: NativeModalWindowRuntime, initialScrollPosition: Int) : ViewGroup(context) {
     private val fill = Paint(ABOUT_PAINT_FLAGS)
     private val fillMotion=colorTransition(aboutTonalColor(appearance.palette.surfaceContainerHigh,appearance.palette,6f)) {fill.color=it;invalidate()}
     private val path = Path()
@@ -549,11 +550,11 @@ private class AboutCloseGlyph(context: Context, color: Int) : View(context) {
 }
 
 private class AboutRepositoryCard(context: Context, appearance: AboutContentAppearance, onClick: () -> Unit) : ViewGroup(context) {
-    private val group = ReverbGroupLayout(context, 20f)
+    private val group = NativeGroupLayout(context, 20f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
     val row = AboutRepositoryRow(context, appearance, onClick)
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
-        group.addRow(row, ReverbGroupLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+        group.addRow(row, NativeGroupLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         addView(group); setAppearance(appearance)
     }
     fun setAppearance(value: AboutContentAppearance) {
@@ -659,7 +660,7 @@ private class AboutGithubGlyph(context: Context, color: Int) : View(context) {
 }
 
 private class AboutErrorCard(context: Context, private var appearance: AboutContentAppearance) : ViewGroup(context) {
-    private val group = ReverbGroupLayout(context, 18f)
+    private val group = NativeGroupLayout(context, 18f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
     private val text = aboutParagraph(context, appearance, appearance.bodyMedium, appearance.palette.onErrorContainer).apply {
         accessibilityLiveRegion = ACCESSIBILITY_LIVE_REGION_POLITE
     }
@@ -680,7 +681,7 @@ private class AboutErrorCard(context: Context, private var appearance: AboutCont
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         body.importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         body.addView(text)
-        group.addRow(body, ReverbGroupLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+        group.addRow(body, NativeGroupLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         addView(group); setAppearance(appearance)
     }
     private fun dp(value: Float) = (value * appearance.density.density).roundToInt()
@@ -792,7 +793,7 @@ private class AboutContentAccessibilityOwner(
     private val geometry = NativePlainTextViewGeometry(windowRoot, NativeTextSemanticsClipPolicy { view ->
         when {
             view === clipHost || view === viewport ||
-                (view.parent is ReverbGroupLayout && (view.parent as ReverbGroupLayout).getChildAt(0) === view) ->
+                (view.parent is NativeGroupLayout && (view.parent as NativeGroupLayout).getChildAt(0) === view) ->
                 NativeTextSemanticsClip.Rectangle(ComposeRect(0f, 0f, view.width.toFloat(), view.height.toFloat()))
             else -> NativeTextSemanticsClip.Unclipped
         }

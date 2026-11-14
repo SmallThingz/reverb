@@ -1,5 +1,7 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.components.NativeModalWindowRuntime
+
 import smallthingz.ui.scroll.NativeVerticalViewport
 
 import smallthingz.ui.text.view.ParagraphView
@@ -48,7 +50,7 @@ internal fun verifyNativeOnboardingControlsCurrent(instrumentation: Instrumentat
         for (dark in listOf(false, true)) {
             val host = launchNativeParityActivity(instrumentation)
             awaitNativeParityDraw(instrumentation, host.fixtureRoot)
-            val runtime = NativeAboutWindowRuntime(host).apply { setStarted(true) }
+            val runtime = NativeModalWindowRuntime(host).apply { setStarted(true) }
             var view: NativeOnboardingScreenView? = null
             var caseFailure: Throwable? = null
             try {

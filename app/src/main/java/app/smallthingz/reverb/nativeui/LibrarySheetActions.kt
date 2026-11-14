@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeActionSheetContentContext
+
 import android.content.Context
 import android.view.View
 import android.view.ViewGroup
@@ -9,8 +11,9 @@ import kotlin.math.roundToInt
 
 /** ReverbActionSheet's caller action Row: logical End, centered vertically, explicit8dp Spacer. */
 internal class LibrarySheetActions(context:Context,private val host:NativeActionSheetContentContext,
+                                  initialEnvironment:ReverbViewEnvironment,
                                   val buttons:List<LibrarySheetButton>):ViewGroup(context),AutoCloseable {
-    private var environment=host.environment
+    private var environment=initialEnvironment
     private var closed=false
     private var contentWidth=0
     private val measuredGaps=IntArray(buttons.size)

@@ -4,6 +4,8 @@
  */
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeActionSheetContentContext
+
 import smallthingz.ui.text.view.ParagraphView
 import android.content.Context
 import android.content.ClipboardManager
@@ -53,13 +55,14 @@ private val renameSupportingStyle=renameInheritedBody.merge(ReverbParagraphStyle
 internal class ReverbRenameFieldView(
     context:Context,
     private val host:NativeActionSheetContentContext,
+    initialEnvironment: ReverbViewEnvironment,
     initialName:String,
     initialError:String?,
     readName:()->String,
     onNameChanged:(String)->Unit,
     onDone:()->Unit,
 ):ViewGroup(context),NativeAndroidInteropHost,AutoCloseable {
-    private var environment=host.environment
+    private var environment=initialEnvironment
     private var error=initialError
     private var readName=readName
     private var onNameChanged=onNameChanged

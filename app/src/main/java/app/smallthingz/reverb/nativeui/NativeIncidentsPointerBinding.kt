@@ -1,8 +1,9 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.input.phase.NativePointerLayerShape
+import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.scroll.NativeVerticalNestedHost
 import smallthingz.ui.scroll.NativeVerticalScrollSource
-
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
@@ -145,7 +146,7 @@ internal class NativeIncidentsPointerBinding(
             NativeClickPhaseNode(target, it.nativeClickEndpoint) { change -> interested(target, change) }
         }
         private val clickNode = click?.let(::owned)
-        private val shield = if (target is ReverbIncidentsContentView || target is ReverbGroupLayout) {
+        private val shield = if (target is ReverbIncidentsContentView || target is NativeGroupLayout) {
             owned(object : NativeViewPhasePointerNode {
                 override val view get() = target
                 override fun dispatch(event: NativeDragPointerEvent, pass: NativePointerPass) = Unit
@@ -197,7 +198,7 @@ internal class NativeIncidentsPointerBinding(
                 return fixedNodes
             }
         override fun withinLayerBounds(local: Offset): Boolean = when {
-            target is ReverbGroupLayout -> target.containsVisualPoint(local.x, local.y)
+            target is NativeGroupLayout -> target.containsVisualPoint(local.x, local.y)
             target is NativePointerLayerShape -> target.containsPointerLayer(local.x, local.y)
             target === listView -> {
                 val extra = (30f * density).roundToInt()

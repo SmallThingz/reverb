@@ -1,9 +1,8 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.interaction.view.isNativeClickActivationKey
-
 import smallthingz.ui.geometry.roundedGroupGeometry
-
 import smallthingz.ui.interaction.view.NativeClickBinding
 import smallthingz.ui.interaction.view.NativeClickEnvironment
 import smallthingz.ui.interaction.view.RowIndication
@@ -100,12 +99,12 @@ internal class PlayerTrimButtons(context: Context, private var environment: Reve
 private class PlayerTrimAction(context: Context, private var environment: ReverbViewEnvironment,
                                inputRoot: View, private val savingAction: Boolean,
     frames: MonotonicFrameClock, scope: CoroutineScope, durationScale: () -> Float) : ViewGroup(context) {
-    private val surface = ReverbGroupLayout(context, 14f)
+    private val surface = NativeGroupLayout(context, 14f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
     private val row = PlayerTrimActionRow(context, environment, inputRoot, savingAction, frames, scope, durationScale)
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         clipChildren = false
-        surface.addRow(row, ReverbGroupLayout.LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
+        surface.addRow(row, NativeGroupLayout.LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
         addView(surface)
     }
     fun bind(value: ReverbViewEnvironment, owner: String, enabled: Boolean, saving: Boolean, action: () -> Unit) {

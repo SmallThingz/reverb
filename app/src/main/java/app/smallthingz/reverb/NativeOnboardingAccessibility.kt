@@ -4,8 +4,8 @@
  */
 package app.smallthingz.reverb
 
+import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.scroll.NativeVerticalViewport
-
 import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
 import smallthingz.ui.text.view.NativePlainTextViewGeometry
 import smallthingz.ui.text.view.NativeSourceAccessibilityNode
@@ -50,7 +50,7 @@ internal class NativeOnboardingAccessibility(
 
     private fun clip(view: View): NativeTextSemanticsClip = when {
         view === pager() || view is NativeVerticalViewport || view is SettingsExpansionView ||
-            view.parent is ReverbGroupLayout || footer.clipsAccessibilityTextAt(view) ->
+            view.parent is NativeGroupLayout || footer.clipsAccessibilityTextAt(view) ->
             NativeTextSemanticsClip.Rectangle(ComposeRect(0f, 0f, view.width.toFloat(), view.height.toFloat()))
         else -> NativeTextSemanticsClip.Unclipped
     }

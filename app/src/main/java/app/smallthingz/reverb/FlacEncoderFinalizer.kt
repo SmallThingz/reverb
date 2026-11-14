@@ -1,5 +1,7 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.util.closePreservingPrimaryFailure
+
 import java.io.IOException
 import java.io.InterruptedIOException
 
