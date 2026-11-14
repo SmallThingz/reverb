@@ -2,13 +2,14 @@ package app.smallthingz.reverb
 
 import android.app.Application
 import android.app.Instrumentation
+import android.graphics.Point
 import android.graphics.Rect
 import android.os.SystemClock
 import android.view.Display
 import android.view.InputDevice
 import android.view.MotionEvent
-import android.view.View
 import android.view.ViewGroup
+import android.widget.Space
 import android.widget.TextView
 import androidx.lifecycle.Lifecycle
 import app.smallthingz.reverb.nativeui.ReverbPalette
@@ -16,6 +17,7 @@ import app.smallthingz.reverb.nativeui.ReverbViewEnvironment
 import app.smallthingz.reverb.nativeui.createReverbActionSheet
 import java.io.File
 import kotlin.math.abs
+import kotlin.math.ceil
 import org.json.JSONArray
 import org.json.JSONObject
 import smallthingz.ui.components.NativeActionSheet
@@ -33,8 +35,9 @@ internal fun verifyNativeActionSheetDismissalCurrent(instrumentation: Instrument
     val directory = File(context.filesDir, "native-action-sheet-dismissal-${System.currentTimeMillis()}")
     check(directory.mkdir())
     val cases = JSONArray()
+    val scrimTargets = JSONArray()
     val result = JSONObject().put("selector", "native_action_sheet_dismissal_current")
-        .put("passed", false).put("cases", cases)
+        .put("passed", false).put("cases", cases).put("scrim_targets", scrimTargets)
         .put("scope", "NativeActionSheet AndroidX Back-dispatcher completion/scrim busy veto, plus NativeFloatingDialog dispatcher completion and content/window retirement")
         .put("input_route", "Instance ComponentDialog.onBackPressedDispatcher.onBackPressed(); scrim Dialog.dispatchTouchEvent; no global input injection")
         .put("unqualified", JSONArray(listOf("physical/system Back delivery", "platform OnBackInvoked registration/delivery",
@@ -67,7 +70,7 @@ internal fun verifyNativeActionSheetDismissalCurrent(instrumentation: Instrument
                 }
                 currentSheet = dialog
                 val body = TextView(host).apply { text = "Busy operations must keep this window open." }
-                val actions = View(host)
+                val actions = Space(host)
                 dialog.setContent(body, actions, emptyList())
                 dialog.setDismissalAdmission { !busy }
                 dialog.setOnDismissListener { windowDismissals++ }
@@ -97,12 +100,32 @@ internal fun verifyNativeActionSheetDismissalCurrent(instrumentation: Instrument
                     dialog.onBackPressedDispatcher.onBackPressed()
                 } else {
                     val now = SystemClock.uptimeMillis()
-                    val origin = IntArray(2).also(decor::getLocationOnScreen)
-                    val bounds = Rect().also { check(dialog.contentView.getGlobalVisibleRect(it)) }
-                    val gap = bounds.top - origin[1]
-                    check(gap > 48 * host.resources.displayMetrics.density) { "No safe measured scrim area" }
-                    val x = decor.width / 2f
-                    val y = gap / 2f
+                    // Both visible rectangles and this origin use the same root coordinates.
+                    val origin = Point()
+                    val windowBounds = Rect().also { check(decor.getGlobalVisibleRect(it, origin) && !it.isEmpty) }
+                    val bounds = Rect().also { check(dialog.contentView.getGlobalVisibleRect(it) && !it.isEmpty) }
+                    val clipped = Rect(bounds).also { check(it.intersect(windowBounds)) }
+                    val margin = ceil(24 * host.resources.displayMetrics.density).toInt()
+                    val regions = listOf(
+                        "top" to Rect(windowBounds.left, windowBounds.top, windowBounds.right, clipped.top),
+                        "bottom" to Rect(windowBounds.left, clipped.bottom, windowBounds.right, windowBounds.bottom),
+                        "left" to Rect(windowBounds.left, windowBounds.top, clipped.left, windowBounds.bottom),
+                        "right" to Rect(clipped.right, windowBounds.top, windowBounds.right, windowBounds.bottom),
+                    )
+                    val target = regions.mapNotNull { (side, region) ->
+                        Rect(region).apply { inset(margin, margin) }.takeUnless { it.isEmpty }?.let { side to it }
+                    }.maxByOrNull { (_, region) -> minOf(region.width(), region.height()) }
+                    checkNotNull(target) { "No safe measured scrim area: window=$windowBounds surface=$bounds margin=$margin" }
+                    val (side, safeBounds) = target
+                    val x = safeBounds.exactCenterX() - origin.x
+                    val y = safeBounds.exactCenterY() - origin.y
+                    check(x >= 0f && x < decor.width && y >= 0f && y < decor.height)
+                    scrimTargets.put(JSONObject().put("busy", busy).put("side", side)
+                        .put("coordinate_space", "root rectangles; dispatch coordinates relative to decor")
+                        .put("window_bounds", windowBounds.toShortString()).put("surface_bounds", bounds.toShortString())
+                        .put("safe_scrim_bounds", safeBounds.toShortString()).put("margin_px", margin)
+                        .put("decor_origin_x", origin.x).put("decor_origin_y", origin.y)
+                        .put("dispatch_x", x).put("dispatch_y", y))
                     for (action in listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP)) {
                         val event = MotionEvent.obtain(now, now, action, x, y, 0).apply {
                             source = InputDevice.SOURCE_TOUCHSCREEN
