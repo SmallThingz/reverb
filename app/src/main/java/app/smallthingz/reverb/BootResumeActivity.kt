@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.ColorStateList
 import android.content.res.Configuration
 import android.graphics.drawable.ColorDrawable
 import android.net.Uri
@@ -318,7 +319,9 @@ internal class BootResumeContentView(
     private val controls = ControlPalette(palette.surface, palette.surfaceContainer, palette.onBackground,
         palette.onSurfaceVariant, palette.primary, palette.onPrimary, palette.primaryContainer, palette.outline)
     private val detail = NativeText(context, controls, NativeTextStyle(20f, lineHeightSp = 28f))
-    private val progress = ProgressBar(context)
+    private val progress = ProgressBar(context).apply {
+        indeterminateTintList = ColorStateList.valueOf(palette.primary)
+    }
 
     init {
         orientation = VERTICAL

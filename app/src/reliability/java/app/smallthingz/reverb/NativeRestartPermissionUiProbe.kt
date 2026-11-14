@@ -85,10 +85,24 @@ internal fun verifyNativeRestartPermissionUi(instrumentation: Instrumentation, r
                     check(restartUiViews(content).none { it.isClickable })
                     val progress = restartUiViews(content).filterIsInstance<ProgressBar>().single()
                     check(progress.visibility == if (completed) View.INVISIBLE else View.VISIBLE)
+                    val progressLocation = IntArray(2).also(progress::getLocationInWindow)
+                    val contentLocation = IntArray(2).also(content::getLocationInWindow)
+                    val progressLeft = progressLocation[0] - contentLocation[0]
+                    val progressTop = progressLocation[1] - contentLocation[1]
+                    val configuredTint = progress.indeterminateTintList?.let {
+                        Integer.toUnsignedLong(it.getColorForState(progress.drawableState, it.defaultColor))
+                    }
                     JSONObject().put("name", "boot-$theme-${if (completed) "success" else "pending"}")
                         .put("heading_accessible", true).put("open_action_present", false)
                         .put("reverb_brand_visible", true).put("cancel_action_present", false)
                         .put("brand_bounds", brandBounds.toShortString())
+                        .put("progress_bounds_in_content", JSONArray(listOf(progressLeft, progressTop,
+                            progressLeft + progress.width, progressTop + progress.height)))
+                        .put("capture_content_size", JSONArray(listOf(content.width, content.height)))
+                        .put("progress_visibility", progress.visibility)
+                        .put("progress_configured_tint_argb", configuredTint ?: JSONObject.NULL)
+                        .put("supplied_primary_argb", Integer.toUnsignedLong(palette.primary))
+                        .put("supplied_background_argb", Integer.toUnsignedLong(palette.background))
                         .put("boot_activity_launched", false)
                         .also { if (completed) it.put("success_keeps_brand_position", true) }
                 }

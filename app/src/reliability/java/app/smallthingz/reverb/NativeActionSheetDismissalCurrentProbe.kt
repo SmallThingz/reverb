@@ -6,7 +6,6 @@ import android.graphics.Rect
 import android.os.SystemClock
 import android.view.Display
 import android.view.InputDevice
-import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
@@ -25,7 +24,7 @@ import smallthingz.ui.components.NativeFloatingDialogContent
 import smallthingz.ui.text.font.createFontFamilyResolver
 import smallthingz.ui.unit.Density
 
-/** Real isolated dialog/window input routes; no recorder, permission, or process-global input. */
+/** Instance-scoped AndroidX Back completion and dialog touch; no process-global input. */
 internal fun verifyNativeActionSheetDismissalCurrent(instrumentation: Instrumentation, report: StringBuilder) {
     val context = instrumentation.targetContext
     check(context.packageName == "app.smallthingz.reverb.uitheme.reliability")
@@ -36,9 +35,10 @@ internal fun verifyNativeActionSheetDismissalCurrent(instrumentation: Instrument
     val cases = JSONArray()
     val result = JSONObject().put("selector", "native_action_sheet_dismissal_current")
         .put("passed", false).put("cases", cases)
-        .put("scope", "Actual NativeActionSheet window Back/scrim busy veto, plus NativeFloatingDialog Back and content/window retirement")
-        .put("input_route", "Dialog.dispatchKeyEvent/dispatchTouchEvent; no global input injection")
-        .put("unqualified", JSONArray(listOf("predictive system Back gesture", "IME", "production recorder")))
+        .put("scope", "NativeActionSheet AndroidX Back-dispatcher completion/scrim busy veto, plus NativeFloatingDialog dispatcher completion and content/window retirement")
+        .put("input_route", "Instance ComponentDialog.onBackPressedDispatcher.onBackPressed(); scrim Dialog.dispatchTouchEvent; no global input injection")
+        .put("unqualified", JSONArray(listOf("physical/system Back delivery", "platform OnBackInvoked registration/delivery",
+            "predictive system Back gesture", "IME", "production recorder")))
     val host = launchCurrentUiSmokeActivity(instrumentation)
     var currentSheet: NativeActionSheet? = null
     var currentFloating: NativeFloatingDialog? = null
@@ -53,7 +53,7 @@ internal fun verifyNativeActionSheetDismissalCurrent(instrumentation: Instrument
             }
         }
         awaitNativeParityDraw(instrumentation, anchor)
-        for (route in listOf("back", "scrim")) {
+        for (route in listOf("androidx-back-dispatcher", "scrim")) {
             requireNativeParityHost(instrumentation, host, "before-$route-sheet")
             var busy = true
             var ownerDismissals = 0
@@ -91,11 +91,12 @@ internal fun verifyNativeActionSheetDismissalCurrent(instrumentation: Instrument
             }
             fun dispatch() = main {
                 guard()
-                val now = SystemClock.uptimeMillis()
-                if (route == "back") {
-                    check(dialog.dispatchKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK, 0)))
-                    check(dialog.dispatchKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_BACK, 0)))
+                if (route == "androidx-back-dispatcher") {
+                    // Direct key dispatch skips the modern framework Back input stage.
+                    check(dialog.onBackPressedDispatcher.hasEnabledCallbacks())
+                    dialog.onBackPressedDispatcher.onBackPressed()
                 } else {
+                    val now = SystemClock.uptimeMillis()
                     val origin = IntArray(2).also(decor::getLocationOnScreen)
                     val bounds = Rect().also { check(dialog.contentView.getGlobalVisibleRect(it)) }
                     val gap = bounds.top - origin[1]
@@ -177,15 +178,16 @@ internal fun verifyNativeActionSheetDismissalCurrent(instrumentation: Instrument
             awaitNativeParityDraw(instrumentation, floatingDecor)
         }
         main {
+            check(host.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) && !host.isFinishing)
+            check(floating.isShowing && floatingDecor.hasWindowFocus())
             check(floatingDecor.isAttachedToWindow && floatingDecor.isShown && floatingDecor.isHardwareAccelerated)
             check(floatingDecor.display?.displayId == Display.DEFAULT_DISPLAY)
-            val now = SystemClock.uptimeMillis()
-            check(floating.dispatchKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK, 0)))
-            check(floating.dispatchKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_BACK, 0)))
+            check(floating.onBackPressedDispatcher.hasEnabledCallbacks())
+            floating.onBackPressedDispatcher.onBackPressed()
         }
         val floatingDismissDeadline = SystemClock.uptimeMillis() + 8000
         while (!main { !floating.isShowing && floatingOwnerDismissals == 1 && floatingWindowDismissals == 1 && floatingDisposals == 1 }) {
-            check(SystemClock.uptimeMillis() < floatingDismissDeadline) { "Floating dialog Back did not retire each owner exactly once" }
+            check(SystemClock.uptimeMillis() < floatingDismissDeadline) { "Floating dialog dispatcher completion did not retire each owner exactly once" }
             awaitNativeParityDraw(instrumentation, anchor)
         }
         main { floating.dismiss(); floating.dismiss(); currentFloating = null }
@@ -195,7 +197,7 @@ internal fun verifyNativeActionSheetDismissalCurrent(instrumentation: Instrument
             check(!floatingDecor.isAttachedToWindow)
         }
         requireNativeParityHost(instrumentation, host, "after-floating-dialog")
-        cases.put(JSONObject().put("route", "floating-dialog-window-back")
+        cases.put(JSONObject().put("route", "floating-dialog-androidx-back-dispatcher")
             .put("owner_dismissals", floatingOwnerDismissals).put("window_dismissals", floatingWindowDismissals)
             .put("same_view_visibility_alpha_samples", floatingAlphaSamples)
             .put("transient_entry_alpha_observed", floatingTransientAlphaObserved)
@@ -214,10 +216,10 @@ internal fun verifyNativeActionSheetDismissalCurrent(instrumentation: Instrument
         report.appendLine("ACTION_SHEET_DISMISSAL_EVIDENCE ${directory.absolutePath}")
     }
     failure?.let { throw it }
-    report.appendLine("PASS native_action_sheet_dismissal_current actual window Back/scrim busy veto and floating dialog retirement")
+    report.appendLine("PASS native_action_sheet_dismissal_current AndroidX dispatcher completion/scrim busy veto and floating dialog retirement")
 }
 
-/** Observe animation readiness only; every transition is driven through the actual dialog Window. */
+/** Observe readiness only; transitions use the instance dispatcher or dialog touch dispatch. */
 private fun actionSheetFixtureExpanded(dialog: NativeActionSheet): Boolean {
     val state = dialog.javaClass.getDeclaredField("state").apply { isAccessible = true }.get(dialog)
     fun property(name: String): Any? = state.javaClass.getDeclaredMethod(name).apply { isAccessible = true }.invoke(state)
