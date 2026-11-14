@@ -76,4 +76,37 @@
     </plurals>
     <string name="format_label">Formato</string>
     <string name="format_wav">WAV</string>
+
+    <string name="boot_resume_channel">Promemoria di ripresa dopo il riavvio del dispositivo</string>
+    <string name="boot_resume_title">Riprendi la registrazione</string>
+    <string name="boot_resume_detail">Apri Reverb per riprendere la registrazione dopo il riavvio del dispositivo.</string>
+    <string name="boot_resume_in_progress">Ripresa della registrazione…</string>
+    <string name="boot_resume_success">Registrazione ripresa</string>
+
+    <string name="notification_channel_background">Registrazione e attività in background</string>
+    <string name="notification_channel_background_description">Stato e controlli della registrazione, esportazioni, svuotamento del buffer e aggiornamenti dell’archiviazione.</string>
+    <string name="notification_channel_save_results">Risultati dei salvataggi</string>
+    <string name="notification_channel_save_results_description">Conferme di salvataggio ed errori, anche per Quick Save e le registrazioni ritagliate.</string>
+    <string name="notification_channel_save_progress">Avanzamento del salvataggio delle registrazioni</string>
+    <string name="notification_channel_save_progress_description">Avanzamento, recupero ed errori dei salvataggi di registrazioni in coda.</string>
+    <string name="notification_channel_playback_description">Stato e controlli di riproduzione delle registrazioni salvate.</string>
+    <string name="notification_channel_restart_description">Ti ricorda di aprire Reverb per riprendere la registrazione dopo il riavvio del dispositivo.</string>
+
+    <string name="settings_resume_notification_blocked">I promemoria di ripresa sono bloccati. Controlla le impostazioni delle notifiche.</string>
+    <string name="settings_notification_access">Controlla le impostazioni delle notifiche</string>
+    <string name="settings_notification_access_failed">Impossibile aprire le impostazioni delle notifiche</string>
+    <string name="onboarding_restart_resume_title">Riprendi la registrazione dopo il riavvio</string>
+    <string name="onboarding_restart_resume_body">Consenti la visualizzazione sopra altre app per usare l’avvio automatico dopo il riavvio nelle impostazioni.</string>
+    <string name="settings_restart_access_missing">L’avvio automatico dopo il riavvio richiede l’autorizzazione a visualizzare sopra altre app.</string>
+    <string name="settings_restart_access">Controlla l’autorizzazione per l’avvio automatico</string>
+    <string name="settings_restart_access_failed">Impossibile aprire le impostazioni dell’autorizzazione per l’avvio automatico</string>
+    <string name="auto_start_title">Avvio automatico dopo il riavvio</string>
+    <string name="auto_start_summary">Appare un popup quando la registrazione riprende automaticamente.</string>
+    <string name="auto_start_permission_pending">Consenti la visualizzazione sopra altre app per attivare questa opzione.</string>
+    <string name="auto_start_permission_missing">L’avvio automatico è sospeso finché non consenti la visualizzazione sopra altre app.</string>
+    <string name="auto_start_save_failed">Impossibile aggiornare l’avvio automatico dopo il riavvio</string>
+    <string name="auto_start_unavailable">Impossibile verificare le impostazioni di avvio automatico. Aziona di nuovo l’interruttore.</string>
+    <string name="restart_access_not_now">Non ora</string>
+    <string name="restart_invitation_read_failed">Impossibile controllare il promemoria dell’autorizzazione per l’avvio automatico</string>
+    <string name="restart_invitation_save_failed">Impossibile salvare la scelta relativa al promemoria dell’autorizzazione per l’avvio automatico</string>
 </resources>

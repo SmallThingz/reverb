@@ -74,4 +74,37 @@
     <plurals name="move_recordings_done">
         <item quantity="other">%1$d개의 녹음을 이동했습니다.</item>
     </plurals>
+
+    <string name="boot_resume_channel">기기 재시작 후 녹음 재개 알림</string>
+    <string name="boot_resume_title">녹음 재개</string>
+    <string name="boot_resume_detail">기기 재시작 후 녹음을 재개하려면 Reverb를 여세요.</string>
+    <string name="boot_resume_in_progress">녹음 재개 중…</string>
+    <string name="boot_resume_success">녹음이 재개되었습니다</string>
+
+    <string name="notification_channel_background">녹음 및 백그라운드 작업</string>
+    <string name="notification_channel_background_description">녹음 상태와 제어, 내보내기, 버퍼 비우기 및 저장소 업데이트.</string>
+    <string name="notification_channel_save_results">저장 결과</string>
+    <string name="notification_channel_save_results_description">Quick Save 및 잘라낸 녹음의 저장을 포함한 녹음 저장 확인 및 저장 실패 알림.</string>
+    <string name="notification_channel_save_progress">녹음 저장 진행 상황</string>
+    <string name="notification_channel_save_progress_description">대기 중인 녹음 저장 작업의 진행 상황, 복구 및 실패 알림.</string>
+    <string name="notification_channel_playback_description">저장된 녹음의 재생 상태와 제어.</string>
+    <string name="notification_channel_restart_description">기기 재시작 후 녹음을 재개하도록 Reverb 열기를 안내합니다.</string>
+
+    <string name="settings_resume_notification_blocked">녹음 재개 알림이 차단되었습니다. 알림 설정을 확인하세요.</string>
+    <string name="settings_notification_access">알림 설정 확인</string>
+    <string name="settings_notification_access_failed">알림 설정을 열 수 없습니다</string>
+    <string name="onboarding_restart_resume_title">기기 재시작 후 녹음 재개</string>
+    <string name="onboarding_restart_resume_body">설정에서 기기 재시작 후 자동 시작을 사용하려면 다른 앱 위에 표시를 허용하세요.</string>
+    <string name="settings_restart_access_missing">기기 재시작 후 자동 시작하려면 다른 앱 위에 표시 권한이 필요합니다.</string>
+    <string name="settings_restart_access">자동 시작 권한 확인</string>
+    <string name="settings_restart_access_failed">자동 시작 권한 설정을 열 수 없습니다</string>
+    <string name="auto_start_title">기기 재시작 후 자동 시작</string>
+    <string name="auto_start_summary">녹음이 자동으로 재개되면 팝업이 표시됩니다.</string>
+    <string name="auto_start_permission_pending">이 기능을 켜려면 다른 앱 위에 표시를 허용하세요.</string>
+    <string name="auto_start_permission_missing">다른 앱 위에 표시가 허용될 때까지 자동 시작이 일시 중지됩니다.</string>
+    <string name="auto_start_save_failed">기기 재시작 후 자동 시작 설정을 업데이트할 수 없습니다</string>
+    <string name="auto_start_unavailable">자동 시작 설정을 확인할 수 없습니다. 스위치를 다시 변경해 보세요.</string>
+    <string name="restart_access_not_now">나중에</string>
+    <string name="restart_invitation_read_failed">자동 시작 권한 알림을 확인할 수 없습니다</string>
+    <string name="restart_invitation_save_failed">자동 시작 권한 알림에 대한 선택을 저장할 수 없습니다</string>
 </resources>

@@ -74,4 +74,37 @@
     <plurals name="move_recordings_done">
         <item quantity="other">%1$d rekaman dipindahkan.</item>
     </plurals>
+
+    <string name="boot_resume_channel">Pengingat melanjutkan perekaman</string>
+    <string name="boot_resume_title">Lanjutkan perekaman</string>
+    <string name="boot_resume_detail">Buka Reverb untuk melanjutkan perekaman setelah perangkat dimulai ulang.</string>
+    <string name="boot_resume_in_progress">Melanjutkan perekaman…</string>
+    <string name="boot_resume_success">Perekaman dilanjutkan</string>
+
+    <string name="notification_channel_background">Perekaman dan tugas latar belakang</string>
+    <string name="notification_channel_background_description">Status dan kontrol perekaman, serta ekspor, pembersihan buffer, dan pembaruan penyimpanan.</string>
+    <string name="notification_channel_save_results">Hasil penyimpanan</string>
+    <string name="notification_channel_save_results_description">Konfirmasi dan kegagalan penyimpanan rekaman, termasuk Quick Save dan rekaman yang dipangkas.</string>
+    <string name="notification_channel_save_progress">Progres penyimpanan rekaman</string>
+    <string name="notification_channel_save_progress_description">Progres, pemulihan, dan kegagalan penyimpanan rekaman dalam antrean.</string>
+    <string name="notification_channel_playback_description">Status dan kontrol pemutaran rekaman yang tersimpan.</string>
+    <string name="notification_channel_restart_description">Mengingatkan Anda untuk membuka Reverb dan melanjutkan perekaman setelah perangkat dimulai ulang.</string>
+
+    <string name="settings_resume_notification_blocked">Pengingat untuk melanjutkan perekaman diblokir. Periksa setelan notifikasi.</string>
+    <string name="settings_notification_access">Periksa setelan notifikasi</string>
+    <string name="settings_notification_access_failed">Tidak dapat membuka setelan notifikasi</string>
+    <string name="onboarding_restart_resume_title">Lanjutkan perekaman setelah perangkat dimulai ulang</string>
+    <string name="onboarding_restart_resume_body">Izinkan tampil di atas aplikasi lain untuk menggunakan Mulai otomatis setelah perangkat dimulai ulang di Setelan.</string>
+    <string name="settings_restart_access_missing">Mulai otomatis setelah perangkat dimulai ulang memerlukan izin untuk tampil di atas aplikasi lain.</string>
+    <string name="settings_restart_access">Periksa izin mulai otomatis</string>
+    <string name="settings_restart_access_failed">Tidak dapat membuka setelan izin mulai otomatis</string>
+    <string name="auto_start_title">Mulai otomatis setelah perangkat dimulai ulang</string>
+    <string name="auto_start_summary">Jendela pop-up muncul saat perekaman dilanjutkan secara otomatis.</string>
+    <string name="auto_start_permission_pending">Izinkan tampil di atas aplikasi lain untuk mengaktifkan ini.</string>
+    <string name="auto_start_permission_missing">Mulai otomatis dijeda sampai izin tampil di atas aplikasi lain diberikan.</string>
+    <string name="auto_start_save_failed">Tidak dapat memperbarui mulai otomatis setelah perangkat dimulai ulang</string>
+    <string name="auto_start_unavailable">Tidak dapat memeriksa setelan mulai otomatis. Coba ubah sakelarnya lagi.</string>
+    <string name="restart_access_not_now">Sekarang tidak</string>
+    <string name="restart_invitation_read_failed">Tidak dapat memeriksa pengingat izin mulai otomatis</string>
+    <string name="restart_invitation_save_failed">Tidak dapat menyimpan pilihan pengingat izin mulai otomatis Anda</string>
 </resources>

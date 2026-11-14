@@ -74,4 +74,37 @@
     <plurals name="move_recordings_done">
         <item quantity="other">%1$d 个录音已移动。</item>
     </plurals>
+
+    <string name="boot_resume_channel">设备重启后的录音恢复提醒</string>
+    <string name="boot_resume_title">恢复录音</string>
+    <string name="boot_resume_detail">设备重启后，打开 Reverb 以恢复录音。</string>
+    <string name="boot_resume_in_progress">正在恢复录音…</string>
+    <string name="boot_resume_success">录音已恢复</string>
+
+    <string name="notification_channel_background">录音和后台任务</string>
+    <string name="notification_channel_background_description">录音状态与控制，以及导出、清空缓冲区和存储更新。</string>
+    <string name="notification_channel_save_results">保存结果</string>
+    <string name="notification_channel_save_results_description">录音保存成功和保存失败的通知，包括 Quick Save 和裁剪后的录音。</string>
+    <string name="notification_channel_save_progress">录音保存进度</string>
+    <string name="notification_channel_save_progress_description">排队保存录音的进度、恢复和失败通知。</string>
+    <string name="notification_channel_playback_description">已保存录音的播放状态与控制。</string>
+    <string name="notification_channel_restart_description">提醒您在设备重启后打开 Reverb 以恢复录音。</string>
+
+    <string name="settings_resume_notification_blocked">录音恢复提醒已被屏蔽。请检查通知设置。</string>
+    <string name="settings_notification_access">检查通知设置</string>
+    <string name="settings_notification_access_failed">无法打开通知设置</string>
+    <string name="onboarding_restart_resume_title">设备重启后恢复录音</string>
+    <string name="onboarding_restart_resume_body">允许在其他应用上层显示，即可在设置中使用“设备重启后自动启动”。</string>
+    <string name="settings_restart_access_missing">设备重启后自动启动需要在其他应用上层显示的权限。</string>
+    <string name="settings_restart_access">检查自动启动权限</string>
+    <string name="settings_restart_access_failed">无法打开自动启动权限设置</string>
+    <string name="auto_start_title">设备重启后自动启动</string>
+    <string name="auto_start_summary">录音自动恢复时会显示弹出窗口。</string>
+    <string name="auto_start_permission_pending">请允许在其他应用上层显示以启用此功能。</string>
+    <string name="auto_start_permission_missing">自动启动已暂停，允许在其他应用上层显示后即可恢复。</string>
+    <string name="auto_start_save_failed">无法更新设备重启后自动启动设置</string>
+    <string name="auto_start_unavailable">无法验证自动启动设置。请再次切换开关。</string>
+    <string name="restart_access_not_now">暂不</string>
+    <string name="restart_invitation_read_failed">无法检查自动启动权限提醒</string>
+    <string name="restart_invitation_save_failed">无法保存您对自动启动权限提醒的选择</string>
 </resources>

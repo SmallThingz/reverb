@@ -75,4 +75,37 @@
         <item quantity="one">%1$d Aufnahme verschoben.</item>
         <item quantity="other">%1$d Aufnahmen verschoben.</item>
     </plurals>
+
+    <string name="boot_resume_channel">Erinnerungen zur Aufnahme nach Geräteneustart</string>
+    <string name="boot_resume_title">Aufnahme fortsetzen</string>
+    <string name="boot_resume_detail">Öffne Reverb, um die Aufnahme nach einem Geräteneustart fortzusetzen.</string>
+    <string name="boot_resume_in_progress">Aufnahme wird fortgesetzt…</string>
+    <string name="boot_resume_success">Aufnahme fortgesetzt</string>
+
+    <string name="notification_channel_background">Aufnahme und Hintergrundaufgaben</string>
+    <string name="notification_channel_background_description">Aufnahmestatus und Steuerung sowie Exporte, Leeren des Puffers und Speicheraktualisierungen.</string>
+    <string name="notification_channel_save_results">Speicherergebnisse</string>
+    <string name="notification_channel_save_results_description">Bestätigungen gespeicherter Aufnahmen und Speicherfehler, auch für Quick Save und zugeschnittene Aufnahmen.</string>
+    <string name="notification_channel_save_progress">Fortschritt beim Speichern von Aufnahmen</string>
+    <string name="notification_channel_save_progress_description">Fortschritt, Wiederherstellung und Fehler bei Aufnahmen in der Speicherwarteschlange.</string>
+    <string name="notification_channel_playback_description">Wiedergabestatus und Steuerung für gespeicherte Aufnahmen.</string>
+    <string name="notification_channel_restart_description">Erinnert dich daran, Reverb zu öffnen, um die Aufnahme nach einem Geräteneustart fortzusetzen.</string>
+
+    <string name="settings_resume_notification_blocked">Erinnerungen zum Fortsetzen sind blockiert. Prüfe die Benachrichtigungseinstellungen.</string>
+    <string name="settings_notification_access">Benachrichtigungseinstellungen prüfen</string>
+    <string name="settings_notification_access_failed">Benachrichtigungseinstellungen konnten nicht geöffnet werden</string>
+    <string name="onboarding_restart_resume_title">Aufnahme nach Geräteneustart fortsetzen</string>
+    <string name="onboarding_restart_resume_body">Erlaube die Anzeige über anderen Apps, um „Autostart nach Geräteneustart“ in den Einstellungen zu nutzen.</string>
+    <string name="settings_restart_access_missing">Autostart nach Geräteneustart benötigt die Berechtigung zur Anzeige über anderen Apps.</string>
+    <string name="settings_restart_access">Autostart-Berechtigung prüfen</string>
+    <string name="settings_restart_access_failed">Autostart-Berechtigungseinstellungen konnten nicht geöffnet werden</string>
+    <string name="auto_start_title">Autostart nach Geräteneustart</string>
+    <string name="auto_start_summary">Ein Popup erscheint, wenn die Aufnahme automatisch fortgesetzt wird.</string>
+    <string name="auto_start_permission_pending">Erlaube die Anzeige über anderen Apps, um dies einzuschalten.</string>
+    <string name="auto_start_permission_missing">Autostart ist pausiert, bis die Anzeige über anderen Apps erlaubt ist.</string>
+    <string name="auto_start_save_failed">Autostart nach Geräteneustart konnte nicht aktualisiert werden</string>
+    <string name="auto_start_unavailable">Autostart-Einstellungen konnten nicht geprüft werden. Betätige den Schalter erneut.</string>
+    <string name="restart_access_not_now">Jetzt nicht</string>
+    <string name="restart_invitation_read_failed">Erinnerung an die Autostart-Berechtigung konnte nicht geprüft werden</string>
+    <string name="restart_invitation_save_failed">Deine Auswahl zur Erinnerung an die Autostart-Berechtigung konnte nicht gespeichert werden</string>
 </resources>

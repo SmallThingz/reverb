@@ -75,4 +75,37 @@
         <item quantity="one">%1$d ضبط منتقل شد.</item>
         <item quantity="other">%1$d ضبط منتقل شد.</item>
     </plurals>
+
+    <string name="boot_resume_channel">یادآوری‌های ازسرگیری ضبط پس از راه‌اندازی مجدد</string>
+    <string name="boot_resume_title">ازسرگیری ضبط</string>
+    <string name="boot_resume_detail">برای ازسرگیری ضبط پس از راه‌اندازی مجدد دستگاه، Reverb را باز کنید.</string>
+    <string name="boot_resume_in_progress">در حال ازسرگیری ضبط…</string>
+    <string name="boot_resume_success">ضبط از سر گرفته شد</string>
+
+    <string name="notification_channel_background">ضبط و کارهای پس‌زمینه</string>
+    <string name="notification_channel_background_description">وضعیت و کنترل‌های ضبط، به‌همراه خروجی گرفتن، پاک کردن بافر و به‌روزرسانی‌های فضای ذخیره‌سازی.</string>
+    <string name="notification_channel_save_results">نتایج ذخیره</string>
+    <string name="notification_channel_save_results_description">تأیید ذخیره ضبط‌ها و خطاهای ذخیره، از جمله Quick Save و ضبط‌های برش‌خورده.</string>
+    <string name="notification_channel_save_progress">پیشرفت ذخیره ضبط‌ها</string>
+    <string name="notification_channel_save_progress_description">پیشرفت، بازیابی و خطاهای ذخیره ضبط‌های در صف.</string>
+    <string name="notification_channel_playback_description">وضعیت و کنترل‌های پخش ضبط‌های ذخیره‌شده.</string>
+    <string name="notification_channel_restart_description">یادآوری می‌کند پس از راه‌اندازی مجدد دستگاه، برای ازسرگیری ضبط Reverb را باز کنید.</string>
+
+    <string name="settings_resume_notification_blocked">یادآوری‌های ازسرگیری ضبط مسدود هستند. تنظیمات اعلان‌ها را بررسی کنید.</string>
+    <string name="settings_notification_access">بررسی تنظیمات اعلان‌ها</string>
+    <string name="settings_notification_access_failed">باز کردن تنظیمات اعلان‌ها ممکن نشد</string>
+    <string name="onboarding_restart_resume_title">ازسرگیری ضبط پس از راه‌اندازی مجدد دستگاه</string>
+    <string name="onboarding_restart_resume_body">برای استفاده از شروع خودکار پس از راه‌اندازی مجدد در تنظیمات، نمایش روی برنامه‌های دیگر را مجاز کنید.</string>
+    <string name="settings_restart_access_missing">شروع خودکار پس از راه‌اندازی مجدد به مجوز نمایش روی برنامه‌های دیگر نیاز دارد.</string>
+    <string name="settings_restart_access">بررسی مجوز نمایش روی برنامه‌های دیگر</string>
+    <string name="settings_restart_access_failed">باز کردن تنظیمات مجوز نمایش روی برنامه‌های دیگر ممکن نشد</string>
+    <string name="auto_start_title">شروع خودکار پس از راه‌اندازی مجدد</string>
+    <string name="auto_start_summary">وقتی ضبط به‌طور خودکار از سر گرفته شود، یک پنجره بازشو ظاهر می‌شود.</string>
+    <string name="auto_start_permission_pending">برای روشن کردن این گزینه، نمایش روی برنامه‌های دیگر را مجاز کنید.</string>
+    <string name="auto_start_permission_missing">شروع خودکار تا مجاز شدن نمایش روی برنامه‌های دیگر متوقف است.</string>
+    <string name="auto_start_save_failed">به‌روزرسانی شروع خودکار پس از راه‌اندازی مجدد ممکن نشد</string>
+    <string name="auto_start_unavailable">بررسی تنظیمات شروع خودکار ممکن نشد. دوباره کلید را تغییر دهید.</string>
+    <string name="restart_access_not_now">الان نه</string>
+    <string name="restart_invitation_read_failed">بررسی یادآوری مجوز نمایش روی برنامه‌های دیگر ممکن نشد</string>
+    <string name="restart_invitation_save_failed">ذخیره انتخاب شما برای یادآوری مجوز نمایش روی برنامه‌های دیگر ممکن نشد</string>
 </resources>

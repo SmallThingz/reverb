@@ -79,4 +79,37 @@
         <item quantity="many">تم نقل %1$d تسجيلًا.</item>
         <item quantity="other">تم نقل %1$d تسجيل.</item>
     </plurals>
+
+    <string name="boot_resume_channel">تذكيرات استئناف التسجيل بعد إعادة التشغيل</string>
+    <string name="boot_resume_title">استئناف التسجيل</string>
+    <string name="boot_resume_detail">افتح Reverb لاستئناف التسجيل بعد إعادة تشغيل الجهاز.</string>
+    <string name="boot_resume_in_progress">جارٍ استئناف التسجيل…</string>
+    <string name="boot_resume_success">تم استئناف التسجيل</string>
+
+    <string name="notification_channel_background">التسجيل والمهام في الخلفية</string>
+    <string name="notification_channel_background_description">حالة التسجيل وعناصر التحكم فيه، بالإضافة إلى التصدير ومسح المخزن المؤقت وتحديثات التخزين.</string>
+    <string name="notification_channel_save_results">نتائج الحفظ</string>
+    <string name="notification_channel_save_results_description">تأكيدات حفظ التسجيلات وحالات فشل الحفظ، بما في ذلك Quick Save والتسجيلات المقتطعة.</string>
+    <string name="notification_channel_save_progress">تقدم حفظ التسجيلات</string>
+    <string name="notification_channel_save_progress_description">التقدم والاسترداد وحالات الفشل لعمليات حفظ التسجيلات في قائمة الانتظار.</string>
+    <string name="notification_channel_playback_description">حالة تشغيل التسجيلات المحفوظة وعناصر التحكم فيها.</string>
+    <string name="notification_channel_restart_description">يذكّرك بفتح Reverb لاستئناف التسجيل بعد إعادة تشغيل الجهاز.</string>
+
+    <string name="settings_resume_notification_blocked">تذكيرات استئناف التسجيل محظورة. راجع إعدادات الإشعارات.</string>
+    <string name="settings_notification_access">مراجعة إعدادات الإشعارات</string>
+    <string name="settings_notification_access_failed">تعذر فتح إعدادات الإشعارات</string>
+    <string name="onboarding_restart_resume_title">استئناف التسجيل بعد إعادة تشغيل الجهاز</string>
+    <string name="onboarding_restart_resume_body">اسمح بالظهور فوق التطبيقات الأخرى لاستخدام البدء التلقائي بعد إعادة التشغيل في الإعدادات.</string>
+    <string name="settings_restart_access_missing">يتطلب البدء التلقائي بعد إعادة التشغيل إذن الظهور فوق التطبيقات الأخرى.</string>
+    <string name="settings_restart_access">مراجعة إذن الظهور فوق التطبيقات الأخرى</string>
+    <string name="settings_restart_access_failed">تعذر فتح إعدادات إذن الظهور فوق التطبيقات الأخرى</string>
+    <string name="auto_start_title">البدء التلقائي بعد إعادة التشغيل</string>
+    <string name="auto_start_summary">تظهر نافذة منبثقة عند استئناف التسجيل تلقائيًا.</string>
+    <string name="auto_start_permission_pending">اسمح بالظهور فوق التطبيقات الأخرى لتفعيل هذا الخيار.</string>
+    <string name="auto_start_permission_missing">البدء التلقائي متوقف مؤقتًا حتى تسمح بالظهور فوق التطبيقات الأخرى.</string>
+    <string name="auto_start_save_failed">تعذر تحديث البدء التلقائي بعد إعادة التشغيل</string>
+    <string name="auto_start_unavailable">تعذر التحقق من إعدادات البدء التلقائي. حاول تغيير المفتاح مرة أخرى.</string>
+    <string name="restart_access_not_now">ليس الآن</string>
+    <string name="restart_invitation_read_failed">تعذر التحقق من تذكير إذن الظهور فوق التطبيقات الأخرى</string>
+    <string name="restart_invitation_save_failed">تعذر حفظ اختيارك لتذكير إذن الظهور فوق التطبيقات الأخرى</string>
 </resources>

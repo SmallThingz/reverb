@@ -75,4 +75,37 @@
         <item quantity="one">%1$d रिकॉर्डिंग स्थानांतरित की गई।</item>
         <item quantity="other">%1$d रिकॉर्डिंग्स स्थानांतरित की गईं।</item>
     </plurals>
+
+    <string name="boot_resume_channel">रिकॉर्डिंग फिर शुरू करने के रिमाइंडर</string>
+    <string name="boot_resume_title">रिकॉर्डिंग फिर शुरू करें</string>
+    <string name="boot_resume_detail">डिवाइस फिर शुरू होने के बाद रिकॉर्डिंग फिर शुरू करने के लिए Reverb खोलें।</string>
+    <string name="boot_resume_in_progress">रिकॉर्डिंग फिर शुरू हो रही है…</string>
+    <string name="boot_resume_success">रिकॉर्डिंग फिर शुरू हो गई</string>
+
+    <string name="notification_channel_background">रिकॉर्डिंग और बैकग्राउंड कार्य</string>
+    <string name="notification_channel_background_description">रिकॉर्डिंग की स्थिति और नियंत्रण, साथ ही एक्सपोर्ट, बफ़र साफ़ करने और स्टोरेज के अपडेट।</string>
+    <string name="notification_channel_save_results">सहेजने के नतीजे</string>
+    <string name="notification_channel_save_results_description">सहेजी गई रिकॉर्डिंग की पुष्टि और सहेजने में विफलताएँ, जिनमें Quick Save और काटी गई रिकॉर्डिंग शामिल हैं।</string>
+    <string name="notification_channel_save_progress">रिकॉर्डिंग सहेजने की प्रगति</string>
+    <string name="notification_channel_save_progress_description">कतार में लगी रिकॉर्डिंग सहेजने की प्रगति, पुनर्प्राप्ति और विफलताएँ।</string>
+    <string name="notification_channel_playback_description">सहेजी गई रिकॉर्डिंग के प्लेबैक की स्थिति और नियंत्रण।</string>
+    <string name="notification_channel_restart_description">डिवाइस फिर शुरू होने के बाद रिकॉर्डिंग फिर शुरू करने के लिए Reverb खोलने की याद दिलाता है।</string>
+
+    <string name="settings_resume_notification_blocked">रिकॉर्डिंग फिर शुरू करने के रिमाइंडर ब्लॉक हैं। सूचना सेटिंग जाँचें।</string>
+    <string name="settings_notification_access">सूचना सेटिंग जाँचें</string>
+    <string name="settings_notification_access_failed">सूचना सेटिंग नहीं खोली जा सकीं</string>
+    <string name="onboarding_restart_resume_title">डिवाइस फिर शुरू होने के बाद रिकॉर्डिंग फिर शुरू करें</string>
+    <string name="onboarding_restart_resume_body">सेटिंग में डिवाइस फिर शुरू होने के बाद ऑटो-स्टार्ट का उपयोग करने के लिए अन्य ऐप्स के ऊपर दिखने की अनुमति दें।</string>
+    <string name="settings_restart_access_missing">डिवाइस फिर शुरू होने के बाद ऑटो-स्टार्ट के लिए अन्य ऐप्स के ऊपर दिखने की अनुमति चाहिए।</string>
+    <string name="settings_restart_access">अन्य ऐप्स के ऊपर दिखने की अनुमति जाँचें</string>
+    <string name="settings_restart_access_failed">अन्य ऐप्स के ऊपर दिखने की अनुमति की सेटिंग नहीं खोली जा सकीं</string>
+    <string name="auto_start_title">डिवाइस फिर शुरू होने के बाद ऑटो-स्टार्ट</string>
+    <string name="auto_start_summary">रिकॉर्डिंग अपने आप फिर शुरू होने पर एक पॉपअप दिखता है।</string>
+    <string name="auto_start_permission_pending">इसे चालू करने के लिए अन्य ऐप्स के ऊपर दिखने की अनुमति दें।</string>
+    <string name="auto_start_permission_missing">अन्य ऐप्स के ऊपर दिखने की अनुमति मिलने तक ऑटो-स्टार्ट रुका है।</string>
+    <string name="auto_start_save_failed">डिवाइस फिर शुरू होने के बाद ऑटो-स्टार्ट अपडेट नहीं हो सका</string>
+    <string name="auto_start_unavailable">ऑटो-स्टार्ट सेटिंग की पुष्टि नहीं हो सकी। स्विच फिर से बदलकर देखें।</string>
+    <string name="restart_access_not_now">अभी नहीं</string>
+    <string name="restart_invitation_read_failed">अन्य ऐप्स के ऊपर दिखने की अनुमति का रिमाइंडर जाँचा नहीं जा सका</string>
+    <string name="restart_invitation_save_failed">अन्य ऐप्स के ऊपर दिखने की अनुमति के रिमाइंडर के लिए आपका चुनाव सहेजा नहीं जा सका</string>
 </resources>

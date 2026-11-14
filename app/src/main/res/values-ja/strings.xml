@@ -74,4 +74,37 @@
     <plurals name="move_recordings_done">
         <item quantity="other">%1$d 件の録音を移動しました。</item>
     </plurals>
+
+    <string name="boot_resume_channel">端末の再起動後の録音再開リマインダー</string>
+    <string name="boot_resume_title">録音を再開</string>
+    <string name="boot_resume_detail">端末の再起動後に録音を再開するには、Reverbを開いてください。</string>
+    <string name="boot_resume_in_progress">録音を再開中…</string>
+    <string name="boot_resume_success">録音を再開しました</string>
+
+    <string name="notification_channel_background">録音とバックグラウンド処理</string>
+    <string name="notification_channel_background_description">録音の状態と操作、エクスポート、バッファの消去、ストレージの更新。</string>
+    <string name="notification_channel_save_results">保存結果</string>
+    <string name="notification_channel_save_results_description">Quick Saveやトリミングした録音を含む、録音の保存完了と保存失敗の通知。</string>
+    <string name="notification_channel_save_progress">録音の保存状況</string>
+    <string name="notification_channel_save_progress_description">保存待ちの録音の処理状況、復旧、失敗の通知。</string>
+    <string name="notification_channel_playback_description">保存した録音の再生状態と操作。</string>
+    <string name="notification_channel_restart_description">端末の再起動後に録音を再開できるよう、Reverbを開くようお知らせします。</string>
+
+    <string name="settings_resume_notification_blocked">録音再開のリマインダーがブロックされています。通知設定を確認してください。</string>
+    <string name="settings_notification_access">通知設定を確認</string>
+    <string name="settings_notification_access_failed">通知設定を開けませんでした</string>
+    <string name="onboarding_restart_resume_title">端末の再起動後に録音を再開</string>
+    <string name="onboarding_restart_resume_body">設定で「端末の再起動後に自動開始」を使うには、他のアプリの上に表示することを許可してください。</string>
+    <string name="settings_restart_access_missing">端末の再起動後に自動開始するには、他のアプリの上に表示する権限が必要です。</string>
+    <string name="settings_restart_access">自動開始の権限を確認</string>
+    <string name="settings_restart_access_failed">自動開始の権限設定を開けませんでした</string>
+    <string name="auto_start_title">端末の再起動後に自動開始</string>
+    <string name="auto_start_summary">録音が自動的に再開されると、ポップアップが表示されます。</string>
+    <string name="auto_start_permission_pending">この機能をオンにするには、他のアプリの上に表示することを許可してください。</string>
+    <string name="auto_start_permission_missing">他のアプリの上に表示することが許可されるまで、自動開始は一時停止されます。</string>
+    <string name="auto_start_save_failed">端末の再起動後の自動開始設定を更新できませんでした</string>
+    <string name="auto_start_unavailable">自動開始の設定を確認できませんでした。スイッチをもう一度切り替えてください。</string>
+    <string name="restart_access_not_now">後で</string>
+    <string name="restart_invitation_read_failed">自動開始の権限リマインダーを確認できませんでした</string>
+    <string name="restart_invitation_save_failed">自動開始の権限リマインダーの選択を保存できませんでした</string>
 </resources>

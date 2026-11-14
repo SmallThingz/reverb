@@ -76,4 +76,37 @@
     </plurals>
     <string name="format_label">Formato</string>
     <string name="format_wav">WAV</string>
+
+    <string name="boot_resume_channel">Lembretes para retomar a gravação</string>
+    <string name="boot_resume_title">Retomar gravação</string>
+    <string name="boot_resume_detail">Abra o Reverb para retomar a gravação após reiniciar o dispositivo.</string>
+    <string name="boot_resume_in_progress">Retomando gravação…</string>
+    <string name="boot_resume_success">Gravação retomada</string>
+
+    <string name="notification_channel_background">Gravação e tarefas em segundo plano</string>
+    <string name="notification_channel_background_description">Status e controles da gravação, além de exportações, limpeza do buffer e atualizações de armazenamento.</string>
+    <string name="notification_channel_save_results">Resultados de salvamento</string>
+    <string name="notification_channel_save_results_description">Confirmações e falhas ao salvar gravações, incluindo Quick Save e gravações cortadas.</string>
+    <string name="notification_channel_save_progress">Progresso do salvamento de gravações</string>
+    <string name="notification_channel_save_progress_description">Progresso, recuperação e falhas de gravações na fila de salvamento.</string>
+    <string name="notification_channel_playback_description">Status e controles de reprodução das gravações salvas.</string>
+    <string name="notification_channel_restart_description">Lembra você de abrir o Reverb para retomar a gravação após reiniciar o dispositivo.</string>
+
+    <string name="settings_resume_notification_blocked">Os lembretes para retomar a gravação estão bloqueados. Confira as configurações de notificações.</string>
+    <string name="settings_notification_access">Revisar configurações de notificações</string>
+    <string name="settings_notification_access_failed">Não foi possível abrir as configurações de notificações</string>
+    <string name="onboarding_restart_resume_title">Retomar gravação após reiniciar o dispositivo</string>
+    <string name="onboarding_restart_resume_body">Permita a exibição sobre outros aplicativos para usar a inicialização automática após reiniciar nas Configurações.</string>
+    <string name="settings_restart_access_missing">A inicialização automática após reiniciar precisa de permissão para exibir sobre outros aplicativos.</string>
+    <string name="settings_restart_access">Revisar permissão para inicialização automática</string>
+    <string name="settings_restart_access_failed">Não foi possível abrir as configurações de permissão para inicialização automática</string>
+    <string name="auto_start_title">Iniciar automaticamente após reiniciar o dispositivo</string>
+    <string name="auto_start_summary">Uma janela aparece quando a gravação é retomada automaticamente.</string>
+    <string name="auto_start_permission_pending">Permita a exibição sobre outros aplicativos para ativar esta opção.</string>
+    <string name="auto_start_permission_missing">A inicialização automática está pausada até que a exibição sobre outros aplicativos seja permitida.</string>
+    <string name="auto_start_save_failed">Não foi possível atualizar a inicialização automática após reiniciar</string>
+    <string name="auto_start_unavailable">Não foi possível verificar as configurações de inicialização automática. Tente alterar a opção novamente.</string>
+    <string name="restart_access_not_now">Agora não</string>
+    <string name="restart_invitation_read_failed">Não foi possível verificar o lembrete de permissão para inicialização automática</string>
+    <string name="restart_invitation_save_failed">Não foi possível salvar sua escolha sobre o lembrete de permissão para inicialização automática</string>
 </resources>

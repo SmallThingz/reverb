@@ -76,4 +76,37 @@
         <item quantity="many">%1$d enregistrements déplacés.</item>
         <item quantity="other">%1$d enregistrements déplacés.</item>
     </plurals>
+
+    <string name="boot_resume_channel">Rappels de reprise après redémarrage de l’appareil</string>
+    <string name="boot_resume_title">Reprendre l’enregistrement</string>
+    <string name="boot_resume_detail">Ouvrez Reverb pour reprendre l’enregistrement après un redémarrage de l’appareil.</string>
+    <string name="boot_resume_in_progress">Reprise de l’enregistrement…</string>
+    <string name="boot_resume_success">Enregistrement repris</string>
+
+    <string name="notification_channel_background">Enregistrement et tâches en arrière-plan</string>
+    <string name="notification_channel_background_description">État et commandes de l’enregistrement, exportations, vidage du tampon et mises à jour du stockage.</string>
+    <string name="notification_channel_save_results">Résultats des sauvegardes</string>
+    <string name="notification_channel_save_results_description">Confirmations de sauvegarde et échecs, y compris pour Quick Save et les enregistrements découpés.</string>
+    <string name="notification_channel_save_progress">Progression de la sauvegarde des enregistrements</string>
+    <string name="notification_channel_save_progress_description">Progression, récupération et échecs des sauvegardes d’enregistrements en attente.</string>
+    <string name="notification_channel_playback_description">État et commandes de lecture des enregistrements sauvegardés.</string>
+    <string name="notification_channel_restart_description">Vous rappelle d’ouvrir Reverb pour reprendre l’enregistrement après un redémarrage de l’appareil.</string>
+
+    <string name="settings_resume_notification_blocked">Les rappels de reprise sont bloqués. Vérifiez les paramètres de notification.</string>
+    <string name="settings_notification_access">Vérifier les paramètres de notification</string>
+    <string name="settings_notification_access_failed">Impossible d’ouvrir les paramètres de notification</string>
+    <string name="onboarding_restart_resume_title">Reprendre l’enregistrement après un redémarrage</string>
+    <string name="onboarding_restart_resume_body">Autorisez l’affichage par-dessus les autres applications pour utiliser le démarrage automatique après redémarrage dans les paramètres.</string>
+    <string name="settings_restart_access_missing">Le démarrage automatique après redémarrage nécessite l’autorisation d’affichage par-dessus les autres applications.</string>
+    <string name="settings_restart_access">Vérifier l’autorisation de démarrage automatique</string>
+    <string name="settings_restart_access_failed">Impossible d’ouvrir les paramètres d’autorisation de démarrage automatique</string>
+    <string name="auto_start_title">Démarrage automatique après redémarrage</string>
+    <string name="auto_start_summary">Une fenêtre s’affiche lorsque l’enregistrement reprend automatiquement.</string>
+    <string name="auto_start_permission_pending">Autorisez l’affichage par-dessus les autres applications pour activer cette option.</string>
+    <string name="auto_start_permission_missing">Le démarrage automatique est suspendu jusqu’à l’autorisation d’affichage par-dessus les autres applications.</string>
+    <string name="auto_start_save_failed">Impossible de modifier le démarrage automatique après redémarrage</string>
+    <string name="auto_start_unavailable">Impossible de vérifier les paramètres de démarrage automatique. Actionnez à nouveau l’interrupteur.</string>
+    <string name="restart_access_not_now">Pas maintenant</string>
+    <string name="restart_invitation_read_failed">Impossible de vérifier le rappel d’autorisation de démarrage automatique</string>
+    <string name="restart_invitation_save_failed">Impossible de sauvegarder votre choix concernant le rappel d’autorisation de démarrage automatique</string>
 </resources>
