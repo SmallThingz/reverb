@@ -14,6 +14,8 @@ import smallthingz.ui.text.view.NativeMergedRowAccessibilityState
 import smallthingz.ui.text.view.NativeMergedRowRole
 import smallthingz.ui.text.view.ParagraphView
 import android.content.Context
+import android.Manifest
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Canvas
 import android.graphics.Outline
@@ -33,6 +35,7 @@ import smallthingz.ui.input.phase.NativeViewPhasePointerNode
 import smallthingz.ui.input.phase.NativeViewPointerHitLayout
 import smallthingz.ui.input.phase.ViewClickPhaseEndpoint
 import app.smallthingz.reverb.R
+import app.smallthingz.reverb.requiresLegacyPublicStoragePermission
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -65,6 +68,10 @@ internal class NativePermissionRequiredView(
         } else if(!show) {
             content?.let {removeView(it);it.close()};content=null
         }
+        content?.bindPermissions(
+            context.checkSelfPermission(Manifest.permission.RECORD_AUDIO)==PackageManager.PERMISSION_GRANTED,
+            !requiresLegacyPublicStoragePermission() ||
+                context.checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE)==PackageManager.PERMISSION_GRANTED)
     }
     fun bindEnvironment(next:ReverbViewEnvironment) {
         if(environment===next)return
@@ -87,7 +94,6 @@ private class PermissionContent(context:Context,private val host:NativeMaterialB
     private var environment=host.environment
     private val message=ParagraphView(context,reverbDefaultTextStyle(),environment.textDensity,
         environment.sharedFontResolver,environment.palette.onSurfaceVariant).apply {
-        setText(context.getString(R.string.permission_required_message))
         isScreenReaderFocusable=true
     }
     private val allow=LibrarySheetButton(context,host,true,context.getString(R.string.allow),review)
@@ -116,6 +122,9 @@ private class PermissionContent(context:Context,private val host:NativeMaterialB
             override fun getOutline(view:View,outline:Outline){outline.setRect(0,0,view.width,view.height)}
         }
         addView(message);addView(allow);addView(libraryAction)
+    }
+    fun bindPermissions(microphoneAllowed:Boolean,legacyStorageAllowed:Boolean) {
+        message.setText(context.getString(requiredPermissionMessageResource(microphoneAllowed,legacyStorageAllowed)))
     }
     fun bindEnvironment(next:ReverbViewEnvironment) {
         if(environment===next)return

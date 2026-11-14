@@ -47,6 +47,7 @@ internal class CaptureServiceUiOwner {
         view: View,
         isAlive: () -> Boolean,
         callbacks: BindingCallbacks,
+        canBind: () -> Boolean = isAlive,
     ): Closeable {
         check(!bindingAttached) { "Close the previous Capture binding before replacing it" }
         bindingAttached = true
@@ -66,7 +67,8 @@ internal class CaptureServiceUiOwner {
 
         fun bindIfNeeded() {
             if (closed || boundConnection != null ||
-                !lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+                !lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) ||
+                !isAlive() || !canBind()
             ) return
 
             val bindingGeneration = longArrayOf(++connectionGeneration)

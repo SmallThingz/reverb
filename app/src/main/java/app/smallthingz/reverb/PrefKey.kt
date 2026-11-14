@@ -41,6 +41,7 @@ enum class PrefKey {
     PENDING_OUTPUT_CLEANUP,
     VERIFIED_EXPORT_STAGING,
     FILE_COPY_PUBLICATIONS,
+    AUTO_START_AFTER_RESTART,
 }
 
 fun SharedPreferences.getString(key: PrefKey, default: String?): String? = getString(key.name, default)

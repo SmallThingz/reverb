@@ -40,6 +40,7 @@ private const val GROUP_PAINT_FLAGS = Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG
 internal class ReverbGroupLayout(
     context: Context,
     private val cornerRadiusDp: Float = 16f,
+    orientation: Int = LinearLayout.VERTICAL,
 ) : FrameLayout(context) {
     private val fillPaint = Paint(GROUP_PAINT_FLAGS)
     private val borderPaint = Paint(GROUP_PAINT_FLAGS).apply { style = Paint.Style.STROKE }
@@ -64,6 +65,7 @@ internal class ReverbGroupLayout(
 
     init {
         require(cornerRadiusDp.isFinite() && cornerRadiusDp >= 0f)
+        content.orientation = orientation
         setWillNotDraw(false)
         isFocusable = false
         isClickable = false

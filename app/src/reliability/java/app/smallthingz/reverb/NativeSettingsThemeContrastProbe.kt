@@ -180,10 +180,8 @@ private fun verifySettingsBackgroundWarnings(instrumentation: Instrumentation, h
     val battery = themeField(owner, "batteryOptimizationRestricted")
     val blocked = themeField(owner, "resumeNotificationBlocked")
     val restart = themeField(owner, "restartAccessMissing")
-    val armed = themeField(owner, "restartTestArmed")
     val changed = owner.javaClass.getDeclaredMethod("notifyChanged").apply { isAccessible = true }
     val original = main { Triple(battery.getBoolean(owner), blocked.getBoolean(owner), restart.getBoolean(owner)) }
-    val originalArmed = main { armed.getBoolean(owner) }
     val list = main { checkNotNull(settings.listViewport) }
     val rows = JSONArray()
     try {
@@ -194,35 +192,35 @@ private fun verifySettingsBackgroundWarnings(instrumentation: Instrumentation, h
             main {
                 battery.setBoolean(owner, batteryRestricted); blocked.setBoolean(owner, notificationBlocked)
                 restart.setBoolean(owner, restartAccessMissing)
-                armed.setBoolean(owner, false)
                 changed.invoke(owner)
             }
             repeat(3) { awaitNativeParityDraw(instrumentation, render.board) }
             main {
                 check(settings.listViewport === list)
                 val adapter = checkNotNull(list.adapter)
-                check((0 until adapter.itemCount).count { adapter.getItemViewType(it) == SettingsSectionKey.BACKGROUND.ordinal } == 1)
+                check((0 until adapter.itemCount).count { adapter.getItemViewType(it) == SettingsSectionKey.BACKGROUND.ordinal } == if (bits == 0) 0 else 1)
                 val retention = (0 until adapter.itemCount).single { adapter.getItemViewType(it) == SettingsSectionKey.RETENTION.ordinal }
-                check(retention == SettingsSectionKey.retentionIndex(true))
+                check(retention == SettingsSectionKey.retentionIndex(bits != 0))
                 (list.layoutManager as LinearLayoutManager).scrollToPositionWithOffset(0, 0)
             }
             repeat(3) { awaitNativeParityDraw(instrumentation, render.board) }
             val entry = main {
                 val first = checkNotNull((list.layoutManager as LinearLayoutManager).findViewByPosition(0))
                 val visible = themeViews(first).filterIsInstance<SettingsPermissionReviewRow>().filter { it.visibility == View.VISIBLE }.toList()
-                val count = Integer.bitCount(bits and 3) + 1
+                val count = Integer.bitCount(bits)
                 check(visible.size == count)
                 check(visible.all { it.width > 0 && it.height > 0 })
                 visible.zipWithNext().forEach { (first, second) ->
                     check(first.parent === second.parent && first.bottom <= second.top)
                 }
-                val action = if (restartAccessMissing) R.string.settings_restart_access else R.string.settings_restart_test
-                check(themeViews(first).any { it.contentDescription == host.getString(action) && it.isShown })
+                check(themeViews(first).any {
+                    it.contentDescription == host.getString(R.string.settings_restart_access) && it.isShown
+                } == restartAccessMissing)
                 JSONObject().put("battery_restricted", batteryRestricted).put("notification_blocked", notificationBlocked)
                     .put("restart_access_missing", restartAccessMissing)
                     .put("visible_rows", count).put("retained_list_identity", System.identityHashCode(list))
-                    .put("retention_index", SettingsSectionKey.retentionIndex(true))
-                    .put("restart_action", if (restartAccessMissing) "review" else "test")
+                    .put("retention_index", SettingsSectionKey.retentionIndex(bits != 0))
+                    .put("restart_action", if (restartAccessMissing) "review" else "absent")
             }
             rows.put(entry)
             if (batteryRestricted && notificationBlocked && restartAccessMissing) {
@@ -232,45 +230,17 @@ private fun verifySettingsBackgroundWarnings(instrumentation: Instrumentation, h
             }
             if (bits == 0) {
                 val image = captureNativeParityContent(instrumentation, host) { render.board }
-                try { saveNativeParityBitmap(directory, "restart-test-ready-hardware.png", image) }
+                try { saveNativeParityBitmap(directory, "no-background-permission-warnings-hardware.png", image) }
                 finally { image.recycle() }
             }
         }
-        main {
-            battery.setBoolean(owner, false); blocked.setBoolean(owner, false); restart.setBoolean(owner, false)
-            armed.setBoolean(owner, true); changed.invoke(owner)
-        }
-        repeat(3) { awaitNativeParityDraw(instrumentation, render.board) }
-        main {
-            val first = checkNotNull((list.layoutManager as LinearLayoutManager).findViewByPosition(0))
-            check(themeViews(first).filterIsInstance<SettingsPermissionReviewRow>().count { it.visibility == View.VISIBLE } == 1)
-            check(themeViews(first).any { it.contentDescription == host.getString(R.string.cancel) && it.isShown })
-        }
-        val cancelImage = captureNativeParityContent(instrumentation, host) { render.board }
-        try { saveNativeParityBitmap(directory, "restart-test-cancel-hardware.png", cancelImage) }
-        finally { cancelImage.recycle() }
-        // A stale visible Cancel must not open access settings or submit a new arm.
-        val permissionMonitor = instrumentation.addMonitor(
-            android.content.IntentFilter(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION), null, true)
-        try {
-            main {
-                check(!BootResumeActivity.restartTestArmed())
-                owner.restartAction(owner.state.activation)
-                check(!owner.restartTestArmed && !owner.restartTestPending)
-                check(!BootResumeActivity.restartTestArmed())
-            }
-            check(permissionMonitor.hits == 0)
-        } finally {
-            instrumentation.removeMonitor(permissionMonitor)
-        }
         return JSONObject().put("name", "background-permission-warnings").put("states", rows)
             .put("shared_group_nonoverlap", true).put("permission_activity_launched", false)
-            .put("restart_test_available_without_warnings", true).put("restart_cancel_presentation", true)
-            .put("restart_test_armed_by_fixture", false).put("stale_cancel_did_not_rearm", true)
+            .put("background_section_absent_without_warnings", true)
     } finally {
         main {
             battery.setBoolean(owner, original.first); blocked.setBoolean(owner, original.second)
-            restart.setBoolean(owner, original.third); armed.setBoolean(owner, originalArmed); changed.invoke(owner)
+            restart.setBoolean(owner, original.third); changed.invoke(owner)
         }
     }
 }

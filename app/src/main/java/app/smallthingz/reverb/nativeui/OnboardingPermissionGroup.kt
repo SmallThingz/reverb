@@ -75,7 +75,7 @@ internal class OnboardingPermissionGroup(
         return AutoCloseable { releaseOwner(connected) }
     }
 
-    fun bind(status: OnboardingPermissionStatus, palette: ReverbPalette) {
+    fun bind(status: OnboardingPermissionStatus, palette: ReverbPalette): Boolean {
         val states = buildList {
             add(PermissionRowState(OnboardingPermission.MICROPHONE, "●",
                 context.getString(R.string.onboarding_microphone_title), context.getString(R.string.onboarding_microphone_body),
@@ -96,9 +96,9 @@ internal class OnboardingPermissionGroup(
             add(PermissionRowState(OnboardingPermission.BATTERY, "B",
                 context.getString(R.string.onboarding_background_title), context.getString(R.string.onboarding_background_body),
                 status.batteryOptimizationAllowed, status.interactionEnabled))
-            add(PermissionRowState(OnboardingPermission.OVERLAY, "R",
+            if (!status.overlayAllowed) add(PermissionRowState(OnboardingPermission.OVERLAY, "R",
                 context.getString(R.string.onboarding_restart_resume_title), context.getString(R.string.onboarding_restart_resume_body),
-                status.overlayAllowed, status.interactionEnabled, ReverbIcon.BackgroundWarning))
+                false, status.interactionEnabled, ReverbIcon.BackgroundWarning))
         }
         val present = states.mapTo(mutableSetOf()) { it.kind }
         rows.keys.filterNot(present::contains).forEach { kind ->
@@ -110,7 +110,8 @@ internal class OnboardingPermissionGroup(
             }.bind(state, palette)
         }
         val desiredOrder = states.map { it.kind }
-        if (rowOrder != desiredOrder) {
+        val membershipChanged = rowOrder != desiredOrder
+        if (membershipChanged) {
             rows.values.forEach(view::removeRow)
             desiredOrder.forEachIndexed { index, kind ->
                 view.addRow(checkNotNull(rows[kind]), ReverbGroupLayout.LayoutParams(-1, -2).apply {
@@ -120,6 +121,7 @@ internal class OnboardingPermissionGroup(
             rowOrder = desiredOrder
         }
         view.setPalette(palette.field, palette.border)
+        return membershipChanged
     }
 
     fun cancelPendingRowInput() = rows.values.forEach(View::cancelPendingInputEvents)

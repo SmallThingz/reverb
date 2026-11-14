@@ -242,13 +242,28 @@ internal fun verifyNativeUiConsistencyCurrent(instrumentation: Instrumentation, 
             check(themed.getString(R.string.storage_settings_title) in permissionLabels) { "Missing Storage: $placement" }
             check(themed.getString(R.string.settings_audio_read_missing) in permissionLabels) { "Missing audio access: $placement" }
             check(themed.getString(R.string.settings_all_files_optional) in permissionLabels) { "Missing all-files access: $placement" }
+            for ((allFilesAllowed, overlayAllowed) in listOf(false to false, true to false, true to true,
+                false to true, false to false)) {
+                main { permissionScreen.bind(permissionState.copy(permissions = permissionState.permissions.copy(
+                    allFilesAllowed = allFilesAllowed, overlayAllowed = overlayAllowed))) }
+                awaitNativeParityDraw(instrumentation, permissionScreen)
+                main {
+                    val labels = descendants(permissionScreen).filterIsInstance<smallthingz.ui.text.view.ParagraphView>()
+                        .filter { it.isShown }.map { it.getText().toString() }.toSet()
+                    check((themed.getString(R.string.settings_all_files_optional) in labels) == !allFilesAllowed)
+                    check((themed.getString(R.string.onboarding_restart_resume_title) in labels) == !overlayAllowed)
+                }
+            }
+            scenes.put(JSONObject().put("name", "${if (dark) "dark" else "light"}-onboarding-grant-revoke")
+                .put("all_files_and_overlay_absent_iff_granted", true).put("permission_activity_launched", false))
             main { permissionScreen.close(); host.fixtureRoot.removeView(permissionScreen) }
 
+            val storageState = SettingsStorageState(
+                pathText = "/recordings", hasCustomDirectory = false, canMove = false,
+                settingsPersisting = false, allFilesAvailable = true, allFilesAllowed = false,
+                audioReadAvailable = true, audioReadAllowed = false)
             val storageSection = main {
-                SettingsStorageSection(themed, SettingsStorageState(
-                    pathText = "/recordings", hasCustomDirectory = false, canMove = false,
-                    settingsPersisting = false, allFilesAvailable = true, allFilesAllowed = false,
-                    audioReadAvailable = true, audioReadAllowed = false), environment,
+                SettingsStorageSection(themed, storageState, environment,
                     { host.fixtureRoot }, forbidden, forbidden, forbidden, forbidden, forbidden)
             }
             val storageFrame = main {
@@ -266,6 +281,19 @@ internal fun verifyNativeUiConsistencyCurrent(instrumentation: Instrumentation, 
             check(themed.getString(R.string.settings_audio_read_missing) in storageLabels)
             check(themed.getString(R.string.settings_all_files_optional) in storageLabels)
             capture("${if (dark) "dark" else "light"}-settings-storage-missing", storageFrame, dark)
+            for (granted in listOf(true, false, true)) {
+                main { storageSection.bind(storageState.copy(allFilesAllowed = granted), environment) }
+                awaitNativeParityDraw(instrumentation, storageFrame)
+                main {
+                    val title = descendants(storageSection).filterIsInstance<smallthingz.ui.text.view.ParagraphView>()
+                        .single { it.getText().toString() == themed.getString(R.string.settings_all_files_optional) }
+                    check(title.isShown == !granted)
+                    check(descendants(storageSection).any {
+                        it.contentDescription == themed.getString(R.string.choose_folder) && it.isShown
+                    })
+                }
+            }
+            capture("${if (dark) "dark" else "light"}-settings-storage-granted", storageFrame, dark)
             main { storageSection.close(); host.fixtureRoot.removeView(storageFrame) }
 
             val toolbar = main {

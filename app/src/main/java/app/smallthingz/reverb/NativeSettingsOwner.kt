@@ -19,6 +19,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collect
 
 /**
  * Released Settings effects/actions owned by one retained native panel. The existing draft,
@@ -73,10 +74,8 @@ internal class NativeSettingsOwner(
         private set
     var restartAccessMissing = !BootResumeActivity.overlayAvailable(context)
         private set
-    var restartTestArmed = BootResumeActivity.restartTestArmed()
-        private set
-    var restartTestPending = false
-        private set
+    val autoStartChoice get() = AutoStartAfterRestart.policy.state.value
+    private var autoStartPermissionRequest: Long? = null
     var allFilesAllowed = hasAllFilesAccess()
         private set
     var audioReadAllowed = hasRecordingAudioReadPermission(context)
@@ -135,7 +134,16 @@ internal class NativeSettingsOwner(
             Lifecycle.Event.ON_PAUSE -> { resetBackConfirmation(); notifyChanged() }
             Lifecycle.Event.ON_START -> refreshMoveAvailability()
             Lifecycle.Event.ON_STOP -> moveAvailability.hide()
-            Lifecycle.Event.ON_RESUME -> if (batteryObserverInstalled) refreshBattery()
+            Lifecycle.Event.ON_RESUME -> if (batteryObserverInstalled) {
+                refreshBattery()
+                val request = autoStartPermissionRequest
+                autoStartPermissionRequest = null
+                if (request != null) {
+                    AutoStartAfterRestart.policy.permissionReturned(request,
+                        state.active && !restartAccessMissing)?.let { AutoStartAfterRestart.persist(context, it) }
+                }
+                AutoStartAfterRestart.refresh(context)
+            }
             else -> Unit
         }
     }
@@ -148,6 +156,8 @@ internal class NativeSettingsOwner(
             started = true
             lifecycle.addObserver(lifecycleObserver)
             batteryObserverInstalled = true
+            scope.launch { AutoStartAfterRestart.policy.state.collect { notifyChanged() } }
+            AutoStartAfterRestart.refresh(context)
             draftChanged(state)
         }
         notifyChanged()
@@ -155,6 +165,7 @@ internal class NativeSettingsOwner(
 
     fun setActive(active: Boolean) {
         if (closed) return
+        if (!active) cancelAutoStartPermissionRequest()
         if (active && !state.active) {
             allFilesAllowed = hasAllFilesAccess()
             audioReadAllowed = hasRecordingAudioReadPermission(context)
@@ -541,37 +552,30 @@ internal class NativeSettingsOwner(
         }
     }
 
-    fun restartAction(owner: Any) {
-        if (!acceptsInput(owner) || restartTestPending) return
-        if (restartTestArmed || BootResumeActivity.restartTestArmed()) {
-            BootResumeActivity.cancelRestartTest()
-            restartTestArmed = false
-            notifyChanged()
+    fun autoStartChanged(owner: Any, enabled: Boolean) {
+        if (!featureInputReady(owner) || !autoStartChoice.loaded) return
+        if (enabled && autoStartChoice.saving) return
+        cancelAutoStartPermissionRequest()
+        if (!enabled || BootResumeActivity.overlayAvailable(context)) {
+            AutoStartAfterRestart.request(context, enabled)
             return
         }
-        if (!BootResumeActivity.overlayAvailable(context)) {
-            reviewRestartAccess(owner)
-            return
+        val request = AutoStartAfterRestart.policy.requestPermission()
+        autoStartPermissionRequest = request
+        try {
+            context.startActivity(BootResumeActivity.overlayReviewIntent(context))
+        } catch (error: ActivityNotFoundException) {
+            cancelAutoStartPermissionRequest()
+            feedback(R.string.settings_restart_access_failed, error)
+        } catch (error: SecurityException) {
+            cancelAutoStartPermissionRequest()
+            feedback(R.string.settings_restart_access_failed, error)
         }
-        restartTestPending = true
-        notifyChanged()
-        scope.launch(start = CoroutineStart.UNDISPATCHED) {
-            try {
-                if (BootResumeActivity.armRestartTest(context.applicationContext)) {
-                    AppFeedbackCenter.post(context.getString(R.string.settings_restart_test_armed), FeedbackTone.SUCCESS)
-                } else {
-                    feedback(R.string.settings_restart_test_unavailable)
-                }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Exception) {
-                feedback(R.string.settings_restart_test_failed, error)
-            } finally {
-                restartTestPending = false
-                restartTestArmed = BootResumeActivity.restartTestArmed()
-                notifyChanged()
-            }
-        }
+    }
+
+    private fun cancelAutoStartPermissionRequest() {
+        autoStartPermissionRequest?.let(AutoStartAfterRestart.policy::cancelPermission)
+        autoStartPermissionRequest = null
     }
 
     fun moveExistingRecordings(renderedActivation: Any) {
@@ -646,7 +650,6 @@ internal class NativeSettingsOwner(
         batteryOptimizationRestricted = !isIgnoringBatteryOptimizations(context)
         resumeNotificationBlocked = !BootResumeNotification.deliveryAvailable(context)
         restartAccessMissing = !BootResumeActivity.overlayAvailable(context)
-        restartTestArmed = BootResumeActivity.restartTestArmed()
         allFilesAllowed = hasAllFilesAccess()
         audioReadAllowed = hasRecordingAudioReadPermission(context)
         notifyChanged()
@@ -770,6 +773,7 @@ internal class NativeSettingsOwner(
     override fun close() {
         if (closed) return
         closed = true
+        cancelAutoStartPermissionRequest()
         draft.directoryPicker.setPanelActive(false)
         draft.dispose()
         lifecycle.removeObserver(lifecycleObserver)

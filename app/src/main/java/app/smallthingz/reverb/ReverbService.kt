@@ -320,8 +320,6 @@ open class ReverbService : Service() {
     private val listeningCommandGeneration = AtomicLong()
     // Accepted explicit intent retires queued foreground work without changing healthy PCM.
     private val foregroundAdmissionGeneration = AtomicLong()
-    // Read and written only under listeningIntentLock; Main cancellation cannot replace this receipt.
-    private var lastAcceptedRestartTestControlEpoch = 0L
     // Command versions also advance for harmless destination changes. This separate epoch
     // advances only when capture continuity breaks, so an in-flight read can survive a buffer
     // handoff without surviving Stop -> Start or failure boundaries.
@@ -1059,7 +1057,6 @@ open class ReverbService : Service() {
                 RecordingQuickTiles.beginHandoff(previousActiveBuffer, bufferSlot, resolvedGeneration)
             }
             if (resolvedGeneration != null) {
-                lastAcceptedRestartTestControlEpoch = BootResumeActivity.invalidateRestartTest()
                 captureControlFence.recordAcceptedControl(expectedControl)
             }
             publishCaptureIngress()
@@ -1256,7 +1253,6 @@ open class ReverbService : Service() {
                 }
             }
             if (acceptedGeneration != null) {
-                lastAcceptedRestartTestControlEpoch = BootResumeActivity.invalidateRestartTest()
                 if (!enabled) BootResumeNotification.dismiss(this)
                 foregroundAdmissionGeneration.incrementAndGet()
                 foregroundCaptureRetryGate.resetForExplicitIntent()
@@ -4306,75 +4302,9 @@ open class ReverbService : Service() {
             foregroundServiceTypes and ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE != 0 &&
             command == listeningCommandGeneration.get() && continuity == captureContinuityGeneration.get()
 
-    internal fun requestRestartTest(test: RestartTestArm, visible: () -> Boolean,
-        completed: (RestartTestResult) -> Unit) {
-        check(Looper.myLooper() == Looper.getMainLooper())
-        val requestEpoch = BootResumeActivity.restartTestControlEpoch()
-        val delivered = AtomicBoolean()
-        fun rejection(): RestartTestResult = if (BootResumeActivity.restartTestCurrent(test))
-            RestartTestResult.Rejected(requestEpoch, getString(R.string.boot_resume_test_rejected)) else RestartTestResult.Superseded
-        fun deliver(result: RestartTestResult) {
-            if (!delivered.compareAndSet(false, true)) return
-            mainHandler.post {
-                completed(currentRestartTestResult(result, BootResumeActivity.restartTestControlEpoch(),
-                    foregroundAdmissionGeneration.get(), visible(), !serviceDestroying && durableListeningIntentEnabled))
-            }
-        }
-        if (serviceDestroying || !visible() || !BootResumeActivity.restartTestCurrent(test)) {
-            deliver(rejection())
-            return
-        }
-        val accepted = try {
-            captureCommands.submit(
-                retainLifetime = ::retainUiCaptureCommandLifetime,
-                enqueue = { work -> postCaptureWork(
-                    onRejected = { rejectCaptureCommandWork(work) }) { work.run() } },
-                onIdle = { mainHandler.post { releaseCaptureCommandStartedLifetimeIfIdle() } },
-                onRejected = { deliver(rejection()) },
-            ) {
-                val outcome = recorderErrors.captureCommand<RestartTestResult> {
-                    try {
-                        synchronized(listeningIntentLock) {
-                            val stopped = !serviceDestroying && appUiForeground && visible() &&
-                                durableCaptureIntentAuthorityValid && !durableListeningIntentEnabled &&
-                                state != STATE_LISTENING && audioRecord == null &&
-                                BootResumeActivity.restartPrerequisitesAvailable(this) &&
-                                !readDurableCaptureIntentPreferences(getRecorderPreferences(this)).enabled
-                            if (!stopped) rejection()
-                            else if (!BootResumeActivity.claimRestartTest(test, stopped = true)) RestartTestResult.Superseded
-                            else if (enableListening(durableCaptureBufferSlot ?: activeBufferSlot).accepted)
-                                RestartTestResult.Started(RestartTestAdmission(foregroundAdmissionGeneration.get(),
-                                    lastAcceptedRestartTestControlEpoch))
-                            else RestartTestResult.Rejected(requestEpoch, getString(R.string.boot_resume_test_rejected))
-                        }
-                    } catch (error: Exception) {
-                        RecordingIncidentStore.recordUnexpectedErrorInBackground(this, "Apply restart test", error)
-                        reportError(userFacingError(getString(R.string.boot_resume_test_rejected), error))
-                        RestartTestResult.Rejected(requestEpoch)
-                    }
-                }
-                val result = outcome.result
-                val message = outcome.errorMessage
-                deliver(if (message == null) result else when (result) {
-                    is RestartTestResult.Started -> RestartTestResult.Rejected(result.admission.testControlEpoch, message)
-                    is RestartTestResult.Rejected -> result.copy(message = message)
-                    RestartTestResult.Superseded -> result
-                })
-            }
-        } catch (error: RuntimeException) {
-            deliver(RestartTestResult.Rejected(requestEpoch,
-                userFacingError(getString(R.string.boot_resume_test_rejected), error)))
-            false
-        }
-        if (!accepted) {
-            deliver(rejection())
-            mainHandler.post { releaseCaptureCommandStartedLifetimeIfIdle() }
-        }
-    }
-
-    internal fun confirmBootResumeCapture(afterNanos: Long, expectedAdmissionGeneration: Long? = null,
+    internal fun confirmBootResumeCapture(afterNanos: Long,
         confirmed: () -> Unit): java.io.Closeable {
-        val admissionGeneration = expectedAdmissionGeneration ?: foregroundAdmissionGeneration.get()
+        val admissionGeneration = foregroundAdmissionGeneration.get()
         val confirmation = BootCaptureConfirmation(afterNanos) {
             if (admissionGeneration == foregroundAdmissionGeneration.get()) confirmed()
         }

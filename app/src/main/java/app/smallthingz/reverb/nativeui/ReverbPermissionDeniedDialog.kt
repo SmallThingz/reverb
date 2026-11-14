@@ -3,6 +3,10 @@ package app.smallthingz.reverb.nativeui
 import android.view.View
 import app.smallthingz.reverb.R
 
+internal fun requiredPermissionMessageResource(microphoneAllowed: Boolean, legacyStorageAllowed: Boolean): Int =
+    if (microphoneAllowed && !legacyStorageAllowed) R.string.storage_permission_required_message
+    else R.string.permission_required_message
+
 /**
  * MainActivity309-325's existing ReverbMessageSheet. The Activity still owns actual permission facts
  * and ACTION_APPLICATION_DETAILS_SETTINGS; this presentation never requests or changes permissions.
@@ -33,10 +37,7 @@ internal class ReverbPermissionDeniedDialog(
     fun bind(microphoneAllowed:Boolean,legacyStorageAllowed:Boolean,onDismiss:()->Unit,
              onOpenApplicationSettings:()->Unit) {
         dialog.bind(context.getString(R.string.permission_required),onDismiss)
-        val resource=if(!microphoneAllowed)R.string.permission_required_message
-            else if(!legacyStorageAllowed)R.string.storage_permission_required_message
-            else R.string.permission_required_message
-        message.setText(context.getString(resource))
+        message.setText(context.getString(requiredPermissionMessageResource(microphoneAllowed,legacyStorageAllowed)))
         close.bind(context.getString(R.string.close),true,onDismiss)
         // Released confirm launches Settings without dismissing this sheet.
         allow.bind(context.getString(R.string.allow),true,onOpenApplicationSettings)

@@ -47,21 +47,21 @@ internal class NativeSettingsSections(
         SettingsSectionKey.QUICK_TILES -> tiles()
         SettingsSectionKey.STORAGE -> storage()
         SettingsSectionKey.WAKE_LOCK -> wakeLock()
+        SettingsSectionKey.AUTO_START -> autoStart()
     }
 
     private fun background(): NativeSettingsSection {
         var activation = owner.state.activation
         val body = SettingsBackgroundWarningView(context, environment(), inputRoot,
             owner.batteryOptimizationRestricted, owner.resumeNotificationBlocked, owner.restartAccessMissing,
-            owner.restartTestArmed, owner.restartTestPending,
             { owner.reviewBattery(activation) }, { owner.reviewResumeNotifications(activation) },
-            { owner.restartAction(activation) })
+            { owner.reviewRestartAccess(activation) })
         return object : NativeSettingsSection {
             override val view = body
             override fun bind() {
                 activation = owner.state.activation
                 body.bind(environment(), owner.batteryOptimizationRestricted, owner.resumeNotificationBlocked,
-                    owner.restartAccessMissing, owner.restartTestArmed, owner.restartTestPending)
+                    owner.restartAccessMissing)
             }
             override fun close() = body.close()
         }
@@ -333,6 +333,24 @@ internal class NativeSettingsSections(
         }
     }
 
+    private fun autoStart(): NativeSettingsSection {
+        var activation = owner.state.activation
+        val body = SettingsAutoStartView(context, environment(), inputRoot) {
+            owner.autoStartChanged(activation, it)
+        }
+        return object : NativeSettingsSection {
+            override val view = body
+            override fun bind() {
+                activation = owner.state.activation
+                val choice = owner.autoStartChoice
+                body.bind(choice.permissionPending || choice.enabled,
+                    choice.loaded, choice.permissionPending, choice.unavailable,
+                    choice.enabled && owner.restartAccessMissing, environment())
+            }
+            override fun close() = body.close()
+        }
+    }
+
     private fun wakeLock(): NativeSettingsSection {
         val initial = owner.state
         var activation = initial.activation
@@ -351,7 +369,7 @@ internal class NativeSettingsSections(
     }
 }
 
-/** Permission reviews and the optional restart test share one compact surface. */
+/** Missing background permissions share one compact review surface. */
 private class SettingsBackgroundWarningView(
     context: Context,
     private var environment: ReverbViewEnvironment,
@@ -359,8 +377,6 @@ private class SettingsBackgroundWarningView(
     batteryRestricted: Boolean,
     notificationBlocked: Boolean,
     restartAccessMissing: Boolean,
-    restartTestArmed: Boolean,
-    restartTestPending: Boolean,
     reviewBattery: () -> Unit,
     reviewNotifications: () -> Unit,
     reviewRestart: () -> Unit,
@@ -383,32 +399,20 @@ private class SettingsBackgroundWarningView(
         group.addRow(notifications, notificationLayout)
         group.addRow(restart, restartLayout)
         addView(group)
-        bind(environment, batteryRestricted, notificationBlocked, restartAccessMissing, restartTestArmed, restartTestPending)
+        bind(environment, batteryRestricted, notificationBlocked, restartAccessMissing)
     }
     fun bind(next: ReverbViewEnvironment, batteryRestricted: Boolean, notificationBlocked: Boolean,
-        restartAccessMissing: Boolean, restartTestArmed: Boolean, restartTestPending: Boolean) {
+        restartAccessMissing: Boolean) {
         environment = next
         group.setPalette(next.palette.field, next.palette.border)
         battery.visibility = if (batteryRestricted) VISIBLE else GONE
         notifications.visibility = if (notificationBlocked) VISIBLE else GONE
-        restart.visibility = VISIBLE
+        restart.visibility = if (restartAccessMissing) VISIBLE else GONE
         notificationLayout.dividerTop = batteryRestricted && notificationBlocked
         restartLayout.dividerTop = batteryRestricted || notificationBlocked
         battery.bind(next, batteryRestricted)
         notifications.bind(next, notificationBlocked)
-        val action = when {
-            restartTestArmed -> R.string.cancel
-            restartAccessMissing -> R.string.background_review
-            else -> R.string.settings_restart_test
-        }
-        val title = when {
-            restartTestArmed -> R.string.settings_restart_test_armed
-            restartAccessMissing -> R.string.settings_restart_access_missing
-            else -> R.string.settings_restart_test_ready
-        }
-        restart.bind(next, !restartTestPending, title, action,
-            if (restartAccessMissing && !restartTestArmed) R.string.settings_restart_access else action,
-            if (restartAccessMissing) ReverbIcon.BackgroundWarning else ReverbIcon.Reset)
+        restart.bind(next, restartAccessMissing)
         requestLayout()
     }
     override fun onMeasure(w: Int, h: Int) {

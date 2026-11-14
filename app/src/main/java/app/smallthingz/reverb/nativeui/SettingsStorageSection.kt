@@ -61,8 +61,9 @@ internal class SettingsStorageSection(
         surface.setPalette(colors.palette.field,colors.palette.border)
         reset.visibility=if(next.hasCustomDirectory)VISIBLE else GONE
         reset.bind(colors,true);choose.bind(colors,!next.settingsPersisting);move.bind(colors,next.canMove&&!next.settingsPersisting)
-        allFiles.visibility=if(next.allFilesAvailable)VISIBLE else GONE
-        allFiles.bind(colors,!next.settingsPersisting&&next.allFilesAvailable)
+        val missingAllFiles=next.allFilesAvailable&&!next.allFilesAllowed
+        allFiles.visibility=if(missingAllFiles)VISIBLE else GONE
+        allFiles.bind(colors,!next.settingsPersisting&&missingAllFiles)
         val missingAudio=next.audioReadAvailable&&!next.audioReadAllowed
         audioRead.visibility=if(missingAudio)VISIBLE else GONE
         audioRead.bind(colors,!next.settingsPersisting&&missingAudio)

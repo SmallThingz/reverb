@@ -153,13 +153,12 @@ internal class NativeSettingsScreenContent(
         }
         val sectionValues=SectionValues(state,owner.errors,owner.exportPathText,owner.canMove,
             owner.settingsCommitBlocked,owner.batteryOptimizationRestricted,owner.resumeNotificationBlocked,owner.restartAccessMissing,
-            owner.restartTestArmed,owner.restartTestPending,
-            owner.allFilesAllowed,owner.audioReadAllowed,environment,input.focusRetention)
+            owner.allFilesAllowed,owner.audioReadAllowed,owner.autoStartChoice,environment,input.focusRetention)
         val tileEditorChanged=tileEditorPublication.changed(owner.quickTileEditorState)
         if(lastSections!=sectionValues) {
             lastSections=sectionValues
-            // Restart testing remains reachable even when every permission is granted.
-            currentList.bind(true,environment)
+            currentList.bind(owner.batteryOptimizationRestricted || owner.resumeNotificationBlocked ||
+                owner.restartAccessMissing,environment)
         } else {
             // Back can close the child without changing the parent draft or firing the tile owner.
             if(tileEditorChanged)currentList.bindSection(SettingsSectionKey.QUICK_TILES)
@@ -270,8 +269,8 @@ internal class NativeSettingsScreenContent(
     private data class SectionValues(val state:SettingsDraftPresentation,val errors:NativeSettingsRetentionErrors,
         val path:String,val canMove:Boolean,val commitBlocked:Boolean,val batteryRestricted:Boolean,
         val notificationBlocked:Boolean,val restartAccessMissing:Boolean,
-        val restartTestArmed:Boolean,val restartTestPending:Boolean,
-        val allFilesAllowed:Boolean,val audioReadAllowed:Boolean,val environment:ReverbViewEnvironment,
+        val allFilesAllowed:Boolean,val audioReadAllowed:Boolean,val autoStartChoice:AutoStartChoice,
+        val environment:ReverbViewEnvironment,
         val focus:ReverbService.BufferSlot?)
     private data class TopBarValues(val activation:Any,val changed:Boolean,val persisting:Boolean,
         val calibrating:Boolean,val tileOpen:Boolean,val durationPending:Boolean,val backHint:Any?,

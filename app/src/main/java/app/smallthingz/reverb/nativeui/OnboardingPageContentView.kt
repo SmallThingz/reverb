@@ -187,8 +187,6 @@ internal class OnboardingPageContentView(
             boundPalette = palette
             environment = ReverbViewEnvironment(environment.textDensity, environment.sharedFontResolver, palette)
         }
-        val permissionMembershipChanged = state.permissions.storageRequired != next.permissions.storageRequired ||
-            state.permissions.recoveryRequired != next.permissions.recoveryRequired
         state = next
         updateAudioExposure()
         viewport.interactionEnabled = next.interactionEnabled
@@ -210,7 +208,8 @@ internal class OnboardingPageContentView(
         }, palette.primary)
         header.animateTextColor(palette.onSurface)
         permissionBody?.animateTextColor(palette.onSurfaceVariant)
-        permissions?.bind(next.permissions.copy(interactionEnabled = next.interactionEnabled), palette)
+        val permissionMembershipChanged = permissions?.bind(
+            next.permissions.copy(interactionEnabled = next.interactionEnabled), palette) == true
         bufferGroup?.setPalette(palette.field, palette.border)
         oneShot?.bind(context.getString(R.string.onboarding_one_shot_title),
             context.getString(R.string.onboarding_one_shot_body), next.oneShotEnabled,

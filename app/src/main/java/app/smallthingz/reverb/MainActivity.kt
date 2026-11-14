@@ -253,7 +253,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onStop() {
-        BootResumeActivity.mainStopped(this, applicationContext)
+        BootResumeActivity.mainStopped(this)
         super.onStop()
     }
 

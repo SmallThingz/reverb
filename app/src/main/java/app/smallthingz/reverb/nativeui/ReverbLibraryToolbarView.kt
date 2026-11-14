@@ -5,6 +5,7 @@ import android.os.Build
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.widget.LinearLayout
 import smallthingz.ui.text.style.TextOverflow
 import app.smallthingz.reverb.R
 import kotlin.math.max
@@ -113,23 +114,7 @@ private class LibrarySelectionBar(context: Context, private var environment: Rev
         R.string.share_recording, true, sharedSurface = true)
     private val delete = ReverbTopBarIconAction(context, environment, inputRoot, ReverbIcon.Delete,
         R.string.delete_recording, true, sharedSurface = true)
-    private val selectionActions = ReverbGroupLayout(context, 15f)
-    private val actionRow = object : ViewGroup(context) {
-        init { importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO; addView(share); addView(delete) }
-        override fun onMeasure(w: Int, h: Int) {
-            val size = dp(48f)
-            share.measure(libraryToolbarExact(size), libraryToolbarExact(size))
-            delete.measure(libraryToolbarExact(size), libraryToolbarExact(size))
-            setMeasuredDimension(size * 2, size)
-        }
-        override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
-            val size = share.measuredWidth
-            val shareX = if (layoutDirection == LAYOUT_DIRECTION_RTL) size else 0
-            val deleteX = if (layoutDirection == LAYOUT_DIRECTION_RTL) 0 else size
-            share.layout(shareX, 0, shareX + size, height)
-            delete.layout(deleteX, 0, deleteX + size, height)
-        }
-    }
+    private val selectionActions = ReverbGroupLayout(context, 15f, LinearLayout.HORIZONTAL)
     private val title = environment.paragraph(context, "", ReverbTextRole.TITLE_MEDIUM).apply {
         setTextLayout(maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
@@ -138,8 +123,10 @@ private class LibrarySelectionBar(context: Context, private var environment: Rev
     init {
         background = noise
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
-        selectionActions.addRow(actionRow, ReverbGroupLayout.LayoutParams(
-            LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        selectionActions.addRow(share, ReverbGroupLayout.LayoutParams(0, LayoutParams.MATCH_PARENT, 1f))
+        selectionActions.addRow(delete, ReverbGroupLayout.LayoutParams(0, LayoutParams.MATCH_PARENT, 1f).apply {
+            dividerStart = true
+        })
         addView(close); addView(title); addView(selectionActions)
     }
     fun bind(value: ReverbViewEnvironment, state: LibraryToolbarState, actions: LibraryToolbarActions) {

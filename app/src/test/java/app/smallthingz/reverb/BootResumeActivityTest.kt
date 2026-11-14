@@ -4,11 +4,60 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
 class BootResumeActivityTest {
+    @Test fun optOutBeforeQueuedBindDispatchPreventsServiceCreation() {
+        val policy = AutoStartPolicy()
+        policy.load(0L, true)
+        val launch = requireNotNull(policy.admission())
+        val admission = BootResumeActivityAdmission(createdAtMillis = 100L)
+        assertTrue(admission.admit(visible = true, nowMillis = 110L))
+        policy.request(false)
+        assertFalse(admission.acceptServiceBind(true, policy.currentAdmission(launch), 120L))
+        assertFalse(admission.bindAccepted)
+    }
+
+    @Test fun acceptedBindKeepsPcmConfirmationAfterNoticeDismissalOrLaterPolicyOptOut() {
+        val policy = AutoStartPolicy()
+        policy.load(0L, true)
+        val launch = requireNotNull(policy.admission())
+        var noticeAllowsLaunch = true
+        val admission = BootResumeActivityAdmission(createdAtMillis = 100L)
+        assertTrue(admission.admit(visible = true, nowMillis = 110L))
+        assertTrue(admission.acceptServiceBind(true, noticeAllowsLaunch && policy.currentAdmission(launch), 120L))
+        noticeAllowsLaunch = false // First PCM may dismiss the reminder before service connection delivery.
+        policy.request(false) // Opt-out affects future starts, not this accepted binding.
+        assertFalse(noticeAllowsLaunch && policy.currentAdmission(launch))
+        assertTrue(admission.current(130L))
+        assertTrue(admission.confirmCapture(140L))
+        assertEquals(500L, admission.successRemainingMillis(140L))
+    }
+
+    @Test fun successHoldBeginsOnlyAfterAdmittedCaptureAndOutlivesAdmissionDeadline() {
+        val admission = BootResumeActivityAdmission(createdAtMillis = 100L)
+        assertFalse(admission.confirmCapture(110L))
+        assertEquals(0L, admission.successRemainingMillis(110L))
+        assertTrue(admission.admit(visible = true, nowMillis = 15_090L))
+        assertTrue(admission.confirmCapture(15_099L))
+        assertFalse(admission.confirmCapture(15_100L))
+        assertEquals(499L, admission.successRemainingMillis(15_100L))
+        assertEquals(1L, admission.successRemainingMillis(15_598L))
+        assertEquals(0L, admission.successRemainingMillis(15_599L))
+    }
+
+    @Test fun departureOrTeardownRetiresSuccessHoldAndLateConfirmation() {
+        val admission = BootResumeActivityAdmission(createdAtMillis = 100L)
+        assertTrue(admission.admit(visible = true, nowMillis = 110L))
+        assertTrue(admission.confirmCapture(120L))
+        admission.abandon()
+        assertEquals(0L, admission.successRemainingMillis(130L))
+        assertFalse(admission.confirmCapture(130L))
+        val next = BootResumeActivityAdmission(createdAtMillis = 200L)
+        assertFalse(next.captureConfirmed)
+        assertEquals(0L, next.successRemainingMillis(210L))
+    }
+
     @Test fun initialSleepPauseCanWaitForActualForegroundWithoutBindingWhileHidden() {
         val admission = BootResumeActivityAdmission(createdAtMillis = 100L)
         // First resume, queued sleep pause, then second resume before the first real draw.
@@ -35,7 +84,7 @@ class BootResumeActivityTest {
         assertFalse(admission.departed(110L))
         assertEquals(10L, admission.remainingMillis(15_090L))
         // No Handler timeout has run while asleep; the resume itself checks elapsed time.
-        assertFalse(admission.withinDeadline(15_100L)) // Also used by the queued Start admission callback.
+        assertFalse(admission.withinDeadline(15_100L))
         assertFalse(admission.observeForeground(visible = true, nowMillis = 15_100L))
         assertFalse(admission.admit(visible = true, nowMillis = 15_101L))
         assertEquals(0L, admission.remainingMillis(20_000L))
@@ -45,7 +94,7 @@ class BootResumeActivityTest {
     @Test fun stopRevokesWaitingLaunchBeforeAnyVisibleAdmission() {
         val admission = BootResumeActivityAdmission(createdAtMillis = 100L)
         var allowed = true
-        val launch = BootResumeLaunch("boot", 100L, { allowed }, null)
+        val launch = BootResumeLaunch("boot", 100L, { allowed })
         assertFalse(admission.departed(110L))
         allowed = false
         assertFalse(admission.current(120L, launch.current(0L)))
@@ -57,7 +106,7 @@ class BootResumeActivityTest {
         val owners = StartedMainOwners()
         var visible = false
         owners.start(Any()) { visible }
-        val launch = BootResumeLaunch("boot", 100L, { true }, null, owners.visibilityRevision)
+        val launch = BootResumeLaunch("boot", 100L, { true }, owners.visibilityRevision)
         val admission = BootResumeActivityAdmission(createdAtMillis = 100L)
         assertFalse(owners.refreshVisibility())
         assertTrue(admission.current(110L, launch.current(owners.visibilityRevision)))
@@ -150,86 +199,6 @@ class BootResumeActivityTest {
         assertFalse(confirmation.active)
     }
 
-    @Test fun explicitOffTestIsOneShotAndNeverConsumesWhileRecording() {
-        val arm = RestartTestArm(100L)
-        assertFalse(arm.consume(101L, stopped = false))
-        assertTrue(arm.available(101L))
-        assertTrue(arm.consume(102L, stopped = true))
-        assertFalse(arm.consume(103L, stopped = true))
-    }
-
-    @Test fun noOpStopOrMainReturnRevokesOffTestBeforeConsumption() {
-        val arm = RestartTestArm(100L)
-        // Every accepted control invalidates even when durable OFF did not change.
-        arm.cancel()
-        assertFalse(arm.consume(101L, stopped = true))
-    }
-
-    @Test fun offTestExpiresAndRejectsClockRegression() {
-        val arm = RestartTestArm(100L)
-        assertFalse(arm.available(99L))
-        assertTrue(arm.available(120_100L))
-        assertFalse(arm.consume(120_101L, stopped = true))
-    }
-
-    @Test fun consumedTestStartUsesNewCaptureProofInsteadOfConsumedArm() {
-        val arm = RestartTestArm(100L)
-        assertTrue(arm.consume(101L, stopped = true))
-        arm.cancel() // The canonical Start also runs accepted-control invalidation.
-        var finished = false
-        val proof = BootCaptureConfirmation(200L) { finished = true }
-        proof.arm(2L, 3L) // Registered after Start, not against its previous generation.
-        assertTrue(proof.accepts(2L, 3L, 201L, 64))
-        proof.deliver(current = true)
-        assertTrue(finished)
-    }
-
-    @Test fun newerStopStillRevokesConsumedTestCaptureProof() {
-        val arm = RestartTestArm(100L)
-        assertTrue(arm.consume(101L, stopped = true))
-        var finished = false
-        val proof = BootCaptureConfirmation(200L) { finished = true }
-        proof.arm(2L, 3L)
-        arm.cancel()
-        assertFalse(proof.accepts(2L, 4L, 201L, 64))
-        proof.deliver(current = false)
-        assertFalse(finished)
-    }
-
-    @Test fun lifecycleCancellationDuringDurableReadCannotResurrectAnArm() {
-        val tests = RestartTestRegistry()
-        val epoch = tests.invalidate()
-        tests.invalidate() // Main returned while the durable read was outstanding.
-        assertFalse(tests.publish(epoch, RestartTestArm(100L)) { true })
-        assertEquals(null, tests.current())
-    }
-
-    @Test fun cancellationAtPublicationRevokesTheExactToken() {
-        val tests = RestartTestRegistry()
-        val epoch = tests.invalidate()
-        val arm = RestartTestArm(100L)
-        var checks = 0
-        assertFalse(tests.publish(epoch, arm) {
-            if (++checks == 2) tests.invalidate()
-            checks == 1
-        })
-        assertFalse(arm.available(101L))
-        assertEquals(null, tests.current())
-    }
-
-    @Test fun delayedOldArmOrCanceledCoroutineCannotRetireNewerArm() {
-        val tests = RestartTestRegistry()
-        val oldEpoch = tests.invalidate()
-        val old = RestartTestArm(100L)
-        val newEpoch = tests.invalidate()
-        val current = RestartTestArm(101L)
-        assertTrue(tests.publish(newEpoch, current) { true })
-        assertFalse(tests.publish(oldEpoch, old) { true })
-        tests.retire(old)
-        assertTrue(tests.current() === current)
-        assertTrue(current.available(102L))
-    }
-
     @Test fun stoppingOneMainDoesNotPretendAnotherVisibleMainIsBackground() {
         val owners = StartedMainOwners()
         val first = Any()
@@ -241,80 +210,6 @@ class BootResumeActivityTest {
         assertTrue(owners.stop(second))
         assertFalse(owners.anyStarted)
         assertFalse(owners.stop(second))
-    }
-
-    @Test fun acceptedControlAfterOwnStartRevokesItsSuccessAndFailureOwnership() {
-        val tests = RestartTestRegistry()
-        val arm = RestartTestArm(100L)
-        val epoch = tests.invalidate()
-        assertTrue(tests.publish(epoch, arm) { true })
-        assertTrue(arm.consume(101L, stopped = true))
-        tests.invalidate() // Canonical Start succeeds, then snapshots its new control epoch.
-        val ownStartEpoch = tests.revision()
-        assertEquals(ownStartEpoch, tests.revision())
-        tests.invalidate() // Even an accepted no-op Stop/selection owns a newer boundary.
-        assertFalse(ownStartEpoch == tests.revision())
-    }
-
-    @Test fun cancellationRemovalWinsEvenBeforeTokenCancellationFinishes() {
-        val removed = CountDownLatch(1)
-        val finishCancel = CountDownLatch(1)
-        val failure = AtomicReference<Throwable?>()
-        val registry = RestartTestRegistry { token ->
-            removed.countDown()
-            check(finishCancel.await(2, TimeUnit.SECONDS))
-            token.cancel()
-        }
-        val token = RestartTestArm(100L)
-        assertTrue(registry.publish(registry.revision(), token) { true })
-        val cancel = Thread {
-            try { registry.invalidate() } catch (error: Throwable) { failure.set(error) }
-        }
-        cancel.start()
-        try {
-            assertTrue(removed.await(2, TimeUnit.SECONDS))
-            assertTrue(token.available(101L)) // Cancellation is deliberately paused after removal.
-            assertFalse(registry.claim(token, 101L, stopped = true))
-        } finally {
-            finishCancel.countDown()
-            cancel.join(2_000L)
-        }
-        assertFalse(cancel.isAlive)
-        failure.get()?.let { throw it }
-    }
-
-    @Test fun claimWinningAcceptsCommandBeforeLaterNavigationCancellation() {
-        val registry = RestartTestRegistry()
-        val token = RestartTestArm(100L)
-        assertTrue(registry.publish(registry.revision(), token) { true })
-        val admitted = registry.claim(token, 101L, stopped = true)
-        registry.invalidate()
-        registry.retire(token)
-        // Accepted commands own completion; navigation cannot retroactively unaccept this Start.
-        assertTrue(admitted)
-        assertFalse(registry.claim(token, 102L, stopped = true))
-    }
-
-    @Test fun exactOwnAcceptedEpochCannotAdoptLaterMainCancellation() {
-        val accepted = RestartTestResult.Started(RestartTestAdmission(4L, 8L))
-        assertEquals(accepted, currentRestartTestResult(accepted, 8L, 4L, visible = true, healthy = true))
-        assertEquals(RestartTestResult.Superseded,
-            currentRestartTestResult(accepted, 9L, 4L, visible = true, healthy = true))
-    }
-
-    @Test fun rejectedStartStillReportsAfterClaimWithoutRevivingArm() {
-        val registry = RestartTestRegistry()
-        val token = RestartTestArm(100L)
-        assertTrue(registry.publish(registry.revision(), token) { true })
-        val epoch = registry.revision()
-        assertTrue(registry.claim(token, 101L, stopped = true))
-        val rejected = RestartTestResult.Rejected(epoch, "The selected buffer is unavailable")
-        assertEquals(rejected,
-            currentRestartTestResult(rejected, epoch, 0L, visible = true, healthy = false))
-        assertEquals(null, registry.current())
-        registry.invalidate()
-        assertEquals(RestartTestResult.Superseded,
-            currentRestartTestResult(rejected, registry.revision(), 0L, visible = true, healthy = false))
     }
 
     @Test fun startedHiddenMainDoesNotSuppressTheBootHelper() {
@@ -341,7 +236,7 @@ class BootResumeActivityTest {
     }
 
     @Test fun mainBecomingVisibleRetiresAlreadyQueuedOrdinaryBootLaunch() {
-        val boot = BootResumeLaunch("boot", 100L, { true }, null)
+        val boot = BootResumeLaunch("boot", 100L, { true })
         val pending = AtomicReference<BootResumeLaunch?>(boot)
         retirePendingBootLaunch(pending, mainVisible = false)
         assertTrue(pending.get() === boot)
@@ -352,10 +247,4 @@ class BootResumeActivityTest {
         assertEquals(null, pending.get())
     }
 
-    @Test fun ordinaryVisibilitySuppressionDoesNotReplaceExplicitTestCancellation() {
-        val test = BootResumeLaunch("test", 100L, { true }, RestartTestArm(100L))
-        val pending = AtomicReference<BootResumeLaunch?>(test)
-        retirePendingBootLaunch(pending, mainVisible = true)
-        assertTrue(pending.get() === test)
-    }
 }

@@ -28,7 +28,6 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import org.json.JSONArray
 import org.json.JSONObject
-import smallthingz.ui.components.NativeButton
 import smallthingz.ui.text.font.createFontFamilyResolver
 import smallthingz.ui.text.view.ParagraphView
 import smallthingz.ui.unit.Density
@@ -58,46 +57,34 @@ internal fun verifyNativeRestartPermissionUi(instrumentation: Instrumentation, r
         for (dark in listOf(true, false)) {
             val theme = if (dark) "dark" else "light"
             val palette = ReverbPalette.fallback(dark)
-            var opened = 0
             val content = main {
-                BootResumeContentView(host, palette) { opened++ }.also {
+                BootResumeContentView(host, palette).also {
                     host.fixtureRoot.removeAllViews()
                     host.fixtureRoot.addView(it, ViewGroup.LayoutParams(-1, -1))
                     androidx.core.view.ViewCompat.requestApplyInsets(it)
                 }
             }
-            for (failed in listOf(false, true)) {
-                if (failed) main { content.showOpenFailure(SecurityException("Permission unavailable")) }
+            for (completed in listOf(false, true)) {
+                if (completed) main { content.showSuccess() }
                 repeat(3) { awaitNativeParityDraw(instrumentation, content) }
                 val entry = main {
+                    val brand = restartUiViews(content).filterIsInstance<ReverbBrandMarkView>().single()
+                    check(brand.isShown && brand.contentDescription == context.getString(R.string.app_name))
                     val title = restartUiViews(content).filterIsInstance<TextView>().single {
-                        it.text.toString() == context.getString(R.string.boot_resume_title)
+                        it.text.toString() == context.getString(if (completed) R.string.boot_resume_success else R.string.boot_resume_in_progress)
                     }
                     check(title.isAccessibilityHeading && title.isShown)
-                    val action = restartUiViews(content).filterIsInstance<NativeButton>().single()
-                    check(action.isEnabled && action.isClickable)
-                    action.requestRectangleOnScreen(Rect(0, 0, action.width, action.height), true)
+                    check(restartUiViews(content).none { it.isClickable })
                     val progress = restartUiViews(content).filterIsInstance<ProgressBar>().single()
-                    check((progress.visibility == View.GONE) == failed)
-                    if (failed) check(restartUiViews(content).filterIsInstance<TextView>().any {
-                        it.text.toString().contains("Permission unavailable")
-                    })
-                    JSONObject().put("name", "boot-$theme-${if (failed) "failure" else "pending"}")
-                        .put("heading_accessible", true).put("open_action_enabled", true)
-                        .put("failure_detail_preserved", failed).put("boot_activity_launched", false)
+                    check((progress.visibility == View.GONE) == completed)
+                    JSONObject().put("name", "boot-$theme-${if (completed) "success" else "pending"}")
+                        .put("heading_accessible", true).put("open_action_present", false)
+                        .put("reverb_brand_visible", true).put("cancel_action_present", false)
+                        .put("boot_activity_launched", false)
                 }
                 val bitmap = captureNativeParityContent(instrumentation, host) { content }
                 try { saveNativeParityBitmap(directory, entry.getString("name") + "-hardware.png", bitmap) }
                 finally { bitmap.recycle() }
-                main {
-                    val action = restartUiViews(content).filterIsInstance<NativeButton>().single()
-                    val visible = Rect()
-                    check(action.getGlobalVisibleRect(visible) && visible.width() == action.width && visible.height() == action.height)
-                    if (failed) {
-                        check(action.performAccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, null))
-                        check(opened == 1)
-                    }
-                }
                 cases.put(entry)
             }
             var dismissed = 0
@@ -181,42 +168,38 @@ internal fun verifyNativeRestartPermissionUi(instrumentation: Instrumentation, r
         val stressed = main {
             val configuration = Configuration(host.resources.configuration).apply { fontScale = 1.8f }
             val styled = ContextThemeWrapper(host.createConfigurationContext(configuration), R.style.Theme_Reverb_Dark)
-            BootResumeContentView(styled, ReverbPalette.fallback(true)) {}.also {
+            BootResumeContentView(styled, ReverbPalette.fallback(true)).also {
                 host.fixtureRoot.removeAllViews()
                 val density = styled.resources.displayMetrics.density
                 host.fixtureRoot.addView(it, ViewGroup.LayoutParams(
                     minOf(host.fixtureRoot.width, (320 * density).toInt()),
                     minOf(host.fixtureRoot.height, (180 * density).toInt())))
-                it.showOpenFailure(SecurityException("Permission unavailable. Review access in Android settings."))
+                it.showSuccess()
                 androidx.core.view.ViewCompat.requestApplyInsets(it)
             }
         }
         repeat(3) { awaitNativeParityDraw(instrumentation, stressed) }
         main {
-            val action = restartUiViews(stressed).filterIsInstance<NativeButton>().single()
-            action.requestRectangleOnScreen(Rect(0, 0, action.width, action.height), true)
+            val status = restartUiViews(stressed).filterIsInstance<TextView>().single()
+            status.requestRectangleOnScreen(Rect(0, 0, status.width, status.height), true)
         }
         val stressBitmap = captureNativeParityContent(instrumentation, host) { stressed }
         try { saveNativeParityBitmap(directory, "boot-compact-large-font-hardware.png", stressBitmap) }
         finally { stressBitmap.recycle() }
         cases.put(main {
-            val action = restartUiViews(stressed).filterIsInstance<NativeButton>().single()
+            val status = restartUiViews(stressed).filterIsInstance<TextView>().single()
             val visible = Rect()
-            check(action.getGlobalVisibleRect(visible) && visible.width() == action.width && visible.height() == action.height)
+            check(status.getGlobalVisibleRect(visible) && visible.width() == status.width && visible.height() == status.height)
             val scroll = restartUiViews(stressed).filterIsInstance<ScrollView>().single()
             check(scroll.scrollY > 0)
-            val error = restartUiViews(stressed).filterIsInstance<TextView>().single {
-                it.text.toString().contains("Review access in Android settings.")
-            }
-            val layout = checkNotNull(error.layout)
-            check(layout.lineCount > 1)
+            val layout = checkNotNull(status.layout)
             for (line in 0 until layout.lineCount) {
                 check(layout.getEllipsisCount(line) == 0 && layout.getLineLeft(line) >= 0f && layout.getLineRight(line) <= layout.width)
             }
             JSONObject().put("name", "boot-compact-large-font").put("font_scale", 1.8)
                 .put("width", stressed.width).put("height", stressed.height).put("scroll_y", scroll.scrollY)
-                .put("open_action_fully_visible", true).put("error_lines", layout.lineCount)
-                .put("error_horizontal_clipping", false).put("global_configuration_changed", false)
+                .put("status_fully_visible", true).put("status_lines", layout.lineCount)
+                .put("status_horizontal_clipping", false).put("global_configuration_changed", false)
         })
         result.put("passed", true)
     } catch (error: Throwable) { failure = error }
