@@ -1,0 +1,6 @@
+- Add optional recording resume after restart and a reminder to open Reverb.
+- Record microphone silencing and input restarts in Incidents.
+- Fix playback, trimming, and fine seeking after playback becomes idle.
+- Improve Library expansion, touch targets, and keyboard handling in Settings.
+- Keep status icons readable during theme changes and clarify notification settings.
+- Improve protection of recordings during saving and storage changes.

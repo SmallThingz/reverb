@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.3-rc4 — 2026-11-15 (prerelease)
+
+- Add optional recording resume after restart and a reminder to open Reverb.
+- Record microphone silencing and input restarts in Incidents.
+- Fix playback, trimming, and fine seeking after playback becomes idle.
+- Improve Library expansion, touch targets, and keyboard handling in Settings.
+- Keep status icons readable during theme changes and clarify notification settings.
+- Improve protection of recordings during saving and storage changes.
+
 ## 0.1.3-rc3 — 2026-11-07 (prerelease)
 
 - Save recordings in the background. Keep source audio until the saved file is verified, including after a restart or buffer clear.
