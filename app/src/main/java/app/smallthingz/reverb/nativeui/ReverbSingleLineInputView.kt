@@ -21,7 +21,6 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Typeface
 import android.os.Build
-import android.os.LocaleList
 import android.os.Bundle
 import android.os.Handler
 import android.text.TextUtils
@@ -29,16 +28,12 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.view.inputmethod.InputContentInfo
 import android.text.Editable
 import android.text.InputType
-import android.text.Layout
 import android.text.Selection
 import android.text.Spanned
 import android.text.TextWatcher
-import android.text.method.TextKeyListener
 import android.text.style.LineHeightSpan
 import android.util.TypedValue
-import android.view.Gravity
 import android.view.KeyEvent
-import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
@@ -110,53 +105,7 @@ internal class ReverbSingleLineInputView private constructor(
 
 
     init {
-        // The cursor-only style does not inherit EditText's touch-mode focus default.
-        isFocusableInTouchMode = true
-        background = null
-        foreground = null
-        // AndroidComposeView opts out of the platform overlay; cursor/selection own field focus.
-        defaultFocusHighlightEnabled = false
-        setPadding(0, 0, 0, 0)
-        setCompoundDrawablePadding(0)
-        minimumWidth = 0
-        minimumHeight = 0
-        setMinWidth(0)
-        setMinHeight(0)
-        setAutoSizeTextTypeWithDefaults(AUTO_SIZE_TEXT_TYPE_NONE)
-        includeFontPadding = false
-        setFallbackLineSpacing(true)
-        gravity = Gravity.TOP or Gravity.START
-        textAlignment = View.TEXT_ALIGNMENT_GRAVITY
-        textDirection = View.TEXT_DIRECTION_FIRST_STRONG
-        paintFlags = Paint.ANTI_ALIAS_FLAG
-        paint.hinting = Paint.HINTING_ON
-        paint.isSubpixelText = false
-        paint.isLinearText = false
-        paint.textSkewX = 0f
-        paint.isFakeBoldText = false
-        fontFeatureSettings = ""
-        textScaleX = 1f
-        textLocales = LocaleList.getDefault()
-        breakStrategy = android.graphics.text.LineBreaker.BREAK_STRATEGY_SIMPLE
-        hyphenationFrequency = Layout.HYPHENATION_FREQUENCY_NONE
-        justificationMode = android.graphics.text.LineBreaker.JUSTIFICATION_MODE_NONE
-        if (Build.VERSION.SDK_INT >= 33) {
-            lineBreakStyle = android.graphics.text.LineBreakConfig.LINE_BREAK_STYLE_NONE
-            lineBreakWordStyle = android.graphics.text.LineBreakConfig.LINE_BREAK_WORD_STYLE_NONE
-        }
-        if (Build.VERSION.SDK_INT >= 35) {
-            setUseBoundsForWidth(false)
-            setShiftDrawingOffsetForStartOverhang(false)
-        }
-        // Hints never install an input-type-specific key listener/filter. BasicTextField's raw
-        // String contract admits Unicode, punctuation and pasted newlines even with Ascii hints.
-        keyListener = TextKeyListener.getInstance(false, TextKeyListener.Capitalize.NONE)
-        filters = emptyArray()
-        setSingleLine(true)
-        transformationMethod = null // Source VisualTransformation.None retains raw newlines.
-        setHorizontallyScrolling(true)
-        setSelectAllOnFocus(false)
-        importantForAutofill = IMPORTANT_FOR_AUTOFILL_NO
+        editing.initializeUnrestrictedSingleLineEditor()
         applyImeHints()
         setOnEditorActionListener { _, action, event ->
             // Android16 calls this for hardware DOWN and UP. Hardware Enter is handled once by

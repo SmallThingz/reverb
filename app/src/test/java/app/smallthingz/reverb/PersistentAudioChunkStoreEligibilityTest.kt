@@ -3,7 +3,6 @@ package app.smallthingz.reverb
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
-import java.nio.file.Files
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -249,13 +248,6 @@ class PersistentAudioChunkStoreEligibilityTest {
         return output.toByteArray()
     }
 
-    private fun withRoot(block: (File) -> Unit) {
-        val parent = File("build/tmp/eligibility-tests").apply { mkdirs() }
-        val root = Files.createTempDirectory(parent.toPath(), "store-").toFile()
-        try {
-            block(root)
-        } finally {
-            root.deleteRecursively()
-        }
-    }
+    private fun withRoot(block: (File) -> Unit) =
+        withTestDirectory("build/tmp/eligibility-tests", "store-", block)
 }

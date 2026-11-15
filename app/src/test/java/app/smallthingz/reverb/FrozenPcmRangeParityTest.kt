@@ -4,7 +4,6 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import java.nio.file.Files
 import java.util.zip.CRC32
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -233,9 +232,6 @@ class FrozenPcmRangeParityTest {
         }
     }
 
-    private fun withRoot(block: (File) -> Unit) {
-        val parent = File("build/tmp/frozen-pcm-range-parity").apply { mkdirs() }
-        val root = Files.createTempDirectory(parent.toPath(), "case-").toFile()
-        try { block(root) } finally { root.deleteRecursively() }
-    }
+    private fun withRoot(block: (File) -> Unit) =
+        withTestDirectory("build/tmp/frozen-pcm-range-parity", "case-", block)
 }

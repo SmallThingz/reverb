@@ -17,11 +17,8 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class PcmStreamContinuityTest {
-    private inline fun withRoot(block: (File) -> Unit) {
-        val parent = File("build/tmp/pcm-stream-continuity").apply { mkdirs() }
-        val root = Files.createTempDirectory(parent.toPath(), "store-").toFile()
-        try { block(root) } finally { root.deleteRecursively() }
-    }
+    private inline fun withRoot(block: (File) -> Unit) =
+        withTestDirectory("build/tmp/pcm-stream-continuity", "store-", block)
 
     private fun pcm(frames: Int, channels: Int, format: PcmSampleFormat, signal: (Int) -> Double): ByteArray =
         ByteBuffer.allocate(frames * channels * format.bytesPerSample).order(ByteOrder.LITTLE_ENDIAN).apply {

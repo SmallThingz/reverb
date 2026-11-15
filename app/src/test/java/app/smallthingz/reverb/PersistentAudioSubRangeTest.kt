@@ -523,13 +523,6 @@ class PersistentAudioSubRangeTest {
         return field.get(this) as List<PersistentAudioChunkStore.Segment>
     }
 
-    private fun withRoot(block: (File) -> Unit) {
-        val parent = File("build/tmp/subrange-tests").apply { mkdirs() }
-        val root = Files.createTempDirectory(parent.toPath(), "store-").toFile()
-        try {
-            block(root)
-        } finally {
-            root.deleteRecursively()
-        }
-    }
+    private fun withRoot(block: (File) -> Unit) =
+        withTestDirectory("build/tmp/subrange-tests", "store-", block)
 }

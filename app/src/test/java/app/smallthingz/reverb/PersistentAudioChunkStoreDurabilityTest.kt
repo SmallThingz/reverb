@@ -2085,13 +2085,6 @@ class PersistentAudioChunkStoreDurabilityTest {
         return ByteArray(size) { index -> ((index * 29 + index / 17 + 7) and 0xff).toByte() }
     }
 
-    private inline fun withStoreRoot(block: (File) -> Unit) {
-        val parent = File("build/tmp/durability-tests").apply { mkdirs() }
-        val root = Files.createTempDirectory(parent.toPath(), "store-").toFile()
-        try {
-            block(root)
-        } finally {
-            root.deleteRecursively()
-        }
-    }
+    private inline fun withStoreRoot(block: (File) -> Unit) =
+        withTestDirectory("build/tmp/durability-tests", "store-", block)
 }

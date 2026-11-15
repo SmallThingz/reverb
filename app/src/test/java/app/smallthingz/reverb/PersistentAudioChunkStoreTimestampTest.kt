@@ -4,7 +4,6 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import java.nio.file.Files
 import java.util.zip.CRC32
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -274,13 +273,6 @@ class PersistentAudioChunkStoreTimestampTest {
         return output.toByteArray()
     }
 
-    private fun withRoot(block: (File) -> Unit) {
-        val parent = File("build/tmp/chunk-timestamp-tests").apply { mkdirs() }
-        val root = Files.createTempDirectory(parent.toPath(), "store-").toFile()
-        try {
-            block(root)
-        } finally {
-            root.deleteRecursively()
-        }
-    }
+    private fun withRoot(block: (File) -> Unit) =
+        withTestDirectory("build/tmp/chunk-timestamp-tests", "store-", block)
 }
