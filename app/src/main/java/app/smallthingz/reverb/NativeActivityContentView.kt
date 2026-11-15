@@ -1,6 +1,7 @@
 package app.smallthingz.reverb
 
 import smallthingz.ui.components.NativeWindowInsetsBinding
+import smallthingz.ui.components.NativeStatusBarProtection
 
 import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.text.view.NativePlainTextViewGeometry
@@ -47,6 +48,7 @@ internal class NativeActivityContentView(
     private val onThemeChanged: (AppThemeMode?) -> Unit,
     private val registerDirectoryResult: ((Uri?) -> Unit) -> NativeDirectoryPickerRegistration,
     private val openApplicationSettings: () -> Unit,
+    private val statusBarProtection: NativeStatusBarProtection = createReverbStatusBarProtection(activity),
 ) : ViewGroup(activity), AutoCloseable {
     private var environment = initialEnvironment
     private var snapshot = owner.snapshot
@@ -85,6 +87,7 @@ internal class NativeActivityContentView(
         transformPolicy = hostTextTransforms)
     private val insets = NativeWindowInsetsBinding(this) { value ->
         windowInsets = value
+        statusBarProtection.updateInsets(value)
         deliverInsets()
     }
 
@@ -98,6 +101,7 @@ internal class NativeActivityContentView(
         defaultFocusHighlightEnabled = false
         if (Build.VERSION.SDK_INT >= 29) isForceDarkAllowed = false
         background = noise
+        foreground = statusBarProtection
         sourceFocus = NativeSourceFocusPolicy(this,
             takeOwnerFocus = { super.requestFocus(FOCUS_DOWN, null) },
             clearOwnerFocus = { super.clearFocus() })
@@ -367,6 +371,7 @@ internal class NativeActivityContentView(
         release(::retireLoading)
         release(::retireOnboarding)
         release(insets::close)
+        release { foreground = null }
         failure?.let { throw it }
     }
     private fun dp(value: Int) = (value * environment.textDensity.density).roundToInt()

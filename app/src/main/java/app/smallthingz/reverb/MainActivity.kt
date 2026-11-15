@@ -1,6 +1,7 @@
 package app.smallthingz.reverb
 
 import smallthingz.ui.components.NativeModalWindowRuntime
+import smallthingz.ui.components.NativeStatusBarProtection
 
 import android.content.ActivityNotFoundException
 import android.app.KeyguardManager
@@ -44,6 +45,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var themePresentation: ThemePresentationOwner
     private lateinit var runtime: NativeModalWindowRuntime
     private lateinit var content: NativeActivityContentView
+    private lateinit var statusBarProtection: NativeStatusBarProtection
     private var themeJob: Job? = null
     private var closed = false
     private var renderedDark: Boolean? = null
@@ -86,6 +88,8 @@ class MainActivity : ComponentActivity() {
         val configuredMode = getConfiguredThemeMode(this)
         setTheme(if (configuredMode.nativeIsDark(systemDark())) R.style.Theme_Reverb_Dark else R.style.Theme_Reverb_Light)
         super.onCreate(savedInstanceState)
+        statusBarProtection = createReverbStatusBarProtection(this)
+        configureWindow()
         ViewModelProvider(this)[RecordingRenameConsentHostViewModel::class.java]
         playbackRequest = if (savedInstanceState?.containsKey(STATE_PLAYBACK_REQUEST) == true)
             RecordingPlaybackRequest.fromBundle(savedInstanceState.getBundle(STATE_PLAYBACK_REQUEST))
@@ -157,9 +161,9 @@ class MainActivity : ComponentActivity() {
                     AppFeedbackCenter.post(getString(R.string.no_app_available), FeedbackTone.ERROR)
                 }
             },
+            statusBarProtection = statusBarProtection,
         )
         setContentView(content)
-        configureWindow()
         applyWindowPalette(dark)
         content.bind(owner.snapshot, environment)
         owner.attach()
@@ -228,7 +232,7 @@ class MainActivity : ComponentActivity() {
     private fun publishTheme() {
         if (closed) return
         val dark = themePresentation.mode.nativeIsDark(systemDark())
-        // Request the independently rendered system icons before rebinding the content palette.
+        // Navigation icons still follow the selected theme; status icons remain fixed.
         applyWindowPalette(dark)
         if (renderedDark != dark) {
             renderedDark = dark
@@ -244,12 +248,12 @@ class MainActivity : ComponentActivity() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         window.statusBarColor = Color.TRANSPARENT
         window.navigationBarColor = Color.TRANSPARENT
+        statusBarProtection.applyWindowAppearance(window)
     }
 
     private fun applyWindowPalette(dark: Boolean) {
         if (windowPaletteDark == dark) return
         WindowCompat.getInsetsController(window, content).apply {
-            isAppearanceLightStatusBars = !dark
             isAppearanceLightNavigationBars = !dark
         }
         windowPaletteDark = dark

@@ -15,7 +15,8 @@ internal class ReverbAboutDialog(
         this(anchor, appearance, 0, onDismiss)
 
     private lateinit var content: ReverbAboutContentView
-    private val dialog = NativeFloatingDialog(anchor, appearance.density.density, onDismiss) { context, runtime, dismiss ->
+    private val dialog = NativeFloatingDialog(anchor, appearance.density.density, onDismiss,
+        statusBarProtection = createReverbStatusBarProtection(anchor.context)) { context, runtime, dismiss ->
         val body = createReverbAboutContent(context, appearance, dismiss, runtime, restoredScrollPosition)
         content = body
         NativeFloatingDialogContent(body, body.predictiveMotionTarget, body::bindWindowAccessibility, body::dispose)

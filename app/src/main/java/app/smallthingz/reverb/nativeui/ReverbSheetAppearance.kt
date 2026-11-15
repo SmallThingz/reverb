@@ -18,7 +18,8 @@ internal fun createReverbActionSheet(
         NativeActionSheetIcon(glyph,
             { window, node -> glyph.bindDescriptionAccessibility(window, { node(glyph) }, { !node(glyph).hidden }) },
             { color -> glyph.bind(ReverbIcon.Close, color) }),
-        ReverbNoiseDrawable(anchor.resources))
+        ReverbNoiseDrawable(anchor.resources),
+        statusBarProtection = createReverbStatusBarProtection(anchor.context))
 }
 
 internal fun NativeActionSheet.bindEnvironment(environment: ReverbViewEnvironment) =
