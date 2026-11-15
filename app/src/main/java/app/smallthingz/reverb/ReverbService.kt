@@ -2847,7 +2847,6 @@ open class ReverbService : Service() {
     }
 
     fun cancelCurrentExport(): Boolean = requestExportCancellation(
-        preserveVerifiedOutput = false,
         reportFailure = false,
         requireOpenAdmission = true,
     )
@@ -2859,7 +2858,6 @@ open class ReverbService : Service() {
     }
 
     private fun requestExportCancellation(
-        preserveVerifiedOutput: Boolean,
         reportFailure: Boolean,
         requireOpenAdmission: Boolean = false,
     ): Boolean {
@@ -2877,7 +2875,6 @@ open class ReverbService : Service() {
                 return@synchronized false
             }
 
-            if (preserveVerifiedOutput) token.preserveVerifiedOutput.set(true)
             if (reportFailure) token.cancellationReportsFailure.set(true)
             token.cancelled.set(true)
             val future = activeExportFuture
@@ -5355,7 +5352,6 @@ open class ReverbService : Service() {
         if ((fgsType and ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC) != 0) {
             Log.e(TAG, "Data-sync foreground-service timeout; preserving source audio and verified output")
             requestExportCancellation(
-                preserveVerifiedOutput = true,
                 reportFailure = true,
             )
             if (requestBufferClearCancellation(reportFailure = true) && !appUiForeground) {
@@ -6095,7 +6091,6 @@ open class ReverbService : Service() {
         // Once this flips, publication/final metadata owns completion and Cancel loses the race.
         val publicationStarted: AtomicBoolean = AtomicBoolean(false),
         val committed: AtomicBoolean = AtomicBoolean(false),
-        val preserveVerifiedOutput: AtomicBoolean = AtomicBoolean(false),
         // User Cancel is a neutral terminal state. Platform/system cancellation is a failed save
         // and must remain visible through the receiver's UI/notification fallback.
         val cancellationReportsFailure: AtomicBoolean = AtomicBoolean(false),

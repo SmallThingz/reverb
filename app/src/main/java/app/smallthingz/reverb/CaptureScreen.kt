@@ -97,7 +97,7 @@ private fun ensureCaptureResultNotificationChannel(context: Context) {
 }
 
 class NotifyFileReceiver(
-    private val context: Context,
+    context: Context,
 ) : ReverbService.AudioFileReceiver {
     private val appContext = context.applicationContext
     override fun fileReady(recording: RecordingEntity) {

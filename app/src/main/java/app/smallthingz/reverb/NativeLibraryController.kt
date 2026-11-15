@@ -86,9 +86,7 @@ internal class NativeLibraryController(
     private val pendingDeletions = ObservedRecordingMap(::visibleChanged)
     private val localOperationBusyIds = LinkedHashSet<String>()
     private val deletionState = LibraryDeletionState()
-    private var showRenameDialog by observed(false)
     private var renameRecording by observed<RecordingEntity?>(null)
-    private var showInfoDialog by observed(false)
     private var infoRecording by observed<RecordingEntity?>(null)
     private var expandedRecordingOwner by observed<InlinePlaybackRowOwner?>(null)
     private var trimRequestRecordingId by observed<String?>(null)
@@ -250,9 +248,7 @@ internal class NativeLibraryController(
             contextMenuRecordingId = null
             selectedIds.clear()
             syncSelectionActive()
-            showRenameDialog = false
             renameRecording = null
-            showInfoDialog = false
             infoRecording = null
             setExpandedRecording(null)
             clearUndoNotice()
@@ -375,8 +371,8 @@ internal class NativeLibraryController(
             acceptsDeletions = deletionState.acceptsDeletions,
             undo = undoNotice,
             menuRecording = contextMenuRecordingId?.let { id -> visible.firstOrNull { it.id == id } },
-            renameRecording = renameRecording.takeIf { showRenameDialog },
-            infoRecording = infoRecording.takeIf { showInfoDialog },
+            renameRecording = renameRecording,
+            infoRecording = infoRecording,
         ))
     }
 
@@ -416,12 +412,12 @@ internal class NativeLibraryController(
     fun rename(recording: RecordingEntity) {
         if (pendingSaveOwns(recording)) return
         contextMenuRecordingId = null; setExpandedRecording(null)
-        renameRecording = recording; showRenameDialog = true
+        renameRecording = recording
     }
     fun info(recording: RecordingEntity) {
         if (pendingSaveOwns(recording)) return
         contextMenuRecordingId = null; setExpandedRecording(null)
-        infoRecording = recording; showInfoDialog = true
+        infoRecording = recording
     }
     fun share(recording: RecordingEntity) { contextMenuRecordingId = null; shareRecordings(listOf(recording)) }
     fun shareSelection() = shareRecordings(selectedIds.values.toList())
@@ -465,7 +461,7 @@ internal class NativeLibraryController(
                 if (navigationAllowed()) refresh(showSpinner = false)
             })
     }
-    fun dismissRename() { showRenameDialog = false; renameRecording = null }
+    fun dismissRename() { renameRecording = null }
     fun renamed(renamed: RecordingEntity) {
         val updated = recordings.map { if (it.id == (renameRecording?.id ?: renamed.id)) renamed else it }
         recordings = updated
@@ -477,7 +473,7 @@ internal class NativeLibraryController(
         showPassiveNotice(actionableErrorMessage(context, resources.getString(R.string.rename_recording_uncertain), error), FeedbackTone.ERROR)
         refresh(showSpinner = false)
     }
-    fun dismissInfo() { showInfoDialog = false; infoRecording = null }
+    fun dismissInfo() { infoRecording = null }
 
     fun showPassiveNotice(message: String, tone: FeedbackTone) {
         AppFeedbackCenter.post(message, tone)
@@ -549,11 +545,9 @@ internal class NativeLibraryController(
         renameRecording = renameRecording?.let { previous ->
             storedById[previous.id]?.takeIf { current -> sameRecordingActionTarget(previous, current) }
         }
-        if (renameRecording == null) showRenameDialog = false
         infoRecording = infoRecording?.let { previous ->
             storedById[previous.id]?.takeIf { current -> sameRecordingActionTarget(previous, current) }
         }
-        if (infoRecording == null) showInfoDialog = false
 
         val retainedExpandedId = retainId(expandedRecordingOwner?.recordingId)
         setExpandedRecording(retainedExpandedId)
