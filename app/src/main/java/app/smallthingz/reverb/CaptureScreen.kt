@@ -11,6 +11,7 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -100,20 +101,29 @@ class NotifyFileReceiver(
     context: Context,
 ) : ReverbService.AudioFileReceiver {
     private val appContext = context.applicationContext
-    override fun fileReady(recording: RecordingEntity) {
+    override fun fileReady(recording: RecordingEntity) = fileReady(recording, null)
+
+    /** A precomputed Quick Save detail changes presentation, not saved-output ownership. */
+    internal fun fileReady(recording: RecordingEntity, message: String?) {
         backgroundRecordingResultScope.launch {
+            var preparedNotification: Notification? = null
             deliverDetachedSaveSuccess(
                 notificationAvailable = {
-                    ensureCaptureResultNotificationChannel(appContext)
+                    // Normal Save ensures the channel first; Quick Save builds its base below.
+                    if (message == null) ensureCaptureResultNotificationChannel(appContext)
                     val notificationManager = NotificationManagerCompat.from(appContext)
-                    val platformNotificationManager = appContext.getSystemService(NotificationManager::class.java)
+                    val platformNotificationManager = if (message == null)
+                        appContext.getSystemService(NotificationManager::class.java) else null
                     val runtimePermissionRequired = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
                     val runtimePermissionGranted = !runtimePermissionRequired ||
-                        ActivityCompat.checkSelfPermission(appContext, Manifest.permission.POST_NOTIFICATIONS) ==
+                        ContextCompat.checkSelfPermission(appContext, Manifest.permission.POST_NOTIFICATIONS) ==
                         PackageManager.PERMISSION_GRANTED
+                    // Retain Quick Save's availability-time construction and exception boundary.
+                    if (message != null) preparedNotification = buildCaptureNotification(appContext, recording)
                     !detachedSaveSuccessNeedsInAppFallback(
                         notificationsEnabled = notificationManager.areNotificationsEnabled(),
-                        channelEnabled = platformNotificationManager
+                        channelEnabled = (if (message == null) platformNotificationManager
+                            else appContext.getSystemService(NotificationManager::class.java))
                             ?.getNotificationChannel(ReverbService.NOTIFICATION_CHANNEL_ID)
                             ?.importance
                             ?.let { importance -> importance != NotificationManager.IMPORTANCE_NONE }
@@ -123,14 +133,25 @@ class NotifyFileReceiver(
                     )
                 },
                 notify = {
-                    NotificationManagerCompat.from(appContext).notify(
-                        recordingSavedNotificationTag(recording.id),
-                        RECORDING_SAVED_NOTIFICATION_ID,
-                        buildCaptureNotification(appContext, recording),
-                    )
+                    if (message == null) {
+                        NotificationManagerCompat.from(appContext).notify(
+                            recordingSavedNotificationTag(recording.id),
+                            RECORDING_SAVED_NOTIFICATION_ID,
+                            buildCaptureNotification(appContext, recording),
+                        )
+                    } else {
+                        val notification = Notification.Builder.recoverBuilder(
+                            appContext, requireNotNull(preparedNotification),
+                        ).setContentText(message)
+                            .setStyle(Notification.BigTextStyle().bigText("$message\n${recording.displayName}"))
+                            .build()
+                        NotificationManagerCompat.from(appContext).notify(
+                            recordingSavedNotificationTag(recording.id), RECORDING_SAVED_NOTIFICATION_ID, notification,
+                        )
+                    }
                 },
                 fallback = {
-                    AppFeedbackCenter.post(appContext.getString(R.string.recording_saved), FeedbackTone.SUCCESS)
+                    AppFeedbackCenter.post(message ?: appContext.getString(R.string.recording_saved), FeedbackTone.SUCCESS)
                 },
             )
         }
