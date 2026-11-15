@@ -2898,7 +2898,6 @@ open class ReverbService : Service() {
         exportTask: FutureTask<Unit>,
         exportToken: ExportCancellationToken,
         receiver: AudioFileReceiver,
-        afterSubmission: () -> Unit = {},
     ) {
         var rejection: RejectedExecutionException? = null
         val accepted = synchronized(exportStateLock) {
@@ -2909,11 +2908,9 @@ open class ReverbService : Service() {
                 false
             } else {
                 activeExportFuture = exportTask
-                // No I/O or waits here. Teardown cannot close admission between the actual
-                // worker submission and the buffered route's audio-queue preparation post.
+                // No I/O or waits here. Task submission shares teardown's admission boundary.
                 try {
                     exportWorkExecutor.execute(exportTask)
-                    afterSubmission()
                     true
                 } catch (error: RejectedExecutionException) {
                     rejection = error

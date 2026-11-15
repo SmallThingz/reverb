@@ -112,6 +112,221 @@ internal fun verifyDurableSaveReferenceRetirement(context: Context, report: Stri
     report.append("DURABLE_REFERENCE_DONE run=$run owned_root_removed=true\n")
 }
 
+/** Current durable Save timeout/recovery plus a distinct fresh Save; isolated synthetic PCM only. */
+internal fun verifyDurableProviderTimeout(
+    context: Context,
+    tree: Uri,
+    provider: ReliabilityDocumentsProvider,
+    report: StringBuilder,
+) {
+    requireProviderTerminalDurableQuiescence(context)
+    check(DurableSaveFaultHooks.onBoundary == null)
+    val priorTree = getConfiguredExportTreeUri(context)
+    check(setConfiguredExportTreeUri(context, tree))
+    val run = UUID.randomUUID().toString()
+    var sourceOwner: DurableQaSource? = null
+    var sessionOwner: DurableQaService? = null
+    var primary: Throwable? = null
+    var success = false
+    try {
+        val source = DurableQaSource(context, run).also { sourceOwner = it }
+        val session = DurableQaService(context).also { sessionOwner = it }
+        session.fence()
+        requireProviderTerminalDurableQuiescence(context)
+        val providerRoot = File(context.filesDir, "reliability-documents")
+        val providerRootIdentity = resolveDirectoryIdentity(providerRoot)
+        check(providerRootIdentity.isNotBlank())
+        val existing = checkNotNull(providerRoot.listFiles())
+        check(existing.size <= 64)
+        val unrelated = existing.associateWith { file ->
+            val stat = Os.lstat(file.path)
+            check(OsConstants.S_ISREG(stat.st_mode) && stat.st_size in 0..1_048_576)
+            stat to file.readBytes()
+        }
+        fun verifyUnrelated() {
+            check(resolveDirectoryIdentity(providerRoot) == providerRootIdentity)
+            unrelated.forEach { (file, proof) ->
+                val actual = Os.lstat(file.path)
+                val before = proof.first
+                check(actual.st_dev == before.st_dev && actual.st_ino == before.st_ino &&
+                    actual.st_mode == before.st_mode && actual.st_size == before.st_size &&
+                    actual.st_ctim.tv_sec == before.st_ctim.tv_sec && actual.st_ctim.tv_nsec == before.st_ctim.tv_nsec)
+                check(file.readBytes().contentEquals(proof.second)) { "Pre-existing provider evidence changed" }
+            }
+        }
+        verifyUnrelated()
+        val priorMode = provider.mode
+        val priorRemovals = provider.removedDocuments()
+        val deletesBefore = provider.deleteCalls
+        provider.mode = ReliabilityDocumentsProvider.Mode.RENAME_NEW_ID
+        session.configure(ExportFormat.WAV)
+        source.append()
+        val pcm = durableQaPcm(0, DURABLE_QA_FRAMES)
+        val expected = buildWavHeaderBytes(DURABLE_QA_RATE, 1, PcmSampleFormat.PCM_16, pcm.size.toLong()) + pcm
+        fun verifyOutput(recording: RecordingEntity) {
+            val bytes = checkNotNull(openRecordingInputStream(context, recording)).use { it.readBytes() }
+            check(bytes.contentEquals(expected)) { "Durable provider output changed the WAV header or original PCM" }
+        }
+        fun acknowledgeRetiredOutput(jobId: String, recording: RecordingEntity) {
+            val observed = catalog(context).single { it.id == recording.id }
+            check(fileIdentityMatches(recording.fileIdentity, observed.fileIdentity))
+            val retired = DurableSaveJobs.state.value.filter { it.id == jobId }
+            val job = retired.single()
+            check(job.terminallyRetired && job.phase != SavePhase.FAILED && job.error == null)
+            check(job.publishedRecordingId == recording.id)
+            val identity = mapOf(observed.id to observed.fileIdentity)
+            check(job.matchesPublishedRecording(identity))
+            check(!durableSaveNeedsProgressNotification(job))
+            check(buildPendingSaveItems(retired, identity).isEmpty())
+            check(!recordingOwnedByPendingSave(observed, pendingSaveOutputIdentities(retired)))
+            DurableSaveJobs.acknowledgePublished(identity)
+            check(DurableSaveJobs.state.value.none { it.id == jobId })
+        }
+        fun verifySource() {
+            var position = 0
+            checkNotNull(source.store.acquireRange(0.0, source.store.durationSeconds())).use { lease ->
+                lease.readNormalized(DURABLE_QA_RATE, 1, PcmSampleFormat.PCM_16) { bytes, offset, count ->
+                    check(count <= pcm.size - position)
+                    for (index in 0 until count) check(bytes[offset + index] == pcm[position + index])
+                    position += count
+                    count
+                }
+            }
+            check(position == pcm.size) { "Provider failure changed retained source PCM" }
+        }
+        val (sentinelStaging, sentinelProof) = writeTerminalFixture(context, tree)
+        val sentinel = buildRecordingEntity(context, finalizeOutputTarget(context, sentinelStaging, sentinelProof),
+            100L, "WAV", sentinelProof.digest.byteCount)
+        val sentinelId = DocumentsContract.getDocumentId(Uri.parse(sentinel.id))
+        val sentinelIdentity = checkNotNull(provider.documentIdentity(sentinelId))
+        val sentinelBytes = checkNotNull(openRecordingInputStream(context, sentinel)).use { it.readBytes() }
+        fun verifySentinel() {
+            verifyUnrelated()
+            check(provider.documentIdentity(sentinelId) == sentinelIdentity) { "Unrelated provider identity changed" }
+            check(checkNotNull(openRecordingInputStream(context, sentinel)).use { it.readBytes() }
+                .contentEquals(sentinelBytes)) { "Unrelated provider bytes changed" }
+        }
+        val writesBefore = provider.writeOpenCalls
+        provider.mode = ReliabilityDocumentsProvider.Mode.WRITE_TIMEOUT
+        val failedReceiver = session.submit(source.store, "timeout-$run", 0f, DURABLE_QA_FRAMES.toFloat() / DURABLE_QA_RATE)
+        val (failedId, failure) = failedReceiver.awaitFailed()
+        session.fence()
+        session.assertNoMicrophone()
+        val timeout = checkNotNull(provider.lastWriteTimeout())
+        check(failure.cause is java.net.SocketTimeoutException && failure.cause === timeout.error) {
+            "Provider WRITE_TIMEOUT cause was replaced: $failure / ${failure.cause}"
+        }
+        check(failedReceiver.terminals.get() == 1 && provider.writeOpenCalls == writesBefore + 1)
+        check(provider.deleteCalls == deletesBefore && provider.removedDocuments() == priorRemovals)
+        val coordinator = DurableSaveCoordinator.get(context)
+        val journal = DurableSaveJournal(durableSaveJournalRoot(context))
+        val failed = journal.read(failedId)
+        check(failed.stage == DurableSaveStage.WRITING && failed.error.isNotBlank())
+        val partial = checkNotNull(failed.output)
+        val partialId = DocumentsContract.getDocumentId(checkNotNull(partial.uri))
+        check(partialId == timeout.document.documentId && provider.documentIdentity(partialId) == timeout.document)
+        check(timeout.document.sizeBytes == 0L && partial.stagingIdentity.isNotBlank())
+        check(coordinator.pendingCount() == 1)
+        val pending = DurableSaveJobs.state.value.single { it.id == failedId }
+        check(pending.phase == SavePhase.FAILED && !pending.terminallyRetired)
+        val proofs = verifyDurableQaPins(context, failedId, 0, DURABLE_QA_FRAMES)
+        verifySentinel()
+        verifySource()
+        check(!session.service.cancelCurrentExport()) { "Durable failure retained a legacy export token" }
+        report.append("PROVIDER_TIMEOUT run=$run job=$failedId document=$partialId")
+            .append(" cause=SocketTimeoutException exact_provider_instance=true terminals=1 pins_protected=true\n")
+
+        // Recover the same persisted owner, not a resubmission disguised as recovery.
+        provider.mode = ReliabilityDocumentsProvider.Mode.RENAME_NEW_ID
+        check(coordinator.recover().single().id == failedId)
+        val recovered = coordinator.materialize(failedId) { }
+        session.fence()
+        verifyOutput(recovered)
+        verifyDurableQaPinsReleased(context, failedId)
+        verifyDurableQaReferencesReleased(context, failedId, proofs)
+        check(proofs.none { DurablePcmPins.isProtected(File(it.sourcePath)) })
+        check(coordinator.pendingCount() == 0 && coordinator.recover().isEmpty())
+        acknowledgeRetiredOutput(failedId, recovered)
+        check(provider.writeOpenCalls == writesBefore + 2)
+        check(provider.deleteCalls == deletesBefore + 1 && provider.removedDocuments() == priorRemovals + timeout.document) {
+            "Recovery deleted an object other than the exact failed partial"
+        }
+        check(provider.documentIdentity(partialId) == null && failedReceiver.terminals.get() == 1)
+        verifySentinel()
+        verifySource()
+
+        val retryReceiver = session.submit(source.store, "fresh-$run", 0f, DURABLE_QA_FRAMES.toFloat() / DURABLE_QA_RATE)
+        val retryId = retryReceiver.awaitQueued()
+        val fresh = retryReceiver.awaitReady()
+        session.fence()
+        check(retryId != failedId && fresh.id != recovered.id && retryReceiver.terminals.get() == 1)
+        verifyOutput(fresh)
+        verifyDurableQaPinsReleased(context, retryId)
+        check(proofs.none { DurablePcmPins.isProtected(File(it.sourcePath)) }) { "Fresh save retained source references" }
+        check(coordinator.pendingCount() == 0 && coordinator.recover().isEmpty())
+        acknowledgeRetiredOutput(retryId, fresh)
+        check(provider.writeOpenCalls == writesBefore + 3 && provider.deleteCalls == deletesBefore + 1)
+        check(provider.removedDocuments() == priorRemovals + timeout.document)
+        verifySentinel()
+        verifySource()
+        verifyLegacyExportTokenCancellation(session.service)
+        session.fence()
+        session.assertNoMicrophone()
+        report.append("PROVIDER_RETRY run=$run recovered_job=$failedId fresh_job=$retryId")
+            .append(" recovered=${recovered.id} fresh=${fresh.id} wav_and_pcm_exact=true source_exact=true")
+            .append(" journal_and_references_retired=true sentinel_unchanged=true\n")
+        report.append("PASS legacy_export_token_cancel_is_neutral seam=private_beginExport/public_cancelCurrentExport\n")
+
+        val allowedRemovals = priorRemovals.toMutableList().apply { add(timeout.document) }
+        for (recording in listOf(recovered, fresh)) {
+            allowedRemovals += checkNotNull(provider.documentIdentity(DocumentsContract.getDocumentId(Uri.parse(recording.id))))
+            check(runBlocking { RecordingRepository.deleteExactWithoutPendingReplay(context, recording) })
+            check(provider.removedDocuments() == allowedRemovals)
+            check(catalog(context).none { it.id == recording.id })
+            verifySentinel()
+        }
+        allowedRemovals += sentinelIdentity
+        check(deleteVerifiedRecordingAsset(context, sentinel))
+        check(provider.removedDocuments() == allowedRemovals && provider.deleteCalls == deletesBefore + 4)
+        verifyUnrelated()
+        check(checkNotNull(providerRoot.listFiles()).toSet() == unrelated.keys)
+        requireProviderTerminalDurableQuiescence(context)
+        verifySource()
+        source.deleteAfterSuccess()
+        check(setConfiguredExportTreeUri(context, priorTree))
+        provider.mode = priorMode
+        success = true
+        report.append("PROVIDER_TIMEOUT_DONE run=$run exact_owned_deletions=4 unrelated_files=${unrelated.size}")
+            .append(" source_root_removed=true no_microphone=true\n")
+    } catch (error: Throwable) { primary = error; throw error }
+    finally {
+        // Drain before releasing handles; failure never resets/deletes the retained source or provider tree.
+        var cleanupFailure: Throwable? = null
+        fun cleanup(action: () -> Unit) {
+            try { action() } catch (error: Throwable) {
+                if (cleanupFailure == null) cleanupFailure = error
+                else if (cleanupFailure !== error) cleanupFailure!!.addSuppressed(error)
+            }
+        }
+        var drained = sessionOwner == null
+        cleanup { sessionOwner?.fence(); drained = true }
+        if (drained) {
+            cleanup { sessionOwner?.assertNoMicrophone() }
+            cleanup { sourceOwner?.close() }
+            cleanup { sessionOwner?.close() }
+        }
+        if (!success) report.append("PROVIDER_TIMEOUT_RETAINED run=$run source=${sourceOwner?.root?.absolutePath} drained=$drained\n")
+        cleanupFailure?.let { error ->
+            if (primary != null && error !== primary) primary.addSuppressed(error) else throw error
+        }
+    }
+}
+
+internal fun requireProviderTerminalDurableQuiescence(context: Context) {
+    durableQaGuard(context)
+    durableQaRequireNoPendingJobs(context)
+}
+
 /** Actual coordinator and one Service failure path; no live capture or unowned output. */
 internal fun verifyDurableSaveCleanupFailure(
     context: Context,
@@ -1149,7 +1364,12 @@ private class DurableQaSource(context: Context, run: String) {
         val stat = Os.lstat(root.path)
         device = stat.st_dev; inode = stat.st_ino
         store = PersistentAudioChunkStore(root)
-        store.configure(RetentionMode.SIZE, 4_194_304L, DURABLE_QA_RATE, 1, PcmSampleFormat.PCM_16)
+        try {
+            store.configure(RetentionMode.SIZE, 4_194_304L, DURABLE_QA_RATE, 1, PcmSampleFormat.PCM_16)
+        } catch (error: Throwable) {
+            try { store.close() } catch (cleanup: Throwable) { if (cleanup !== error) error.addSuppressed(cleanup) }
+            throw error
+        }
     }
     fun append() {
         // Separate sealed and active objects exercise admission's sealing of the acquired tail.

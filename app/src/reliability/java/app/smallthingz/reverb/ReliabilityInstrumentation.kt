@@ -130,6 +130,16 @@ class ReliabilityInstrumentation : Instrumentation() {
                 executed++
                 verifyFileCopyPublicationBackend(targetContext, report)
                 report.appendLine("PASS file_copy_publication")
+            } else if (requestedTest == "provider_durable_timeout") {
+                executed++
+                val tree = DocumentsContract.buildTreeDocumentUri(
+                    "${targetContext.packageName}.reliability.documents", ReliabilityDocumentsProvider.ROOT_ID,
+                )
+                targetContext.contentResolver.acquireContentProviderClient(tree).use { client ->
+                    val provider = requireNotNull(client?.localContentProvider as? ReliabilityDocumentsProvider)
+                    verifyDurableProviderTimeout(targetContext, tree, provider, report)
+                }
+                report.appendLine("PASS provider_durable_timeout")
             } else if (requestedTest == "durable_save_cleanup_failure") {
                 executed++
                 val tree = DocumentsContract.buildTreeDocumentUri(
@@ -685,7 +695,7 @@ class ReliabilityInstrumentation : Instrumentation() {
                         }
                     }
                     if (requestedTest == null || requestedTest == "provider_terminal_sweep") {
-                        verifyProviderTerminalMatrix(targetContext, tree, provider) { name, test ->
+                        verifyProviderTerminalMatrix(targetContext, tree, provider, report) { name, test ->
                             executed++
                             try {
                                 test()

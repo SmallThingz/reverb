@@ -1,20 +1,15 @@
 package app.smallthingz.reverb
 
-import android.content.ComponentName
 import android.content.Context
-import android.content.Intent
-import android.content.ServiceConnection
 import android.net.Uri
 import android.os.Handler
-import android.os.IBinder
 import android.os.Looper
-import java.io.ByteArrayOutputStream
-import java.io.File
 import java.util.UUID
+import java.lang.reflect.InvocationTargetException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.FutureTask
-import java.util.concurrent.ExecutorService
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
 /** Actual provider/service terminal paths, using only synthetic QA-package recordings. */
@@ -22,9 +17,10 @@ internal fun verifyProviderTerminalMatrix(
     context: Context,
     tree: Uri,
     provider: ReliabilityDocumentsProvider,
+    report: StringBuilder,
     run: (String, () -> Unit) -> Unit,
 ) {
-    check(context.packageName.endsWith(".reliability"))
+    requireProviderTerminalDurableQuiescence(context)
     for ((name, mode) in listOf(
         "deleted_old_document_id_reports_success" to ReliabilityDocumentsProvider.Mode.RENAME_NEW_ID,
         "committed_delete_transport_failure_reports_success" to ReliabilityDocumentsProvider.Mode.DELETE_THEN_THROW,
@@ -98,14 +94,11 @@ internal fun verifyProviderTerminalMatrix(
         check(provider.retainedBytes().single().contentEquals(originalBytes))
     }
     run("provider_timeout_is_failed_save_not_user_cancel") {
-        provider.reset(ReliabilityDocumentsProvider.Mode.WRITE_TIMEOUT)
-        verifyUnrequestedExportTimeout(context, tree, provider)
-        check(provider.writeOpenCalls == 2)
-        check(provider.deleteCalls == 0)
+        verifyDurableProviderTimeout(context, tree, provider, report)
     }
 }
 
-private fun writeTerminalFixture(context: Context, tree: Uri): Pair<RecordingOutputTarget, StableOutputFingerprint> {
+internal fun writeTerminalFixture(context: Context, tree: Uri): Pair<RecordingOutputTarget, StableOutputFingerprint> {
     val target = createOutputTargetInDirectory(
         context, tree, "terminal-${UUID.randomUUID()}.wav", "audio/wav", 1_790_000_000_000L,
         StagingOutputKind.EXPORT_TRACKED,
@@ -120,173 +113,51 @@ private fun writeTerminalFixture(context: Context, tree: Uri): Pair<RecordingOut
     return target to fingerprint
 }
 
-private fun verifyUnrequestedExportTimeout(context: Context, tree: Uri, provider: ReliabilityDocumentsProvider) {
-    val prefs = getRecorderPreferences(context)
-    check(prefs.edit().putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false).commit())
-    val connected = CountDownLatch(1)
-    var service: ReverbService? = null
-    val connection = object : ServiceConnection {
-        override fun onServiceConnected(name: ComponentName, binder: IBinder) {
-            service = (binder as ReverbService.BackgroundRecorderBinder).service
-            connected.countDown()
-        }
-        override fun onServiceDisconnected(name: ComponentName) = Unit
-    }
-    val root = File(context.filesDir, "terminal-source-${UUID.randomUUID()}")
-    val pcm = ByteArray(3200) { (it * 31 + 3).toByte() }
-    var bound = false
-    var treeConfigured = false
-    var store: PersistentAudioChunkStore? = null
-    var firstLease: PersistentAudioChunkStore.RangeLease? = null
-    var retryLease: PersistentAudioChunkStore.RangeLease? = null
-    var executor: ExecutorService? = null
-    var exportStarted = false
-    var primaryFailure: Throwable? = null
+/** Private legacy-token injection plus real public cancellation; not a queued recompression test. */
+internal fun verifyLegacyExportTokenCancellation(recorder: ReverbService) {
     val main = Handler(Looper.getMainLooper())
     fun awaitMainCallbacks() {
         val fence = FutureTask { Unit }
         check(main.post(fence))
         fence.get(15, TimeUnit.SECONDS)
     }
-    try {
-        treeConfigured = setConfiguredExportTreeUri(context, tree)
-        check(treeConfigured)
-        bound = context.bindService(Intent(context, ReverbService::class.java), connection, Context.BIND_AUTO_CREATE)
-        check(bound)
-        check(connected.await(15, TimeUnit.SECONDS))
-        val recorder = requireNotNull(service)
-        val worker = ReverbService::class.java.getDeclaredField("exportWorkExecutor").apply { isAccessible = true }
-            .get(recorder) as ExecutorService
-        executor = worker
-        val export = ProviderTerminalExportAdapter(recorder)
-        val source = PersistentAudioChunkStore(root)
-        store = source
-        val initialized = FutureTask { Unit }
-        val audio = ReverbService::class.java.getDeclaredField("audioHandler").apply { isAccessible = true }
-            .get(recorder) as Handler
-        check(audio.post(initialized))
-        initialized.get(15, TimeUnit.SECONDS)
-        source.configure(RetentionMode.SIZE, 1_048_576L, 16000, 1, PcmSampleFormat.PCM_16)
-        check(source.append(pcm, 0, pcm.size) == pcm.size)
-        source.sealActiveChunk()
-        val terminal = AtomicReference<String>()
-        val originalError = AtomicReference<Throwable>()
-        val delivered = CountDownLatch(1)
-        val receiver = object : ReverbService.AudioFileReceiver {
-            override fun fileReady(recording: RecordingEntity) { terminal.set("success"); delivered.countDown() }
-            override fun fileFailed(message: String, error: Throwable?) {
-                terminal.set("failure")
-                originalError.set(error)
-                delivered.countDown()
-            }
-            override fun fileCancelled() { terminal.set("cancelled"); delivered.countDown() }
+    val cancelled = CountDownLatch(1)
+    val terminals = AtomicInteger()
+    val cancellationFailure = AtomicReference<Throwable>()
+    val cancellationReceiver = object : ReverbService.AudioFileReceiver {
+        // Main-thread callbacks record failures; the instrumentation owner reports them below.
+        override fun fileReady(recording: RecordingEntity) {
+            terminals.incrementAndGet()
+            cancellationFailure.compareAndSet(null, IllegalStateException("Cancelled export succeeded"))
+            cancelled.countDown()
         }
-        val token = requireNotNull(export.begin(receiver))
-        exportStarted = true
-        val config = recorder.getConfigurationSnapshot().copy(
-            format = ExportFormat.WAV,
-            codec = ExportCodec.PCM_16,
-            sampleRate = 16000,
-            channelMode = ChannelMode.entries.single { it.channelCount == 1 },
-            sampleFormat = PcmSampleFormat.PCM_16,
-        )
-        val lease = requireNotNull(source.acquireRange(0.0, source.durationSeconds())).also { firstLease = it }
-        export.submit(lease, receiver, "terminal-timeout", token, config)
-        check(delivered.await(15, TimeUnit.SECONDS)) { "Export never delivered its terminal result" }
-        // Terminal delivery can precede worker cleanup. Wait for that owned worker before unbinding.
-        worker.submit {}.get(15, TimeUnit.SECONDS)
-        awaitMainCallbacks()
-        check(terminal.get() == "failure") { "Unrequested provider timeout was reported as ${terminal.get()}" }
-        check(originalError.get() is java.net.SocketTimeoutException) { "Original timeout failure was not preserved" }
-        check(!recorder.cancelCurrentExport()) { "Failed export retained its busy token" }
-
-        // Ordinary recovery must allow a fresh export, not leave the recorder permanently busy.
-        provider.mode = ReliabilityDocumentsProvider.Mode.RENAME_NEW_ID
-        val retried = CountDownLatch(1)
-        val saved = AtomicReference<RecordingEntity>()
-        val retryReceiver = object : ReverbService.AudioFileReceiver {
-            override fun fileReady(recording: RecordingEntity) { saved.set(recording); retried.countDown() }
-            override fun fileFailed(message: String, error: Throwable?) { retried.countDown() }
-            override fun fileCancelled() { retried.countDown() }
+        override fun fileFailed(message: String, error: Throwable?) {
+            terminals.incrementAndGet()
+            cancellationFailure.compareAndSet(null,
+                IllegalStateException("User cancellation reported as failure: $message", error))
+            cancelled.countDown()
         }
-        val retryToken = requireNotNull(export.begin(retryReceiver))
-        val retry = requireNotNull(source.acquireRange(0.0, source.durationSeconds())).also { retryLease = it }
-        export.submit(retry, retryReceiver, "terminal-retry", retryToken, config)
-        check(retried.await(15, TimeUnit.SECONDS))
-        worker.submit {}.get(15, TimeUnit.SECONDS)
-        awaitMainCallbacks()
-        val recording = checkNotNull(saved.get()) { "A fresh export failed after the provider recovered" }
-        val savedBytes = requireNotNull(openRecordingInputStream(context, recording)).use { it.readBytes() }
-        check(savedBytes.contentEquals(buildWavHeaderBytes(16000, 1, PcmSampleFormat.PCM_16, pcm.size.toLong()) + pcm))
-
-        val cancelled = CountDownLatch(1)
-        val cancellationFailure = AtomicReference<Throwable>()
-        val cancellationReceiver = object : ReverbService.AudioFileReceiver {
-            // Main-thread callbacks record failures; the instrumentation owner reports them below.
-            override fun fileReady(recording: RecordingEntity) {
-                cancellationFailure.compareAndSet(null, IllegalStateException("Cancelled export succeeded"))
-                cancelled.countDown()
-            }
-            override fun fileFailed(message: String, error: Throwable?) {
-                cancellationFailure.compareAndSet(null,
-                    IllegalStateException("User cancellation reported as failure: $message", error))
-                cancelled.countDown()
-            }
-            override fun fileCancelled() { cancelled.countDown() }
-        }
-        requireNotNull(export.begin(cancellationReceiver))
-        check(recorder.cancelCurrentExport())
-        check(cancelled.await(15, TimeUnit.SECONDS)) { "User cancellation lost its neutral terminal" }
-        try {
-            awaitMainCallbacks()
-        } catch (fenceFailure: Throwable) {
-            cancellationFailure.get()?.let { terminalFailure ->
-                if (terminalFailure !== fenceFailure) terminalFailure.addSuppressed(fenceFailure)
-                throw terminalFailure
-            }
-            throw fenceFailure
-        }
-        cancellationFailure.get()?.let { throw it }
-        check(!recorder.cancelCurrentExport())
-        val retained = ByteArrayOutputStream()
-        requireNotNull(source.acquireRange(0.0, source.durationSeconds())).use { original ->
-            original.readNormalized(16000, 1, PcmSampleFormat.PCM_16) { bytes, offset, count ->
-                retained.write(bytes, offset, count)
-                count
-            }
-        }
-        check(pcm.contentEquals(retained.toByteArray())) { "Failed export changed retained audio" }
-    } catch (error: Throwable) {
-        primaryFailure = error
-        throw error
-    } finally {
-        var cleanupFailure: Throwable? = null
-        fun cleanup(action: () -> Unit) {
-            try { action() } catch (error: Throwable) {
-                if (cleanupFailure == null) cleanupFailure = error
-                else if (cleanupFailure !== error) cleanupFailure!!.addSuppressed(error)
-            }
-        }
-        // This fixture exclusively owns the isolated QA export. Keep its store, leases and tree
-        // intact if cancellation/draining cannot establish that the worker has released them.
-        if (primaryFailure != null && exportStarted) cleanup { service?.cancelCurrentExport() }
-        var drained = false
-        cleanup {
-            executor?.submit {}?.get(15, TimeUnit.SECONDS)
-            awaitMainCallbacks()
-            drained = true
-        }
-        if (drained) {
-            cleanup { val closing = firstLease; firstLease = null; closing?.close() }
-            cleanup { val closing = retryLease; retryLease = null; closing?.close() }
-            cleanup { val closing = store; store = null; closing?.close() }
-        } else cleanup { error("QA export worker/callbacks did not drain; synthetic store, leases and tree retained") }
-        if (bound) cleanup { bound = false; context.unbindService(connection) }
-        if (drained && treeConfigured) cleanup { check(setConfiguredExportTreeUri(context, null)) }
-        cleanupFailure?.let { error ->
-            if (primaryFailure != null) {
-                if (primaryFailure !== error) primaryFailure!!.addSuppressed(error)
-            } else throw error
+        override fun fileCancelled() {
+            terminals.incrementAndGet()
+            cancelled.countDown()
         }
     }
+    val begin = ReverbService::class.java.getDeclaredMethod("beginExport", ReverbService.AudioFileReceiver::class.java)
+        .apply { isAccessible = true }
+    try { requireNotNull(begin.invoke(recorder, cancellationReceiver)) }
+    catch (error: InvocationTargetException) { throw error.targetException }
+    check(recorder.cancelCurrentExport())
+    check(cancelled.await(15, TimeUnit.SECONDS)) { "User cancellation lost its neutral terminal" }
+    try {
+        awaitMainCallbacks()
+    } catch (fenceFailure: Throwable) {
+        cancellationFailure.get()?.let { terminalFailure ->
+            if (terminalFailure !== fenceFailure) terminalFailure.addSuppressed(fenceFailure)
+            throw terminalFailure
+        }
+        throw fenceFailure
+    }
+    cancellationFailure.get()?.let { throw it }
+    check(terminals.get() == 1) { "Legacy cancellation delivered multiple terminal callbacks" }
+    check(!recorder.cancelCurrentExport())
 }

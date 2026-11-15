@@ -8,6 +8,8 @@ import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import android.provider.DocumentsContract.Document
 import android.provider.DocumentsProvider
+import android.system.Os
+import android.system.OsConstants
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.IOException
@@ -43,6 +45,21 @@ class ReliabilityDocumentsProvider : DocumentsProvider() {
         WRITE_TIMEOUT,
     }
 
+    internal data class DocumentIdentity(val documentId: String, val device: Long, val inode: Long,
+        val sizeBytes: Long, val changedSeconds: Long, val changedNanos: Long)
+    internal data class WriteTimeout(val document: DocumentIdentity, val error: java.net.SocketTimeoutException)
+    private val removals = mutableListOf<DocumentIdentity>()
+    private var timeout: WriteTimeout? = null
+
+    @Synchronized internal fun removedDocuments(): List<DocumentIdentity> = removals.toList()
+    @Synchronized internal fun lastWriteTimeout(): WriteTimeout? = timeout
+    @Synchronized internal fun documentIdentity(documentId: String): DocumentIdentity? {
+        val file = entries[documentId]?.file ?: return null
+        val stat = Os.lstat(file.path)
+        check(OsConstants.S_ISREG(stat.st_mode))
+        return DocumentIdentity(documentId, stat.st_dev, stat.st_ino, stat.st_size, stat.st_ctim.tv_sec, stat.st_ctim.tv_nsec)
+    }
+
     private data class Entry(var file: File, val mimeType: String)
     private val entries = linkedMapOf<String, Entry>()
     private lateinit var root: File
@@ -69,6 +86,8 @@ class ReliabilityDocumentsProvider : DocumentsProvider() {
     @Synchronized
     fun reset(nextMode: Mode) {
         entries.clear()
+        removals.clear()
+        timeout = null
         root.listFiles()?.forEach { check(it.delete()) }
         mode = nextMode
         renamed = false
@@ -248,7 +267,9 @@ class ReliabilityDocumentsProvider : DocumentsProvider() {
         deleteCalls++
         val entry = entries[documentId] ?: throw FileNotFoundException(documentId)
         if (mode == Mode.DELETE_NOOP || mode == Mode.DELETE_LOADING || mode == Mode.DELETE_ERROR) return
+        val identity = checkNotNull(documentIdentity(documentId))
         check(entry.file.delete())
+        removals += identity
         entries.remove(documentId)
         if (mode == Mode.DELETE_THEN_THROW) {
             throw IllegalStateException("Fixture transport failure after committed deletion")
@@ -272,7 +293,11 @@ class ReliabilityDocumentsProvider : DocumentsProvider() {
             }
         } else {
             writeOpenCalls++
-            if (this.mode == Mode.WRITE_TIMEOUT) throw java.net.SocketTimeoutException("Fixture writable-open timeout")
+            if (this.mode == Mode.WRITE_TIMEOUT) {
+                val error = java.net.SocketTimeoutException("Fixture writable-open timeout")
+                timeout = WriteTimeout(checkNotNull(documentIdentity(documentId)), error)
+                throw error
+            }
         }
         return ParcelFileDescriptor.open(entry.file, ParcelFileDescriptor.parseMode(mode))
     }
