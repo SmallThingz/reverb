@@ -5,6 +5,13 @@ set_source_files_properties(shuttle_pcm.c PROPERTIES
     COMPILE_OPTIONS "-fno-fast-math;-fno-associative-math;-ffp-contract=off")
 target_link_libraries(reverb_file_move PRIVATE m)
 set_target_properties(reverb_file_move PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED YES)
-target_compile_options(reverb_file_move PRIVATE -Wall -Wextra -Werror -fvisibility=hidden)
+# Stable debug paths keep the linker-generated build ID independent of checkout location.
+target_compile_options(reverb_file_move PRIVATE -Wall -Wextra -Werror -fvisibility=hidden
+    "-fdebug-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}=/reverb/native-src"
+    "-fdebug-prefix-map=${CMAKE_CURRENT_BINARY_DIR}=/reverb/native-build")
+if(CMAKE_ANDROID_NDK AND IS_DIRECTORY "${CMAKE_ANDROID_NDK}")
+    target_compile_options(reverb_file_move PRIVATE
+        "-fdebug-prefix-map=${CMAKE_ANDROID_NDK}=/android-ndk")
+endif()
 target_link_options(reverb_file_move PRIVATE
     "-Wl,-z,max-page-size=16384" "-Wl,-z,common-page-size=16384" "-Wl,--no-undefined")
