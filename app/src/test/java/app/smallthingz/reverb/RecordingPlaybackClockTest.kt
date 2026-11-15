@@ -2,8 +2,33 @@ package app.smallthingz.reverb
 
 import org.junit.Assert.*
 import org.junit.Test
+import java.math.BigInteger
+import java.util.Random
 
 class RecordingPlaybackClockTest {
+    @Test
+    fun seededForwardProjectionMatchesIndependentIntegerOracle() {
+        val random = Random(0x51A7E)
+        repeat(500) {
+            val start = random.nextInt(1_000_000)
+            val end = start + random.nextInt(1_000_000)
+            val position = start + random.nextInt(end - start + 1)
+            val sampledAt = random.nextLong().ushr(2)
+            val now = sampledAt + random.nextInt(2_000_000).toLong()
+            val playing = random.nextBoolean()
+            val anchor = sample(position, sampledAt, playing, end, start = start)
+
+            // Independent integer arithmetic over valid forward timestamps, without Long overflow.
+            val elapsed = if (playing) BigInteger.valueOf(now).subtract(BigInteger.valueOf(sampledAt))
+                else BigInteger.ZERO
+            val expected = BigInteger.valueOf(position.toLong()).add(elapsed)
+                .max(BigInteger.valueOf(start.toLong()))
+                .min(BigInteger.valueOf(end.toLong())).toInt()
+            assertEquals(expected, anchor.positionAt(now))
+            assertEquals(playing && expected < end, anchor.isAdvancingAt(now))
+        }
+    }
+
     private fun sample(
         position: Int = 200,
         at: Long = 1_000L,

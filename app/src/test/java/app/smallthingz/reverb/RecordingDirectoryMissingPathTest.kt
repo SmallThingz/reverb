@@ -1,7 +1,6 @@
 package app.smallthingz.reverb
 
 import android.content.Context
-import android.content.ContextWrapper
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.IOException
@@ -52,7 +51,7 @@ class RecordingDirectoryMissingPathTest {
                 .getDeclaredMethod("listFileDirectoryRecordings", Context::class.java, File::class.java,
                     Map::class.java, Set::class.java)
                 .apply { isAccessible = true }
-                .invoke(null, ContextWrapper(null), directory, emptyMap<String, RecordingEntity>(), emptySet<String>())
+                .invoke(null, RecordingScanTestContext { emptySet() }, directory, emptyMap<String, RecordingEntity>(), emptySet<String>())
         } catch (error: InvocationTargetException) {
             throw error.targetException
         }
@@ -61,7 +60,7 @@ class RecordingDirectoryMissingPathTest {
     private inline fun withDirectory(block: (File, File) -> Unit) {
         val root = Files.createTempDirectory("recording-missing-path-").toFile()
         try {
-            // These tests fail at stream open, before format decoding or Android context use.
+            // The scan reads an empty publication journal before these stream-open boundaries.
             val file = File(root, "recording.wav").apply { writeBytes(ByteArray(128)) }
             block(root, file)
         } finally {

@@ -174,6 +174,7 @@ class BootResumeActivityTest {
         confirmation.arm(3L, 4L)
         assertTrue(confirmation.accepts(3L, 4L, 101L, 64))
         confirmation.close()
+        assertFalse(confirmation.accepts(3L, 4L, 101L, 64))
         confirmation.deliver(current = true)
         assertEquals(0, callbacks)
         assertFalse(confirmation.active)

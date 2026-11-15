@@ -126,6 +126,24 @@ class DurableSaveJournalTest {
     }
 
     @Test
+    fun parentSyncFailureBeforeReservationLeavesNoJobDirectory() = withRoot { root ->
+        val journalRoot = File(root, "jobs").apply { check(mkdir()) }
+        val failure = IOException("parent barrier")
+        val journal = hostJournal(journalRoot, directorySync = { directory ->
+            assertEquals(root, directory)
+            throw failure
+        })
+        val id = UUID.randomUUID().toString()
+        var reserved = false
+        val thrown = assertThrows(IOException::class.java) {
+            journal.createDirectory(id) { reserved = true }
+        }
+        assertSame(failure, thrown)
+        assertFalse(reserved)
+        assertFalse(journal.directory(id).exists())
+    }
+
+    @Test
     fun caughtReservationBarrierFailureCanRetireOnlyItsOwnEmptyDirectory() = withRoot { root ->
         val journalRoot = File(root, "jobs")
         var failBarrier = true
