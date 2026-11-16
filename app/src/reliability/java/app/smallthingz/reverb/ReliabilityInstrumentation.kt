@@ -708,8 +708,12 @@ class ReliabilityInstrumentation : Instrumentation() {
                             }
                         }
                     }
-                    if (requestedTest == null || requestedTest == "compatibility_sweep") {
+                    if (requestedTest == null || requestedTest == "compatibility_sweep" ||
+                        requestedTest == "recorder_snapshot_cannot_clear_new_export_busy_state" ||
+                        requestedTest == "recorder_snapshot_cannot_resurrect_finished_export") {
                         verifyCompatibilityMatrix(targetContext, tree, provider) { name, test ->
+                            if (requestedTest != null && requestedTest != "compatibility_sweep" &&
+                                requestedTest != name) return@verifyCompatibilityMatrix
                             executed++
                             try {
                                 test()
