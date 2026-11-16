@@ -290,6 +290,7 @@ private fun ReverbService.compatSet(name: String, value: Any?) {
 
 private fun fixtureExportToken(): Any {
     val type = ReverbService::class.java.declaredClasses.single { it.simpleName == "ExportCancellationToken" }
-    val constructor = type.declaredConstructors.single { it.parameterCount == 8 }.apply { isAccessible = true }
-    return constructor.newInstance(1L, *Array(7) { AtomicBoolean(false) })
+    val constructor = type.getDeclaredConstructor(java.lang.Long.TYPE, *Array(6) { AtomicBoolean::class.java })
+        .apply { isAccessible = true }
+    return constructor.newInstance(1L, *Array(6) { AtomicBoolean(false) })
 }
