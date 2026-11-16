@@ -151,6 +151,21 @@ class BootResumeActivityTest {
         }
     }
 
+    @Test fun bindDenialRetiresThatAttemptAndFreshPermissionRetryBindsOnce() {
+        val denied = BootResumeActivityAdmission(createdAtMillis = 100L)
+        assertTrue(denied.admit(visible = true, nowMillis = 110L))
+        assertFalse(denied.acceptServiceBind(visible = true, allowed = false, nowMillis = 120L))
+        // A later permission grant cannot revive callbacks from the denied attempt.
+        assertFalse(denied.acceptServiceBind(visible = true, allowed = true, nowMillis = 121L))
+
+        val retry = BootResumeActivityAdmission(createdAtMillis = 200L)
+        assertTrue(retry.admit(visible = true, nowMillis = 210L))
+        assertTrue(retry.acceptServiceBind(visible = true, allowed = true, nowMillis = 220L))
+        assertFalse(retry.acceptServiceBind(visible = true, allowed = true, nowMillis = 221L))
+        assertTrue(retry.bindAccepted)
+        assertTrue(retry.current(221L))
+    }
+
     @Test fun positiveSilentPcmCanConfirmOnlyTheCurrentReadBoundary() {
         val confirmation = BootCaptureConfirmation(100L) {}
         confirmation.arm(3L, 4L)

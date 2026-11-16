@@ -357,10 +357,6 @@ class DurableSaveOwnershipTest {
         assertTrue(batch.delete())
     }
 
-    // Model only Android's unavailable descriptor syscall; marker IO/checksums/renames are real.
-    private fun hostDescriptorProof(identity: String, descriptor: FileDescriptor) =
-        identity.isNotBlank() && descriptor.valid()
-
     private fun range(file: File): FrozenPcmRange {
         val checksum = CRC32().apply { update(byteArrayOf(1, 2, 3, 4)) }.value.toInt()
         val record = PersistentAudioChunkStore.ChunkRecord(1u, file, PersistentAudioChunkStore.ChunkState.FINALIZED,
@@ -370,9 +366,14 @@ class DurableSaveOwnershipTest {
         return FrozenPcmRange(listOf(segment), emptyList(), emptyList(), 1000L, 1001L, 2.0 / 48000)
     }
 
-    private fun nativeLikeIdentity(file: File): String {
-        val device = Files.getAttribute(file.toPath(), "unix:dev") as Long
-        val inode = Files.getAttribute(file.toPath(), "unix:ino") as Long
-        return "stat:$device:$inode:0:0:0"
-    }
+}
+
+// Shared host file identity and descriptor models for JVM durable PCM pin tests.
+internal fun hostDescriptorProof(identity: String, descriptor: FileDescriptor) =
+    identity.isNotBlank() && descriptor.valid()
+
+internal fun nativeLikeIdentity(file: File): String {
+    val device = Files.getAttribute(file.toPath(), "unix:dev") as Long
+    val inode = Files.getAttribute(file.toPath(), "unix:ino") as Long
+    return "stat:$device:$inode:0:0:0"
 }

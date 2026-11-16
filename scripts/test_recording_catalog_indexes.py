@@ -66,7 +66,9 @@ def concat_sql(expression, variables=None):
     return "".join(values)
 
 
-ORDER = concat_sql(section("internal fun recordingCatalogOrderBy(): String =", "\n\n"))
+# Follow the actual cached production accessor; reject any unrecognized accessor shape.
+assert section("internal fun recordingCatalogOrderBy(): String =", "\n\n").strip() == "RecordingCatalogSql.orderBy"
+ORDER = concat_sql(section("private object RecordingCatalogSql {", "\n}").split("    val orderBy =", 1)[1])
 INDEX_BODY = section("private fun SQLiteDatabase.createIndexes() {", "\ninternal enum class")
 assert "val orderBy = recordingCatalogOrderBy()\n    transaction {" in INDEX_BODY
 INDEX_EXPRESSIONS = re.findall(

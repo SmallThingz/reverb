@@ -375,6 +375,56 @@ class DurableSaveJournalTest {
     }
 
     @Test
+    fun staleTerminalFingerprintCannotReleaseCurrentSavePins() = withRoot { root ->
+        val fixture = fixture(root)
+        val identityResolver: (File) -> String = ::nativeLikeIdentity
+        val descriptorMatches: (String, FileDescriptor) -> Boolean = ::hostDescriptorProof
+        val linked = DurablePcmPins.link(fixture.directory, fixture.record.source.range,
+            identityResolver = identityResolver, descriptorMatches = descriptorMatches) {}
+        val outputFile = File(root, "saved.wav").absoluteFile.apply { writeBytes(byteArrayOf(3, 1, 4, 1, 5)) }
+        val outputIdentity = nativeLikeIdentity(outputFile)
+        val output = RecordingOutputTarget(outputFile.path, outputFile.name, "audio/wav", RecordingStorageType.FILE,
+            root.absolutePath, outputFile.lastModified(), file = outputFile, staging = false,
+            publishedIdentity = outputIdentity)
+        val outputBytes = outputFile.readBytes()
+        val fingerprint = StableOutputFingerprint(CopyDigest(outputBytes.size.toLong(),
+            java.security.MessageDigest.getInstance("SHA-256").digest(outputBytes)), outputIdentity, null)
+        val terminal = fixture.record.copy(stage = DurableSaveStage.COMPLETE,
+            request = fixture.record.request.copy(name = output.displayName, directoryId = root.absolutePath,
+                format = ExportFormat.WAV), source = linked, output = output, fingerprint = fingerprint)
+        fixture.journal.write(terminal)
+        val committedManifest = fixture.manifest.readBytes()
+        val expectedPcm = fixture.payloads[1].copyOfRange(4, 16)
+        fun readSelectedPcm() = ByteArrayOutputStream().also { bytes ->
+            linked.range.readNormalized(48_000, 2, PcmSampleFormat.PCM_16, Long.MAX_VALUE) { data, offset, count ->
+                bytes.write(data, offset, count)
+                count
+            }
+        }.toByteArray()
+        assertArrayEquals(expectedPcm, readSelectedPcm())
+        assertTrue(linked.objects.all { DurablePcmPins.hasReference(fixture.directory, it) })
+        assertTrue(linked.objects.all { DurablePcmPins.isProtected(File(it.sourcePath), descriptorMatches) })
+
+        val stale = terminal.copy(fingerprint = fingerprint.copy(fileKey = "stat:stale-output-revision"))
+        val rejection = assertThrows(IOException::class.java) { fixture.journal.retire(stale) }
+        assertEquals("Save cleanup no longer owns the durable terminal record", rejection.message)
+
+        assertArrayEquals(committedManifest, fixture.manifest.readBytes())
+        assertTrue(linked.objects.all { DurablePcmPins.hasReference(fixture.directory, it) })
+        assertTrue(linked.objects.all { DurablePcmPins.isProtected(File(it.sourcePath), descriptorMatches) })
+        assertArrayEquals(expectedPcm, readSelectedPcm())
+        assertArrayEquals(outputBytes, outputFile.readBytes())
+
+        DurablePcmPins.release(fixture.directory, linked.objects, descriptorMatches = descriptorMatches)
+        fixture.journal.retireMetadata(terminal)
+        assertFalse(fixture.directory.exists())
+        assertTrue(linked.objects.none { DurablePcmPins.hasReference(fixture.directory, it) })
+        assertTrue(linked.objects.none { DurablePcmPins.isProtected(File(it.sourcePath), descriptorMatches) })
+        fixture.assertPinsUnchanged()
+        assertTrue(fixture.journal.recoverEach { fail("Terminal job was already retired") }.presentIds.isEmpty())
+    }
+
+    @Test
     fun nonterminalRecordCannotRetirePins() = withRoot { root ->
         val fixture = fixture(root)
         fixture.journal.write(fixture.record)
