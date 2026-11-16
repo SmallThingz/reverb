@@ -10,15 +10,12 @@ import android.system.ErrnoException
 import android.system.Os
 import android.system.OsConstants
 import android.system.StructStat
-import android.system.StructTimespec
 import java.io.File
 import java.io.FileDescriptor
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.file.Files
-import java.nio.file.LinkOption
 import java.nio.file.Path
-import java.nio.file.attribute.FileTime
 import java.util.Collections
 import java.util.IdentityHashMap
 import java.util.concurrent.CopyOnWriteArrayList
@@ -280,7 +277,7 @@ class PlaybackSessionOsShadow {
         @Implementation
         fun lstat(path: String): StructStat {
             if (path != targetPath) throw ErrnoException("lstat", OsConstants.ENOENT)
-            return stat(Path.of(path), noFollowLinks = true)
+            return hostUnixStat(Path.of(path), noFollowLinks = true)
         }
 
         @JvmStatic
@@ -291,20 +288,7 @@ class PlaybackSessionOsShadow {
             if (fd < 0 || !Files.isSameFile(descriptorPath, Path.of(targetPath))) {
                 throw ErrnoException("fstat", OsConstants.EBADF)
             }
-            return stat(descriptorPath, noFollowLinks = false)
-        }
-
-        private fun stat(path: Path, noFollowLinks: Boolean): StructStat {
-            val options = if (noFollowLinks) arrayOf(LinkOption.NOFOLLOW_LINKS) else emptyArray()
-            val row = Files.readAttributes(path,
-                "unix:dev,ino,mode,nlink,uid,gid,size,lastAccessTime,lastModifiedTime,ctime", *options)
-            fun number(key: String) = (row[key] as Number).toLong()
-            fun time(key: String): StructTimespec = (row[key] as FileTime).toInstant()
-                .let { StructTimespec(it.epochSecond, it.nano.toLong()) }
-            val bytes = number("size")
-            return StructStat(number("dev"), number("ino"), number("mode").toInt(), number("nlink"),
-                number("uid").toInt(), number("gid").toInt(), 0L, bytes,
-                time("lastAccessTime"), time("lastModifiedTime"), time("ctime"), 4096L, (bytes + 511L) / 512L)
+            return hostUnixStat(descriptorPath, noFollowLinks = false)
         }
     }
 }
