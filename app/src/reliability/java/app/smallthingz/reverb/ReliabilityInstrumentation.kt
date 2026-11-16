@@ -74,7 +74,7 @@ class ReliabilityInstrumentation : Instrumentation() {
             val currentUiSmoke = targetContext.packageName == "app.smallthingz.reverb.uitheme.reliability"
             if (currentUiSmoke) {
                 check(targetContext.applicationContext.javaClass == android.app.Application::class.java &&
-                    requestedTest in setOf("native_rename_editor_current", "native_click_ripple_current", "native_retention_input_parity", "native_retention_input_connections", "native_retention_keyboard", "native_icon_parity", "native_settings_library_selectors", "native_theme_matrix", "native_settings_calibration_current", "current_media_delete_consent",
+                    requestedTest in setOf("native_rename_editor_current", "native_click_ripple_current", "native_retention_input_parity", "native_retention_keyboard", "native_icon_parity", "native_settings_library_selectors", "native_theme_matrix", "native_settings_calibration_current", "current_media_delete_consent",
                         "native_silence_blob_current", "native_silence_diagnostic_current", "native_blob_feel_current", "native_material_progress_current", "native_library_admission", "native_library_expansion_measurement", "native_library_expansion_clipping", "native_segmented_contrast", "native_settings_theme_contrast", "native_restart_permission_ui", "native_settings_ime_bounds",
                         "native_action_sheet_dismissal_current",
                         "range_preview_short_end", "range_preview_short_controls", "range_preview_short_retirement", "range_preview_normalization_sampling", "native_ui_consistency_current", "native_settings_hydration_current", "native_settings_folder_pointer")) {
@@ -92,7 +92,7 @@ class ReliabilityInstrumentation : Instrumentation() {
                 "native_font_notifications", "native_group_parity", "native_text_parity", "native_icon_parity",
                 "native_text_backend", "native_motion_spline",
                 "native_brand_parity", "native_switch_parity", "native_switch_motion",
-                "native_input_parity", "native_onboarding_page_parity", "native_onboarding_screen_parity", "native_about_parity", "native_retention_input_parity", "native_retention_input_connections",
+                "native_input_parity", "native_onboarding_page_parity", "native_onboarding_screen_parity", "native_about_parity", "native_retention_input_parity",
                 "native_home_parity", "native_home_input", "native_main_settings_parity",
                 "native_home_input_common_grain", "native_main_settings_parity_common_grain",
                 "native_main_settings_readable_selection_parity",
@@ -469,9 +469,9 @@ class ReliabilityInstrumentation : Instrumentation() {
             } else if (requestedTest == "native_retention_keyboard") {
                 executed++
                 verifyNativeRetentionKeyboardParity(this, report, keyboardSessionNonce)
-            } else if (requestedTest in setOf("native_retention_input_parity", "native_retention_input_connections")) {
+            } else if (requestedTest == "native_retention_input_parity") {
                 executed++
-                verifyNativeRetentionInputParity(this, report, connectionsOnly = requestedTest == "native_retention_input_connections")
+                verifyNativeRetentionInputParity(this, report)
             } else if (requestedTest == "native_onboarding_screen_parity") {
                 executed++
                 verifyNativeOnboardingScreenParity(this, report)
