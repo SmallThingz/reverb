@@ -218,9 +218,6 @@ internal class NativeRecordingInlinePlayerController(
         private var lastWaveform: ProgressiveWaveformData? = null
         private var lastCoarse: FloatArray? = null
         private var lastDetail: FloatArray? = null
-        private var lastCoarseCount = -1
-        private var lastDetailCount = -1
-        private var lastPass: RangeWaveformPass? = null
         // The revision key is fixed for this lifetime; position publications compare only live dependencies.
         private var trimEffectInitialized = false
         private var trimEffectRequested = false
@@ -990,11 +987,13 @@ internal class NativeRecordingInlinePlayerController(
             val fineSeek = SpringFineSeekBinding((prepared || !trimMode) && !trimSaving, isPlaying || trimPlaybackStarting, duration.toFloat() / 1000f,
                 currentFineSeekInteractionKey(), fineSeekTogglePlayback, fineSeekInteractionStart,
                 fineSeekBeginAdjust, fineSeekAdjust, fineSeekUpdateShuttle, fineSeekEndAdjust, fineSeekCancelAdjust)
-            if (lastWaveform == null || lastCoarse !== coarseWaveform || lastDetail !== detailWaveform ||
-                lastCoarseCount != coarseBuiltCount || lastDetailCount != detailBuiltCount || lastPass != waveformPass) {
+            val previousWaveform = lastWaveform
+            if (previousWaveform == null || lastCoarse !== coarseWaveform || lastDetail !== detailWaveform ||
+                previousWaveform.coarse.builtCount != coarseBuiltCount ||
+                previousWaveform.detail.builtCount != detailBuiltCount || previousWaveform.pass != waveformPass) {
                 lastWaveform = ProgressiveWaveformData(coarseWaveform, coarseBuiltCount, detailWaveform, detailBuiltCount, waveformPass)
-                lastCoarse = coarseWaveform; lastDetail = detailWaveform
-                lastCoarseCount = coarseBuiltCount; lastDetailCount = detailBuiltCount; lastPass = waveformPass
+                lastCoarse = coarseWaveform
+                lastDetail = detailWaveform
             }
             return NativeInlinePlayerPresentation(state, presentationActions, fineSeek, checkNotNull(lastWaveform), waveformLoading, waveformMorphStarted)
         }

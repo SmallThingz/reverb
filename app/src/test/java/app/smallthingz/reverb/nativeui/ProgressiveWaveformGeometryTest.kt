@@ -58,6 +58,9 @@ class ProgressiveWaveformGeometryTest {
         val coarse = FloatArray(5) { 0.2f }
         val detail = FloatArray(5) { 0.5f }
         val snapshot = waveform(coarse, detail)
+        assertEquals(coarse.size, snapshot.coarse.builtCount)
+        assertEquals(detail.size, snapshot.detail.builtCount)
+        assertEquals(RangeWaveformPass.DETAIL, snapshot.pass)
         coarse.fill(Float.NaN)
         detail.fill(Float.NaN)
         val geometry = ProgressiveWaveformGeometry()

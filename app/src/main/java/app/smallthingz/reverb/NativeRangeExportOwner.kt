@@ -96,11 +96,8 @@ internal class NativeRangeExportOwner(
         tween<Float>(760, easing = FastOutSlowInEasing), { AnimationVector1D(0f) })
     private val openingProgress = MutableStateFlow(0f)
     private var openingJob: Job? = null
-    private data class WaveformKey(
-        val coarse: FloatArray, val coarseCount: Int,
-        val detail: FloatArray, val detailCount: Int, val pass: RangeWaveformPass,
-    )
-    private var waveformKey: WaveformKey? = null
+    private var waveformCoarse: FloatArray? = null
+    private var waveformDetail: FloatArray? = null
     private var waveformLoading: Boolean? = null
     private var waveformData: ProgressiveWaveformData? = null
     private var waveformFrame = ProgressiveWaveformFrame(0f, 0f, 0f, 0f, 0f, 0f, true)
@@ -221,17 +218,16 @@ internal class NativeRangeExportOwner(
         val detail = state.detailWaveform
         val detailCount = state.detailWaveformBuiltCount
         val pass = state.waveformPass
-        val previousKey = waveformKey
-        val waveformChanged = previousKey == null ||
-            previousKey.coarse !== coarse || previousKey.coarseCount != coarseCount ||
-            previousKey.detail !== detail || previousKey.detailCount != detailCount ||
-            previousKey.pass != pass
+        val previousWaveform = waveformData
+        val waveformChanged = previousWaveform == null ||
+            waveformCoarse !== coarse || previousWaveform.coarse.builtCount != coarseCount ||
+            waveformDetail !== detail || previousWaveform.detail.builtCount != detailCount ||
+            previousWaveform.pass != pass
         if (waveformChanged || waveformLoading != state.waveformLoading) {
             if (waveformChanged) {
-                val key = WaveformKey(coarse, coarseCount, detail, detailCount, pass)
-                waveformKey = key
-                waveformData = ProgressiveWaveformData(key.coarse, key.coarseCount,
-                    key.detail, key.detailCount, key.pass)
+                waveformData = ProgressiveWaveformData(coarse, coarseCount, detail, detailCount, pass)
+                waveformCoarse = coarse
+                waveformDetail = detail
             }
             waveformLoading = state.waveformLoading
             updatingWaveform = true
