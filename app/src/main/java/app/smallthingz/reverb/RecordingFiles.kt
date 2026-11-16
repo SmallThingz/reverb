@@ -1694,11 +1694,11 @@ internal fun providerRecordingIdentity(
     sizeBytes: Long,
     revisionToken: Long,
 ): String {
-    if (storageType == RecordingStorageType.FILE || id.isBlank()) return ""
+    if (storageType == RecordingStorageType.FILE || id.isBlank() || sizeBytes < 0L) return ""
     if (revisionToken <= 0L) return ""
     val encodedId = Base64.getUrlEncoder().withoutPadding()
         .encodeToString(id.toByteArray(Charsets.UTF_8))
-    return "provider:${storageType.storageCode.toInt()}:$encodedId:${sizeBytes.coerceAtLeast(0L)}:$revisionToken"
+    return "provider:${storageType.storageCode.toInt()}:$encodedId:$sizeBytes:$revisionToken"
 }
 
 internal fun listedProviderRecordingIdentity(
@@ -1805,7 +1805,7 @@ internal fun resolveProviderCatalogObservation(
                 identity = mediaStoreProviderIdentityFromMetadata(
                     id = uri.toString(),
                     sizeKnown = !cursor.isNull(1),
-                    sizeBytes = if (cursor.isNull(1)) 0L else cursor.getLong(1).coerceAtLeast(0L),
+                    sizeBytes = if (cursor.isNull(1)) 0L else cursor.getLong(1),
                     modifiedKnown = !cursor.isNull(2),
                     modifiedSeconds = if (cursor.isNull(2)) 0L else cursor.getLong(2).coerceAtLeast(0L),
                     generationKnown = useGeneration && !cursor.isNull(3),
@@ -1857,7 +1857,7 @@ internal fun resolveProviderRecordingIdentity(
             mediaStoreProviderIdentityFromMetadata(
                 id = uri.toString(),
                 sizeKnown = !cursor.isNull(0),
-                sizeBytes = if (cursor.isNull(0)) 0L else cursor.getLong(0).coerceAtLeast(0L),
+                sizeBytes = if (cursor.isNull(0)) 0L else cursor.getLong(0),
                 modifiedKnown = !cursor.isNull(1),
                 modifiedSeconds = if (cursor.isNull(1)) 0L else cursor.getLong(1).coerceAtLeast(0L),
                 generationKnown = useGeneration && !cursor.isNull(2),
@@ -3041,13 +3041,14 @@ private fun queryDocumentTreeEntries(context: Context, treeUri: Uri): List<Docum
                     throw IOException("Document tree contains an invalid or duplicate document id: $treeUri")
                 }
                 val mimeType = if (rows.isNull(mimeIndex)) null else rows.getString(mimeIndex)
+                val reportedSize = if (rows.isNull(sizeIndex)) -1L else rows.getLong(sizeIndex)
                 add(
                     DocumentTreeEntry(
                         uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, documentId),
                         name = if (rows.isNull(nameIndex)) null else rows.getString(nameIndex),
                         mimeType = mimeType,
-                        sizeBytes = if (rows.isNull(sizeIndex)) 0L else rows.getLong(sizeIndex).coerceAtLeast(0L),
-                        sizeKnown = !rows.isNull(sizeIndex),
+                        sizeBytes = reportedSize.coerceAtLeast(0L),
+                        sizeKnown = reportedSize >= 0L,
                         modifiedMillis = if (rows.isNull(modifiedIndex)) 0L else rows.getLong(modifiedIndex).coerceAtLeast(0L),
                         isFile = mimeType != null && mimeType != DocumentsContract.Document.MIME_TYPE_DIR,
                     ),
@@ -3500,7 +3501,8 @@ private fun listMediaStoreRecordings(
                     val storedName = cursor.getString(nameIndex) ?: continue
                     val uri = ContentUris.withAppendedId(collection, cursor.getLong(idIndex))
                     if (uri.toString() in suppressedIds) continue
-                    val size = cursor.getLong(sizeIndex).coerceAtLeast(0L)
+                    val reportedSize = if (cursor.isNull(sizeIndex)) -1L else cursor.getLong(sizeIndex)
+                    val size = reportedSize.coerceAtLeast(0L)
                     val pending = mediaStoreListedPendingState(
                         pendingKnown = !cursor.isNull(pendingIndex),
                         pending = if (cursor.isNull(pendingIndex)) false else cursor.getInt(pendingIndex) != 0,
@@ -3599,7 +3601,7 @@ private fun listMediaStoreRecordings(
                         listedProviderRecordingIdentity(
                             storageType = RecordingStorageType.MEDIASTORE,
                             id = id,
-                            sizeKnown = !cursor.isNull(sizeIndex),
+                            sizeKnown = reportedSize >= 0L,
                             sizeBytes = size,
                             revisionToken = generation.takeIf { it > 0L } ?: modifiedMillis,
                         )
@@ -4804,10 +4806,11 @@ private fun queryCreatedMediaStoreOutput(
         val pendingIndex = rows.getColumnIndexOrThrow(MediaStore.MediaColumns.IS_PENDING)
         val pathIndex = rows.getColumnIndexOrThrow(MediaStore.MediaColumns.RELATIVE_PATH)
         val mimeType = if (rows.isNull(mimeIndex)) null else rows.getString(mimeIndex)
+        val reportedSize = if (rows.isNull(sizeIndex)) -1L else rows.getLong(sizeIndex)
         NewlyCreatedOutputObservation(
             displayName = if (rows.isNull(nameIndex)) null else rows.getString(nameIndex),
-            sizeBytes = if (rows.isNull(sizeIndex)) 0L else rows.getLong(sizeIndex).coerceAtLeast(0L),
-            sizeKnown = !rows.isNull(sizeIndex),
+            sizeBytes = reportedSize.coerceAtLeast(0L),
+            sizeKnown = reportedSize >= 0L,
             isFile = !mimeType.isNullOrBlank(),
             pending = if (rows.isNull(pendingIndex)) null else rows.getInt(pendingIndex) != 0,
             directoryMatches = !rows.isNull(pathIndex) && rows.getString(pathIndex) == MEDIA_STORE_RELATIVE_PATH,

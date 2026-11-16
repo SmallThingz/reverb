@@ -3,13 +3,21 @@ package app.smallthingz.reverb
 import android.app.Application
 import android.content.ContentProvider
 import android.content.ContentValues
+import android.content.Context
 import android.content.pm.ProviderInfo
 import android.database.Cursor
 import android.database.MatrixCursor
 import android.database.sqlite.SQLiteException
 import android.net.Uri
+import android.os.ParcelFileDescriptor
 import android.provider.MediaStore
+import android.provider.DocumentsContract
 import java.io.File
+import java.io.FileDescriptor
+import java.io.FileNotFoundException
+import java.io.IOException
+import java.lang.reflect.InvocationTargetException
+import java.nio.file.Files
 import java.util.IdentityHashMap
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -83,6 +91,208 @@ class MediaStoreCatalogObservationTest {
             }
         }
         if (primary == null && failure != null) throw failure
+    }
+
+    @Test fun negativeCatalogSizeCannotMatchKnownEmptySelection() {
+        CatalogRowProvider.values = row(size = 0L)
+        val selected = selection().copy(sizeBytes = 0L)
+        checkSelection(selected, identity = true, name = true)
+        CatalogRowProvider.values = row(size = 1L)
+        checkSelection(selected, identity = false, name = true)
+        for (size in listOf(null, -1L, Long.MIN_VALUE)) {
+            CatalogRowProvider.values = row(size = size)
+            CatalogRowProvider.calls = 0
+            val result = recordingCatalogPostconditionObservation(app, selected)
+            assertFalse("reported size $size cannot prove the selected zero-byte revision", result.identityMatches)
+            assertEquals(1, CatalogRowProvider.calls)
+            assertTrue(CatalogRowProvider.lastCursor!!.isClosed)
+        }
+    }
+
+    @Test fun negativeReadIdentitySizeIsUnavailableWithGenerationOrDateRevision() {
+        for (generation in listOf(9L, null)) {
+            CatalogRowProvider.values = row(size = 0L, generation = generation)
+            val emptyIdentity = resolveProviderRecordingIdentity(app, RecordingStorageType.MEDIASTORE, uri)
+            assertTrue("known empty row must retain identity", emptyIdentity.isNotBlank())
+            CatalogRowProvider.values = row(size = 1L, generation = generation)
+            val nonemptyIdentity = resolveProviderRecordingIdentity(app, RecordingStorageType.MEDIASTORE, uri)
+            assertTrue(nonemptyIdentity.isNotBlank())
+            assertNotEquals(emptyIdentity, nonemptyIdentity)
+            for (size in listOf(null, -1L, Long.MIN_VALUE)) {
+                CatalogRowProvider.values = row(size = size, generation = generation)
+                CatalogRowProvider.calls = 0
+                assertEquals("reported size $size cannot establish read authority", "",
+                    resolveProviderRecordingIdentity(app, RecordingStorageType.MEDIASTORE, uri))
+                assertEquals(1, CatalogRowProvider.calls)
+                assertTrue(CatalogRowProvider.lastCursor!!.isClosed)
+            }
+        }
+    }
+
+    @Test fun createdMediaStoreRowCannotPresentNegativeSizeAsKnownEmpty() {
+        val query = Class.forName("app.smallthingz.reverb.RecordingFilesKt")
+            .getDeclaredMethod("queryCreatedMediaStoreOutput", Context::class.java, Uri::class.java)
+            .apply { isAccessible = true }
+        for ((size, writable) in listOf(0L to true, 1L to false, null to false,
+            -1L to false, Long.MIN_VALUE to false)) {
+            CatalogRowProvider.values = row(size = size, pending = 1)
+            CatalogRowProvider.calls = 0
+            val observation = query.invoke(null, app, uri) as NewlyCreatedOutputObservation?
+            assertEquals("created row size $size", writable,
+                newlyCreatedOutputMayBeWritten("clip.wav", requirePending = true, observation))
+            assertEquals(1, CatalogRowProvider.calls)
+            assertTrue(CatalogRowProvider.lastCursor!!.isClosed)
+        }
+    }
+
+    @Test fun documentListingDoesNotCertifyNegativeMetadataAsKnownSize() {
+        val provider = CatalogRowProvider()
+        provider.attachInfo(app, ProviderInfo().apply { authority = "test.documents" })
+        ShadowContentResolver.registerProviderInternal("test.documents", provider)
+        val tree = Uri.parse("content://test.documents/tree/root")
+        val query = Class.forName("app.smallthingz.reverb.RecordingFilesKt")
+            .getDeclaredMethod("queryDocumentTreeEntries", Context::class.java, Uri::class.java)
+            .apply { isAccessible = true }
+        for ((size, known) in listOf(0L to true, 1L to true, null to false,
+            -1L to false, Long.MIN_VALUE to false)) {
+            CatalogRowProvider.values = row(size = size)
+            CatalogRowProvider.calls = 0
+            val entry = requireNotNull((query.invoke(null, app, tree) as List<*>).single())
+            val observedKnown = entry.javaClass.getDeclaredField("sizeKnown")
+                .apply { isAccessible = true }.getBoolean(entry)
+            assertEquals("listed document size $size", known, observedKnown)
+            assertEquals(1, CatalogRowProvider.calls)
+            assertEquals(DocumentsContract.buildChildDocumentsUriUsingTree(tree, "root"),
+                CatalogRowProvider.lastUri)
+            assertTrue(CatalogRowProvider.lastCursor!!.isClosed)
+        }
+    }
+
+    @Test fun collectionRequiresFreshValidationWhenReportedSizeBecomesNegative() {
+        val list = Class.forName("app.smallthingz.reverb.RecordingFilesKt")
+            .getDeclaredMethod("listMediaStoreRecordings", Context::class.java,
+                Map::class.java, Set::class.java).apply { isAccessible = true }
+        CatalogRowProvider.values = row(size = 0L)
+        // Synthetic cache-contract input: positive duration and known zero size.
+        // This is not evidence that a zero-byte WAV contains playable audio.
+        val known = selection().copy(sizeBytes = 0L)
+        val cache = mapOf(known.id to known)
+        CatalogRowProvider.calls = 0
+        val reused = list.invoke(null, app, cache, emptySet<String>()) as List<*>
+        assertEquals(1, reused.size)
+        assertSame(known, reused.single())
+        assertEquals(1, CatalogRowProvider.calls)
+        assertEquals(0, CatalogRowProvider.openCalls)
+        assertTrue(CatalogRowProvider.lastCursor!!.isClosed)
+        for (size in listOf(-1L, Long.MIN_VALUE)) {
+            CatalogRowProvider.values = row(size = size)
+            CatalogRowProvider.calls = 0
+            CatalogRowProvider.openCalls = 0
+            val failure = try {
+                list.invoke(null, app, cache, emptySet<String>())
+                fail("negative-size collection row reused cached authority or hid read failure")
+                null
+            } catch (error: InvocationTargetException) { error.targetException }
+            assertTrue(failure is IOException)
+            assertEquals("Unable to validate discovered MediaStore recording $uri", failure!!.message)
+            assertTrue(failure.cause is FileNotFoundException)
+            assertEquals("injected descriptor access failure", failure.cause!!.message)
+            assertEquals(1, CatalogRowProvider.calls)
+            assertEquals(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, CatalogRowProvider.lastUri)
+            assertEquals(1, CatalogRowProvider.openCalls)
+            assertEquals(uri, CatalogRowProvider.lastOpenUri)
+            assertEquals("r", CatalogRowProvider.lastOpenMode)
+            assertEquals(0, CatalogRowProvider.mutationCalls)
+            assertTrue(CatalogRowProvider.lastCursor!!.isClosed)
+            assertSame(known, cache[known.id])
+        }
+    }
+
+    @Test
+    @Config(shadows = [PlaybackSessionOsShadow::class])
+    fun createdDocumentWithNegativeMetadataRequiresVerifiedDescriptorSize() {
+        val provider = CatalogRowProvider()
+        provider.attachInfo(app, ProviderInfo().apply { authority = "test.documents" })
+        ShadowContentResolver.registerProviderInternal("test.documents", provider)
+        val tree = Uri.parse("content://test.documents/tree/root")
+        val document = Uri.parse("content://test.documents/tree/root/document/clip")
+        val query = Class.forName("app.smallthingz.reverb.RecordingFilesKt")
+            .getDeclaredMethod("queryCreatedDocumentOutput", Context::class.java,
+                Uri::class.java, Uri::class.java).apply { isAccessible = true }
+        fun created() = query.invoke(null, app, tree, document) as NewlyCreatedOutputObservation
+        fun writable(observation: NewlyCreatedOutputObservation) =
+            newlyCreatedOutputMayBeWritten("clip.wav", requirePending = false, observation)
+        check(PlaybackSessionOsShadow.targetPath.isEmpty())
+        val source = Files.createTempFile(app.cacheDir.toPath(), "document-identity-", ".bin").toFile()
+        var bodyFailure: Throwable? = null
+        try {
+            source.writeBytes(byteArrayOf(1, 2, 3, 4))
+            PlaybackSessionOsShadow.targetPath = source.absolutePath
+            CatalogRowProvider.descriptorSource = source
+            CatalogRowProvider.values = row(size = 4L)
+            val metadata = created()
+            assertTrue(metadata.sizeKnown)
+            assertEquals(4L, metadata.sizeBytes)
+            assertFalse(writable(metadata))
+            assertEquals(1, CatalogRowProvider.calls)
+            assertEquals(0, CatalogRowProvider.openCalls)
+            for (size in listOf(null, -1L, Long.MIN_VALUE)) {
+                CatalogRowProvider.values = row(size = size)
+                CatalogRowProvider.calls = 0
+                CatalogRowProvider.openCalls = 0
+                val observation = created()
+                assertEquals("clip.wav", observation.displayName)
+                assertTrue("descriptor provides known size for reported $size", observation.sizeKnown)
+                assertEquals(4L, observation.sizeBytes)
+                assertFalse("nonempty descriptor cannot be writable staging", writable(observation))
+                assertEquals(3, CatalogRowProvider.calls)
+                assertEquals(1, CatalogRowProvider.openCalls)
+                assertEquals(document, CatalogRowProvider.lastOpenUri)
+                assertEquals("r", CatalogRowProvider.lastOpenMode)
+                assertTrue(CatalogRowProvider.lastCursor!!.isClosed)
+                assertFalse("actual descriptor owner must be closed",
+                    checkNotNull(CatalogRowProvider.openedDescriptor).second.valid())
+            }
+            assertArrayEquals(byteArrayOf(1, 2, 3, 4), source.readBytes())
+            // Only the test empties its own file; native zero remains legitimate authority.
+            source.writeBytes(byteArrayOf())
+            CatalogRowProvider.values = row(size = -1L)
+            CatalogRowProvider.calls = 0
+            CatalogRowProvider.openCalls = 0
+            val empty = created()
+            assertTrue(empty.sizeKnown)
+            assertEquals(0L, empty.sizeBytes)
+            assertTrue(writable(empty))
+            assertEquals(3, CatalogRowProvider.calls)
+            assertEquals(1, CatalogRowProvider.openCalls)
+            assertFalse(checkNotNull(CatalogRowProvider.openedDescriptor).second.valid())
+            CatalogRowProvider.descriptorSource = null
+            CatalogRowProvider.calls = 0
+            CatalogRowProvider.openCalls = 0
+            val unavailable = created()
+            assertFalse("failed descriptor cannot establish known empty size", unavailable.sizeKnown)
+            assertFalse(writable(unavailable))
+            assertEquals(2, CatalogRowProvider.calls)
+            assertEquals(1, CatalogRowProvider.openCalls)
+            assertTrue(CatalogRowProvider.lastCursor!!.isClosed)
+            assertEquals(0, CatalogRowProvider.mutationCalls)
+        } catch (error: Throwable) {
+            bodyFailure = error
+            throw error
+        } finally {
+            var cleanupFailure: Throwable? = null
+            for (cleanup in listOf<() -> Unit>(
+                { CatalogRowProvider.openedDescriptor?.first?.close() },
+                { Files.deleteIfExists(source.toPath()); Unit },
+            )) {
+                try { cleanup() } catch (error: Throwable) {
+                    if (cleanupFailure == null) cleanupFailure = error else cleanupFailure.addSuppressed(error)
+                }
+            }
+            CatalogRowProvider.descriptorSource = null
+            PlaybackSessionOsShadow.targetPath = ""
+            cleanupFailure?.let { if (bodyFailure == null) throw it else bodyFailure.addSuppressed(it) }
+        }
     }
 
     @Test fun queryBindsNameAndIdentityToOnePublishedManagedRow() {
@@ -283,6 +493,12 @@ private class CatalogRowProvider : ContentProvider() {
         var queryFailure = false
         var closeFailure = false
         var calls = 0
+        var openCalls = 0
+        var mutationCalls = 0
+        var lastOpenUri: Uri? = null
+        var lastOpenMode: String? = null
+        var descriptorSource: File? = null
+        var openedDescriptor: Pair<ParcelFileDescriptor, FileDescriptor>? = null
         var lastProjection: Array<out String>? = null
         var lastUri: Uri? = null
         var lastCursor: MatrixCursor? = null
@@ -290,6 +506,8 @@ private class CatalogRowProvider : ContentProvider() {
             values = null; secondValues = null; denySecond = false
             empty = false; returnNull = false; queryFailure = false; closeFailure = false
             calls = 0; lastProjection = null; lastUri = null; lastCursor = null
+            openCalls = 0; mutationCalls = 0; lastOpenUri = null; lastOpenMode = null
+            descriptorSource = null; openedDescriptor = null
         }
     }
 
@@ -314,14 +532,33 @@ private class CatalogRowProvider : ContentProvider() {
                 MediaStore.MediaColumns.RELATIVE_PATH, MediaStore.MediaColumns.IS_PENDING,
             )
             val selectedValues = if (calls == 2) secondValues ?: values else values
-            val namedValues = names.zip(requireNotNull(selectedValues)).toMap()
+            val namedValues = names.zip(requireNotNull(selectedValues)).toMap() + mapOf(
+                MediaStore.MediaColumns._ID to 41L,
+                MediaStore.MediaColumns.MIME_TYPE to "audio/wav",
+                DocumentsContract.Document.COLUMN_DOCUMENT_ID to "clip",
+                DocumentsContract.Document.COLUMN_LAST_MODIFIED to 100_000L,
+            )
             cursor.addRow(requireNotNull(projection).map { namedValues[it] })
         }
         lastCursor = cursor
         return cursor
     }
+    override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor {
+        openCalls++
+        lastOpenUri = uri
+        lastOpenMode = mode
+        val source = descriptorSource ?: throw FileNotFoundException("injected descriptor access failure")
+        check(mode == "r")
+        return ParcelFileDescriptor.open(source, ParcelFileDescriptor.MODE_READ_ONLY).also {
+            openedDescriptor = it to it.fileDescriptor
+        }
+    }
     override fun getType(uri: Uri): String? = null
-    override fun insert(uri: Uri, values: ContentValues?): Uri? = null
-    override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?) = 0
-    override fun update(uri: Uri, values: ContentValues?, selection: String?, selectionArgs: Array<out String>?) = 0
+    override fun insert(uri: Uri, values: ContentValues?): Uri? { mutationCalls++; return null }
+    override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?): Int {
+        mutationCalls++; return 0
+    }
+    override fun update(uri: Uri, values: ContentValues?, selection: String?, selectionArgs: Array<out String>?): Int {
+        mutationCalls++; return 0
+    }
 }

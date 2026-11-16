@@ -15,6 +15,31 @@ class DurableEmptyMediaStoreRecoveryTest {
     )
 
     @Test
+    fun negativeSizeCannotBorrowTheKnownEmptyRecoveryIdentity() {
+        val target = target()
+        assertTrue(emptyMediaStoreRecoveryIdentityMatches(target, identity(45134L, size = 0L)))
+        assertFalse(emptyMediaStoreRecoveryIdentityMatches(target, identity(45134L, size = 1L)))
+        for (size in listOf(-1L, Long.MIN_VALUE)) {
+            val malformed = identity(45134L, size = size)
+            assertEquals("negative size $size is not known empty", "", malformed)
+            assertFalse(emptyMediaStoreRecoveryIdentityMatches(target, malformed))
+        }
+    }
+
+    @Test
+    fun sharedProviderIdentityNeverNormalizesNegativeSizeIntoAuthority() {
+        for (storage in listOf(RecordingStorageType.MEDIASTORE, RecordingStorageType.DOCUMENT)) {
+            val uri = if (storage == RecordingStorageType.DOCUMENT) "content://test.documents/tree/root/document/clip" else id
+            assertTrue(providerRecordingIdentity(storage, uri, 0L, 9L).isNotBlank())
+            assertTrue(providerRecordingIdentity(storage, uri, Long.MAX_VALUE, 9L).isNotBlank())
+            for (size in listOf(-1L, Long.MIN_VALUE)) {
+                assertEquals("", providerRecordingIdentity(storage, uri, size, 9L))
+                assertEquals("", listedProviderRecordingIdentity(storage, uri, true, size, 9L))
+            }
+        }
+    }
+
+    @Test
     fun changedRevisionCannotBorrowTheOrdinaryWritersSameUriAdmission() {
         val target = target()
         val changed = identity(45135L)
