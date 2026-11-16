@@ -3227,7 +3227,7 @@ open class ReverbService : Service() {
         bytes: ByteArray, offset: Int, count: Int, slot: BufferSlot, epoch: Long,
         readEndedAtNanos: Long, captureStartedAtNanos: Long?,
         drainOwner: AcceptedCaptureReadOwner?,
-        batchStartedAtMillis: Long? = null,
+        batchStartedAtMillis: Long,
     ) {
         silenceSampleRequest?.let { request ->
             if (request.running()) try {
@@ -3244,23 +3244,20 @@ open class ReverbService : Service() {
         val format = pcmSampleFormat
         if (!silenceGateConfig.enabled) {
             finishSilenceGate()
-            appendCapturedAudio(bytes, offset, count, slot, batchStartedAtMillis ?: captureBatchStartedAtMillis(
-                System.currentTimeMillis(), count, channels * format.bytesPerSample, rate), drainOwner)
+            appendCapturedAudio(bytes, offset, count, slot, batchStartedAtMillis, drainOwner)
             return
         }
         val previous = silenceGateStream
         if (silenceGateSlot != slot || silenceGateEpoch != epoch || previous?.sampleRate != rate ||
             previous.channels != channels || previous.format != format) {
             finishSilenceGate()
-            val anchor = batchStartedAtMillis ?: captureBatchStartedAtMillis(
-                System.currentTimeMillis(), count, channels * format.bytesPerSample, rate)
             silenceGateSlot = slot
             silenceGateEpoch = epoch
             silenceGateStream = SilenceGateStream(rate, channels, format, silenceGateConfig, object : SilenceGateOutput {
                 override fun audio(bytes: ByteArray, offset: Int, count: Int, sourceFrame: Long) {
                     if (!captureGateOutputMayCommit(epoch, persistenceInterruptedCaptureEpoch)) return
                     appendCapturedAudio(bytes, offset, count, slot,
-                        recordingTimestampWithOffset(anchor, sourceFrame * 1000L / rate), silenceGateDrainOwner)
+                        recordingTimestampWithOffset(batchStartedAtMillis, sourceFrame * 1000L / rate), silenceGateDrainOwner)
                 }
                 override fun gap() {
                     if (!captureGateOutputMayCommit(epoch, persistenceInterruptedCaptureEpoch)) return
