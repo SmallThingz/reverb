@@ -1992,19 +1992,8 @@ class PersistentAudioChunkStoreDurabilityTest {
         return lease.use(::readLease)
     }
 
-    private fun readLease(lease: PersistentAudioChunkStore.RangeLease): ByteArray {
-        val output = ByteArrayOutputStream()
-        val result = lease.readNormalized(
-            targetSampleRate = 8_000,
-            targetChannelCount = 1,
-            targetSampleFormat = PcmSampleFormat.PCM_16,
-        ) { bytes, offset, count ->
-            output.write(bytes, offset, count)
-            count
-        }
-        assertEquals(output.size().toLong(), result.sampleBytes)
-        return output.toByteArray()
-    }
+    private fun readLease(lease: PersistentAudioChunkStore.RangeLease): ByteArray =
+        readStoreTestPcm16Mono8Khz(lease)
 
     private fun ByteArray.endsWithBytes(suffix: ByteArray): Boolean {
         if (suffix.size > size) return false

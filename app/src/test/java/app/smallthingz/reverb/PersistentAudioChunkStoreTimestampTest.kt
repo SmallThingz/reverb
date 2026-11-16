@@ -1,6 +1,5 @@
 package app.smallthingz.reverb
 
-import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -263,15 +262,8 @@ class PersistentAudioChunkStoreTimestampTest {
     private fun readAll(store: PersistentAudioChunkStore): ByteArray =
         requireNotNull(store.acquireRange(0.0, store.durationSeconds())).use(::read)
 
-    private fun read(range: PersistentAudioChunkStore.RangeLease): ByteArray {
-        val output = ByteArrayOutputStream()
-        val result = range.readNormalized(8_000, 1, PcmSampleFormat.PCM_16) { bytes, offset, count ->
-            output.write(bytes, offset, count)
-            count
-        }
-        assertEquals(output.size().toLong(), result.sampleBytes)
-        return output.toByteArray()
-    }
+    private fun read(range: PersistentAudioChunkStore.RangeLease): ByteArray =
+        readStoreTestPcm16Mono8Khz(range)
 
     private fun withRoot(block: (File) -> Unit) =
         withTestDirectory("build/tmp/chunk-timestamp-tests", "store-", block)

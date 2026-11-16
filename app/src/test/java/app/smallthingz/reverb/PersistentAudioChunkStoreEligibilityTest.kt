@@ -1,6 +1,5 @@
 package app.smallthingz.reverb
 
-import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
 import org.junit.Assert.assertArrayEquals
@@ -238,15 +237,8 @@ class PersistentAudioChunkStoreEligibilityTest {
         )
     }
 
-    private fun read(lease: PersistentAudioChunkStore.RangeLease): ByteArray {
-        val output = ByteArrayOutputStream()
-        val result = lease.readNormalized(8_000, 1, PcmSampleFormat.PCM_16) { bytes, offset, count ->
-            output.write(bytes, offset, count)
-            count
-        }
-        assertEquals(output.size().toLong(), result.sampleBytes)
-        return output.toByteArray()
-    }
+    private fun read(lease: PersistentAudioChunkStore.RangeLease): ByteArray =
+        readStoreTestPcm16Mono8Khz(lease)
 
     private fun withRoot(block: (File) -> Unit) =
         withTestDirectory("build/tmp/eligibility-tests", "store-", block)
