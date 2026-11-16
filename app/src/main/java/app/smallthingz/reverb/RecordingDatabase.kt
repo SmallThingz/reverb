@@ -112,17 +112,23 @@ class RecordingDatabase private constructor(context: Context) : SQLiteOpenHelper
     fun recordingDao(): RecordingDao = dao
 
     private inner class DaoImpl : RecordingDao {
-        override suspend fun listAll(): List<RecordingEntity> {
-            return readableDatabase.query(
-                TABLE_RECORDINGS,
-                recordingCatalogProjection(),
-                null,
-                null,
-                null,
-                null,
-                recordingCatalogOrderBy(),
-            ).use { cursor -> readRecordings(cursor, managedFileDirectoryIds) }
-        }
+        private fun SQLiteDatabase.queryRecordings(
+            selection: String? = null,
+            selectionArgs: Array<String>? = null,
+            ordered: Boolean = true,
+            limit: String? = null,
+        ): List<RecordingEntity> = query(
+            TABLE_RECORDINGS,
+            recordingCatalogProjection(),
+            selection,
+            selectionArgs,
+            null,
+            null,
+            if (ordered) recordingCatalogOrderBy() else null,
+            limit,
+        ).use { cursor -> readRecordings(cursor, managedFileDirectoryIds) }
+
+        override suspend fun listAll(): List<RecordingEntity> = readableDatabase.queryRecordings()
 
         override suspend fun listOutsideDirectories(directoryIds: Set<String>): List<RecordingEntity> {
             if (directoryIds.isEmpty()) return listAll()
@@ -131,41 +137,17 @@ class RecordingDatabase private constructor(context: Context) : SQLiteOpenHelper
             if (directoryIds.size > MAX_RECORDING_CATALOG_DIRECTORY_QUERY_ARGS) {
                 return listAll().filter { recordingNeedsFallbackAssetProbe(it.directoryId, directoryIds) }
             }
-            return readableDatabase.query(
-                TABLE_RECORDINGS,
-                recordingCatalogProjection(),
+            return readableDatabase.queryRecordings(
                 recordingCatalogOutsideDirectoriesSelection(directoryIds.size),
                 directoryIds.toTypedArray(),
-                null,
-                null,
-                recordingCatalogOrderBy(),
-            ).use { cursor -> readRecordings(cursor, managedFileDirectoryIds) }
+            )
         }
 
-        override suspend fun findById(id: String): RecordingEntity? {
-            return readableDatabase.query(
-                TABLE_RECORDINGS,
-                recordingCatalogProjection(),
-                "$COLUMN_ID = ?",
-                arrayOf(id),
-                null,
-                null,
-                null,
-                "1",
-            ).use { cursor -> readRecordings(cursor, managedFileDirectoryIds) }.firstOrNull()
-        }
+        override suspend fun findById(id: String): RecordingEntity? =
+            readableDatabase.queryRecordings("$COLUMN_ID = ?", arrayOf(id), ordered = false, limit = "1").firstOrNull()
 
-        override suspend fun listByDirectory(directoryId: String): List<RecordingEntity> {
-            return readableDatabase.query(
-                TABLE_RECORDINGS,
-                recordingCatalogProjection(),
-                "$COLUMN_DIRECTORY_ID = ?",
-                arrayOf(directoryId),
-                null,
-                null,
-                recordingCatalogOrderBy(),
-            ).use { cursor -> readRecordings(cursor, managedFileDirectoryIds) }
-        }
+        override suspend fun listByDirectory(directoryId: String): List<RecordingEntity> =
+            readableDatabase.queryRecordings("$COLUMN_DIRECTORY_ID = ?", arrayOf(directoryId))
 
         override suspend fun upsert(recording: RecordingEntity) {
             writableDatabase.upsertRecording(recording)

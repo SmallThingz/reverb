@@ -1776,18 +1776,12 @@ internal object RecordingIncidentStore {
         if (version !in 1..PENDING_FORMAT_VERSION) {
             throw IOException("Unsupported pending recording incidents version $version")
         }
-        val count = input.readUnsignedShort()
-        if (count > MAX_PENDING_INCIDENT_SESSIONS) {
-            throw IOException("Pending recording incident count $count exceeds $MAX_PENDING_INCIDENT_SESSIONS")
-        }
-        return buildList(count) {
-            repeat(count) {
-                val marker = readSessionMarker(input, hasBootCount = version >= 3)
-                val resumedAtMillis = input.readLong()
-                val endedByMillis = if (version == 1) 0L else input.readLong()
-                if (endedByMillis < 0L) throw IOException("Invalid pending capture process-exit boundary")
-                add(PendingRecordingSession(marker, resumedAtMillis, endedByMillis))
-            }
+        return readBoundedRecords(input, MAX_PENDING_INCIDENT_SESSIONS, "Pending recording incident") { records ->
+            val marker = readSessionMarker(records, hasBootCount = version >= 3)
+            val resumedAtMillis = records.readLong()
+            val endedByMillis = if (version == 1) 0L else records.readLong()
+            if (endedByMillis < 0L) throw IOException("Invalid pending capture process-exit boundary")
+            PendingRecordingSession(marker, resumedAtMillis, endedByMillis)
         }
     }
 
@@ -1874,71 +1868,76 @@ internal object RecordingIncidentStore {
         return incidents
     }
 
-    private fun readLegacyHistory(input: DataInputStream): List<RecordingIncident> {
+    private inline fun <T> readBoundedRecords(
+        input: DataInputStream,
+        maximum: Int,
+        label: String,
+        readRecord: (DataInputStream) -> T,
+    ): List<T> {
         val count = input.readUnsignedShort()
-        if (count > MAX_INCIDENTS) throw IOException("Incident count $count exceeds $MAX_INCIDENTS")
+        if (count > maximum) throw IOException("$label count $count exceeds $maximum")
         return buildList(count) {
             repeat(count) {
-                val kindCode = input.readByte()
-                val timestamp = input.readLong()
-                val kind = RecordingIncidentKind.fromStorageCode(kindCode)
-                    ?: throw IOException("Unknown recording incident kind $kindCode")
-                if (kind == RecordingIncidentKind.CAPTURE_INPUT_OBSERVATION) {
-                    throw IOException("Capture observations require history version 4")
-                }
-                if (timestamp <= 0L) throw IOException("Invalid recording incident timestamp $timestamp")
-                add(RecordingIncident(occurredAtMillis = timestamp, kind = kind))
+                add(readRecord(input))
             }
         }
     }
 
-    private fun readCurrentHistory(input: DataInputStream, maximumRecords: Int, hasObservationIds: Boolean = false): List<RecordingIncident> {
-        val count = input.readUnsignedShort()
-        if (count > maximumRecords) throw IOException("Incident count $count exceeds $maximumRecords")
-        return buildList(count) {
-            repeat(count) {
-                val kindCode = input.readByte()
-                val occurredAtMillis = input.readLong()
-                val resumedAtMillis = input.readLong()
-                val acknowledgedAtMillis = input.readLong()
-                val exitReason = input.readInt()
-                val exitStatus = input.readInt()
-                val pid = input.readInt()
-                val importance = input.readInt()
-                val pssKb = input.readLong()
-                val rssKb = input.readLong()
-                val processStartedAtMillis = input.readLong()
-                val captureArmedAtMillis = input.readLong()
-                val description = input.readUTF().takeIf { it.isNotBlank() }?.take(MAX_DESCRIPTION_CHARS)
-                val observationId = if (hasObservationIds) input.readLong() else 0L
-                val kind = RecordingIncidentKind.fromStorageCode(kindCode)
-                    ?: throw IOException("Unknown recording incident kind $kindCode")
-                if (observationId < 0L || (kind == RecordingIncidentKind.CAPTURE_INPUT_OBSERVATION &&
-                    (!hasObservationIds || observationId == 0L || pid <= 0 || processStartedAtMillis <= 0L))) {
-                    throw IOException("Invalid capture observation identity $observationId")
-                }
-                if (occurredAtMillis <= 0L) {
-                    throw IOException("Invalid recording incident timestamp $occurredAtMillis")
-                }
-                add(
-                    RecordingIncident(
-                        occurredAtMillis = occurredAtMillis,
-                        resumedAtMillis = resumedAtMillis,
-                        acknowledgedAtMillis = acknowledgedAtMillis,
-                        kind = kind,
-                        exitReason = exitReason,
-                        exitStatus = exitStatus,
-                        pid = pid,
-                        importance = importance,
-                        pssKb = pssKb,
-                        rssKb = rssKb,
-                        processStartedAtMillis = processStartedAtMillis,
-                        captureArmedAtMillis = captureArmedAtMillis,
-                        description = description,
-                        observationId = observationId,
-                    ),
-                )
+    private fun readLegacyHistory(input: DataInputStream): List<RecordingIncident> {
+        return readBoundedRecords(input, MAX_INCIDENTS, "Incident") { records ->
+            val kindCode = records.readByte()
+            val timestamp = records.readLong()
+            val kind = RecordingIncidentKind.fromStorageCode(kindCode)
+                ?: throw IOException("Unknown recording incident kind $kindCode")
+            if (kind == RecordingIncidentKind.CAPTURE_INPUT_OBSERVATION) {
+                throw IOException("Capture observations require history version 4")
             }
+            if (timestamp <= 0L) throw IOException("Invalid recording incident timestamp $timestamp")
+            RecordingIncident(occurredAtMillis = timestamp, kind = kind)
+        }
+    }
+
+    private fun readCurrentHistory(input: DataInputStream, maximumRecords: Int, hasObservationIds: Boolean = false): List<RecordingIncident> {
+        return readBoundedRecords(input, maximumRecords, "Incident") { records ->
+            val kindCode = records.readByte()
+            val occurredAtMillis = records.readLong()
+            val resumedAtMillis = records.readLong()
+            val acknowledgedAtMillis = records.readLong()
+            val exitReason = records.readInt()
+            val exitStatus = records.readInt()
+            val pid = records.readInt()
+            val importance = records.readInt()
+            val pssKb = records.readLong()
+            val rssKb = records.readLong()
+            val processStartedAtMillis = records.readLong()
+            val captureArmedAtMillis = records.readLong()
+            val description = records.readUTF().takeIf { it.isNotBlank() }?.take(MAX_DESCRIPTION_CHARS)
+            val observationId = if (hasObservationIds) records.readLong() else 0L
+            val kind = RecordingIncidentKind.fromStorageCode(kindCode)
+                ?: throw IOException("Unknown recording incident kind $kindCode")
+            if (observationId < 0L || (kind == RecordingIncidentKind.CAPTURE_INPUT_OBSERVATION &&
+                (!hasObservationIds || observationId == 0L || pid <= 0 || processStartedAtMillis <= 0L))) {
+                throw IOException("Invalid capture observation identity $observationId")
+            }
+            if (occurredAtMillis <= 0L) {
+                throw IOException("Invalid recording incident timestamp $occurredAtMillis")
+            }
+            RecordingIncident(
+                occurredAtMillis = occurredAtMillis,
+                resumedAtMillis = resumedAtMillis,
+                acknowledgedAtMillis = acknowledgedAtMillis,
+                kind = kind,
+                exitReason = exitReason,
+                exitStatus = exitStatus,
+                pid = pid,
+                importance = importance,
+                pssKb = pssKb,
+                rssKb = rssKb,
+                processStartedAtMillis = processStartedAtMillis,
+                captureArmedAtMillis = captureArmedAtMillis,
+                description = description,
+                observationId = observationId,
+            )
         }
     }
 

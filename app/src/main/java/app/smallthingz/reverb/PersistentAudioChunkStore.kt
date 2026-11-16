@@ -1611,15 +1611,6 @@ internal class PersistentAudioChunkStore internal constructor(
         val continuesPreviousChunk: Boolean,
     )
 
-    private data class ParsedImmutableHeader(
-        val id: UInt,
-        val createdAtMillis: Long,
-        val sampleRate: Int,
-        val channelCount: Int,
-        val sampleFormat: PcmSampleFormat,
-        val continuesPreviousChunk: Boolean,
-    )
-
     private data class ParsedMutableSlot(
         val generation: Long,
         val state: ChunkState,
@@ -2497,66 +2488,53 @@ internal class PersistentAudioChunkStore internal constructor(
             return null
         }
 
-        if (header.state == ChunkState.FINALIZED) {
+        val sampleFrames = alignedActualPayload / frameBytes
+        val checksum = if (header.state == ChunkState.FINALIZED) {
             if (
                 actualPayload != alignedActualPayload ||
                 header.payloadBytes != actualPayload ||
-                header.sampleFrames != actualPayload / frameBytes
+                header.sampleFrames != sampleFrames
             ) {
                 return null
             }
-            return ChunkRecord(
-                id = header.id,
-                file = file,
-                state = header.state,
-                createdAtMillis = header.createdAtMillis,
-                payloadBytes = header.payloadBytes,
-                sampleFrames = header.sampleFrames,
-                sampleRate = header.sampleRate,
-                channelCount = header.channelCount,
-                sampleFormat = header.sampleFormat,
-                payloadChecksum = header.payloadChecksum,
-                headerGeneration = header.generation,
-                payloadOffsetBytes = header.payloadOffsetBytes,
-                continuesPreviousChunk = header.continuesPreviousChunk,
-            )
-        }
+            header.payloadChecksum
+        } else {
+            // ACTIVE metadata can lag the payload after a crash, but the latest valid mutable
+            // slot describes a prefix that already crossed a successful fsync. Never bless that
+            // known-durable prefix again from whatever bytes happen to occupy the file now: prove
+            // its geometry/checksum first. Bytes appended after that checkpoint have no prior CRC,
+            // so they remain best-effort crash recovery once the authoritative prefix is intact.
+            requireUnpinnedMutationLocked(File(chunksDirectory, filenameId.toString()))
+            if (
+                header.payloadBytes < 0L ||
+                header.payloadBytes % frameBytes.toLong() != 0L ||
+                header.sampleFrames != header.payloadBytes / frameBytes.toLong() ||
+                alignedActualPayload < header.payloadBytes
+            ) {
+                return null
+            }
+            if (header.payloadBytes > 0L) {
+                val checkpointChecksum = crc32FilePayload(file, header.payloadOffsetBytes, header.payloadBytes)
+                if (checkpointChecksum != header.payloadChecksum) return null
+            }
 
-        // ACTIVE metadata can lag the payload after a crash, but the latest valid mutable
-        // slot describes a prefix that already crossed a successful fsync. Never bless that
-        // known-durable prefix again from whatever bytes happen to occupy the file now: prove
-        // its geometry/checksum first. Bytes appended after that checkpoint have no prior CRC,
-        // so they remain best-effort crash recovery once the authoritative prefix is intact.
-        requireUnpinnedMutationLocked(File(chunksDirectory, filenameId.toString()))
-        if (
-            header.payloadBytes < 0L ||
-            header.payloadBytes % frameBytes.toLong() != 0L ||
-            header.sampleFrames != header.payloadBytes / frameBytes.toLong() ||
-            alignedActualPayload < header.payloadBytes
-        ) {
-            return null
+            // If the crash tore the final frame, preserve the original bytes before aligning the
+            // live copy; even undecodable trailing bytes are never silently destroyed.
+            if (actualPayload != alignedActualPayload) {
+                preserveFileCopyLocked(file, "partial-frame")
+            }
+            RandomAccessFile(file, "rw").use { access ->
+                access.setLength(header.payloadOffsetBytes + alignedActualPayload)
+            }
+            crc32FilePayload(file, header.payloadOffsetBytes, alignedActualPayload)
         }
-        if (header.payloadBytes > 0L) {
-            val checkpointChecksum = crc32FilePayload(file, header.payloadOffsetBytes, header.payloadBytes)
-            if (checkpointChecksum != header.payloadChecksum) return null
-        }
-
-        // If the crash tore the final frame, preserve the original bytes before aligning the
-        // live copy; even undecodable trailing bytes are never silently destroyed.
-        if (actualPayload != alignedActualPayload) {
-            preserveFileCopyLocked(file, "partial-frame")
-        }
-        RandomAccessFile(file, "rw").use { access ->
-            access.setLength(header.payloadOffsetBytes + alignedActualPayload)
-        }
-        val checksum = crc32FilePayload(file, header.payloadOffsetBytes, alignedActualPayload)
-        val recovered = ChunkRecord(
+        val record = ChunkRecord(
             id = header.id,
             file = file,
             state = ChunkState.FINALIZED,
             createdAtMillis = header.createdAtMillis,
             payloadBytes = alignedActualPayload,
-            sampleFrames = alignedActualPayload / frameBytes,
+            sampleFrames = sampleFrames,
             sampleRate = header.sampleRate,
             channelCount = header.channelCount,
             sampleFormat = header.sampleFormat,
@@ -2565,8 +2543,10 @@ internal class PersistentAudioChunkStore internal constructor(
             payloadOffsetBytes = header.payloadOffsetBytes,
             continuesPreviousChunk = header.continuesPreviousChunk,
         )
-        writeMutableChunkSlot(recovered, forceToDisk = true)
-        return recovered
+        if (header.state == ChunkState.ACTIVE) {
+            writeMutableChunkSlot(record, forceToDisk = true)
+        }
+        return record
     }
 
     private fun indexRecordMatchesChunk(indexed: IndexRecord, record: ChunkRecord): Boolean {
@@ -3847,14 +3827,6 @@ internal class PersistentAudioChunkStore internal constructor(
         if (readIntLE(bytes, 40) != crc32(bytes, 0, CHUNK_IMMUTABLE_CRC_OFFSET)) return null
 
         val sampleFormat = sampleFormatFromCode(readIntLE(bytes, 32)) ?: return null
-        val immutable = ParsedImmutableHeader(
-            id = readIntLE(bytes, 8).toUInt(),
-            createdAtMillis = readLongLE(bytes, 16),
-            sampleRate = readIntLE(bytes, 24),
-            channelCount = readIntLE(bytes, 28),
-            sampleFormat = sampleFormat,
-            continuesPreviousChunk = readIntLE(bytes, 36) == CHUNK_CONTINUES_PREVIOUS,
-        )
         val first = readMutableSlot(bytes, CHUNK_SLOT_A_OFFSET)
         val second = readMutableSlot(bytes, CHUNK_SLOT_B_OFFSET)
         val mutable = when {
@@ -3865,18 +3837,18 @@ internal class PersistentAudioChunkStore internal constructor(
         } ?: return null
 
         return ParsedHeader(
-            id = immutable.id,
+            id = readIntLE(bytes, 8).toUInt(),
             state = mutable.state,
             generation = mutable.generation,
-            createdAtMillis = immutable.createdAtMillis,
+            createdAtMillis = readLongLE(bytes, 16),
             payloadBytes = mutable.payloadBytes,
             sampleFrames = mutable.sampleFrames,
-            sampleRate = immutable.sampleRate,
-            channelCount = immutable.channelCount,
-            sampleFormat = immutable.sampleFormat,
+            sampleRate = readIntLE(bytes, 24),
+            channelCount = readIntLE(bytes, 28),
+            sampleFormat = sampleFormat,
             payloadChecksum = mutable.payloadChecksum,
             payloadOffsetBytes = CHUNK_HEADER_BYTES.toLong(),
-            continuesPreviousChunk = immutable.continuesPreviousChunk,
+            continuesPreviousChunk = readIntLE(bytes, 36) == CHUNK_CONTINUES_PREVIOUS,
         )
     }
 

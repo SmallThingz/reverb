@@ -863,10 +863,7 @@ class PersistentAudioChunkStoreDurabilityTest {
         replaceActiveAccessWithFailingClose(store)
 
         val error = assertThrows(IOException::class.java) { store.clear() }
-        assertTrue(
-            error.message?.contains("Injected active access close failure") == true ||
-                error.suppressed.any { it.message?.contains("Injected active access close failure") == true },
-        )
+        assertActiveAccessCloseFailure(error)
         assertFalse(store.hasData())
         store.close()
 
@@ -889,10 +886,7 @@ class PersistentAudioChunkStoreDurabilityTest {
         replaceActiveAccessWithFailingClose(store)
 
         val error = assertThrows(IOException::class.java) { store.sealActiveChunk() }
-        assertTrue(
-            error.message?.contains("Injected active access close failure") == true ||
-                error.suppressed.any { it.message?.contains("Injected active access close failure") == true },
-        )
+        assertActiveAccessCloseFailure(error)
         assertEquals(expected.size.toLong(), store.countFilledBytes())
         assertArrayEquals(expected, readAll(store))
         store.close()
@@ -913,10 +907,7 @@ class PersistentAudioChunkStoreDurabilityTest {
         replaceActiveAccessWithFailingClose(store)
 
         val error = assertThrows(IOException::class.java) { store.sealActiveChunk() }
-        assertTrue(
-            error.message?.contains("Injected active access close failure") == true ||
-                error.suppressed.any { it.message?.contains("Injected active access close failure") == true },
-        )
+        assertActiveAccessCloseFailure(error)
         assertEquals(expected.size.toLong(), store.countFilledBytes())
         assertArrayEquals(expected, readAll(store))
         store.close()
@@ -1043,10 +1034,7 @@ class PersistentAudioChunkStoreDurabilityTest {
         replaceActiveAccessWithFailingClose(store)
 
         val error = assertThrows(IOException::class.java) { store.close() }
-        assertTrue(
-            error.message?.contains("Injected active access close failure") == true ||
-                error.suppressed.any { it.message?.contains("Injected active access close failure") == true },
-        )
+        assertActiveAccessCloseFailure(error)
 
         PersistentAudioChunkStore(root).use { reopened ->
             configure(reopened, 128 * 1024L)
@@ -1964,6 +1952,13 @@ class PersistentAudioChunkStoreDurabilityTest {
             }
             assertArrayEquals(expected, readAll(store))
         }
+    }
+
+    private fun assertActiveAccessCloseFailure(error: IOException) {
+        assertTrue(
+            error.message?.contains("Injected active access close failure") == true ||
+                error.suppressed.any { it.message?.contains("Injected active access close failure") == true },
+        )
     }
 
     private fun configure(store: PersistentAudioChunkStore, retentionBytes: Long) {
