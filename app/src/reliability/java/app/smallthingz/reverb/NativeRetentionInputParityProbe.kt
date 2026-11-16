@@ -76,19 +76,26 @@ private val retentionCases = listOf(
  * No production preferences/backend, real IME launch, clipboard writes or external input.
  * This is not cursor/selection-handle/toolbar/focus/IME-session parity qualification.
  */
-internal fun verifyNativeRetentionInputParity(instrumentation: Instrumentation, report: StringBuilder) {
+internal fun verifyNativeRetentionInputParity(
+    instrumentation: Instrumentation,
+    report: StringBuilder,
+    connectionsOnly: Boolean = false,
+) {
     val context = instrumentation.targetContext
     check(context.packageName in setOf("app.smallthingz.reverb.nativeparity.reliability",
         "app.smallthingz.reverb.uitheme.reliability"))
     check(context.applicationContext.javaClass == Application::class.java)
-    val typography = Class.forName("app.smallthingz.reverb.ReverbThemeKt")
+    val cases = if (connectionsOnly) emptyList() else retentionCases
+    val typography = if (connectionsOnly) null else Class.forName("app.smallthingz.reverb.ReverbThemeKt")
         .getDeclaredField("ReverbTypography").apply { isAccessible = true }.get(null) as Typography
     val directory = File(context.filesDir, "native-retention-input-parity-${System.currentTimeMillis()}")
     check(directory.mkdir())
     val entries = JSONArray()
     val result = JSONObject().put("baseline", "3e16f8ddb78dca15df4b436d34d330801ce83ffd")
         .put("oracle_sha256", "ddbab4f6155ebb5400917282c7c32c5fd9f9841de26babeb4b7fc077e5b9f726")
-        .put("scope", "Exact unfocused editor pixels/visible metrics and native-only raw InputConnection contract")
+        .put("scope", if (connectionsOnly) "Native-only raw InputConnection contract; no raster comparison"
+            else "Exact unfocused editor pixels/visible metrics and native-only raw InputConnection contract")
+        .put("expected_raster_cases", cases.size).put("expected_connection_modes", 3)
         .put("unqualified", JSONArray(listOf("focused cursor and blink phase", "selection handles/toolbar/magnifier",
             "hardware keys/undo", "real IME session/composition ordering", "accessibility editable actions",
             "keyed focus and keyboard show/hide", "API28 native cursor geometry")))
@@ -105,7 +112,7 @@ internal fun verifyNativeRetentionInputParity(instrumentation: Instrumentation, 
             launchCurrentUiSmokeActivity(instrumentation) else launchNativeParityActivity(instrumentation))
         host = activity
         awaitNativeParityDraw(instrumentation, activity.fixtureRoot)
-        for (case in retentionCases) {
+        for (case in cases) {
             val entry = JSONObject().put("case", case.name).put("raw", case.raw)
                 .put("dark", case.dark).put("font_scale", case.scale.toDouble()).put("rtl", case.rtl)
                 .put("passed", false)
@@ -116,7 +123,7 @@ internal fun verifyNativeRetentionInputParity(instrumentation: Instrumentation, 
                 repeat(4) { pass ->
                     var rendered: RetentionRender? = null
                     bitmaps += captureNativeParityContent(instrumentation, activity) {
-                        showRetentionCase(activity, typography, case, pass % 2 == 0)
+                        showRetentionCase(activity, checkNotNull(typography), case, pass % 2 == 0)
                             .also { rendered = it }.content
                     }
                     requireNativeParityHost(instrumentation, activity)
@@ -160,8 +167,9 @@ internal fun verifyNativeRetentionInputParity(instrumentation: Instrumentation, 
             verifyRetentionNativeConnectionContract(activity)
         }
         requireNativeParityHost(instrumentation, activity)
+        check(contract.length() == 3) { "Expected TIME, SIZE and RENAME connection modes" }
         result.put("native_connection_contract", contract)
-        check(completed == retentionCases.size && mismatches == 0) {
+        check(completed == cases.size && mismatches == 0) {
             "Retention native editor differs in $mismatches of $completed cases; preserve failed candidate"
         }
     } catch (error: Throwable) {
@@ -178,7 +186,9 @@ internal fun verifyNativeRetentionInputParity(instrumentation: Instrumentation, 
             result.put("cleanup_error", android.util.Log.getStackTraceString(error))
         }
         result.put("completed_cases", completed).put("mismatched_cases", mismatches)
-            .put("passed", primary == null && cleanup == null && completed == retentionCases.size && mismatches == 0)
+            .put("passed", primary == null && cleanup == null && completed == cases.size && mismatches == 0)
+        if (connectionsOnly && primary == null && cleanup == null)
+            report.appendLine("PASS native_retention_input_connections raster_cases=0 connection_modes=3")
         report.append("PARITY_EVIDENCE ").append(directory.name).append("/result.json\n")
         try {
             writeQaEvidenceAtomically(File(directory, "result.json")) { output ->

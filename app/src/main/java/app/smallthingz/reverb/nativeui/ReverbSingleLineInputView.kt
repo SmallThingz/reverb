@@ -71,25 +71,16 @@ internal class ReverbSingleLineInputView private constructor(
     initialEnvironment: ReverbViewEnvironment,
     initialConfiguration: NativeSingleLineInputConfiguration,
     private val legacyCursor: LegacyNativeCursorBinding?,
-) : EditText(legacyCursor?.context ?: context, null, 0,
-    if (legacyCursor != null) R.style.ReverbNativeEditorCursor else 0) {
+) : ReverbEditableInputView(context, legacyCursor) {
     constructor(context: Context, initialEnvironment: ReverbViewEnvironment,
         initialConfiguration: NativeSingleLineInputConfiguration) : this(
         context, initialEnvironment, initialConfiguration, legacyNativeCursorBinding(context,
             2f * initialEnvironment.textDensity.density, initialConfiguration.cursorColor))
-    override fun createAccessibilityNodeInfo(): AccessibilityNodeInfo? =
-        if (nativeSurfaceInputAllowed(this)) super.createAccessibilityNodeInfo() else null
-
-    override fun performAccessibilityAction(action: Int, arguments: Bundle?): Boolean {
-        if (!nativeSurfaceInputAllowed(this) && action != AccessibilityNodeInfo.ACTION_CLEAR_FOCUS &&
-            action != AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS) return false
-        return super.performAccessibilityAction(action, arguments)
-    }
-
     private var environment = initialEnvironment
-    private val cursorDrawable = legacyCursor?.cursor ?: NativeEditableCursorDrawable(
+    protected override val cursorDrawable = legacyCursor?.cursor ?: NativeEditableCursorDrawable(
         2f * initialEnvironment.textDensity.density, initialConfiguration.cursorColor)
-    private var initialized = false
+    protected override var initialized = false
+        private set
     private var configuration = initialConfiguration
     private val colorMotion:ViewColorTransition by lazy {ViewColorTransition(this,
         intArrayOf(initialConfiguration.textColor,initialConfiguration.selectionBackgroundColor,
@@ -101,7 +92,7 @@ internal class ReverbSingleLineInputView private constructor(
     private var appliedConfiguration: NativeSingleLineInputConfiguration? = null
     private var minimumParagraph: Paragraph? = null
     private var lineHeightSpan: NativeEditableLineHeightSpan? = null
-    private val editing = NativeEditableState(this, ::installLineHeightSpan)
+    protected override val editing = NativeEditableState(this, ::installLineHeightSpan)
 
 
     init {
@@ -117,14 +108,7 @@ internal class ReverbSingleLineInputView private constructor(
         }
         initialized = true
         applyTypography()
-        Selection.setSelection(checkNotNull(editableText), 0)
-        addTextChangedListener(object : TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
-            override fun afterTextChanged(value: Editable?) {
-                if (initialized) editing.afterTextChanged()
-            }
-        })
+        observeNativeEdits()
     }
 
     fun bind(
@@ -156,24 +140,6 @@ internal class ReverbSingleLineInputView private constructor(
         onNativeFocusChanged = null
     }
 
-    override fun onDraw(canvas: Canvas) {
-        cursorDrawable.beginTextDraw()
-        try {
-            super.onDraw(canvas)
-            // Released BasicTextField draws its cursor after drawContent, above glyph edges.
-            cursorDrawable.drawAfterText(canvas, compoundPaddingLeft, extendedPaddingTop)
-        } finally {
-            cursorDrawable.endTextDraw()
-        }
-    }
-
-    override fun scrollTo(x: Int, y: Int) {
-        // Released Rename uses singleLine CoreTextField: HorizontalScrollLayoutModifier places
-        // text at (horizontalOffset, 0), even when its unrestricted raw value contains newlines.
-        // TextView cursor-follow must not introduce a source-absent vertical scrolling axis.
-        super.scrollTo(x, 0)
-    }
-
     private fun applyImeHints() {
         val hints = configuration.ime
         // Keep the unrestricted key listener installed above; never use setInputType here.
@@ -203,17 +169,13 @@ internal class ReverbSingleLineInputView private constructor(
         }
     }
 
-    override fun onTextContextMenuItem(id: Int): Boolean =
-        // RecordingInputConnection/BasicTextField(String) preserves raw characters, not rich spans.
-        editing.nativeEdit { super.onTextContextMenuItem(if (id == android.R.id.paste) android.R.id.pasteAsPlainText else id) }
-
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         if (keyCode == KeyEvent.KEYCODE_ENTER || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER) {
             if (!nativeSingleLineEnterCommand(keyCode, event.isAltPressed, event.isMetaPressed)) return false
             onDone?.invoke()
             return true
         }
-        return editing.nativeEdit { super.onKeyDown(keyCode, event) }
+        return super.onKeyDown(keyCode, event)
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean =
@@ -340,6 +302,62 @@ internal class ReverbSingleLineInputView private constructor(
         super.onFocusChanged(gainFocus, direction, previouslyFocusedRect)
         onNativeFocusChanged?.invoke(gainFocus)
     }
+}
+
+/** Shared native Editor mechanics; each leaf retains its initialization and presentation state. */
+internal abstract class ReverbEditableInputView(
+    context: Context,
+    legacyCursor: LegacyNativeCursorBinding?,
+) : EditText(legacyCursor?.context ?: context, null, 0,
+    if (legacyCursor != null) R.style.ReverbNativeEditorCursor else 0) {
+    protected abstract val cursorDrawable: NativeEditableCursorDrawable
+    protected abstract val initialized: Boolean
+    protected abstract val editing: NativeEditableState
+
+    override fun createAccessibilityNodeInfo(): AccessibilityNodeInfo? =
+        if (nativeSurfaceInputAllowed(this)) super.createAccessibilityNodeInfo() else null
+
+    override fun performAccessibilityAction(action: Int, arguments: Bundle?): Boolean {
+        if (!nativeSurfaceInputAllowed(this) && action != AccessibilityNodeInfo.ACTION_CLEAR_FOCUS &&
+            action != AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS) return false
+        return super.performAccessibilityAction(action, arguments)
+    }
+
+    /** Called by the leaf after its typography, at the original selection/watcher publication point. */
+    protected fun observeNativeEdits() {
+        Selection.setSelection(checkNotNull(editableText), 0)
+        addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+            override fun afterTextChanged(value: Editable?) {
+                if (initialized) editing.afterTextChanged()
+            }
+        })
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        cursorDrawable.beginTextDraw()
+        try {
+            super.onDraw(canvas)
+            // Released BasicTextField draws its cursor after drawContent, above glyph edges.
+            cursorDrawable.drawAfterText(canvas, compoundPaddingLeft, extendedPaddingTop)
+        } finally {
+            cursorDrawable.endTextDraw()
+        }
+    }
+
+    override fun scrollTo(x: Int, y: Int) {
+        // Both released single-line fields place unrestricted raw text at (horizontalOffset, 0).
+        // Native cursor-follow must not introduce a vertical scrolling axis for pasted newlines.
+        super.scrollTo(x, 0)
+    }
+
+    override fun onTextContextMenuItem(id: Int): Boolean =
+        // RecordingInputConnection/BasicTextField(String) preserves raw characters, not rich spans.
+        editing.nativeEdit { super.onTextContextMenuItem(if (id == android.R.id.paste) android.R.id.pasteAsPlainText else id) }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean =
+        editing.nativeEdit { super.onKeyDown(keyCode, event) }
 }
 
 internal data class NativeSingleLineImeContract(val inputType:Int,val imeOptions:Int,val autoCorrect:Boolean)

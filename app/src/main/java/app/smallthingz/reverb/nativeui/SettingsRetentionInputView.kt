@@ -17,24 +17,17 @@ import smallthingz.ui.components.input.NativeQueuedInputConnection
 import smallthingz.ui.animation.view.ViewColorTransition
 
 import android.content.Context
-import android.view.accessibility.AccessibilityNodeInfo
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Typeface
 import android.os.Build
-import android.os.Bundle
-import android.text.Editable
 import android.text.InputType
-import android.text.Selection
 import android.text.Spanned
-import android.text.TextWatcher
 import android.text.style.LineHeightSpan
 import android.util.TypedValue
-import android.view.KeyEvent
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
-import android.widget.EditText
 import smallthingz.ui.graphics.Color
 import smallthingz.ui.text.Paragraph
 import smallthingz.ui.text.TextStyle
@@ -48,7 +41,6 @@ import smallthingz.ui.unit.LayoutDirection
 import smallthingz.ui.unit.sp
 import androidx.core.view.inputmethod.EditorInfoCompat
 import app.smallthingz.reverb.RetentionMode
-import app.smallthingz.reverb.R
 import kotlin.math.ceil
 
 /**
@@ -69,26 +61,17 @@ internal class SettingsRetentionInputView private constructor(
     context: Context,
     initialEnvironment: ReverbViewEnvironment,
     private val legacyCursor: LegacyNativeCursorBinding?,
-) : EditText(legacyCursor?.context ?: context, null, 0,
-    if (legacyCursor != null) R.style.ReverbNativeEditorCursor else 0) {
+) : ReverbEditableInputView(context, legacyCursor) {
     constructor(context: Context, initialEnvironment: ReverbViewEnvironment) : this(
         context, initialEnvironment, legacyNativeCursorBinding(context,
             2f * initialEnvironment.textDensity.density, initialEnvironment.palette.primary))
-    override fun createAccessibilityNodeInfo(): AccessibilityNodeInfo? =
-        if (nativeSurfaceInputAllowed(this)) super.createAccessibilityNodeInfo() else null
-
-    override fun performAccessibilityAction(action: Int, arguments: Bundle?): Boolean {
-        if (!nativeSurfaceInputAllowed(this) && action != AccessibilityNodeInfo.ACTION_CLEAR_FOCUS &&
-            action != AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS) return false
-        return super.performAccessibilityAction(action, arguments)
-    }
-
     private var environment = initialEnvironment
     private val colorMotion:ViewColorTransition by lazy {ViewColorTransition(this,
         intArrayOf(initialEnvironment.palette.ink,initialEnvironment.palette.primary),::applyColors)}
-    private val cursorDrawable = legacyCursor?.cursor ?: NativeEditableCursorDrawable(
+    protected override val cursorDrawable = legacyCursor?.cursor ?: NativeEditableCursorDrawable(
         2f * initialEnvironment.textDensity.density, initialEnvironment.palette.primary)
-    private var initialized = false
+    protected override var initialized = false
+        private set
     private var mode = RetentionMode.TIME
     private var focusKey: Boolean? = null
     private var focusPending = false
@@ -96,7 +79,7 @@ internal class SettingsRetentionInputView private constructor(
     private var appliedEnvironment: ReverbViewEnvironment? = null
     private var minimumParagraph: Paragraph? = null
     private var lineHeightSpan: RetentionLineHeightSpan? = null
-    private val editing = NativeEditableState(this, ::installLineHeightSpan)
+    protected override val editing = NativeEditableState(this, ::installLineHeightSpan)
 
     private val focusRequest = Runnable {
         if (!focusPending) return@Runnable
@@ -117,14 +100,7 @@ internal class SettingsRetentionInputView private constructor(
         }
         initialized = true
         applyTypography()
-        Selection.setSelection(checkNotNull(editableText), 0)
-        addTextChangedListener(object : TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
-            override fun afterTextChanged(value: Editable?) {
-                if (initialized) editing.afterTextChanged()
-            }
-        })
+        observeNativeEdits()
     }
 
     fun bind(
@@ -165,22 +141,7 @@ internal class SettingsRetentionInputView private constructor(
 
     override fun onDraw(canvas: Canvas) {
         publishTextInk()
-        cursorDrawable.beginTextDraw()
-        try {
-            super.onDraw(canvas)
-            // Released BasicTextField draws its cursor after drawContent, above glyph edges.
-            cursorDrawable.drawAfterText(canvas, compoundPaddingLeft, extendedPaddingTop)
-        } finally {
-            cursorDrawable.endTextDraw()
-        }
-    }
-
-    override fun scrollTo(x: Int, y: Int) {
-        // Released singleLine CoreTextField uses HorizontalScrollLayoutModifier: its content
-        // placement is (horizontalOffset, 0), including raw newlines. TextView's cursor-follow
-        // pre-draw otherwise adds vertical slack for that raw multiline Layout, even unfocused.
-        // Keep native horizontal scrolling; this editor has no source vertical scroll axis.
-        super.scrollTo(x, 0)
+        super.onDraw(canvas)
     }
 
     private fun applyImeHints() {
@@ -209,13 +170,6 @@ internal class SettingsRetentionInputView private constructor(
             }
         }
     }
-
-    override fun onTextContextMenuItem(id: Int): Boolean =
-        // RecordingInputConnection/BasicTextField(String) preserves raw characters, not rich spans.
-        editing.nativeEdit { super.onTextContextMenuItem(if (id == android.R.id.paste) android.R.id.pasteAsPlainText else id) }
-
-    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean =
-        editing.nativeEdit { super.onKeyDown(keyCode, event) }
 
     private fun currentStyle(): TextStyle = ReverbParagraphStyles[ReverbTextRole.BODY_LARGE].copy(
         color = Color(environment.palette.ink),
