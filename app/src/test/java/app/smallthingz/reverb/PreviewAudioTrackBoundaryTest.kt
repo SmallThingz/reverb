@@ -85,6 +85,43 @@ class PreviewAudioTrackBoundaryTest {
         assertTerminalOnce(track)
     }
 
+    @Test fun secondNativeWriteFailureReportsOnceAndRetiresTheActualTrackAfterItsExactPrefix() {
+        var started = 0
+        var finished = 0
+        val errors = mutableListOf<Throwable>()
+        val failureDelivered = CountDownLatch(1)
+        fixture(false) { controller, recording ->
+            PreviewBoundaryTrackShadow.failWriteAt = 2
+            assertTrue(controller.playRecording(RuntimeEnvironment.getApplication(), recording, 2, 5,
+                {}, { started++ }, { finished++ }, { error -> errors += error; failureDelivered.countDown() }))
+            awaitMain(failureDelivered)
+            await(PreviewBoundaryTrackShadow.released, "failed track terminal release")
+            assertEquals(1, started)
+            assertEquals(0, finished)
+            assertEquals(1, errors.size)
+            assertTrue(errors.single() is java.io.IOException)
+            assertEquals("Audio preview write failed: -2", errors.single().message)
+            val track = PreviewBoundaryTrackShadow.single()
+            assertArrayEquals(expectedSelection().copyOf(34), track.acceptedBytes())
+            assertEquals(2, track.events.count { it.first == "write" })
+            assertEquals(1, track.events.count { it.first == "play" })
+            assertTerminalOnce(track)
+            controller.stop()
+        }
+        // fixture closes and joins stream/control/release workers, then drains Main.
+        // Successful terminal release returns the actual controller's shared native-track permit.
+        drainMain()
+        assertEquals(1, started)
+        assertEquals(0, finished)
+        assertEquals(1, errors.size)
+        assertEquals("Audio preview write failed: -2", errors.single().message)
+        val retired = PreviewBoundaryTrackShadow.single()
+        assertArrayEquals(expectedSelection().copyOf(34), retired.acceptedBytes())
+        assertEquals(2, retired.events.count { it.first == "write" })
+        assertEquals(1, retired.events.count { it.first == "play" })
+        assertTerminalOnce(retired)
+    }
+
     private fun fixture(blockFirstWrite: Boolean, test: (TimelineAudioPreviewController, RecordingEntity) -> Unit) {
         check(ServiceStateOsShadow.fixtureRoot == null)
         JournalHostIoShadow.reset()
@@ -209,6 +246,7 @@ class PreviewBoundaryTrackShadow : ShadowAudioTrack() {
         check(size > 0 && offset >= 0 && offset + size <= bytes.size && size % 2 == 0)
         check(mode == AudioTrack.WRITE_BLOCKING || mode == AudioTrack.WRITE_NON_BLOCKING)
         event("write")
+        if (failWriteAt > 0 && events.count { it.first == "write" } == failWriteAt) return AudioTrack.ERROR_BAD_VALUE
         writeEntered.countDown()
         if (blockFirst && events.count { it.first == "write" } == 1) check(allowWriteReturn.await(10, TimeUnit.SECONDS))
         val accepted = minOf(size, 34)
@@ -224,6 +262,7 @@ class PreviewBoundaryTrackShadow : ShadowAudioTrack() {
     companion object {
         private val tracks = mutableListOf<PreviewBoundaryTrackShadow>()
         private var blockFirst = false
+        @Volatile var failWriteAt = 0
         lateinit var writeEntered: CountDownLatch
         lateinit var allowWriteReturn: CountDownLatch
         lateinit var quiet: CountDownLatch
@@ -233,6 +272,7 @@ class PreviewBoundaryTrackShadow : ShadowAudioTrack() {
         fun reset(block: Boolean) {
             synchronized(tracks) { tracks.clear() }
             blockFirst = block
+            failWriteAt = 0
             writeEntered = CountDownLatch(1); allowWriteReturn = CountDownLatch(1)
             quiet = CountDownLatch(1); released = CountDownLatch(1)
         }

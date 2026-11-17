@@ -92,7 +92,46 @@ class CaptureIoBacklogTest {
         }
     }
 
+    @Test fun writerFailureRevokesQueuedAndInflightPcmWithoutReusingReadOwner() {
+        val deliveredPrefix = byteArrayOf(1, 2, 3, 4, 5, 6, 7, 8)
+        val queued = byteArrayOf(11, 12, 13, 14, 15, 16, 17, 18)
+        val inflight = byteArrayOf(21, 22, 23, 24, 25, 26, 27, 28)
+        val injected = IOException("injected sink failure")
+        withFixture(CapturePcmBudget(2, 8, 32, 8), listOf(deliveredPrefix, queued),
+            holdNextRead = true, writerFailure = injected, heldReadBytes = inflight) { f ->
+            f.start()
+            f.await(f.writerEntered)
+            f.await(f.source.extraReadEntered)
+            assertTrue(f.storage.ring.status().reading)
+            assertEquals(3, f.source.reads.get())
+            f.releaseWriter.countDown()
+            f.await(f.writerFailureDelivered)
+            assertSame(injected, f.unexpected.get())
+            assertEquals(1, f.writerFailures.get())
+            assertEquals(CapturePcmRing.Terminal.WRITER_FAILURE, f.storage.ring.status().terminal)
+            assertTrue(f.storage.ring.status().reading)
+            assertEquals(1, f.delivered.size)
+            assertArrayEquals(deliveredPrefix, f.delivered.single())
+            f.source.releaseExtraRead.countDown()
+            f.onReader { Unit }
+            f.awaitDrained()
+            assertTrue(f.storage.ring.isDrained())
+            assertEquals(1, f.writerFailures.get())
+            assertEquals(0, f.failures.get())
+            assertEquals(3, f.source.reads.get())
+            assertEquals(1, f.delivered.size)
+            assertArrayEquals(deliveredPrefix, f.delivered.single())
+            f.detach()
+            assertEquals(1, f.writerFailures.get())
+            assertEquals(3, f.source.reads.get())
+            assertEquals(0, f.failures.get())
+            assertEquals(1, f.delivered.size)
+            assertArrayEquals(deliveredPrefix, f.delivered.single())
+        }
+    }
+
     private fun withFixture(budget: CapturePcmBudget, packets: List<ByteArray>, holdNextRead: Boolean = false,
+        writerFailure: IOException? = null, heldReadBytes: ByteArray = byteArrayOf(),
         block: (Fixture) -> Unit) {
         val thread = HandlerThread("backlog-test-writer")
         var fixture: Fixture? = null
@@ -103,23 +142,26 @@ class CaptureIoBacklogTest {
             fixture?.cleanupAfterWriterTermination()
         }.use {
             thread.start()
-            val created = Fixture(thread, budget, packets, holdNextRead)
+            val created = Fixture(thread, budget, packets, holdNextRead, writerFailure, heldReadBytes)
             fixture = created
             created.use(block)
         }
     }
 
-    private class Fixture(writerThread: HandlerThread, budget: CapturePcmBudget, packets: List<ByteArray>, holdNextRead: Boolean) : Closeable {
+    private class Fixture(writerThread: HandlerThread, budget: CapturePcmBudget, packets: List<ByteArray>, holdNextRead: Boolean,
+        writerFailure: IOException?, heldReadBytes: ByteArray) : Closeable {
         val storage = CaptureIoCoordinator.Storage(budget)
         val writer = Handler(writerThread.looper)
-        val source = Source(packets, holdNextRead)
+        val source = Source(packets, holdNextRead, heldReadBytes)
         val writerEntered = CountDownLatch(1)
         val releaseWriter = CountDownLatch(1)
         val exhausted = CountDownLatch(1)
         val failureDelivered = CountDownLatch(1)
+        val writerFailureDelivered = CountDownLatch(1)
         val allDelivered = CountDownLatch(packets.size)
         val delivered = mutableListOf<ByteArray>()
         val failures = AtomicInteger()
+        val writerFailures = AtomicInteger()
         val deliveredAtFailure = AtomicInteger(-1)
         val inputFailure = AtomicReference<Throwable>()
         val unexpected = AtomicReference<Throwable>()
@@ -134,9 +176,10 @@ class CaptureIoBacklogTest {
                 }
                 delivered.add(bytes.copyOf(packet.byteCount))
                 allDelivered.countDown()
+                if (writerFailure != null) throw writerFailure
             },
             onInputFailure = { _, error -> deliveredAtFailure.set(delivered.size); inputFailure.set(error); failures.incrementAndGet(); failureDelivered.countDown() },
-            onWriterFailure = { unexpected.compareAndSet(null, it) },
+            onWriterFailure = { unexpected.compareAndSet(null, it); writerFailures.incrementAndGet(); writerFailureDelivered.countDown() },
             onDispatchFailure = { unexpected.compareAndSet(null, it) },
         )
         fun start() = onWriter {
@@ -223,7 +266,8 @@ class CaptureIoBacklogTest {
         }
     }
 
-    private class Source(private val packets: List<ByteArray>, private val holdNextRead: Boolean) : CaptureAudioInput {
+    private class Source(private val packets: List<ByteArray>, private val holdNextRead: Boolean,
+        private val heldReadBytes: ByteArray) : CaptureAudioInput {
         val reads = AtomicInteger()
         val extraReadEntered = CountDownLatch(1)
         val releaseExtraRead = CountDownLatch(1)
@@ -238,7 +282,9 @@ class CaptureIoBacklogTest {
             check(holdNextRead) { "unexpected read after accepted packets" }
             extraReadEntered.countDown()
             check(releaseExtraRead.await(5, TimeUnit.SECONDS)) { "input release timed out" }
-            return 0
+            check(heldReadBytes.size <= sizeInBytes) { "held read exceeds requested capacity" }
+            buffer.put(heldReadBytes)
+            return heldReadBytes.size
         }
     }
 }

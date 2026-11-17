@@ -17,6 +17,7 @@ import java.io.File
 import java.io.FileDescriptor
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.nio.file.Files
 import java.security.MessageDigest
 import java.util.Base64
 import java.util.UUID
@@ -32,6 +33,61 @@ import org.robolectric.shadows.ShadowContentResolver
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], application = Application::class, shadows = [JournalHostIoShadow::class])
 class SafRepositoryReconciliationTest {
+    @Test fun legacyExportStagingStaysHiddenWithoutRenameThenPublishesExactlyOnce() = runBlocking {
+        fixture(expectedRenames = 1) { f ->
+            f.dao.deleteById(SAF_SELECTED)
+            assertNull(f.dao.findById(SAF_SELECTED))
+            val stagedName = "reverb-partial-export__old-session__token__Y2xpcC53YXY.wav"
+            f.provider.selectedName = stagedName
+            val inode = Files.getAttribute(f.provider.payload.toPath(), "unix:ino")
+            val preferences = getRecorderPreferences(f.context)
+            val keys = listOf(PrefKey.VERIFIED_EXPORT_STAGING, PrefKey.PENDING_OUTPUT_CLEANUP,
+                PrefKey.PENDING_RECORDING_DELETIONS)
+            val journals = keys.associateWith { preferences.getStringSet(it.name, emptySet())!!.toSet() }
+            assertFalse(f.provider.renameSupported)
+            assertFalse(RecordingRepository.refresh(f.context).any { it.id == SAF_SELECTED })
+            assertFalse(RecordingRepository.listKnown(f.context).any { it.id == SAF_SELECTED })
+            assertNull(f.dao.findById(SAF_SELECTED))
+            assertEquals(stagedName, f.provider.selectedName)
+            assertEquals(f.selected.fileIdentity, resolveProviderRecordingIdentity(f.context,
+                RecordingStorageType.DOCUMENT, Uri.parse(SAF_SELECTED)))
+            f.assertOwnedBytes()
+            assertEquals(inode, Files.getAttribute(f.provider.payload.toPath(), "unix:ino"))
+            assertTrue(f.provider.callMethods.isEmpty())
+            assertEquals(listOf(false), f.provider.capabilityObservations)
+            assertEquals(0, f.provider.mutations)
+            assertTrue(f.provider.selectedOpens > 0)
+            assertEquals(f.sentinel, f.dao.findById(SAF_SENTINEL))
+            keys.forEach { assertEquals(journals[it], preferences.getStringSet(it.name, emptySet())) }
+            val opensBeforePublish = f.provider.selectedOpens
+            f.provider.renameSupported = true
+            val published = RecordingRepository.refresh(f.context).single { it.id == SAF_SELECTED }
+            assertEquals(listOf(Uri.parse(SAF_SELECTED) to "clip.wav"), f.provider.renameRequests)
+            assertEquals(listOf(false, true), f.provider.capabilityObservations)
+            assertEquals("clip.wav", f.provider.selectedName)
+            assertEquals("clip.wav", published.displayName)
+            assertEquals("audio/wav", published.mimeType)
+            assertEquals(1644L, published.sizeBytes)
+            assertEquals(100L, published.durationMillis)
+            val encodedId = Base64.getUrlEncoder().withoutPadding().encodeToString(SAF_SELECTED.toByteArray(Charsets.UTF_8))
+            assertEquals("provider:2:$encodedId:1644:100001", published.fileIdentity)
+            assertEquals(published, f.dao.findById(SAF_SELECTED))
+            assertTrue(f.provider.selectedOpens > opensBeforePublish)
+            val renameIndex = f.provider.trace.indexOf("rename:selected")
+            assertTrue(renameIndex >= 0)
+            assertTrue(f.provider.trace.drop(renameIndex + 1).contains("query:children:complete"))
+            f.assertOwnedBytes()
+            assertEquals(inode, Files.getAttribute(f.provider.payload.toPath(), "unix:ino"))
+            keys.forEach { assertEquals(journals[it], preferences.getStringSet(it.name, emptySet())) }
+            assertEquals(published, RecordingRepository.refresh(f.context).single { it.id == SAF_SELECTED })
+            assertEquals(listOf(Uri.parse(SAF_SELECTED) to "clip.wav"), f.provider.renameRequests)
+            assertEquals(listOf(false, true), f.provider.capabilityObservations)
+            assertEquals(inode, Files.getAttribute(f.provider.payload.toPath(), "unix:ino"))
+            f.assertOwnedBytes()
+            keys.forEach { assertEquals(journals[it], preferences.getStringSet(it.name, emptySet())) }
+        }
+    }
+
     @Test fun incompleteConfiguredListingPreservesKnownCatalogAndStableRetryRecovers() = runBlocking {
         for (fault in listOf("null", "denied", "loading", "error", "duplicate")) fixture { f ->
             f.provider.listing = fault
@@ -125,7 +181,7 @@ class SafRepositoryReconciliationTest {
         override fun getSharedPreferences(name: String, mode: Int): SharedPreferences = preferences
     }
 
-    private suspend fun fixture(body: suspend (Fixture) -> Unit) {
+    private suspend fun fixture(expectedRenames: Int = 0, body: suspend (Fixture) -> Unit) {
         val app = RuntimeEnvironment.getApplication()
         val root = File(app.filesDir, "saf-refresh-${UUID.randomUUID()}").apply { check(mkdir()) }
         val preferenceName = "saf-refresh-${root.name}"
@@ -183,6 +239,8 @@ class SafRepositoryReconciliationTest {
             assertArrayEquals(sentinelBytes, sentinelFile.readBytes())
             assertEquals(suppression, preferences.getStringSet(PrefKey.PENDING_OUTPUT_CLEANUP.name, emptySet()))
             assertEquals(0, provider.mutations)
+            assertEquals(List(expectedRenames) { "android:renameDocument" }, provider.callMethods)
+            assertEquals(expectedRenames, provider.renameRequests.size)
             assertEquals(0, media.mutations)
             provider.assertClosed()
             media.assertClosed()
@@ -228,6 +286,11 @@ private class SafRefreshProvider(val payload: File, val sentinel: File) : Conten
     var listing = "complete"
     var item = "present"
     var revision = 100_000L
+    var selectedName = "clip.wav"
+    var renameSupported = false
+    val capabilityObservations = mutableListOf<Boolean>()
+    val callMethods = mutableListOf<String>()
+    val renameRequests = mutableListOf<Pair<Uri, String>>()
     var replaceOnOpen: ByteArray? = null
     var retainedOriginal: File? = null
     var selectedOpens = 0
@@ -250,6 +313,9 @@ private class SafRefreshProvider(val payload: File, val sentinel: File) : Conten
             if (children && listing == "error") putString(DocumentsContract.EXTRA_ERROR, "injected listing error")
         }
         val columns = checkNotNull(projection)
+        if (selected && columns.contentEquals(arrayOf(DocumentsContract.Document.COLUMN_FLAGS))) {
+            capabilityObservations += renameSupported
+        }
         val cursor = object : MatrixCursor(columns) { override fun getExtras(): Bundle = extras }
         cursors += cursor
         if (children && listing == "empty" || selected && item == "missing") return cursor
@@ -257,10 +323,12 @@ private class SafRefreshProvider(val payload: File, val sentinel: File) : Conten
         val file = if (isSelected) payload else sentinel
         val values: Map<String, Any?> = mapOf(
             DocumentsContract.Document.COLUMN_DOCUMENT_ID to if (isSelected) "root/clip.wav" else "root/sentinel.wav",
-            DocumentsContract.Document.COLUMN_DISPLAY_NAME to if (isSelected) "clip.wav" else "sentinel.wav",
+            DocumentsContract.Document.COLUMN_DISPLAY_NAME to if (isSelected) selectedName else "sentinel.wav",
             DocumentsContract.Document.COLUMN_MIME_TYPE to "audio/wav",
             DocumentsContract.Document.COLUMN_SIZE to file.length(),
             DocumentsContract.Document.COLUMN_LAST_MODIFIED to if (isSelected) revision else 90_000L,
+            DocumentsContract.Document.COLUMN_FLAGS to if (isSelected && renameSupported)
+                DocumentsContract.Document.FLAG_SUPPORTS_RENAME else 0,
         )
         val row = columns.map { check(values.containsKey(it)); values[it] }
         cursor.addRow(row)
@@ -288,6 +356,19 @@ private class SafRefreshProvider(val payload: File, val sentinel: File) : Conten
         }
     }
     override fun getType(uri: Uri) = "audio/wav"
+    override fun call(method: String, arg: String?, extras: Bundle?): Bundle {
+        callMethods += method
+        check(method == "android:renameDocument" && arg == null && renameSupported)
+        val request = checkNotNull(extras)
+        val source = checkNotNull(request.getParcelable("uri", Uri::class.java))
+        check(source.toString() == SAF_SELECTED)
+        val requestedName = checkNotNull(request.getString(DocumentsContract.Document.COLUMN_DISPLAY_NAME))
+        renameRequests += source to requestedName
+        selectedName = requestedName
+        revision = 100_001L
+        trace += "rename:selected"
+        return Bundle().apply { putParcelable("uri", source) }
+    }
     override fun insert(uri: Uri, values: ContentValues?): Uri? { mutations++; error("refresh cannot insert provider audio") }
     override fun update(uri: Uri, values: ContentValues?, selection: String?, selectionArgs: Array<out String>?): Int {
         mutations++; error("refresh cannot update provider audio")
