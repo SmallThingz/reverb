@@ -122,7 +122,47 @@ class PreviewAudioTrackBoundaryTest {
         assertTerminalOnce(retired)
     }
 
-    private fun fixture(blockFirstWrite: Boolean, test: (TimelineAudioPreviewController, RecordingEntity) -> Unit) {
+    @Test fun rejectedNativeStartThresholdReleasesAcquiredTrackBeforeOneErrorAndNeverPlays() {
+        var started = 0
+        var finished = 0
+        var releasedBeforeError = false
+        val errors = mutableListOf<Throwable>()
+        val samples = mutableListOf<PreviewPlaybackSample>()
+        val failureDelivered = CountDownLatch(1)
+        fixture(false, acquiredOnlyCleanup = true) { controller, recording ->
+            PreviewBoundaryTrackShadow.thresholdResult = 0
+            assertTrue(controller.playRecording(RuntimeEnvironment.getApplication(), recording, 2, 5,
+                samples::add, { started++ }, { finished++ }, { error ->
+                    releasedBeforeError = PreviewBoundaryTrackShadow.single().events.map { it.first } == listOf("release") &&
+                        PreviewBoundaryTrackShadow.released.count == 0L
+                    errors += error
+                    failureDelivered.countDown()
+                }))
+            awaitMain(failureDelivered)
+            assertTrue("Acquired track must release before playback failure callback", releasedBeforeError)
+            assertEquals(1, errors.size)
+            assertTrue(errors.single() is java.io.IOException)
+            assertEquals("Unable to configure audio preview start threshold: 0", errors.single().message)
+            assertEquals(0, started)
+            assertEquals(0, finished)
+            assertTrue(samples.isEmpty())
+            assertArrayEquals(ByteArray(0), PreviewBoundaryTrackShadow.single().acceptedBytes())
+            assertAcquiredReleaseOnce(PreviewBoundaryTrackShadow.single())
+            controller.stop()
+        }
+        // All worker owners are joined and Main drained by fixture before these final assertions.
+        drainMain()
+        assertTrue(releasedBeforeError)
+        assertEquals(1, errors.size)
+        assertEquals("Unable to configure audio preview start threshold: 0", errors.single().message)
+        assertEquals(0, started)
+        assertEquals(0, finished)
+        assertTrue(samples.isEmpty())
+        assertArrayEquals(ByteArray(0), PreviewBoundaryTrackShadow.single().acceptedBytes())
+        assertAcquiredReleaseOnce(PreviewBoundaryTrackShadow.single())
+    }
+
+    private fun fixture(blockFirstWrite: Boolean, acquiredOnlyCleanup: Boolean = false, test: (TimelineAudioPreviewController, RecordingEntity) -> Unit) {
         check(ServiceStateOsShadow.fixtureRoot == null)
         JournalHostIoShadow.reset()
         val root = Files.createTempDirectory("preview-track-boundary-")
@@ -169,7 +209,9 @@ class PreviewAudioTrackBoundaryTest {
             clean { drainMain() }
             clean { synchronized(cleanupFailures) { assertTrue(cleanupFailures.toString(), cleanupFailures.isEmpty()) } }
             if (workersStopped) {
-                clean { PreviewBoundaryTrackShadow.acquired()?.let(::assertTerminalOnce) }
+                clean { PreviewBoundaryTrackShadow.acquired()?.let { track ->
+                    if (acquiredOnlyCleanup) assertAcquiredReleaseOnce(track) else assertTerminalOnce(track)
+                } }
                 clean { JournalHostIoShadow.finishFixture()?.let { throw it } }
                 ServiceStateOsShadow.fixtureRoot = null
             }
@@ -190,6 +232,11 @@ class PreviewAudioTrackBoundaryTest {
             }
         }
         primary?.let { throw it }
+    }
+
+    private fun assertAcquiredReleaseOnce(track: PreviewBoundaryTrackShadow) {
+        assertEquals(listOf("release"), track.events.map { it.first })
+        assertNotEquals("Acquired release must stay off test/main caller", Thread.currentThread().name, track.events.single().second)
     }
 
     private fun assertTerminalOnce(track: PreviewBoundaryTrackShadow) {
@@ -239,7 +286,7 @@ class PreviewBoundaryTrackShadow : ShadowAudioTrack() {
     @Implementation fun setStartThresholdInFrames(value: Int): Int {
         check(value == 1)
         synchronized(tracks) { if (!tracks.contains(this)) tracks += this }
-        return value
+        return thresholdResult
     }
     @Implementation fun setVolume(value: Float): Int { check(value == 1f); return AudioTrack.SUCCESS }
     @Implementation fun write(bytes: ByteArray, offset: Int, size: Int, mode: Int): Int {
@@ -263,6 +310,7 @@ class PreviewBoundaryTrackShadow : ShadowAudioTrack() {
         private val tracks = mutableListOf<PreviewBoundaryTrackShadow>()
         private var blockFirst = false
         @Volatile var failWriteAt = 0
+        @Volatile var thresholdResult = 1
         lateinit var writeEntered: CountDownLatch
         lateinit var allowWriteReturn: CountDownLatch
         lateinit var quiet: CountDownLatch
@@ -273,6 +321,7 @@ class PreviewBoundaryTrackShadow : ShadowAudioTrack() {
             synchronized(tracks) { tracks.clear() }
             blockFirst = block
             failWriteAt = 0
+            thresholdResult = 1
             writeEntered = CountDownLatch(1); allowWriteReturn = CountDownLatch(1)
             quiet = CountDownLatch(1); released = CountDownLatch(1)
         }
