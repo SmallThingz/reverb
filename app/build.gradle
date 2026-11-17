@@ -102,6 +102,11 @@ android {
     }
     testOptions {
         unitTests.includeAndroidResources = true
+        unitTests.all {
+            // Host I/O fixtures inspect owned file/channel descriptors on modular JDKs.
+            jvmArgs '--add-opens=java.base/java.io=ALL-UNNAMED',
+                '--add-opens=java.base/sun.nio.ch=ALL-UNNAMED'
+        }
     }
     packaging {
         jniLibs { useLegacyPackaging = false }
