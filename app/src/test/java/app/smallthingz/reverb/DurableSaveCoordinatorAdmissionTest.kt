@@ -1,6 +1,10 @@
 package app.smallthingz.reverb
 
 import android.content.Context
+import android.content.pm.ProviderInfo
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import org.robolectric.shadows.ShadowContentResolver
 import android.content.ContextWrapper
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -136,6 +140,260 @@ class DurableSaveCoordinatorAdmissionTest {
 
     private fun reopenStore(root: File) = PersistentAudioChunkStore(File(root, "store")).also {
         it.configure(RetentionMode.SIZE, 4096, 8_000, 1, PcmSampleFormat.PCM_16, deferRetentionCleanup = true)
+    }
+
+    @Test fun materializedWavPublishesExactPcmAndRetiresPins() = withFixture { context, root, store, pcm ->
+        withOwnedMedia(context, root) { provider ->
+            val first = coordinator(context)
+            val handle = requireNotNull(store.acquireRange(0.0, store.durationSeconds())).use {
+                first.admit(it, managedWavRequest())
+            }
+            provider.ownedJobIds += handle.id
+            val journal = DurableSaveJournal(File(root, "durable-saves"))
+            val source = journal.read(handle.id).source.objects
+            assertTrue(source.all { DurablePcmPins.isProtected(File(it.sourcePath)) })
+            val recording = first.materialize(handle.id, checkActive = {})
+            assertEquals(provider.uri.toString(), recording.id)
+            assertEquals("test.wav", recording.displayName)
+            assertEquals(0, provider.pending)
+            assertEquals(1, provider.inserts)
+            assertArrayEquals(expectedWav(pcm), File(root, "provider-output.wav").readBytes())
+            val catalog = runBlocking { RecordingDatabase.getInstance(context).recordingDao().findById(recording.id) }
+            assertEquals(recording, catalog)
+            assertEquals(expectedProviderIdentity(provider), recording.fileIdentity)
+            assertFalse(provider.deleted)
+            assertFalse(journal.directory(handle.id).exists())
+            assertTrue(source.none { DurablePcmPins.isProtected(File(it.sourcePath)) })
+            provider.assertClosed()
+        }
+    }
+
+    @Test fun verifiedBoundaryInterruptionRecoversSameWavAndRetiresPins() = withFixture { context, root, store, pcm ->
+        withOwnedMedia(context, root) { provider ->
+            val first = coordinator(context)
+            val handle = requireNotNull(store.acquireRange(0.0, store.durationSeconds())).use {
+                first.admit(it, managedWavRequest())
+            }
+            provider.ownedJobIds += handle.id
+            val journal = DurableSaveJournal(File(root, "durable-saves"))
+            DurableSaveFaultHooks.onBoundary = { id, stage ->
+                if (id == handle.id && stage == "VERIFIED_DURABLE") throw SimulatedProcessDeath()
+            }
+            try {
+                try { first.materialize(handle.id, checkActive = {}); fail("expected interruption") }
+                catch (_: SimulatedProcessDeath) { }
+            } finally { DurableSaveFaultHooks.onBoundary = null }
+            val verified = journal.read(handle.id)
+            assertEquals(DurableSaveStage.VERIFIED, verified.stage)
+            assertEquals(provider.uri.toString(), requireNotNull(verified.output).id)
+            val payload = File(root, "provider-output.wav")
+            assertArrayEquals(expectedWav(pcm), payload.readBytes())
+            val before = java.nio.file.Files.getAttribute(payload.toPath(), "unix:ino")
+            assertTrue(verified.source.objects.all { DurablePcmPins.isProtected(File(it.sourcePath)) })
+            store.clear(); store.close()
+            reopenStore(root).use { assertEquals(0.0, it.durationSeconds(), 0.0) }
+            val fresh = coordinator(context)
+            assertEquals(listOf(handle.id), fresh.recover().map { it.id })
+            val recording = fresh.materialize(handle.id, checkActive = {})
+            assertEquals(provider.uri.toString(), recording.id)
+            assertEquals(before, java.nio.file.Files.getAttribute(payload.toPath(), "unix:ino"))
+            assertEquals(1, provider.inserts)
+            assertEquals(0, provider.pending)
+            assertFalse(provider.deleted)
+            assertEquals(expectedProviderIdentity(provider), recording.fileIdentity)
+            assertArrayEquals(expectedWav(pcm), payload.readBytes())
+            assertEquals(recording, runBlocking { RecordingDatabase.getInstance(context).recordingDao().findById(recording.id) })
+            assertFalse(journal.directory(handle.id).exists())
+            assertTrue(verified.source.objects.none { DurablePcmPins.isProtected(File(it.sourcePath)) })
+            provider.assertClosed()
+        }
+    }
+
+    @Test fun publishedBoundaryInterruptionRecoversWithoutSecondProviderUpdate() = withFixture { context, root, store, pcm ->
+        withOwnedMedia(context, root) { provider ->
+            val first = coordinator(context)
+            val handle = requireNotNull(store.acquireRange(0.0, store.durationSeconds())).use {
+                first.admit(it, managedWavRequest())
+            }
+            provider.ownedJobIds += handle.id
+            val journal = DurableSaveJournal(File(root, "durable-saves"))
+            DurableSaveFaultHooks.onBoundary = { id, stage ->
+                if (id == handle.id && stage == "AFTER_RENAME_BEFORE_MANIFEST") throw SimulatedProcessDeath()
+            }
+            try {
+                try { first.materialize(handle.id, checkActive = {}); fail("expected interruption") }
+                catch (_: SimulatedProcessDeath) { }
+            } finally { DurableSaveFaultHooks.onBoundary = null }
+            val publishing = journal.read(handle.id)
+            assertEquals(DurableSaveStage.PUBLISHING, publishing.stage)
+            assertEquals(provider.uri.toString(), requireNotNull(publishing.output).id)
+            assertEquals("test.wav", provider.name)
+            assertEquals(0, provider.pending)
+            assertEquals(1, provider.inserts)
+            assertEquals(1, provider.updates)
+            assertFalse(provider.deleted)
+            val updatesBeforeRetry = provider.updates
+            val payload = File(root, "provider-output.wav")
+            assertArrayEquals(expectedWav(pcm), payload.readBytes())
+            val inode = Files.getAttribute(payload.toPath(), "unix:ino")
+            assertTrue(publishing.source.objects.all { DurablePcmPins.isProtected(File(it.sourcePath)) })
+            assertNull(runBlocking { RecordingDatabase.getInstance(context).recordingDao().findById(provider.uri.toString()) })
+            store.clear(); store.close()
+            reopenStore(root).use { assertEquals(0.0, it.durationSeconds(), 0.0) }
+            val fresh = coordinator(context)
+            assertEquals(listOf(handle.id), fresh.recover().map { it.id })
+            val recording = fresh.materialize(handle.id, checkActive = {})
+            assertEquals(provider.uri.toString(), recording.id)
+            assertEquals("test.wav", recording.displayName)
+            assertEquals(expectedProviderIdentity(provider), recording.fileIdentity)
+            assertEquals(inode, Files.getAttribute(payload.toPath(), "unix:ino"))
+            assertEquals(1, provider.inserts)
+            assertEquals(updatesBeforeRetry, provider.updates)
+            assertEquals(0, provider.pending)
+            assertFalse(provider.deleted)
+            assertArrayEquals(expectedWav(pcm), payload.readBytes())
+            assertEquals(recording, runBlocking { RecordingDatabase.getInstance(context).recordingDao().findById(recording.id) })
+            assertFalse(journal.directory(handle.id).exists())
+            assertTrue(publishing.source.objects.none { DurablePcmPins.isProtected(File(it.sourcePath)) })
+            provider.assertClosed()
+        }
+    }
+
+    @Test fun failureAfterPinRetirementDoesNotResurrectCompletedSave() = withFixture { context, root, store, pcm ->
+        withOwnedMedia(context, root) { provider ->
+            val coordinator = coordinator(context)
+            val handle = requireNotNull(store.acquireRange(0.0, store.durationSeconds())).use {
+                coordinator.admit(it, managedWavRequest())
+            }
+            provider.ownedJobIds += handle.id
+            val journal = DurableSaveJournal(File(root, "durable-saves"))
+            val source = journal.read(handle.id).source.objects
+            val injected = java.io.IOException("after durable retirement")
+            var failureCallbacks = 0
+            DurableSaveFaultHooks.onBoundary = { id, boundary ->
+                if (id == handle.id && boundary == "AFTER_PIN_RELEASE") throw injected
+            }
+            try {
+                val caught = try {
+                    coordinator.materialize(handle.id, onFailurePublished = { failureCallbacks++ }, checkActive = {})
+                    fail("expected post-retirement failure")
+                    null
+                } catch (error: java.io.IOException) { error }
+                assertSame(injected, caught)
+            } finally { DurableSaveFaultHooks.onBoundary = null }
+            assertEquals(0, failureCallbacks)
+            assertFalse(journal.directory(handle.id).exists())
+            assertTrue(source.none { DurablePcmPins.isProtected(File(it.sourcePath)) })
+            assertEquals(0, coordinator.pendingCount())
+            val beforeRecovery = DurableSaveJobs.state.value.filter { it.id == handle.id }
+            assertTrue(beforeRecovery.none { it.phase == SavePhase.FAILED })
+            assertEquals(1, beforeRecovery.size)
+            assertTrue(beforeRecovery.single().terminallyRetired)
+            assertEquals(provider.uri.toString(), beforeRecovery.single().publishedRecordingId)
+            assertEquals(expectedProviderIdentity(provider), beforeRecovery.single().publishedRecordingIdentity)
+            assertTrue(coordinator(context).recover().isEmpty())
+            val jobs = DurableSaveJobs.state.value.filter { it.id == handle.id }
+            assertTrue(jobs.none { it.phase == SavePhase.FAILED })
+            val row = requireNotNull(runBlocking {
+                RecordingDatabase.getInstance(context).recordingDao().findById(provider.uri.toString())
+            })
+            assertEquals(expectedProviderIdentity(provider), row.fileIdentity)
+            assertEquals("test.wav", row.displayName)
+            assertEquals(1, provider.inserts)
+            assertEquals(0, provider.pending)
+            assertFalse(provider.deleted)
+            assertArrayEquals(expectedWav(pcm), File(root, "provider-output.wav").readBytes())
+            provider.assertClosed()
+        }
+    }
+
+    private fun managedWavRequest() = DurableSaveRequest("test", MEDIA_STORE_DIRECTORY_ID, ExportFormat.WAV,
+        ExportCodec.PCM_16, 8_000, 1, PcmSampleFormat.PCM_16, 5)
+
+    // Independent RIFF oracle, exact full file including EOF; no production WAV helpers.
+    private fun expectedWav(pcm: ByteArray): ByteArray = ByteBuffer.allocate(44 + pcm.size)
+        .order(ByteOrder.LITTLE_ENDIAN).apply {
+            put("RIFF".toByteArray(Charsets.US_ASCII)); putInt(36 + pcm.size)
+            put("WAVEfmt ".toByteArray(Charsets.US_ASCII)); putInt(16)
+            putShort(1); putShort(1); putInt(8_000); putInt(16_000); putShort(2); putShort(16)
+            put("data".toByteArray(Charsets.US_ASCII)); putInt(pcm.size); put(pcm)
+        }.array()
+
+    private fun expectedProviderIdentity(provider: CoordinatorMediaProvider): String =
+        "provider:3:" + java.util.Base64.getUrlEncoder().withoutPadding()
+            .encodeToString(provider.uri.toString().toByteArray(Charsets.UTF_8)) + ":556:9"
+
+    private fun withOwnedMedia(context: Context, root: File, body: (CoordinatorMediaProvider) -> Unit) {
+        val app = RuntimeEnvironment.getApplication()
+        val preferences = getRecorderPreferences(context)
+        val keys = listOf(PrefKey.VERIFIED_EXPORT_STAGING.name, PrefKey.PENDING_OUTPUT_CLEANUP.name,
+            PrefKey.PENDING_RECORDING_DELETIONS.name)
+        val previous = keys.associateWith { key ->
+            if (preferences.contains(key)) preferences.getStringSet(key, emptySet())!!.toSet() else null
+        }
+        val provider = CoordinatorMediaProvider(File(root, "provider-output.wav"))
+        var dao: RecordingDao? = null
+        var databaseAcquired = false
+        @Suppress("UNCHECKED_CAST")
+        val registry = ShadowContentResolver::class.java.getDeclaredField("providers").apply {
+            isAccessible = true
+        }.get(null) as MutableMap<String, android.content.ContentProvider>
+        val previousProvider = registry["media"]
+        var ownsProvider = false
+        var ownsCatalogId = false
+        var handoffProven = false
+        var primary: Throwable? = null
+        try {
+            check(getConfiguredOutputDirectoryId(context) == MEDIA_STORE_DIRECTORY_ID)
+            val db = RecordingDatabase.getInstance(context)
+            databaseAcquired = true
+            val path = File(db.writableDatabase.path).canonicalFile
+            check(path == app.getDatabasePath(checkNotNull(db.databaseName)).canonicalFile)
+            check(path.path.startsWith(checkNotNull(app.filesDir.parentFile).canonicalPath + File.separator))
+            val activeDao = db.recordingDao()
+            dao = activeDao
+            check(runBlocking { activeDao.findById(provider.uri.toString()) } == null)
+            ownsCatalogId = true
+            provider.attachInfo(app, ProviderInfo().apply { authority = "media" })
+            ShadowContentResolver.registerProviderInternal("media", provider)
+            ownsProvider = true
+            body(provider)
+            provider.assertClosed()
+        } catch (error: Throwable) { primary = error }
+        finally {
+            val cleanup = listOf<() -> Unit>(
+                {
+                    val jobs = DurableSaveJobs.state.value.filter { it.id in provider.ownedJobIds }
+                    val terminal = jobs.filter { it.terminallyRetired }
+                    if (terminal.isNotEmpty()) {
+                        check(terminal.all { it.publishedRecordingId == provider.uri.toString() &&
+                            it.publishedRecordingIdentity == expectedProviderIdentity(provider) })
+                        val row = runBlocking { requireNotNull(dao).findById(provider.uri.toString()) }
+                        check(row != null && row.fileIdentity == expectedProviderIdentity(provider))
+                        check(DurableSaveJobs.state.value.none { it.id !in provider.ownedJobIds &&
+                            it.publishedRecordingId == provider.uri.toString() })
+                        DurableSaveJobs.acknowledgePublished(mapOf(provider.uri.toString() to row.fileIdentity))
+                        check(DurableSaveJobs.state.value.none { it.id in terminal.map { job -> job.id } })
+                    }
+                    handoffProven = true
+                },
+                { if (ownsProvider) {
+                    check(registry["media"] === provider) { "Media provider owner changed" }
+                    if (previousProvider == null) registry.remove("media") else registry["media"] = previousProvider
+                } },
+                { provider.assertClosed() },
+                { provider.closeLeaked() },
+                { if (ownsCatalogId && handoffProven) runBlocking { requireNotNull(dao).deleteById(provider.uri.toString()) } },
+                { if (databaseAcquired) RecordingDatabase.resetAfterCorruption() },
+                { check(preferences.edit().also { editor -> previous.forEach { (key, value) ->
+                    if (value == null) editor.remove(key) else editor.putStringSet(key, value)
+                } }.commit()) },
+            )
+            cleanup.forEach { action -> try { action() } catch (error: Throwable) {
+                if (primary == null) primary = error else if (primary !== error) primary!!.addSuppressed(error)
+            } }
+        }
+        primary?.let { throw it }
     }
 
     private fun withFixture(body: (Context, File, PersistentAudioChunkStore, ByteArray) -> Unit) {

@@ -8,6 +8,42 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class PersistentAudioAppendBoundaryTest {
+    @Test fun uninspectablePartialAppendBlocksPublicationUntilRecovery() = withRoot { root ->
+        val prefix = byteArrayOf(1, 2, 3, 4)
+        val attempted = byteArrayOf(11, 12, 13, 14, 15, 16, 17, 18)
+        val store = PersistentAudioChunkStore(root)
+        store.use {
+            configure(store)
+            assertEquals(prefix.size, store.append(prefix, 0, prefix.size))
+            store.checkpoint()
+            val inspectionFailure = IOException("injected position failure")
+            val injected = installOneFailure(store, 4, inspectionFailure)
+            val writeFailure = assertThrows(IOException::class.java) {
+                store.append(attempted, 0, attempted.size)
+            }
+            assertSame(injected, writeFailure)
+            val boundaryFailure = writeFailure.suppressed.single()
+            assertSame(inspectionFailure, boundaryFailure.cause)
+            val chunk = File(File(root, BUFFER_CHUNKS_FOLDER_NAME), "0")
+            val rawAfterFailure = chunk.readBytes()
+            assertArrayEquals(prefix + attempted.copyOf(4), rawAfterFailure.copyOfRange(128, rawAfterFailure.size))
+            assertEquals(prefix.size.toLong(), store.countFilledBytes())
+            assertSame(boundaryFailure, assertThrows(IOException::class.java) {
+                store.append(attempted, 0, attempted.size)
+            }.cause)
+            assertSame(boundaryFailure, assertThrows(IOException::class.java) { store.syncActivePayloadToDisk() }.cause)
+            assertSame(boundaryFailure, assertThrows(IOException::class.java) { store.checkpoint() }.cause)
+            assertSame(boundaryFailure, assertThrows(IOException::class.java) { store.sealActiveChunk() }.cause)
+            assertArrayEquals(rawAfterFailure, chunk.readBytes())
+            assertSame(boundaryFailure, assertThrows(IOException::class.java) { store.close() }.cause)
+            assertArrayEquals(rawAfterFailure, chunk.readBytes())
+        }
+        PersistentAudioChunkStore(root).use { reopened ->
+            configure(reopened)
+            assertArrayEquals(prefix + attempted.copyOf(4), read(reopened))
+        }
+    }
+
     @Test fun failedAppendAtWholeFrameBoundariesKeepsExactlyWrittenPcmAndCanContinue() {
         for (written in listOf(0, 4)) withRoot { root ->
             val prefix = byteArrayOf(1, 2, 3, 4)
@@ -57,7 +93,11 @@ class PersistentAudioAppendBoundaryTest {
         }
     }
 
-    private fun installOneFailure(store: PersistentAudioChunkStore, written: Int): IOException {
+    private fun installOneFailure(
+        store: PersistentAudioChunkStore,
+        written: Int,
+        inspectionFailure: IOException? = null,
+    ): IOException {
         val recordField = PersistentAudioChunkStore::class.java.getDeclaredField("activeRecord").apply { isAccessible = true }
         val record = requireNotNull(recordField.get(store) as? PersistentAudioChunkStore.ChunkRecord)
         val accessField = PersistentAudioChunkStore::class.java.getDeclaredField("activeAccess").apply { isAccessible = true }
@@ -66,13 +106,22 @@ class PersistentAudioAppendBoundaryTest {
         val injected = IOException("injected append failure")
         val failing = object : RandomAccessFile(record.file, "rw") {
             var first = true
+            var failInspection = false
             override fun write(bytes: ByteArray, offset: Int, count: Int) {
                 if (first) {
                     first = false
                     super.write(bytes, offset, written)
+                    failInspection = inspectionFailure != null
                     throw injected
                 }
                 super.write(bytes, offset, count)
+            }
+            override fun getFilePointer(): Long {
+                if (failInspection) {
+                    failInspection = false
+                    throw requireNotNull(inspectionFailure)
+                }
+                return super.getFilePointer()
             }
         }
         try {
