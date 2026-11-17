@@ -32,6 +32,7 @@ internal class CoordinatorMediaProvider(private val payload: File) : ContentProv
     var retainedBeforeReplacement: File? = null
     var readReplacementCount = 0
     val openedModes = mutableListOf<String>()
+    val catalogObservationUris = mutableListOf<Uri>()
     val ownedOutputUris: List<Uri> get() = rows.filter { it.uri != sentinelUri }.map { it.uri }
     fun output(uri: Uri): File = rows.single { it.uri == uri }.file
     fun isDeleted(uri: Uri): Boolean = rows.single { it.uri == uri }.deleted
@@ -64,6 +65,11 @@ internal class CoordinatorMediaProvider(private val payload: File) : ContentProv
     override fun query(uri: Uri, projection: Array<out String>?, selection: String?,
         selectionArgs: Array<out String>?, sortOrder: String?): Cursor {
         val columns = requireNotNull(projection)
+        if (columns.contentEquals(arrayOf(MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.SIZE,
+                MediaStore.MediaColumns.DATE_MODIFIED, MediaStore.MediaColumns.GENERATION_MODIFIED,
+                MediaStore.MediaColumns.RELATIVE_PATH, MediaStore.MediaColumns.IS_PENDING))) {
+            catalogObservationUris += uri
+        }
         val result = MatrixCursor(columns)
         cursors += result
         for (entry in rows.filter { !it.deleted && (uri == it.uri ||

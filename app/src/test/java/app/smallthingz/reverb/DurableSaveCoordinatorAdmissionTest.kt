@@ -585,6 +585,145 @@ class DurableSaveCoordinatorAdmissionTest {
         }
     }
 
+    @Test fun publishedCatalogWriteFailurePreservesVerifiedSuccessAndRepairsWithoutAudioMutation() = withFixture { context, root, store, pcm ->
+        withOwnedMedia(context, root) { provider ->
+            val db = RecordingDatabase.getInstance(context)
+            val dao = db.recordingDao()
+            val sentinelBytes = expectedWav(byteArrayOf(9, 8, 7, 6))
+            provider.addSentinel(sentinelBytes)
+            val sentinel = RecordingEntity(provider.sentinelUri.toString(), "sentinel.wav", "audio/wav", 1L, 1L,
+                sentinelBytes.size.toLong(), "sentinel", RecordingStorageType.MEDIASTORE, MEDIA_STORE_DIRECTORY_ID,
+                expectedProviderIdentity(provider.sentinelUri, sentinelBytes.size), createdAtMillis = 1L, lastSeenAtMillis = 1L)
+            val trigger = "test_coordinator_catalog_" + java.util.UUID.randomUUID().toString().replace("-", "")
+            val audit = trigger + "_audit"
+            var ownsTrigger = false
+            var ownsAudit = false
+            var ownsSentinel = false
+            var primary: Throwable? = null
+            fun assertAudit() {
+                db.readableDatabase.rawQuery("SELECT targetId FROM $audit", null).use { cursor ->
+                    assertTrue(cursor.moveToFirst())
+                    assertEquals(provider.uri.toString(), cursor.getString(0))
+                    assertFalse(cursor.moveToNext())
+                }
+            }
+            try {
+                assertNull(runBlocking { dao.findById(sentinel.id) })
+                ownsSentinel = true
+                runBlocking { dao.upsert(sentinel) }
+                val coordinator = coordinator(context)
+                val handle = requireNotNull(store.acquireRange(0.0, store.durationSeconds())).use {
+                    coordinator.admit(it, managedWavRequest())
+                }
+                provider.ownedJobIds += handle.id
+                val journal = DurableSaveJournal(File(root, "durable-saves"))
+                val accepted = journal.read(handle.id)
+                assertArrayEquals(pcm, readPcm(accepted))
+                assertTrue(accepted.source.objects.all { DurablePcmPins.isProtected(File(it.sourcePath)) })
+                val preferences = getRecorderPreferences(context)
+                val staging = preferences.getStringSet(PrefKey.VERIFIED_EXPORT_STAGING.name, emptySet())!!.toSet()
+                val cleanup = preferences.getStringSet(PrefKey.PENDING_OUTPUT_CLEANUP.name, emptySet())!!.toSet()
+                var publicationBoundaries = 0
+                var catalogTraceStart = -1
+                var publishedInode: Any? = null
+                DurableSaveFaultHooks.onBoundary = { id, boundary ->
+                    if (id == handle.id && boundary == "PUBLISHED_DURABLE") {
+                        publicationBoundaries++
+                        assertEquals(1, publicationBoundaries)
+                        assertEquals(0, provider.pendingOf(provider.uri))
+                        assertArrayEquals(expectedWav(pcm), provider.output(provider.uri).readBytes())
+                        publishedInode = Files.getAttribute(provider.output(provider.uri).toPath(), "unix:ino")
+                        assertNull(runBlocking { dao.findById(provider.uri.toString()) })
+                        assertFalse(db.writableDatabase.inTransaction())
+                        db.readableDatabase.rawQuery("SELECT name FROM sqlite_master WHERE name IN (?,?)",
+                            arrayOf(trigger, audit)).use { assertFalse(it.moveToFirst()) }
+                        ownsAudit = true
+                        db.writableDatabase.execSQL("CREATE TABLE $audit (targetId TEXT NOT NULL)")
+                        db.readableDatabase.rawQuery("PRAGMA table_info($audit)", null).use { cursor ->
+                            assertTrue(cursor.moveToFirst())
+                            assertEquals(0, cursor.getInt(cursor.getColumnIndexOrThrow("cid")))
+                            assertEquals("targetId", cursor.getString(cursor.getColumnIndexOrThrow("name")))
+                            assertEquals("TEXT", cursor.getString(cursor.getColumnIndexOrThrow("type")))
+                            assertEquals(1, cursor.getInt(cursor.getColumnIndexOrThrow("notnull")))
+                            assertTrue(cursor.isNull(cursor.getColumnIndexOrThrow("dflt_value")))
+                            assertEquals(0, cursor.getInt(cursor.getColumnIndexOrThrow("pk")))
+                            assertFalse(cursor.moveToNext())
+                        }
+                        ownsTrigger = true
+                        db.writableDatabase.execSQL("CREATE TRIGGER $trigger BEFORE INSERT ON recordings " +
+                            "WHEN NEW.id='${provider.uri}' BEGIN INSERT INTO $audit VALUES(NEW.id); " +
+                            "SELECT RAISE(FAIL, 'owned catalog rejection'); END")
+                        catalogTraceStart = provider.catalogObservationUris.size
+                    }
+                }
+                var failureCallbacks = 0
+                val recording = try {
+                    coordinator.materialize(handle.id, onFailurePublished = { failureCallbacks++ }, checkActive = {})
+                } finally { DurableSaveFaultHooks.onBoundary = null }
+                assertEquals(1, publicationBoundaries)
+                assertEquals(0, failureCallbacks)
+                // FAIL retains this trigger's audit write while rejecting the recording insert.
+                assertAudit()
+                // The second strict provider observation is the actual registration failure recheck.
+                // Skipping registration, or skipping its SQLite upsert, cannot satisfy this trace.
+                assertEquals(listOf(provider.uri, provider.uri), provider.catalogObservationUris.drop(catalogTraceStart))
+                assertNull(runBlocking { dao.findById(provider.uri.toString()) })
+                assertEquals(provider.uri.toString(), recording.id)
+                assertEquals("test.wav", recording.displayName)
+                assertEquals(expectedProviderIdentity(provider), recording.fileIdentity)
+                assertEquals(556L, recording.sizeBytes)
+                assertEquals(1, provider.inserts)
+                assertEquals(1, provider.updates)
+                assertTrue(provider.attemptedDeleteUris.isEmpty())
+                assertArrayEquals(expectedWav(pcm), provider.output(provider.uri).readBytes())
+                assertEquals(publishedInode, Files.getAttribute(provider.output(provider.uri).toPath(), "unix:ino"))
+                assertFalse(journal.directory(handle.id).exists())
+                assertTrue(accepted.source.objects.none { DurablePcmPins.isProtected(File(it.sourcePath)) })
+                assertEquals(staging, preferences.getStringSet(PrefKey.VERIFIED_EXPORT_STAGING.name, emptySet()))
+                assertEquals(cleanup, preferences.getStringSet(PrefKey.PENDING_OUTPUT_CLEANUP.name, emptySet()))
+                db.writableDatabase.execSQL("DROP TRIGGER $trigger")
+                ownsTrigger = false
+                val repaired = runBlocking { RecordingRepository.register(context, recording) }
+                assertEquals(repaired, runBlocking { dao.findById(provider.uri.toString()) })
+                assertEquals(recording.fileIdentity, repaired.fileIdentity)
+                assertEquals(recording.displayName, repaired.displayName)
+                assertAudit()
+                assertEquals(listOf(provider.uri, provider.uri, provider.uri), provider.catalogObservationUris.drop(catalogTraceStart))
+                assertEquals(1, provider.inserts)
+                assertEquals(1, provider.updates)
+                assertTrue(provider.attemptedDeleteUris.isEmpty())
+                assertArrayEquals(expectedWav(pcm), provider.output(provider.uri).readBytes())
+                assertEquals(publishedInode, Files.getAttribute(provider.output(provider.uri).toPath(), "unix:ino"))
+                assertArrayEquals(sentinelBytes, provider.output(provider.sentinelUri).readBytes())
+                assertEquals("sentinel.wav", provider.nameOf(provider.sentinelUri))
+                assertEquals(0, provider.pendingOf(provider.sentinelUri))
+                assertEquals(sentinel.fileIdentity, resolveProviderRecordingIdentity(context,
+                    RecordingStorageType.MEDIASTORE, provider.sentinelUri))
+                assertEquals(sentinel, runBlocking { dao.findById(sentinel.id) })
+                store.clear(); store.close()
+                reopenStore(root).use { assertEquals(0.0, it.durationSeconds(), 0.0) }
+                assertArrayEquals(expectedWav(pcm), provider.output(provider.uri).readBytes())
+                provider.assertClosed()
+            } catch (error: Throwable) {
+                primary = error
+                throw error
+            } finally {
+                DurableSaveFaultHooks.onBoundary = null
+                val steps = listOf<() -> Unit>(
+                    { if (ownsTrigger) db.writableDatabase.execSQL("DROP TRIGGER IF EXISTS $trigger") },
+                    { if (ownsAudit) db.writableDatabase.execSQL("DROP TABLE IF EXISTS $audit") },
+                    { if (ownsSentinel) runBlocking { dao.deleteById(sentinel.id) } },
+                )
+                var cleanupFailure: Throwable? = null
+                for (step in steps) try { step() } catch (error: Throwable) {
+                    val first = primary ?: cleanupFailure
+                    if (first == null) cleanupFailure = error else if (first !== error) first.addSuppressed(error)
+                }
+                if (primary == null) cleanupFailure?.let { throw it }
+            }
+        }
+    }
+
     private fun managedWavRequest() = DurableSaveRequest("test", MEDIA_STORE_DIRECTORY_ID, ExportFormat.WAV,
         ExportCodec.PCM_16, 8_000, 1, PcmSampleFormat.PCM_16, 5)
 
