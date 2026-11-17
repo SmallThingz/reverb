@@ -23,7 +23,7 @@ that the asset exists.
    ```sh
    python3 scripts/test_verify_release.py
    python3 scripts/verify_release.py v0.1.3-rc4 \
-     .maintenance/release-0.1.3-rc4-20261115/reverb-0.1.3-rc4.apk \
+     .maintenance/release-0.1.3-rc4-20261118/reverb-0.1.3-rc4.apk \
      --build-tools ../../.android/sdk/build-tools/37.0.0
    ```
 
