@@ -42,6 +42,65 @@ import org.robolectric.shadow.api.Shadow
 @LooperMode(LooperMode.Mode.PAUSED)
 class ReverbServiceStateDeliveryTest {
     @Test
+    fun rejectedAudioQueueTerminatesEachPublicStateReadAndPreservesHealthyStorage() = withFixture { fixture ->
+        fixture.proveHealthyThenReset()
+        val originalPcm = fixture.loopingSourceBytes()
+        val handlerField = ReverbService::class.java.getDeclaredField("audioHandler").apply { isAccessible = true }
+        val originalHandler = handlerField.get(fixture.service) as Handler
+        val stoppedThread = HandlerThread("service-rejected-state-queue")
+        var stoppedHandler: Handler? = null
+        var failure: Throwable? = null
+        fun record(error: Throwable) {
+            val first = failure
+            if (first == null) failure = error else if (first !== error) first.addSuppressed(error)
+        }
+        try {
+            stoppedThread.start()
+            stoppedHandler = Handler(stoppedThread.looper)
+        } catch (error: Throwable) {
+            record(error)
+        } finally {
+            try { check(stoppedThread.quitSafely()) { "Rejected queue fixture refused quit" } }
+            catch (error: Throwable) { record(error) }
+            try {
+                stoppedThread.join(8_000L)
+                check(!stoppedThread.isAlive) { "Rejected queue fixture did not stop" }
+            } catch (error: Throwable) { record(error) }
+        }
+        failure?.let { throw it }
+        val first = States()
+        val second = States()
+        try {
+            fixture.setField("audioHandler", checkNotNull(stoppedHandler))
+            fixture.service.getState(first)
+            fixture.service.getState(second)
+            assertTrue(first.values.isEmpty())
+            assertTrue(second.values.isEmpty())
+            ShadowLooper.idleMainLooper()
+            ShadowLooper.idleMainLooper()
+            assertEquals(0, first.awaiting)
+            assertEquals(0, second.awaiting)
+            assertEquals(listOf(unavailableState()), first.values)
+            assertEquals(listOf(unavailableState()), second.values)
+        } catch (error: Throwable) {
+            failure = error
+            throw error
+        } finally {
+            try { handlerField.set(fixture.service, originalHandler) }
+            catch (error: Throwable) {
+                val firstFailure = failure
+                if (firstFailure == null) throw error
+                if (firstFailure !== error) firstFailure.addSuppressed(error)
+            }
+        }
+        fixture.proveHealthyThenReset()
+        assertEquals(originalPcm, fixture.loopingSourceBytes())
+        // A restored queue must not generate delayed duplicates for earlier read owners.
+        assertEquals(1, first.values.size)
+        assertEquals(1, second.values.size)
+    }
+
+    @Test
     fun sampledStateAfterTerminalBoundaryDeliversExactlyOneUnavailable() = withFixture { fixture ->
         val callback = fixture.proveHealthyThenReset()
         fixture.service.getState(callback)
@@ -53,20 +112,7 @@ class ReverbServiceStateDeliveryTest {
         fixture.pumpDelivery()
 
         assertEquals(0, callback.awaiting)
-        assertEquals(listOf(State(
-            commandGeneration = 0L,
-            listeningEnabled = false,
-            activeBufferSlot = ReverbService.BufferSlot.ONE_SHOT,
-            oneShotSeconds = 0f,
-            oneShotBytes = 0L,
-            loopingSeconds = 0f,
-            loopingBytes = 0L,
-            oneShotIsEnabled = false,
-            oneShotIsFull = false,
-            loopingIsEnabled = false,
-            retentionMode = null,
-            exporting = false,
-        )), callback.values)
+        assertEquals(listOf(unavailableState()), callback.values)
     }
 
     @Test
@@ -531,6 +577,21 @@ class ReverbServiceStateDeliveryTest {
     }
 
     private companion object {
+        fun unavailableState() = State(
+            commandGeneration = 0L,
+            listeningEnabled = false,
+            activeBufferSlot = ReverbService.BufferSlot.ONE_SHOT,
+            oneShotSeconds = 0f,
+            oneShotBytes = 0L,
+            loopingSeconds = 0f,
+            loopingBytes = 0L,
+            oneShotIsEnabled = false,
+            oneShotIsFull = false,
+            loopingIsEnabled = false,
+            retentionMode = null,
+            exporting = false,
+        )
+
         fun healthyState(generation: Long, slot: ReverbService.BufferSlot) = State(
             commandGeneration = generation,
             listeningEnabled = false,
