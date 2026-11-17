@@ -217,8 +217,10 @@ internal fun verifyNativeHomeParity(instrumentation: Instrumentation, report: St
 private class HomeParityBoard(
     private val host: NativeParityActivity, private val case: HomeCase, dark: Boolean,
     commonGrain: NativeParityCommonGrainSession? = null,
+    fontScaleOverride: Float? = null,
 ) : AutoCloseable {
     private val configuration = Configuration(host.resources.configuration).apply {
+        fontScaleOverride?.let { fontScale = it }
         uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or
             if (dark) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
     }
@@ -1066,4 +1068,152 @@ private fun directHomeNode(node: AccessibilityNodeInfo, root: View): JSONObject 
             JSONObject().put("id", it.id).put("label", it.label?.toString() ?: JSONObject.NULL)
         })).put("bounds", JSONArray(listOf(bounds.left - origin[0], bounds.top - origin[1],
             bounds.right - origin[0], bounds.bottom - origin[1])))
+}
+
+/** Native-only accessibility sizing oracle; a released renderer may share the old clipping bug. */
+internal fun verifyNativeHomeLabelHeight(instrumentation: Instrumentation, report: StringBuilder) {
+    val context = instrumentation.targetContext
+    check(context.packageName == "app.smallthingz.reverb.uitheme.reliability")
+    check(context.applicationContext.javaClass == Application::class.java)
+    val originalFontScale = context.resources.configuration.fontScale
+    val directory = File(context.filesDir, "native-home-label-height-${System.currentTimeMillis()}")
+    check(directory.mkdir())
+    val cases = JSONArray()
+    val result = JSONObject().put("selector", "native_home_label_height").put("cases", cases)
+        .put("scope", "Actual Home paragraph viewport/intrinsic height, local font1/2 LTR/RTL, TAB selection and native PNGs")
+        .put("limits", "No global font setting changes; no recording or service; horizontal truncation is outside scope")
+        .put("passed", false)
+    var host: NativeParityActivity? = null
+    var board: HomeParityBoard? = null
+    var textLease: AutoCloseable? = null
+    var primary: Throwable? = null
+    var completed = 0
+    try {
+        val scale = android.animation.ValueAnimator.getDurationScale()
+        check(scale.isFinite() && scale in 0f..10f) { "Home label follow-up unqualified at current animator scale" }
+        result.put("observed_animator_scale", scale.toDouble())
+        val activity = launchCurrentUiSmokeActivity(instrumentation).also { host = it }
+        awaitNativeParityDraw(instrumentation, activity.fixtureRoot)
+        for (fontScale in listOf(1f, 2f)) for (rtl in listOf(false, true)) {
+            requireNativeParityHost(instrumentation, activity)
+            val name = "font${fontScale.toInt()}-" + if (rtl) "rtl" else "ltr"
+            val entry = JSONObject().put("name", name).put("paragraphs", JSONArray()).put("passed", false)
+            cases.put(entry)
+            val current = nativeParityOnMain(instrumentation) {
+                HomeParityBoard(activity, homeCases()[1], rtl, fontScaleOverride = fontScale).also { board = it }
+            }
+            // The established board obtains its frame scope from this one reference warm-up.
+            captureNativeParityContent(instrumentation, activity) { current.show(true) }.recycle()
+            val image = captureNativeParityContent(instrumentation, activity) { current.show(false) }
+            try { saveNativeParityBitmap(directory, "$name-native.png", image) } finally { image.recycle() }
+            textLease = nativeParityOnMain(instrumentation) {
+                bindHomeParityAccessibility(activity, current.content(false) as ReverbHomeScreenView, current.dp(48f))
+            }
+            nativeParityOnMain(instrumentation) {
+                val content = current.content(false)
+                entry.put("layout_direction", content.layoutDirection).put("requested_rtl", rtl)
+                check(content.layoutDirection == if (rtl) View.LAYOUT_DIRECTION_RTL else View.LAYOUT_DIRECTION_LTR)
+                check(content.resources.configuration.fontScale == fontScale)
+                val controls = homeViewDescendants(content).filterIsInstance<ReverbHomeControls>().single()
+                check(controls.height == current.dp(112f).roundToInt())
+                val selectorPadding = current.dp(6f).roundToInt()
+                val segmentCap = minOf(current.dp(54f).roundToInt(), controls.height) - selectorPadding * 2
+                val preferredPadding = current.dp(11f).roundToInt() * 2
+                val glyphSize = current.dp(18f).roundToInt()
+                entry.put("density", content.resources.displayMetrics.density)
+                    .put("font_scale", content.resources.configuration.fontScale)
+                    .put("controls_height", controls.height).put("segment_height_cap", segmentCap)
+                val labels = listOf(content.context.getString(R.string.buffer_one_shot),
+                    content.context.getString(R.string.buffer_loop))
+                for ((index, text) in labels.withIndex()) {
+                    val tab = homeNativeTab(content, text)
+                    val label = homeViewDescendants(tab).filterIsInstance<ParagraphView>().single()
+                    val intrinsic = label.intrinsicTextHeight(label.measuredWidth)
+                    val oldViewport = (segmentCap - preferredPadding).coerceAtLeast(0)
+                    val expectedTabHeight = minOf(segmentCap, maxOf(intrinsic, glyphSize) + preferredPadding)
+                    val expectedTabTop = selectorPadding + ((segmentCap - expectedTabHeight) / 2f).roundToInt()
+                    entry.getJSONArray("paragraphs").put(JSONObject().put("text", text)
+                        .put("height", label.height).put("intrinsic_height", intrinsic)
+                        .put("old_viewport_height", oldViewport).put("tab_height", tab.height)
+                        .put("expected_tab_height", expectedTabHeight).put("tab_top", tab.top)
+                        .put("expected_tab_top", expectedTabTop).put("tab_bottom", tab.bottom))
+                    check(label.height >= intrinsic) { "$name $text clips $intrinsic px into ${label.height} px" }
+                    check(label.top >= 0 && label.bottom <= tab.height)
+                    check(label.top == ((tab.height - label.height) / 2f).roundToInt())
+                    // AT_MOST permits the natural padded row to be shorter than the selector cap.
+                    check(tab.height == expectedTabHeight)
+                    check(kotlin.math.abs(tab.top - expectedTabTop) <= 1)
+                    check(tab.top >= selectorPadding && tab.bottom <= selectorPadding + segmentCap)
+                    val glyph = tab.getChildAt(0)
+                    check(glyph.width == current.dp(18f).roundToInt() && glyph.height == current.dp(18f).roundToInt())
+                    check(glyph.top == ((tab.height - glyph.height) / 2f).roundToInt())
+                    // Default pixel rounding may already lose1px; record it without preserving the clip.
+                    entry.getJSONArray("paragraphs").getJSONObject(index).put("old_cap_clips", intrinsic > oldViewport)
+                    if (fontScale == 2f) check(intrinsic > oldViewport) // Old enlarged viewport cannot fit.
+                    val children = ArrayList<View>().also(tab::addChildrenForAccessibility)
+                    check(children.size == 2 && children[0] === label)
+                    val node = checkNotNull(tab.createAccessibilityNodeInfo())
+                    val role = checkNotNull(children[1].createAccessibilityNodeInfo())
+                    try {
+                        check(node.isSelected == (index == 0) && node.isClickable == (index != 0))
+                        check(androidx.core.view.accessibility.AccessibilityNodeInfoCompat.wrap(role).roleDescription ==
+                            content.context.getString(smallthingz.ui.R.string.tab))
+                        check(label.getText() == text)
+                    } finally {
+                        @Suppress("DEPRECATION") node.recycle()
+                        @Suppress("DEPRECATION") role.recycle()
+                    }
+                }
+            }
+            val completion = CountDownLatch(1)
+            val before = nativeParityOnMain(instrumentation) {
+                current.setCompletion(completion)
+                current.nativeEvents.length()
+            }
+            requireNativeParityHost(instrumentation, activity)
+            val admitted = nativeParityOnMain(instrumentation) {
+                val content = current.content(false)
+                clickHomeTabNode(content, false, content.context.getString(R.string.buffer_loop))
+            }
+            entry.put("unselected_action_result", admitted)
+            check(admitted)
+            check(completion.await((420f * scale).toLong() + 2_000L, TimeUnit.MILLISECONDS)) {
+                "Home label selection callback did not complete"
+            }
+            captureNativeParityContent(instrumentation, activity) { current.show(false) }.recycle()
+            nativeParityOnMain(instrumentation) {
+                val content = current.content(false)
+                check(current.selected(false) == BufferSlot.LOOPING)
+                check(current.nativeEvents.length() == before + 1)
+                check(current.nativeEvents.getJSONObject(before).getString("action") == "select:LOOPING")
+                entry.put("selection", current.selected(false).name)
+                    .put("selection_callback_count", current.nativeEvents.length() - before)
+                val selectedNode = checkNotNull(homeNativeTab(content,
+                    content.context.getString(R.string.buffer_loop)).createAccessibilityNodeInfo())
+                try { check(selectedNode.isSelected && !selectedNode.isClickable) }
+                finally { @Suppress("DEPRECATION") selectedNode.recycle() }
+            }
+            nativeParityOnMain(instrumentation) {
+                textLease?.close(); textLease = null
+                current.close(); board = null
+            }
+            completed++
+            entry.put("passed", true)
+            writeHomeEvidence(directory, result, null)
+        }
+        check(context.resources.configuration.fontScale == originalFontScale)
+    } catch (error: Throwable) { primary = error; throw error }
+    finally {
+        var cleanup: Throwable? = null
+        try { nativeParityOnMain(instrumentation) {
+            var failure = captureNativeParityCleanup(null) { textLease?.close() }
+            failure = captureNativeParityCleanup(failure) { board?.close() }
+            failure = captureNativeParityCleanup(failure) { host?.finish() }
+            failure?.let { throw it }
+        } } catch (error: Throwable) { cleanup = error; appendNativeParityFailure(primary, error) }
+        result.put("completed_cases", completed).put("passed", primary == null && cleanup == null && completed == 4)
+        report.append("PARITY_EVIDENCE ").append(directory.name).append("/result.json\n")
+        writeHomeEvidence(directory, result, primary ?: cleanup)
+        if (primary == null) cleanup?.let { throw it }
+    }
 }

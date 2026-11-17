@@ -426,8 +426,9 @@ internal class HomeBufferSegment(context: Context, currentEnvironment: ReverbVie
         glyph.measure(MeasureSpec.makeMeasureSpec(min(dp(18), innerWidth), MeasureSpec.EXACTLY),
             MeasureSpec.makeMeasureSpec(min(dp(18), innerHeight), MeasureSpec.EXACTLY))
         val gap = min(dp(7), (innerWidth - glyph.measuredWidth).coerceAtLeast(0))
+        // Preferred vertical padding must yield to enlarged text before its viewport is clipped.
         label.measure(MeasureSpec.makeMeasureSpec((innerWidth - glyph.measuredWidth - gap).coerceAtLeast(0),
-            MeasureSpec.AT_MOST), MeasureSpec.makeMeasureSpec(innerHeight, MeasureSpec.AT_MOST))
+            MeasureSpec.AT_MOST), MeasureSpec.makeMeasureSpec(maxHeight, MeasureSpec.AT_MOST))
         setMeasuredDimension(width, resolveSize(max(glyph.measuredHeight, label.measuredHeight) + dp(11) * 2, h))
         mergedRowAccessibility.roleView.measure(MeasureSpec.makeMeasureSpec(measuredWidth, MeasureSpec.EXACTLY),
             MeasureSpec.makeMeasureSpec(measuredHeight, MeasureSpec.EXACTLY))

@@ -74,7 +74,7 @@ class ReliabilityInstrumentation : Instrumentation() {
             val currentUiSmoke = targetContext.packageName == "app.smallthingz.reverb.uitheme.reliability"
             if (currentUiSmoke) {
                 check(targetContext.applicationContext.javaClass == android.app.Application::class.java &&
-                    requestedTest in setOf("native_rename_editor_current", "native_click_ripple_current", "native_retention_input_parity", "native_retention_keyboard", "native_icon_parity", "native_settings_library_selectors", "native_theme_matrix", "native_settings_calibration_current", "current_media_delete_consent",
+                    requestedTest in setOf("native_home_label_height", "native_rename_editor_current", "native_click_ripple_current", "native_retention_input_parity", "native_retention_keyboard", "native_icon_parity", "native_settings_library_selectors", "native_theme_matrix", "native_settings_calibration_current", "current_media_delete_consent",
                         "native_silence_blob_current", "native_silence_diagnostic_current", "native_blob_feel_current", "native_material_progress_current", "native_library_admission", "native_library_expansion_measurement", "native_library_expansion_clipping", "native_segmented_contrast", "native_settings_theme_contrast", "native_restart_permission_ui", "native_settings_ime_bounds",
                         "native_action_sheet_dismissal_current",
                         "range_preview_short_end", "range_preview_short_controls", "range_preview_short_retirement", "range_preview_normalization_sampling", "native_ui_consistency_current", "native_settings_hydration_current", "native_settings_folder_pointer")) {
@@ -98,7 +98,7 @@ class ReliabilityInstrumentation : Instrumentation() {
                 "native_main_settings_readable_selection_parity",
                 "native_library_admission", "native_library_expansion_measurement", "native_library_expansion_clipping", "native_segmented_contrast", "native_settings_theme_contrast", "native_restart_permission_ui", "native_settings_ime_bounds",
                 "native_main_incidents_visibility",
-                "native_home_accessibility",
+                "native_home_accessibility", "native_home_label_height",
                 "native_onboarding_audio_flow",
                 "native_settings_library_selectors", "native_theme_matrix", "current_media_delete_consent", "native_settings_back_guard", "native_settings_calibration_current", "native_settings_calibration_live",
                 "native_silence_blob_current", "native_silence_diagnostic_current", "native_blob_feel_current", "native_material_progress_current",
@@ -448,6 +448,9 @@ class ReliabilityInstrumentation : Instrumentation() {
             } else if (requestedTest == "native_range_parity") {
                 executed++
                 verifyNativeRangeParity(this, report)
+            } else if (requestedTest == "native_home_label_height") {
+                executed++
+                verifyNativeHomeLabelHeight(this, report)
             } else if (requestedTest == "native_home_parity") {
                 executed++
                 verifyNativeHomeParity(this, report)
