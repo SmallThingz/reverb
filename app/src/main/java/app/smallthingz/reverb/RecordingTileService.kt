@@ -11,7 +11,6 @@ import android.os.Handler
 import android.os.Looper
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
-import androidx.core.content.ContextCompat
 import androidx.core.content.edit
 import java.util.EnumMap
 import java.util.IdentityHashMap
@@ -974,7 +973,7 @@ abstract class RecordingTileService : TileService() {
             .setAction(ReverbService.ACTION_QUICK_TILE_COMMAND)
             .putExtra(ReverbService.EXTRA_QUICK_TILE_BUFFER_SLOT, bufferSlot.storageCode.toInt())
         val started = runCatching {
-            requireServiceStarted { ContextCompat.startForegroundService(this, intent) }
+            requireServiceStarted { startForegroundService(intent) }
         }.isSuccess
         if (!started) {
             RecordingQuickTileStateCache.markRuntimeUnavailable(this)

@@ -1,8 +1,8 @@
 package app.smallthingz.reverb
 
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import androidx.core.content.ContextCompat
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -50,8 +50,7 @@ internal object RecordingPlayback {
         // Incoming intent revokes a primed/playing scrub before service delivery can be delayed.
         scrubAuthorities.revoke()
         return try {
-            val started = ContextCompat.startForegroundService(app,
-                Intent(app, RecordingPlaybackService::class.java)
+            val started: ComponentName? = app.startForegroundService(Intent(app, RecordingPlaybackService::class.java)
                     .putExtra(RecordingPlaybackService.EXTRA_REQUEST, request.token))
             checkNotNull(started) { "Playback service start was rejected" }
             true

@@ -5,7 +5,6 @@ import android.graphics.drawable.Icon
 import android.os.Build
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
-import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -79,10 +78,11 @@ abstract class QuickSaveTileService : TileService() {
                 QuickSaveTileOptions.error.value == null) {
                 try {
                     requireServiceStarted {
-                        ContextCompat.startForegroundService(this,
+                        startForegroundService(
                             Intent(this, ReverbService::class.java).setAction(ReverbService.ACTION_QUICK_SAVE)
                                 .putExtra(ReverbService.EXTRA_QUICK_TILE_BUFFER_SLOT, tapped.buffer.storageCode.toInt())
-                                .putExtra(ReverbService.EXTRA_QUICK_SAVE_SECONDS, tapped.seconds))
+                                .putExtra(ReverbService.EXTRA_QUICK_SAVE_SECONDS, tapped.seconds),
+                        )
                     }
                 } catch (error: RuntimeException) {
                     NotifyFileReceiver(applicationContext).fileFailed(getString(R.string.save_failed), error)

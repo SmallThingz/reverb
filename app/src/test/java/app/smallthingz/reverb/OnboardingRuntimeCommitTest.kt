@@ -82,7 +82,7 @@ class OnboardingRuntimeCommitTest {
             commit = { events += "commit"; durable = true; true },
             reloadRuntime = {
                 events += "runtime"
-                requireServiceStarted<String> { null }
+                requireServiceStarted { null }
             },
             onRuntimeFailure = {
                 assertTrue(durable)

@@ -9,25 +9,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ServiceForegroundLifetimeTest {
-    @Test
-    fun durableLifetimePreservesOriginalStartAndPromotionFailures() {
-        for (failDuringStart in listOf(true, false)) {
-            val expected = SecurityException("Android denied foreground work")
-            val events = mutableListOf<String>()
-            val result = attemptDurableSaveLifetimeProtection(null,
-                start = {
-                    events += "start"
-                    if (failDuringStart) throw expected
-                    "component"
-                },
-                promote = {
-                    events += "promote"
-                    throw expected
-                })
-            assertSame(expected, result.failure)
-            assertEquals(if (failDuringStart) listOf("start") else listOf("start", "promote"), events)
-        }
-    }
 
     @Test
     fun durableLifecycleRejectionHasFactualReasonAndNoPlatformCause() {
@@ -42,19 +23,6 @@ class ServiceForegroundLifetimeTest {
         }
     }
 
-    @Test
-    fun durableLifetimeRequiresComponentBeforePromotionAndSucceedsInOrder() {
-        var promotions = 0
-        val missing = attemptDurableSaveLifetimeProtection(null, { null }, { promotions++ })
-        assertTrue(missing.failure is IllegalStateException)
-        assertTrue(missing.failure!!.message.orEmpty().contains("no component"))
-        assertEquals(0, promotions)
-        val events = mutableListOf<String>()
-        val accepted = attemptDurableSaveLifetimeProtection(null,
-            { events += "start"; "component" }, { events += "promote" })
-        assertEquals(null, accepted.failure)
-        assertEquals(listOf("start", "promote"), events)
-    }
 
     @Test
     fun durableLifetimeDoesNotConvertFatalFailure() {
@@ -92,10 +60,8 @@ class ServiceForegroundLifetimeTest {
 
     @Test
     fun serviceStartRequiresReturnedComponent() {
-        assertEquals("component", requireServiceStarted { "component" })
-
         val error = assertThrows(IllegalStateException::class.java) {
-            requireServiceStarted<String> { null }
+            requireServiceStarted { null }
         }
 
         assertTrue(error.message.orEmpty().contains("no component"))
@@ -106,7 +72,7 @@ class ServiceForegroundLifetimeTest {
         val expected = SecurityException("denied")
 
         val actual = assertThrows(SecurityException::class.java) {
-            requireServiceStarted<String> { throw expected }
+            requireServiceStarted { throw expected }
         }
 
         assertSame(expected, actual)

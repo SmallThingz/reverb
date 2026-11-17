@@ -7,6 +7,7 @@ import android.app.Notification
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.ComponentName
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.ServiceInfo
@@ -123,7 +124,8 @@ internal fun recorderCommandGenerationMayApply(
     currentGeneration: Long,
 ): Boolean = expectedGeneration == null || expectedGeneration == currentGeneration
 
-internal inline fun <T : Any> requireServiceStarted(start: () -> T?): T =
+// Keep the nullable platform result typed: compatibility wrappers returning Unit cannot own a start.
+internal inline fun requireServiceStarted(start: () -> ComponentName?): ComponentName =
     start() ?: throw IllegalStateException("Service start returned no component")
 
 internal enum class DurableSaveLifetimeRejection(val explanation: String) {
@@ -141,7 +143,7 @@ internal data class DurableSaveLifetimeAttempt(val failure: RuntimeException?)
 /** Called under the Service's existing lifetime lock; never owns terminal delivery or cleanup. */
 internal fun attemptDurableSaveLifetimeProtection(
     rejection: DurableSaveLifetimeRejection?,
-    start: () -> Any?,
+    start: () -> ComponentName?,
     promote: () -> Unit,
 ): DurableSaveLifetimeAttempt {
     if (rejection != null) return DurableSaveLifetimeAttempt(DurableSaveLifetimeRejectedException(rejection))
@@ -1602,7 +1604,7 @@ open class ReverbService : Service() {
         val attempt = newForegroundCaptureAttempt(generation)
         try {
             requireServiceStarted {
-                ContextCompat.startForegroundService(this, Intent(this, javaClass))
+                startForegroundService(Intent(this, javaClass))
             }
         } catch (error: RuntimeException) {
             Log.e(TAG, "Unable to start recorder foreground service", error)
@@ -2244,7 +2246,7 @@ open class ReverbService : Service() {
         }
         attemptDurableSaveLifetimeProtection(rejection,
             start = {
-                ContextCompat.startForegroundService(this, Intent(this, javaClass).setAction(ACTION_EXPORT_KEEPALIVE))
+                startForegroundService(Intent(this, javaClass).setAction(ACTION_EXPORT_KEEPALIVE))
             },
             promote = {
                 // Refresh Saving even when microphone ownership supplies the foreground lifetime.
@@ -2616,8 +2618,7 @@ open class ReverbService : Service() {
         return try {
             if (foregroundServiceTypes == 0) {
                 requireServiceStarted {
-                    ContextCompat.startForegroundService(
-                        this,
+                    startForegroundService(
                         Intent(this, javaClass).setAction(ACTION_EXPORT_KEEPALIVE),
                     )
                 }
@@ -2772,8 +2773,7 @@ open class ReverbService : Service() {
             ) {
                 if ((foregroundServiceTypes and ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC) == 0) {
                     requireServiceStarted {
-                        ContextCompat.startForegroundService(
-                            this,
+                        startForegroundService(
                             Intent(this, javaClass).setAction(ACTION_RETENTION_MAINTENANCE_KEEPALIVE),
                         )
                     }
@@ -4559,8 +4559,7 @@ open class ReverbService : Service() {
         return try {
             if (foregroundServiceTypes == 0) {
                 requireServiceStarted {
-                    ContextCompat.startForegroundService(
-                        this,
+                    startForegroundService(
                         Intent(this, javaClass).setAction(ACTION_BUFFER_CLEAR_KEEPALIVE),
                     )
                 }
