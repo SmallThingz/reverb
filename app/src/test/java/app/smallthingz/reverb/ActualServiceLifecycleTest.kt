@@ -26,6 +26,9 @@ import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.Implementation
+import org.robolectric.annotation.Implements
+import org.robolectric.annotation.RealObject
 import org.robolectric.annotation.LooperMode
 import org.robolectric.shadows.ShadowLooper
 import org.robolectric.shadows.ShadowService
@@ -33,18 +36,23 @@ import org.robolectric.shadow.api.Shadow
 
 /** Actual stopped-Service lifecycle, terminal snapshot delivery, and owned PCM recovery. */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [35], application = Application::class, shadows = [JournalHostIoShadow::class])
+@Config(sdk = [35], application = Application::class, shadows = [JournalHostIoShadow::class,
+    ProbeAudioRecordShadow::class, ProbeAudioRecordBuilderShadow::class])
 @LooperMode(LooperMode.Mode.PAUSED)
 class ActualServiceLifecycleTest {
     class NoMicService : ReverbService() {
         val inputAttempts = AtomicInteger()
+        @Volatile internal var syntheticInput: CaptureAudioInput? = null
         override fun createAudioRecord(): CaptureAudioInput? {
             inputAttempts.incrementAndGet()
-            throw AssertionError("Unexpected microphone admission")
+            return syntheticInput ?: throw AssertionError("Unexpected microphone admission")
         }
     }
 
-    @Test fun stoppedInvalidTileStartAndDestroyRejectQueuedSnapshotButPreservePcm() {
+    @Test fun stoppedInvalidTileStartAndDestroyRejectQueuedSnapshotButPreservePcm() = lifecycle(false)
+    @Test fun publicCaptureStopKeepsCompletedPcmAndRejectsHeldRead() = lifecycle(true)
+
+    private fun lifecycle(capture: Boolean) {
         val app = RuntimeEnvironment.getApplication()
         val noBackup = app.noBackupFilesDir
         val appRoot = requireNotNull(app.filesDir.parentFile).canonicalFile
@@ -64,6 +72,9 @@ class ActualServiceLifecycleTest {
         check(incidentChildrenBefore.isEmpty()) { "Incident work already owned" }
         val incidentRevision = RecordingIncidentStore.historyRevision.value
         check(incidentRetriesEmpty()) { "Incident retry already owned" }
+        val incidentEpochField = RecordingIncidentStore::class.java.getDeclaredField("captureSessionPublicationEpoch")
+            .apply { isAccessible = true }
+        val priorIncidentEpoch = incidentEpochField.get(RecordingIncidentStore)
         val notificationType = DurableSaveNotifications::class.java
         val notificationStarted = notificationType.getDeclaredField("started").apply { isAccessible = true }
         check(!notificationStarted.getBoolean(DurableSaveNotifications)) { "Notification collector already owned" }
@@ -87,6 +98,32 @@ class ActualServiceLifecycleTest {
         drainTileWorker()
         val tileState = snapshotTileState()
         check(tileState.getValue("runtimeOwner") == null) { "Quick tile runtime already owned" }
+        @Suppress("UNCHECKED_CAST")
+        val inputCache = Class.forName("app.smallthingz.reverb.RecorderPreferences")
+            .getDeclaredField("inputConfigCache").apply { isAccessible = true }.get(null) as MutableMap<Any, Boolean>
+        check(inputCache.isEmpty()) { "Audio capability cache already owned" }
+        val keyType = Class.forName("app.smallthingz.reverb.InputConfigKey")
+        val ownedProbeKey = keyType.getDeclaredConstructor(Int::class.javaPrimitiveType, AudioSourceMode::class.java,
+            InputRouteMode::class.java, ChannelMode::class.java, PcmSampleFormat::class.java).apply {
+            isAccessible = true
+        }.newInstance(8_000, AudioSourceMode.VOICE_RECOGNITION, InputRouteMode.AUTO, ChannelMode.MONO, PcmSampleFormat.PCM_16)
+        check(ProbeAudioRecordShadow.created.get() == 0 && ProbeAudioRecordShadow.released.get() == 0 &&
+            ProbeAudioRecordShadow.liveCount() == 0)
+        val priorPid = android.os.Process.myPid()
+        val processIdentity = RecordingIncidentStore::class.java.getDeclaredField("currentAppProcess\$delegate")
+            .apply { isAccessible = true }.get(RecordingIncidentStore) as Lazy<*>
+        if (capture) {
+            check(priorPid == 0) { "Process shadow PID already owned" }
+            check(!processIdentity.isInitialized()) { "Incident process identity already owned" }
+            check(android.os.Process.getStartElapsedRealtime() >= 0L)
+            check(android.os.SystemClock.elapsedRealtime() >= 0L)
+            check(System.currentTimeMillis() > 0L)
+            val bootCount = readOptionalRecordingBootCount {
+                android.provider.Settings.Global.getInt(app.contentResolver, android.provider.Settings.Global.BOOT_COUNT, -1)
+            }
+            check(bootCount >= -1)
+        }
+        var ownsPid = false
         val pcm = ByteArray(512) { (it * 13 + 1).toByte() }
         val loopRoot = File(noBackup, BUFFER_CACHE_FOLDER_NAME)
         var controller: org.robolectric.android.controller.ServiceController<NoMicService>? = null
@@ -98,6 +135,8 @@ class ActualServiceLifecycleTest {
         var primary: Throwable? = null
         var ownerDrainFailed = false
         var ownedCoordinator: Any? = null
+        var packetInput: PacketInput? = null
+        var captureEpoch: Any? = null
         val retained = mutableListOf<ReverbService.TimelineSnapshot>()
         val pending = mutableListOf<ReverbService.TimelineSnapshot?>()
         fun failCleanup(error: Throwable) {
@@ -105,16 +144,23 @@ class ActualServiceLifecycleTest {
         }
         fun failDrain(error: Throwable) { ownerDrainFailed = true; failCleanup(error) }
         try {
+            if (capture) {
+                org.robolectric.shadows.ShadowProcess.setPid(47_191)
+                ownsPid = true
+                check(android.os.Process.myPid() == 47_191)
+            }
             ServiceStateOsShadow.fixtureRoot = appRoot.toPath()
             check(prefs.edit().putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
                 .putInt(PrefKey.CAPTURE_BUFFER_SLOT, ReverbService.BufferSlot.LOOPING.storageCode.toInt())
                 .putInt(PrefKey.SAMPLE_RATE, 8_000)
                 .putInt(PrefKey.CHANNEL_MODE, ChannelMode.MONO.storageCode.toInt())
+                .putInt(PrefKey.AUDIO_SOURCE, AudioSourceMode.VOICE_RECOGNITION.storageCode.toInt())
+                .putInt(PrefKey.INPUT_ROUTE, InputRouteMode.AUTO.storageCode.toInt())
                 .putInt(PrefKey.PCM_SAMPLE_FORMAT, PcmSampleFormat.PCM_16.storageCode.toInt()).commit())
             check(restoreRetentionConfigurationToPreferences(prefs, defaultRetentionConfiguration()))
             PersistentAudioChunkStore(loopRoot).use { seed ->
                 seed.configure(RetentionMode.SIZE, 4096, 8_000, 1, PcmSampleFormat.PCM_16)
-                assertEquals(pcm.size, seed.append(pcm, 0, pcm.size))
+                if (!capture) assertEquals(pcm.size, seed.append(pcm, 0, pcm.size))
             }
             controller = Robolectric.buildService(NoMicService::class.java)
             service = controller!!.get()
@@ -136,55 +182,92 @@ class ActualServiceLifecycleTest {
             assertNull(field(actual, "audioRecord"))
             assertEquals(0, actual.inputAttempts.get())
             assertEquals(false, getRecorderPreferences(actual).getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, true))
-            val healthy = mutableListOf<ReverbService.TimelineSnapshot?>()
-            actual.acquireTimelineSnapshot(ReverbService.BufferSlot.LOOPING) { snapshot ->
-                snapshot?.let(retained::add); healthy += snapshot
-            }
-            awaitLeaseCount(actual, handler, 1)
-            ShadowLooper.idleMainLooper()
-            val live = requireNotNull(healthy.single())
-            requireNotNull(live.acquireRange(0.0, live.durationSeconds)).use {
-                assertArrayEquals(pcm, readStoreTestPcm16Mono8Khz(it))
-            }
-            live.close(); retained.remove(live)
-            val shadow = Shadow.extract<ShadowService>(actual)
-            val intent = Intent(actual, ReverbService::class.java).setAction(ReverbService.ACTION_QUICK_TILE_COMMAND)
-                .putExtra(ReverbService.EXTRA_QUICK_TILE_BUFFER_SLOT, -123)
-            assertEquals(Service.START_NOT_STICKY, actual.onStartCommand(intent, 0, 11))
-            fence(handler)
-            assertNull(field(actual, "audioRecord"))
-            assertEquals(11, shadow.stopSelfResultId)
-            actual.acquireTimelineSnapshot(ReverbService.BufferSlot.LOOPING) { snapshot ->
-                snapshot?.let(retained::add); pending += snapshot
-            }
-            awaitLeaseCount(actual, handler, 1)
-            assertTrue(pending.isEmpty())
-            assertEquals(1, leaseCount(actual))
-            boundaryReached = true
-            destructionCalled = true
-            controller!!.destroy()
-            destructionCompleted = true
-            ShadowLooper.idleMainLooper()
-            assertEquals(listOf(null), pending)
-            thread!!.join(8_000)
-            check(!thread!!.isAlive) { "Service audio thread did not terminate" }
-            ShadowLooper.idleMainLooper()
-            // Wait for the actual asynchronously released snapshot lease before reopening.
-            joinNewChildren(snapshotCleanupScope, snapshotChildrenBefore)
-            assertEquals(0, leaseCount(actual))
-            assertNull(field(actual, "audioRecord"))
-            assertEquals(0, actual.inputAttempts.get())
-            assertFalse(getRecorderPreferences(actual).getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, true))
-            PersistentAudioChunkStore(loopRoot).use { reopened ->
-                reopened.configure(RetentionMode.SIZE, 4096, 8_000, 1, PcmSampleFormat.PCM_16)
-                requireNotNull(reopened.acquireRange(0.0, reopened.durationSeconds())).use {
+            if (capture) {
+                check(!SilenceGatePreferences.read(actual).config.enabled)
+                val first = ByteArray(512) { (it * 31 + 9).toByte() }
+                val rejected = ByteArray(512) { (it * 7 + 71).toByte() }
+                val packet = PacketInput(first, rejected)
+                packetInput = packet
+                actual.syntheticInput = packet
+                exercisePublicCapture(actual, handler, retained, packet, first)
+                captureEpoch = incidentEpochField.get(RecordingIncidentStore)
+                check(captureEpoch !== priorIncidentEpoch) { "Capture session was never armed" }
+                assertEquals(1, actual.inputAttempts.get())
+                destructionCalled = true
+                controller!!.destroy()
+                destructionCompleted = true
+                ShadowLooper.idleMainLooper()
+                thread!!.join(8_000)
+                check(!thread!!.isAlive)
+                ShadowLooper.idleMainLooper()
+                joinNewChildren(snapshotCleanupScope, snapshotChildrenBefore)
+                assertEquals(0, leaseCount(actual))
+                assertEquals(2, packet.reads.get())
+                assertEquals(1, packet.releases.get())
+                assertFalse(RecordingIncidentStore.beginKnownCaptureStop(actual).armed)
+                PersistentAudioChunkStore(loopRoot).use { reopened ->
+                    reopened.configure(RetentionMode.SIZE, 4096, 8_000, 1, PcmSampleFormat.PCM_16)
+                    requireNotNull(reopened.acquireRange(0.0, reopened.durationSeconds())).use {
+                        assertArrayEquals(first, readStoreTestPcm16Mono8Khz(it))
+                    }
+                }
+            } else {
+                val healthy = mutableListOf<ReverbService.TimelineSnapshot?>()
+                actual.acquireTimelineSnapshot(ReverbService.BufferSlot.LOOPING) { snapshot ->
+                    snapshot?.let(retained::add); healthy += snapshot
+                }
+                awaitLeaseCount(actual, handler, 1)
+                ShadowLooper.idleMainLooper()
+                val live = requireNotNull(healthy.single())
+                requireNotNull(live.acquireRange(0.0, live.durationSeconds)).use {
                     assertArrayEquals(pcm, readStoreTestPcm16Mono8Khz(it))
+                }
+                live.close(); retained.remove(live)
+                val shadow = Shadow.extract<ShadowService>(actual)
+                val intent = Intent(actual, ReverbService::class.java).setAction(ReverbService.ACTION_QUICK_TILE_COMMAND)
+                    .putExtra(ReverbService.EXTRA_QUICK_TILE_BUFFER_SLOT, -123)
+                assertEquals(Service.START_NOT_STICKY, actual.onStartCommand(intent, 0, 11))
+                fence(handler)
+                assertNull(field(actual, "audioRecord"))
+                assertEquals(11, shadow.stopSelfResultId)
+                actual.acquireTimelineSnapshot(ReverbService.BufferSlot.LOOPING) { snapshot ->
+                    snapshot?.let(retained::add); pending += snapshot
+                }
+                awaitLeaseCount(actual, handler, 1)
+                assertTrue(pending.isEmpty())
+                assertEquals(1, leaseCount(actual))
+                boundaryReached = true
+                destructionCalled = true
+                controller!!.destroy()
+                destructionCompleted = true
+                ShadowLooper.idleMainLooper()
+                assertEquals(listOf(null), pending)
+                thread!!.join(8_000)
+                check(!thread!!.isAlive) { "Service audio thread did not terminate" }
+                ShadowLooper.idleMainLooper()
+                // Wait for the actual asynchronously released snapshot lease before reopening.
+                joinNewChildren(snapshotCleanupScope, snapshotChildrenBefore)
+                assertEquals(0, leaseCount(actual))
+                assertNull(field(actual, "audioRecord"))
+                assertEquals(0, actual.inputAttempts.get())
+                assertFalse(getRecorderPreferences(actual).getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, true))
+                PersistentAudioChunkStore(loopRoot).use { reopened ->
+                    reopened.configure(RetentionMode.SIZE, 4096, 8_000, 1, PcmSampleFormat.PCM_16)
+                    requireNotNull(reopened.acquireRange(0.0, reopened.durationSeconds())).use {
+                        assertArrayEquals(pcm, readStoreTestPcm16Mono8Khz(it))
+                    }
                 }
             }
         } catch (error: Throwable) {
             if (destructionCalled && !destructionCompleted) failDrain(error) else primary = error
         }
         finally {
+            packetInput?.allowSecond?.countDown()
+            if (capture && service != null) try {
+                if (getRecorderPreferences(service!!).getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)) {
+                    check(service!!.disableListening().accepted)
+                }
+            } catch (error: Throwable) { failDrain(error) }
             if (service != null && thread == null) try {
                 thread = field(service!!, "audioThread") as HandlerThread?
             } catch (error: Throwable) { failDrain(error) }
@@ -239,9 +322,32 @@ class ActualServiceLifecycleTest {
                 ShadowLooper.idleMainLooper()
                 assertEquals(listOf(null), pending)
                 assertEquals(0, (service as NoMicService).inputAttempts.get())
+                assertEquals(0, ProbeAudioRecordShadow.created.get())
+                assertEquals(0, ProbeAudioRecordShadow.liveCount())
                 assertNull(field(service!!, "audioRecord"))
                 assertFalse(getRecorderPreferences(service!!).getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, true))
             } catch (error: Throwable) { failCleanup(error) }
+            if (!ownerDrainFailed && collectorJoined && capture && packetInput != null) try {
+                ShadowLooper.idleMainLooper()
+                assertEquals(2, packetInput!!.reads.get())
+                assertEquals(1, packetInput!!.stops.get())
+                assertEquals(1, packetInput!!.releases.get())
+                assertFalse(getRecorderPreferences(service!!).getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, true))
+                check(captureEpoch != null && incidentEpochField.get(RecordingIncidentStore) === captureEpoch)
+                assertFalse(RecordingIncidentStore.beginKnownCaptureStop(service!!).armed)
+                assertTrue(listOf("recording-incidents.bin", "recording-incidents.bin.bak", "recording-incidents.bin.new")
+                    .all { !File(noBackup, it).exists() })
+                assertTrue(ProbeAudioRecordShadow.created.get() > 0)
+                assertEquals(ProbeAudioRecordShadow.created.get(), ProbeAudioRecordShadow.released.get())
+                assertEquals(0, ProbeAudioRecordShadow.liveCount())
+            } catch (error: Throwable) { failCleanup(error) }
+            if (!ownerDrainFailed) try {
+                check(inputCache.keys.all { it == ownedProbeKey }) { "Unexpected audio capability owner" }
+                inputCache[ownedProbeKey]?.let { check(it && inputCache.remove(ownedProbeKey) == true) }
+                check(ProbeAudioRecordShadow.liveCount() == 0) { "Capability probe still owned" }
+                ProbeAudioRecordShadow.created.set(0)
+                ProbeAudioRecordShadow.released.set(0)
+            } catch (error: Throwable) { failDrain(error) }
             if (!ownerDrainFailed) {
                 retained.toList().forEach { snapshot -> try {
                     snapshot.close(); retained.remove(snapshot)
@@ -264,9 +370,17 @@ class ActualServiceLifecycleTest {
             try { check(DurableSaveJobs.state.value.isEmpty()) { "Fixture left save job ownership" } }
             catch (error: Throwable) { failCleanup(error) }
             if (!ownerDrainFailed) try { JournalHostIoShadow.finishFixture()?.let(::failDrain) } catch (error: Throwable) { failDrain(error) }
+            if (!ownerDrainFailed && ownsPid) try {
+                check(!processIdentity.isInitialized()) { "Fixture initialized process identity; retaining PID owner" }
+                check(android.os.Process.myPid() == 47_191) { "Process shadow PID owner changed" }
+                org.robolectric.shadows.ShadowProcess.setPid(priorPid)
+                check(android.os.Process.myPid() == priorPid)
+                ownsPid = false
+            } catch (error: Throwable) { failDrain(error) }
             if (primary == null && !ownerDrainFailed) try {
                 val allowed = setOf(BUFFER_CACHE_FOLDER_NAME, ONE_SHOT_BUFFER_CACHE_FOLDER_NAME,
-                    LEGACY_BUFFER_CACHE_FOLDER_NAME, "durable-saves", "retention-config.v1")
+                    LEGACY_BUFFER_CACHE_FOLDER_NAME, "durable-saves", "retention-config.v1",
+                    "recording-session.bin", "app-process.bin", "recording-incident-pending.bin", "recording-incidents.bin")
                 val children = noBackup.listFiles().orEmpty()
                 check(children.all { it.name in allowed && !java.nio.file.Files.isSymbolicLink(it.toPath()) }) {
                     "Unexpected no-backup owner; preserving fixture"
@@ -277,6 +391,100 @@ class ActualServiceLifecycleTest {
             if (!ownerDrainFailed) ServiceStateOsShadow.fixtureRoot = null
         }
         primary?.let { throw it }
+    }
+
+    private class PacketInput(private val first: ByteArray, private val rejected: ByteArray) : CaptureAudioInput {
+        val secondEntered = CountDownLatch(1)
+        val allowSecond = CountDownLatch(1)
+        val released = CountDownLatch(1)
+        val reads = AtomicInteger()
+        val stops = AtomicInteger()
+        val releases = AtomicInteger()
+        @Volatile private var recording = false
+        override val state: Int get() = android.media.AudioRecord.STATE_INITIALIZED
+        override val recordingState: Int get() = if (recording) android.media.AudioRecord.RECORDSTATE_RECORDING
+            else android.media.AudioRecord.RECORDSTATE_STOPPED
+        override fun startRecording() { check(!recording); recording = true }
+        override fun read(buffer: java.nio.ByteBuffer, sizeInBytes: Int, readMode: Int): Int {
+            val number = reads.incrementAndGet()
+            val bytes = when (number) {
+                1 -> first
+                2 -> { secondEntered.countDown(); check(allowSecond.await(8, TimeUnit.SECONDS)); rejected }
+                else -> throw AssertionError("Input read after Stop")
+            }
+            check(bytes.size <= sizeInBytes)
+            buffer.put(bytes)
+            return bytes.size
+        }
+        override fun stop() { check(stops.incrementAndGet() == 1); recording = false; allowSecond.countDown() }
+        override fun release() { check(releases.incrementAndGet() == 1); released.countDown() }
+    }
+
+    private fun exercisePublicCapture(actual: NoMicService, handler: Handler,
+        retained: MutableList<ReverbService.TimelineSnapshot>,
+        packet: PacketInput, first: ByteArray) {
+        val wrapperField = android.content.ContextWrapper::class.java.getDeclaredField("mBase").apply { isAccessible = true }
+        val oldBase = wrapperField.get(actual) as android.content.Context
+        val starts = mutableListOf<Intent>()
+        wrapperField.set(actual, object : android.content.ContextWrapper(oldBase) {
+            override fun checkSelfPermission(permission: String): Int =
+                if (permission == android.Manifest.permission.RECORD_AUDIO) android.content.pm.PackageManager.PERMISSION_GRANTED
+                else super.checkSelfPermission(permission)
+            override fun startForegroundService(intent: Intent): android.content.ComponentName {
+                starts += Intent(intent)
+                return android.content.ComponentName(actual, NoMicService::class.java)
+            }
+        })
+        var failure: Throwable? = null
+        try {
+            assertTrue(actual.enableListening(ReverbService.BufferSlot.LOOPING).accepted)
+            assertTrue(getRecorderPreferences(actual).getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false))
+            assertEquals(1, starts.size)
+            assertEquals(android.content.ComponentName(actual, NoMicService::class.java), starts.single().component)
+            assertEquals(Service.START_STICKY, actual.onStartCommand(starts.single(), 0, 37))
+            assertNotNull(Shadow.extract<ShadowService>(actual).lastForegroundNotification)
+            assertTrue(packet.secondEntered.await(8, TimeUnit.SECONDS))
+            assertEquals(8_000, field(actual, "sampleRate"))
+            assertEquals(2, packet.reads.get())
+            val armed = RecordingIncidentStore.beginKnownCaptureStop(actual)
+            assertTrue(armed.armed)
+            assertEquals(47_191, requireNotNull(armed.marker).pid)
+            assertEquals(android.os.Process.getStartElapsedRealtime(), armed.marker!!.processStartElapsedRealtimeMillis)
+            assertTrue(actual.disableListening().accepted)
+            assertFalse(getRecorderPreferences(actual).getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, true))
+            packet.allowSecond.countDown()
+            assertTrue(packet.released.await(8, TimeUnit.SECONDS))
+            assertEquals(1, packet.stops.get())
+            assertEquals(1, packet.releases.get())
+            fence(handler)
+            assertFalse(RecordingIncidentStore.beginKnownCaptureStop(actual).armed)
+            val incidentRoot = actual.applicationContext.noBackupFilesDir
+            assertTrue(listOf("recording-incidents.bin", "recording-incidents.bin.bak", "recording-incidents.bin.new")
+                .all { !File(incidentRoot, it).exists() })
+            val snapshots = mutableListOf<ReverbService.TimelineSnapshot?>()
+            actual.acquireTimelineSnapshot(ReverbService.BufferSlot.LOOPING) { snapshot ->
+                snapshot?.let(retained::add); snapshots += snapshot
+            }
+            awaitLeaseCount(actual, handler, 1)
+            ShadowLooper.idleMainLooper()
+            val snapshot = requireNotNull(snapshots.single())
+            requireNotNull(snapshot.acquireRange(0.0, snapshot.durationSeconds)).use {
+                assertArrayEquals(first, readStoreTestPcm16Mono8Khz(it))
+            }
+            snapshot.close(); retained.remove(snapshot)
+            assertEquals(2, packet.reads.get())
+            assertEquals(1, starts.size)
+        } catch (error: Throwable) {
+            failure = error
+            throw error
+        } finally {
+            packet.allowSecond.countDown()
+            try { wrapperField.set(actual, oldBase) } catch (error: Throwable) {
+                val firstFailure = failure
+                if (firstFailure == null) throw error
+                if (firstFailure !== error) firstFailure.addSuppressed(error)
+            }
+        }
     }
 
     private fun field(owner: Any, name: String): Any? = ReverbService::class.java.getDeclaredField(name).apply {
@@ -351,5 +559,37 @@ class ActualServiceLifecycleTest {
     private fun joinNewChildren(scope: CoroutineScope, prior: Set<Job>) {
         val created = children(scope) - prior
         created.forEach { child -> runBlocking { withTimeout(8_000) { child.join() } } }
+    }
+}
+
+/** Test-only platform capability probe; never starts or reads native microphone input. */
+@Implements(android.media.AudioRecord::class)
+class ProbeAudioRecordShadow {
+    @RealObject private lateinit var record: android.media.AudioRecord
+    companion object {
+        val created = AtomicInteger()
+        val released = AtomicInteger()
+        private val live = java.util.IdentityHashMap<android.media.AudioRecord, Boolean>()
+        fun register(record: android.media.AudioRecord): Unit = synchronized(live) {
+            check(live.put(record, true) == null)
+            created.incrementAndGet()
+            Unit
+        }
+        fun retire(record: android.media.AudioRecord) = synchronized(live) {
+            check(live.remove(record) == true) { "Probe released twice or not owned" }
+            released.incrementAndGet()
+        }
+        fun liveCount(): Int = synchronized(live) { live.size }
+        @JvmStatic @Implementation fun getMinBufferSize(rate: Int, channels: Int, format: Int): Int = 16_384
+    }
+    @Implementation fun getState(): Int = android.media.AudioRecord.STATE_INITIALIZED
+    @Implementation fun release() { retire(record) }
+    @Implementation fun startRecording() { throw AssertionError("Capability probe attempted microphone start") }
+}
+
+@Implements(android.media.AudioRecord.Builder::class)
+class ProbeAudioRecordBuilderShadow {
+    @Implementation fun build(): android.media.AudioRecord {
+        return Shadow.newInstanceOf(android.media.AudioRecord::class.java).also(ProbeAudioRecordShadow::register)
     }
 }
