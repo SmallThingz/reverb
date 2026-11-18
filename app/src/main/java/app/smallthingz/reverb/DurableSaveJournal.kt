@@ -444,30 +444,35 @@ internal class DurableSaveJournal(
                     (it.sourceDirectoryIdentity.isBlank() || it.storeDirectoryIdentity.isBlank()) }) {
                 throw IOException("Save source directory proof missing")
             }
-            val originalPaths = proofs.filter { it.sourcePath.isNotEmpty() }.map { it.sourcePath }
-            if (originalPaths.toSet().size != originalPaths.size) throw IOException("Duplicate referenced PCM object")
-            if (proofs.map { it.name }.toSet().size != proofs.size) throw IOException("Duplicate save source")
-            val names = proofs.map { it.name }.toSet()
-            if ((encodedRange.segments + encodedRange.leadingContext + encodedRange.trailingContext).any { it.record.file.name !in names }) {
-                throw IOException("Unowned save source")
+            val originalPaths = HashSet<String>()
+            if (proofs.any { it.sourcePath.isNotEmpty() && !originalPaths.add(it.sourcePath) }) {
+                throw IOException("Duplicate referenced PCM object")
             }
             val proofByName = proofs.associateBy { it.name }
-            val recordsByName = HashMap<String, PersistentAudioChunkStore.ChunkRecord>()
-            for (segment in encodedRange.segments + encodedRange.leadingContext + encodedRange.trailingContext) {
-                val source = segment.record
-                val proof = requireNotNull(proofByName[source.file.name])
-                if (proof.sourcePath.isNotEmpty() && File(proof.sourcePath).name != source.id.toString()) {
-                    throw IOException("Save source id disagrees with original pathname")
-                }
-                if (proof.identity.isBlank() || proof.payloadOffset != source.payloadOffsetBytes ||
-                    proof.payloadBytes != source.payloadBytes || proof.checksum != source.payloadChecksum) {
-                    throw IOException("Save pin proof disagrees with source geometry")
-                }
-                Math.addExact(proof.payloadOffset, proof.payloadBytes)
-                val previous = recordsByName.putIfAbsent(source.file.name, source)
-                if (previous != null && previous != source) throw IOException("Conflicting save object geometry")
+            if (proofByName.size != proofs.size) throw IOException("Duplicate save source")
+            val segmentGroups = listOf(encodedRange.segments, encodedRange.leadingContext, encodedRange.trailingContext)
+            if (segmentGroups.any { group -> group.any { it.record.file.name !in proofByName } }) {
+                throw IOException("Unowned save source")
             }
-            if (recordsByName.keys != names) throw IOException("Save manifest contains unreferenced pins")
+            val recordsByName = HashMap<String, PersistentAudioChunkStore.ChunkRecord>()
+            for (group in segmentGroups) {
+                for (segment in group) {
+                    val source = segment.record
+                    val name = source.file.name
+                    val proof = requireNotNull(proofByName[name])
+                    if (proof.sourcePath.isNotEmpty() && File(proof.sourcePath).name != source.id.toString()) {
+                        throw IOException("Save source id disagrees with original pathname")
+                    }
+                    if (proof.identity.isBlank() || proof.payloadOffset != source.payloadOffsetBytes ||
+                        proof.payloadBytes != source.payloadBytes || proof.checksum != source.payloadChecksum) {
+                        throw IOException("Save pin proof disagrees with source geometry")
+                    }
+                    Math.addExact(proof.payloadOffset, proof.payloadBytes)
+                    val previous = recordsByName.putIfAbsent(name, source)
+                    if (previous != null && previous != source) throw IOException("Conflicting save object geometry")
+                }
+            }
+            if (recordsByName.keys != proofByName.keys) throw IOException("Save manifest contains unreferenced pins")
             val target = if (input.readBoolean()) {
                 val targetId = input.text(); val name = input.text(); val mime = input.text()
                 val storage = RecordingStorageType.fromStorageCode(input.readInt()) ?: throw IOException("Invalid output storage")
