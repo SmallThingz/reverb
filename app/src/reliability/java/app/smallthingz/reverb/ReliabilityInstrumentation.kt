@@ -787,6 +787,16 @@ class ReliabilityInstrumentation : Instrumentation() {
                         report.append("FAIL capture_restart_failure\n").append(Log.getStackTraceString(error)).append('\n')
                     }
                 }
+                if (requestedTest == null || requestedTest == "capture_input_no_progress") {
+                    executed++
+                    try {
+                        verifyEmptyCaptureReadsStopListening(targetContext)
+                        report.append("PASS capture_input_no_progress\n")
+                    } catch (error: Throwable) {
+                        failures++
+                        report.append("FAIL capture_input_no_progress\n").append(Log.getStackTraceString(error)).append('\n')
+                    }
+                }
                 if (requestedTest == "crash_recover") {
                     executed++
                     verifyDurableCaptureAfterProcessDeath(targetContext)

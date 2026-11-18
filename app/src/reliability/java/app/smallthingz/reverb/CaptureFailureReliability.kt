@@ -10,7 +10,7 @@ import java.util.concurrent.atomic.AtomicInteger
 /** Actual production input-pump recovery with a null-only replacement factory; no microphone capture. */
 internal fun verifyFailedCaptureRestartIsNotSilentlyListening(context: Context) {
     withFramePipeline(context, "pipeline_restart_failure") { fixture ->
-        val disconnected = DisconnectedTestAudioInput()
+        val disconnected = FailingTestAudioInput { _, _ -> AudioRecord.ERROR_DEAD_OBJECT }
         fixture.configure(disconnected, ReverbService.BufferSlot.LOOPING)
         val before = fixture.onAudio {
             val prior = ByteArray(32_000) { ((it * 13 + 7) and 0xff).toByte() }
@@ -32,15 +32,33 @@ internal fun verifyFailedCaptureRestartIsNotSilentlyListening(context: Context) 
     }
 }
 
-private class DisconnectedTestAudioInput : CaptureAudioInput {
+internal fun verifyEmptyCaptureReadsStopListening(context: Context) {
+    withFramePipeline(context, "pipeline_empty_reads") { fixture ->
+        val prefix = ByteArray(128) { (it * 7).toByte() }
+        val source = FailingTestAudioInput { read, buffer ->
+            if (read == 1) { buffer.put(prefix); prefix.size } else 0
+        }
+        fixture.configure(source, ReverbService.BufferSlot.LOOPING)
+        fixture.start()
+        check(source.released.await(15, TimeUnit.SECONDS)) { "Service still owns an input returning only zero bytes" }
+        fixture.fence {
+            check(source.readCalls.get() == 1 + CapturePcmRing.MAX_CONSECUTIVE_EMPTY_READS)
+            check(source.releaseCalls.get() == 1 && fixture.admission.factoryCalls.get() == 0)
+            check(fixture.service.frameField("state") != ReverbService.STATE_LISTENING)
+            check(fixture.service.frameField("durableListeningIntentEnabled") == false)
+            check(prefix.contentEquals(fixture.loop.pipelinePcm())) { "Empty reads changed the retained prefix" }
+        }
+    }
+}
+
+private class FailingTestAudioInput(val returnRead: (Int, ByteBuffer) -> Int) : CaptureAudioInput {
     val readCalls = AtomicInteger()
     val releaseCalls = AtomicInteger()
     val released = CountDownLatch(1)
     override val state = AudioRecord.STATE_INITIALIZED
     override val recordingState = AudioRecord.RECORDSTATE_RECORDING
     override fun read(buffer: ByteBuffer, sizeInBytes: Int, readMode: Int): Int {
-        readCalls.incrementAndGet()
-        return AudioRecord.ERROR_DEAD_OBJECT
+        return returnRead(readCalls.incrementAndGet(), buffer)
     }
     override fun startRecording(): Unit = error("Synthetic input must not start native capture")
     override fun stop() = Unit

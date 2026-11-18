@@ -197,6 +197,43 @@ class CapturePcmRingTest {
         assertNotNull(q.reserve(identity(), 8))
     }
 
+    @Test fun returnedPcmResetsEmptyReadStreakAndRemainsDrainableAfterFailure() {
+        val q = ring()
+        val empty = ByteBuffer.allocate(0)
+        fun emptyRead() = q.complete(requireNotNull(q.reserve(identity(), 8)), empty, 0, 4, null, 5)
+        repeat(CapturePcmRing.MAX_CONSECUTIVE_EMPTY_READS - 1) { assertFalse(emptyRead()) }
+        val quietPcm = byteArrayOf(0, 0)
+        append(q, quietPcm)
+        repeat(CapturePcmRing.MAX_CONSECUTIVE_EMPTY_READS - 1) { assertFalse(emptyRead()) }
+        val last = requireNotNull(q.reserve(identity(), 8))
+        try {
+            q.complete(last, empty, 0, 4, null, 5)
+            fail("A permanently empty blocking input stayed active")
+        } catch (expected: java.io.IOException) {
+            assertTrue(expected.message.orEmpty().contains("consecutive blocking reads"))
+        }
+        assertEquals(CapturePcmRing.Terminal.INPUT_FAILURE, q.status().terminal)
+        assertFalse(q.complete(last, empty, 0, 4, null, 5))
+        assertNull(q.reserve(identity(), 8))
+        assertArrayEquals(quietPcm, consume(q))
+        assertTrue(q.isDrained())
+    }
+
+    @Test fun terminalBoundaryOwnsFinalEmptyRead() {
+        for (preserve in listOf(false, true)) {
+            val q = ring()
+            val empty = ByteBuffer.allocate(0)
+            repeat(CapturePcmRing.MAX_CONSECUTIVE_EMPTY_READS - 1) {
+                q.complete(requireNotNull(q.reserve(identity(), 8)), empty, 0, 4, null, 5)
+            }
+            val last = requireNotNull(q.reserve(identity(), 8))
+            q.stop(preserve)
+            assertFalse(q.complete(last, empty, 0, 4, null, 5))
+            assertEquals(if (preserve) CapturePcmRing.Terminal.TEARDOWN else CapturePcmRing.Terminal.STOP,
+                q.status().terminal)
+        }
+    }
+
     @Test fun releasedPauseKeepsControlFenceWhileNewPcmArrives() {
         val q = ring()
         append(q, byteArrayOf(1, 2))
