@@ -264,7 +264,7 @@ private class SilenceDiagnosticGate(val rate: Int, channels: Int, format: PcmSam
             val db = 10 * log10(power) - config.threshold(hz)
             if (db > excess[bucket]) { excess[bucket] = db; frequency[bucket] = hz; channelAtPeak[bucket] = channel }
         }
-        for (index in powers!!.indices) observe(powers!![index], frequencies!![index], index / spectrum.powers.size)
+        for (index in powers!!.indices) observe(powers!![index], frequencies!![index], index / spectrum.binCount)
         for (index in fittedPowers!!.indices) observe(fittedPowers!![index], fittedFrequencies!![index], index / 2)
         if (spectrum.exceeds(thresholds!!, config)) { crossings++; baselineCounts[bucket]++ }
     })

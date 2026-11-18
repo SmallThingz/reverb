@@ -249,7 +249,8 @@ class SilenceGateTest {
             repeat(spectrum.size) { putFloat(if (it % 2 == 0) 0.1f else -0.1f) }
         }.array()
         spectrum.analyze(bytes, spectrum.size)
-        assertEquals(0.01, spectrum.powers.last(), 0.00001)
+        val nyquistBucket = Math.round(silenceFrequencyFraction(8000.0) * (SILENCE_GRAPH_BINS - 1)).toInt()
+        assertEquals(-20f, spectrum.graph()[nyquistBucket], 0.005f)
         assertFalse(spectrum.exceeds(flat(-16)))
         assertTrue(spectrum.exceeds(flat(-24)))
     }

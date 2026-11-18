@@ -21,8 +21,9 @@ class SilenceGraphAccumulationTest {
         val fittedPowers = array(spectrum, "fittedPowers")
         val fittedFrequencies = array(spectrum, "fittedFrequencies")
         val output = FloatArray(SILENCE_GRAPH_BINS) { -120f }
-        for (channel in 0 until spectrum.channels) for (bin in 1 until spectrum.powers.size) {
-            val index = channel * spectrum.powers.size + bin
+        val binCount = spectrum.size / 2 + 1
+        for (channel in 0 until spectrum.channels) for (bin in 1 until binCount) {
+            val index = channel * binCount + bin
             val hz = detectedFrequencies[index]
             if (hz > SILENCE_MAX_HZ) continue
             if (hz < SILENCE_MIN_HZ) continue

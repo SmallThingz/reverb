@@ -95,12 +95,13 @@ internal class SilenceSpectrum(val sampleRate: Int, val channels: Int, val forma
     val size: Int = Integer.highestOneBit(max(256, (sampleRate + 29) / 30 - 1)) shl 1
     val hop: Int = size / 2
     val frameBytes: Int = channels * format.bytesPerSample
-    val powers = DoubleArray(size / 2 + 1)
+    val binCount: Int = size / 2 + 1
+    private val nyquistBin: Int get() = binCount - 1
     private val real = DoubleArray(size)
     private val imaginary = DoubleArray(size)
-    private val channelPowers = DoubleArray(powers.size)
-    private val detectedPowers = DoubleArray(channels * powers.size)
-    private val detectedFrequencies = DoubleArray(channels * powers.size)
+    private val channelPowers = DoubleArray(binCount)
+    private val detectedPowers = DoubleArray(channels * binCount)
+    private val detectedFrequencies = DoubleArray(channels * binCount)
     private val fittedPowers = DoubleArray(channels * 2)
     private val fittedFrequencies = DoubleArray(channels * 2)
     private val samples = DoubleArray(size)
@@ -196,19 +197,19 @@ internal class SilenceSpectrum(val sampleRate: Int, val channels: Int, val forma
             mean /= frames
             for (i in 0 until frames) real[pad + i] = (real[pad + i] - mean) * analysisWindow[pad + i]
             fft()
-            for (i in powers.indices) {
+            for (i in 0 until binCount) {
                 // DC and Nyquist have no mirrored negative-frequency partner to fold in.
-                val binScale = if (i == 0 || i == powers.lastIndex) scale * 0.25 else scale
+                val binScale = if (i == 0 || i == nyquistBin) scale * 0.25 else scale
                 channelPowers[i] = (real[i] * real[i] + imaginary[i] * imaginary[i]) * binScale
             }
-            for (i in powers.indices) {
+            for (i in 0 until binCount) {
                 var power = channelPowers[i]
                 var hz = frequency(i)
                 // A Hann-windowed tone between FFT bins loses up to 1.42 dB at the
                 // strongest bin. Estimate its lobe centre and undo that window gain,
                 // separately per channel so stereo neighbours cannot invent a peak.
                 // Keep DC/Nyquist edge lobes on their existing one-sided calibration.
-                if (frames >= hop && i in 2 until powers.lastIndex - 1 && power > 0.0 &&
+                if (frames >= hop && i in 2 until nyquistBin - 1 && power > 0.0 &&
                     power >= channelPowers[i - 1] && power >= channelPowers[i + 1]) {
                     val left = sqrt(channelPowers[i - 1])
                     val centre = sqrt(power)
@@ -238,23 +239,10 @@ internal class SilenceSpectrum(val sampleRate: Int, val channels: Int, val forma
                     if (hz > SILENCE_MAX_HZ && hz - SILENCE_MAX_HZ <= error) hz = SILENCE_MAX_HZ.toDouble()
                     if (hz < SILENCE_MIN_HZ && SILENCE_MIN_HZ - hz <= error) hz = SILENCE_MIN_HZ.toDouble()
                 }
-                detectedPowers[channel * powers.size + i] = power
-                detectedFrequencies[channel * powers.size + i] = hz
+                detectedPowers[channel * binCount + i] = power
+                detectedFrequencies[channel * binCount + i] = hz
             }
             if (frames >= hop) calibrateEdgeTone(channel, frames)
-        }
-        powers.fill(0.0)
-        for (channel in 0 until channels) for (bin in powers.indices) {
-            val index = channel * powers.size + bin
-            if (detectedPowers[index] > powers[bin]) {
-                powers[bin] = detectedPowers[index]
-            }
-        }
-        for (index in fittedPowers.indices) {
-            val bin = (fittedFrequencies[index] * size / sampleRate).roundToInt().coerceIn(1, powers.lastIndex)
-            if (fittedPowers[index] > powers[bin]) {
-                powers[bin] = fittedPowers[index]
-            }
         }
     }
 
@@ -291,11 +279,11 @@ internal class SilenceSpectrum(val sampleRate: Int, val channels: Int, val forma
         var lowPower = 0.0; var highPower = 0.0
         for (bin in 1..edgeBins) {
             lowPower = max(lowPower, channelPowers[bin])
-            highPower = max(highPower, channelPowers[powers.lastIndex - bin + 1])
+            highPower = max(highPower, channelPowers[nyquistBin - bin + 1])
         }
         val low = lowPower > channelPowers[edgeBins + 1]
         val high = sampleRate / 2 <= SILENCE_MAX_HZ &&
-            highPower > channelPowers[powers.lastIndex - edgeBins]
+            highPower > channelPowers[nyquistBin - edgeBins]
         if (!low && !high) return
         // Fit under the same Hann observation as the FFT. A rectangular fit can
         // correlate a distant stationary tone with a low edge tone at a partial
@@ -406,10 +394,10 @@ internal class SilenceSpectrum(val sampleRate: Int, val channels: Int, val forma
         val isolated = explained >= energy * (1.0 - 1e-10)
         if (isolated) {
             fittedPowers.fill(0.0, channel * 2, channel * 2 + 2)
-            for (i in 1..powers.lastIndex) detectedPowers[channel * powers.size + i] = 0.0
+            for (i in 1..nyquistBin) detectedPowers[channel * binCount + i] = 0.0
         } else {
-            val first = if (low) 1 else powers.lastIndex - edgeBins
-            val last = if (low) edgeBins else powers.lastIndex
+            val first = if (low) 1 else nyquistBin - edgeBins
+            val last = if (low) edgeBins else nyquistBin
             retainProjectedResidual(channel, frames, hz, cosine, sine, first, last)
         }
         val index = channel * 2 + if (low) 0 else 1
@@ -448,8 +436,8 @@ internal class SilenceSpectrum(val sampleRate: Int, val channels: Int, val forma
                 s = s * binCos + c * binSin; c = nextC
             }
             real[bin] -= projectedReal; imaginary[bin] -= projectedImaginary
-            val binScale = if (bin == powers.lastIndex) scale * 0.25 else scale
-            val index = channel * powers.size + bin
+            val binScale = if (bin == nyquistBin) scale * 0.25 else scale
+            val index = channel * binCount + bin
             detectedPowers[index] = (real[bin] * real[bin] + imaginary[bin] * imaginary[bin]) * binScale
             detectedFrequencies[index] = frequency(bin)
         }
@@ -491,7 +479,7 @@ internal class SilenceSpectrum(val sampleRate: Int, val channels: Int, val forma
         return exceeds(thresholdPowers(config), config)
     }
 
-    fun thresholdPowers(config: SilenceGateConfig): DoubleArray = DoubleArray(powers.size) { bin ->
+    fun thresholdPowers(config: SilenceGateConfig): DoubleArray = DoubleArray(binCount) { bin ->
         val hz = frequency(bin)
         if (hz in SILENCE_MIN_HZ.toDouble()..SILENCE_MAX_HZ.toDouble()) 10.0.pow(config.threshold(hz) / 10.0)
         else Double.POSITIVE_INFINITY
@@ -508,8 +496,8 @@ internal class SilenceSpectrum(val sampleRate: Int, val channels: Int, val forma
         // possible cutoff proves it quiet; retain unresolved higher content.
         if (config != null && analyzedFrames < hop &&
             shortBlockPeakPower > 10.0.pow(config.points.minOf { it.db } / 10.0)) return SilenceGateDecision.BASELINE
-        for (channel in 0 until channels) for (bin in 1 until powers.size) {
-            val index = channel * powers.size + bin
+        for (channel in 0 until channels) for (bin in 1 until binCount) {
+            val index = channel * binCount + bin
             val hz = detectedFrequencies[index]
             if (hz !in SILENCE_MIN_HZ.toDouble()..SILENCE_MAX_HZ.toDouble()) continue
             val threshold = if (config != null && (!flat || !thresholds[bin].isFinite()) && hz != frequency(bin))
@@ -521,7 +509,7 @@ internal class SilenceSpectrum(val sampleRate: Int, val channels: Int, val forma
         for (index in fittedPowers.indices) {
             val hz = fittedFrequencies[index]
             if (fittedPowers[index] <= 0.0 || hz !in SILENCE_MIN_HZ.toDouble()..SILENCE_MAX_HZ.toDouble()) continue
-            val bin = (hz * size / sampleRate).roundToInt().coerceIn(1, powers.lastIndex)
+            val bin = (hz * size / sampleRate).roundToInt().coerceIn(1, nyquistBin)
             val threshold = if (config != null) 10.0.pow(config.threshold(hz) / 10.0) else thresholds[bin]
             if (fittedPowers[index] > threshold) return SilenceGateDecision.BASELINE
             if (!continuation && continuationScale < 1.0 && fittedPowers[index] > threshold * continuationScale)
@@ -540,8 +528,8 @@ internal class SilenceSpectrum(val sampleRate: Int, val channels: Int, val forma
         require(output.size == SILENCE_GRAPH_BINS)
         // Empty buckets still contribute the graph floor when merging into existing peaks.
         for (index in output.indices) output[index] = max(output[index], -120f)
-        for (channel in 0 until channels) for (bin in 1 until powers.size) {
-            val index = channel * powers.size + bin
+        for (channel in 0 until channels) for (bin in 1 until binCount) {
+            val index = channel * binCount + bin
             val hz = detectedFrequencies[index]
             if (hz > SILENCE_MAX_HZ) continue
             if (hz < SILENCE_MIN_HZ) continue
