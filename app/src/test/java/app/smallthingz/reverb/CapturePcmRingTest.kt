@@ -14,20 +14,38 @@ class CapturePcmRingTest {
     }
     private fun consume(q: CapturePcmRing): ByteArray {
         val packet = requireNotNull(q.poll())
-        return ByteArray(packet.byteCount).also { q.copyPacket(packet, it); q.completePacket(packet) }
+        return ByteArray(packet.byteCount).also { q.transferToWriter(packet, it); q.completePacket(packet) }
     }
 
     @Test fun writerOwnedPrefixAndWrappedPacketsKeepTheirBytes() {
         val q = ring()
-        append(q, ByteArray(8) { 1 }); append(q, ByteArray(8) { 2 })
+        append(q, ByteArray(8) { 1 })
+        val fence = q.reserveFence(false)
+        append(q, ByteArray(8) { 2 })
         val first = requireNotNull(q.poll())
         append(q, ByteArray(8) { 3 }); append(q, ByteArray(8) { 4 })
-        val firstBytes = ByteArray(8); q.copyPacket(first, firstBytes)
+        val firstBytes = ByteArray(8); q.transferToWriter(first, firstBytes)
+        append(q, ByteArray(8) { 5 }) // Reuse offset zero while the writer still owns packet one.
         assertArrayEquals(ByteArray(8) { 1 }, firstBytes)
+        assertFalse(q.prefixDrained(fence))
         q.completePacket(first)
-        append(q, ByteArray(8) { 5 }) // Wraps to physical offset zero after the writer releases it.
+        assertTrue(q.prefixDrained(fence)); q.completeFence(fence)
         for (value in 2..5) assertArrayEquals(ByteArray(8) { value.toByte() }, consume(q))
         assertTrue(q.isDrained())
+    }
+
+    @Test fun nativeReadUsesRemainingWholeFramesAndWriterCanCatchUp() {
+        val q = ring()
+        repeat(3) { append(q, ByteArray(8) { it.toByte() }) }
+        append(q, byteArrayOf(21, 22, 23, 24, 25, 26))
+        val tail = requireNotNull(q.reserve(identity(), 8))
+        assertEquals(2, tail.requestedBytes)
+        assertTrue(q.complete(tail, ByteBuffer.wrap(byteArrayOf(31, 32)), 2, 4, null, 5))
+        repeat(3) { assertArrayEquals(ByteArray(8) { it.toByte() }, consume(q)) }
+        assertArrayEquals(byteArrayOf(21, 22, 23, 24, 25, 26), consume(q))
+        assertArrayEquals(byteArrayOf(31, 32), consume(q))
+        assertNull(q.status().terminal)
+        assertEquals(8, requireNotNull(q.reserve(identity(), 8)).requestedBytes)
     }
 
     @Test fun packetStraddlingEndOfRingCopiesExactly() {

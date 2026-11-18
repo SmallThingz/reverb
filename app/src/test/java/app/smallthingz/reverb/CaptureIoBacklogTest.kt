@@ -27,12 +27,13 @@ class CaptureIoBacklogTest {
         exerciseExhaustion(CapturePcmBudget(2, 8, 32, 8), listOf(
             byteArrayOf(1, 2, 3, 4, 5, 6, 7, 8), byteArrayOf(11, 12, 13, 14, 15, 16, 17, 18),
             byteArrayOf(21, 22, 23, 24, 25, 26, 27, 28), byteArrayOf(31, 32, 33, 34, 35, 36, 37, 38),
+            byteArrayOf(41, 42, 43, 44, 45, 46, 47, 48),
         ), expectedBytes = 32, expectedPackets = 4)
     }
 
     @Test fun shortReadsExhaustDescriptorsEvenWhenByteCapacityRemains() {
         exerciseExhaustion(CapturePcmBudget(2, 8, 32, 2), listOf(
-            byteArrayOf(1, 2), byteArrayOf(3, 4),
+            byteArrayOf(1, 2), byteArrayOf(3, 4), byteArrayOf(5, 6),
         ), expectedBytes = 4, expectedPackets = 2)
     }
 
@@ -44,8 +45,8 @@ class CaptureIoBacklogTest {
             f.await(f.exhausted)
             val status = f.storage.ring.status()
             assertEquals(CapturePcmRing.Terminal.EXHAUSTED, status.terminal)
-            assertEquals(expectedBytes, status.occupiedBytes)
-            assertEquals(expectedPackets, status.occupiedPackets)
+            assertEquals(expectedBytes + packets.first().size, status.occupiedBytes)
+            assertEquals(expectedPackets + 1, status.occupiedPackets)
             assertEquals(packets.size, f.source.reads.get())
             assertEquals(0, f.failures.get())
             f.releaseWriter.countDown()
@@ -54,7 +55,9 @@ class CaptureIoBacklogTest {
             assertEquals(1, f.failures.get())
             assertEquals(packets.size, f.deliveredAtFailure.get())
             assertTrue(f.inputFailure.get() is IOException)
-            assertEquals("Capture PCM backlog exhausted its bounded memory budget", f.inputFailure.get()?.message)
+            val message = requireNotNull(f.inputFailure.get()?.message)
+            assertTrue(message, "$expectedBytes/${budget.ringBytes} ring bytes" in message)
+            assertTrue(message, "$expectedPackets/${budget.packetCount} packet slots" in message)
             assertNull(f.unexpected.get())
             assertEquals(packets.size, f.delivered.size)
             packets.indices.forEach { assertArrayEquals(packets[it], f.delivered[it]) }
@@ -68,7 +71,7 @@ class CaptureIoBacklogTest {
     }
 
     @Test fun underBudgetWriterStallResumesWithoutFailureOrLostPcm() {
-        val packets = listOf(byteArrayOf(1, 2, 3, 4, 5, 6, 7, 8), byteArrayOf(11, 12, 13, 14, 15, 16, 17, 18))
+        val packets = List(4) { packet -> ByteArray(8) { (packet * 8 + it).toByte() } }
         withFixture(CapturePcmBudget(2, 8, 32, 8), packets, holdNextRead = true) { f ->
             f.start()
             f.await(f.writerEntered)
@@ -152,8 +155,8 @@ class CaptureIoBacklogTest {
         writerFailure: IOException?, heldReadBytes: ByteArray) : Closeable {
         val storage = CaptureIoCoordinator.Storage(budget)
         val writer = Handler(writerThread.looper)
-        val source = Source(packets, holdNextRead, heldReadBytes)
         val writerEntered = CountDownLatch(1)
+        val source = Source(packets, holdNextRead, heldReadBytes, writerEntered)
         val releaseWriter = CountDownLatch(1)
         val exhausted = CountDownLatch(1)
         val failureDelivered = CountDownLatch(1)
@@ -267,7 +270,7 @@ class CaptureIoBacklogTest {
     }
 
     private class Source(private val packets: List<ByteArray>, private val holdNextRead: Boolean,
-        private val heldReadBytes: ByteArray) : CaptureAudioInput {
+        private val heldReadBytes: ByteArray, private val writerEntered: CountDownLatch) : CaptureAudioInput {
         val reads = AtomicInteger()
         val extraReadEntered = CountDownLatch(1)
         val releaseExtraRead = CountDownLatch(1)
@@ -278,6 +281,7 @@ class CaptureIoBacklogTest {
         override fun release() = Unit
         override fun read(buffer: ByteBuffer, sizeInBytes: Int, readMode: Int): Int {
             val index = reads.getAndIncrement()
+            if (index == 1) check(writerEntered.await(5, TimeUnit.SECONDS)) { "writer did not take first packet" }
             if (index < packets.size) return packets[index].also { buffer.put(it) }.size
             check(holdNextRead) { "unexpected read after accepted packets" }
             extraReadEntered.countDown()

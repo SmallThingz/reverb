@@ -190,9 +190,7 @@ internal class CaptureIoCoordinator(
             ring.inputFailed(); current.failure = error; wakeWriter(); return
         }
         if (lease == null) {
-            if (ring.status().terminal == CapturePcmRing.Terminal.EXHAUSTED) {
-                current.failure = IOException("Capture PCM backlog exhausted its bounded memory budget")
-            }
+            ring.exhaustionFailure()?.let { current.failure = it }
             wakeWriter()
             return // A fence completion, not a poll/spin, owns resumption.
         }
@@ -274,7 +272,7 @@ internal class CaptureIoCoordinator(
         val packet = ring.poll()
         if (packet != null) {
             try {
-                ring.copyPacket(packet, current.storage.writerScratch)
+                ring.transferToWriter(packet, current.storage.writerScratch)
                 onPacket(current, packet, current.storage.writerScratch)
                 current.processedFrames += packet.byteCount / packet.lease.identity.frameBytes
             } catch (error: Throwable) {

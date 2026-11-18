@@ -1,5 +1,6 @@
 package app.smallthingz.reverb
 
+import java.io.IOException
 import java.nio.ByteBuffer
 
 /** Fixed allocations for the supported format range and unchanged 8/40/1000 ms read cadence. */
@@ -63,6 +64,7 @@ internal class CapturePcmRing(val budget: CapturePcmBudget) {
     private var fenceCount = 0
     private var pausedFences = 0
     private var terminal: Terminal? = null
+    private var exhaustion: IOException? = null
     private var highWaterBytes = 0
     private var highWaterPackets = 0
 
@@ -72,18 +74,23 @@ internal class CapturePcmRing(val budget: CapturePcmBudget) {
         require(identity.frameBytes == budget.frameBytes && requestedBytes in 1..budget.maxReadBytes &&
             requestedBytes % budget.frameBytes == 0)
         val index = slots.indexOfFirst { it.state == State.FREE }
-        if (index < 0 || tail - byteHead + requestedBytes > bytes.size) {
+        val occupied = (tail - byteHead).toInt()
+        val readBytes = minOf(requestedBytes, bytes.size - occupied)
+        if (index < 0 || readBytes == 0) {
+            val packets = slots.count { it.state != State.FREE }
+            exhaustion = IOException("Capture PCM backlog exhausted: $occupied/${bytes.size} ring bytes, " +
+                "$packets/${slots.size} packet slots, $requestedBytes bytes requested")
             terminal = Terminal.EXHAUSTED
             return null
         }
         if (slots.all { it.state == State.FREE }) { tail = 0; byteHead = 0 }
-        check(sequence < Long.MAX_VALUE && tail <= Long.MAX_VALUE - requestedBytes)
-        val lease = Lease(this, index, tail, ++sequence, identity, requestedBytes)
-        tail += requestedBytes
+        check(sequence < Long.MAX_VALUE && tail <= Long.MAX_VALUE - readBytes)
+        val lease = Lease(this, index, tail, ++sequence, identity, readBytes)
+        tail += readBytes
         slots[index].apply { state = State.READING; this.lease = lease }
         reading = lease
-        highWaterBytes = maxOf(highWaterBytes, (tail - byteHead).toInt())
-        highWaterPackets = maxOf(highWaterPackets, slots.count { it.state != State.FREE })
+        highWaterBytes = maxOf(highWaterBytes, outstandingBytes())
+        highWaterPackets = maxOf(highWaterPackets, outstandingPackets())
         return lease
     }
 
@@ -121,6 +128,7 @@ internal class CapturePcmRing(val budget: CapturePcmBudget) {
     }
     @Synchronized fun prefixDrained(token: Fence): Boolean {
         require(token.owner === this && !token.completed)
+        if (writing?.lease?.sequence?.let { it <= token.afterSequence } == true) return false
         return slots.none { it.lease?.sequence?.let { sequence -> sequence <= token.afterSequence } == true }
     }
     @Synchronized fun poll(): Packet? {
@@ -132,16 +140,20 @@ internal class CapturePcmRing(val budget: CapturePcmBudget) {
         writing = packet
         return packet
     }
-    @Synchronized fun copyPacket(packet: Packet, target: ByteArray) {
+    /** Transfer storage to the writer scratch; its sequence stays outstanding until the sink returns. */
+    @Synchronized fun transferToWriter(packet: Packet, target: ByteArray) {
         require(writing === packet && target.size >= packet.byteCount)
+        check(slots[packet.lease.slot].lease === packet.lease)
         val offset = (packet.lease.start % bytes.size).toInt()
         val first = minOf(packet.byteCount, bytes.size - offset)
         bytes.copyInto(target, 0, offset, offset + first)
         if (first < packet.byteCount) bytes.copyInto(target, first, 0, packet.byteCount - first)
+        free(packet.lease)
     }
     @Synchronized fun completePacket(packet: Packet) {
         require(writing === packet)
-        writing = null; free(packet.lease)
+        writing = null
+        if (slots[packet.lease.slot].lease === packet.lease) free(packet.lease)
     }
     @Synchronized fun fenceMayExecute(token: Fence): Boolean {
         require(token.owner === this && !token.completed)
@@ -179,8 +191,14 @@ internal class CapturePcmRing(val budget: CapturePcmBudget) {
         }
         events.fill(null); eventHead = 0; eventCount = 0
     }
-    @Synchronized fun status() = Status(terminal, (tail - byteHead).toInt(), highWaterBytes,
-        slots.count { it.state != State.FREE }, highWaterPackets, reading != null, fenceCount != 0)
+    private fun outstandingPackets() = eventCount + (if (reading != null) 1 else 0) + (if (writing != null) 1 else 0)
+    private fun outstandingBytes(): Int {
+        val transferred = writing?.takeIf { slots[it.lease.slot].lease !== it.lease }
+        return (tail - byteHead).toInt() + (transferred?.byteCount ?: 0)
+    }
+    @Synchronized fun status() = Status(terminal, outstandingBytes(), highWaterBytes,
+        outstandingPackets(), highWaterPackets, reading != null, fenceCount != 0)
+    @Synchronized fun exhaustionFailure() = if (terminal == Terminal.EXHAUSTED) exhaustion else null
     @Synchronized fun shouldRescheduleRead(): Boolean {
         if (terminal != null) return false
         check(reading == null) { "Native acknowledgement left its lease owned" }
