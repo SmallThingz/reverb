@@ -20,6 +20,7 @@ import java.nio.file.Files
 import java.nio.file.NoSuchFileException
 import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
+import java.security.MessageDigest
 import java.util.ArrayDeque
 import java.util.Base64
 import java.util.UUID
@@ -2931,6 +2932,46 @@ internal class PersistentAudioChunkStore internal constructor(
         }
     }
 
+    /** Verify every source byte while staging the retained PCM, including audio outside the kept range. */
+    private fun copyVerifiedRetentionRange(
+        record: ChunkRecord,
+        offset: Long,
+        count: Long,
+        output: RandomAccessFile,
+        retainedChecksum: CRC32,
+    ): CopyDigest = RandomAccessFile(record.file, "r").use { input ->
+        val fileBytes = record.payloadOffsetBytes + record.payloadBytes
+        if (input.length() != fileBytes) throw IOException("Retention source chunk size changed: ${record.id}")
+        val digest = MessageDigest.getInstance("SHA-256")
+        val payloadChecksum = CRC32()
+        val scratch = ByteArray(64 * 1024)
+        val headerSize = Math.toIntExact(record.payloadOffsetBytes)
+        input.readFully(scratch, 0, headerSize)
+        digest.update(scratch, 0, headerSize)
+        fun copySection(length: Long, retain: Boolean) {
+            var remaining = length
+            while (remaining > 0L) {
+                val size = minOf(remaining, scratch.size.toLong()).toInt()
+                input.readFully(scratch, 0, size)
+                digest.update(scratch, 0, size)
+                payloadChecksum.update(scratch, 0, size)
+                if (retain) {
+                    output.write(scratch, 0, size)
+                    retainedChecksum.update(scratch, 0, size)
+                }
+                remaining -= size
+            }
+        }
+        copySection(offset, false)
+        copySection(count, true)
+        copySection(record.payloadBytes - offset - count, false)
+        if (input.read() != -1) throw IOException("Retention source chunk size changed: ${record.id}")
+        if (payloadChecksum.value.toInt() != record.payloadChecksum) {
+            throw IOException("Retention source chunk checksum changed: ${record.id}")
+        }
+        CopyDigest(fileBytes, digest.digest())
+    }
+
     private fun truncateFinalizedChunkWithoutPinMutationLocked(
         record: ChunkRecord,
         payloadBytes: Long,
@@ -2949,7 +2990,7 @@ internal class PersistentAudioChunkStore internal constructor(
         val preservesTail = sourcePayloadOffsetBytes > 0L && sourcePayloadOffsetBytes + payloadBytes == record.payloadBytes
 
         if (record === activeRecord) finalizeActiveLocked()
-        requireFinalizedChunkPayloadIntegrityLocked(record)
+        if (record.state != ChunkState.FINALIZED) throw IOException("Retention source chunk is not finalized: ${record.id}")
         if (!preservesTail && retirementTombstoneDurabilityPending.isNotEmpty()) {
             // A prior failed retirement may already have removed a successor from
             // the live list. Its marker must be durable before a retry can shorten
@@ -2957,7 +2998,6 @@ internal class PersistentAudioChunkStore internal constructor(
             forceDirectoryDurable(retiredDirectory)
             retirementTombstoneDurabilityPending.clear()
         }
-        val originalFileDigest = FileInputStream(record.file).use(::sha256)
         val temp = File(chunksDirectory, "${record.id}.truncate.tmp")
         if (temp.exists()) {
             preserveUnrecognizedChunkLocked(temp, "stale-truncation")
@@ -2984,19 +3024,7 @@ internal class PersistentAudioChunkStore internal constructor(
             output = RandomAccessFile(temp, "rw")
             writeInitialChunkHeader(replacement, output)
             val checksum = CRC32()
-            RandomAccessFile(record.file, "r").use { input ->
-                input.seek(record.payloadOffsetBytes + sourcePayloadOffsetBytes)
-                output.seek(replacement.payloadOffsetBytes)
-                val scratch = ByteArray(64 * 1024)
-                var remaining = payloadBytes
-                while (remaining > 0L) {
-                    val count = minOf(scratch.size.toLong(), remaining).toInt()
-                    input.readFully(scratch, 0, count)
-                    output.write(scratch, 0, count)
-                    checksum.update(scratch, 0, count)
-                    remaining -= count.toLong()
-                }
-            }
+            val originalFileDigest = copyVerifiedRetentionRange(record, sourcePayloadOffsetBytes, payloadBytes, output, checksum)
             replacement.payloadBytes = payloadBytes
             replacement.sampleFrames = payloadBytes / replacement.frameBytes.toLong()
             replacement.payloadChecksum = checksum.value.toInt()

@@ -1760,7 +1760,15 @@ class PersistentAudioChunkStoreDurabilityTest {
     }
 
     @Test
-    fun loopingRetentionBoundaryTrim_neverRecertifiesCorruptedFinalizedChunk() = withStoreRoot { root ->
+    fun loopingRetentionBoundaryTrim_neverRecertifiesCorruptedFinalizedChunk() {
+        // The first 2,000 payload bytes will be dropped. Corruption on either side
+        // must prevent publication, even when all of the retained PCM looks valid.
+        for (corruptOffset in listOf(1999L, 2000L)) withStoreRoot { root ->
+            checkCorruptLoopingBoundary(root, corruptOffset)
+        }
+    }
+
+    private fun checkCorruptLoopingBoundary(root: File, corruptOffset: Long) {
         val expected = pcmBytes(16_000)
         PersistentAudioChunkStore(root, overwriteOldest = true).use { store ->
             configure(store, 64 * 1024L)
@@ -1769,17 +1777,16 @@ class PersistentAudioChunkStoreDurabilityTest {
         }
         val chunk = File(File(root, BUFFER_CHUNKS_FOLDER_NAME), "0")
         RandomAccessFile(chunk, "rw").use { file ->
-            file.seek(128L + 4_000L)
+            file.seek(128L + corruptOffset)
             val original = file.read()
-            file.seek(128L + 4_000L)
+            file.seek(128L + corruptOffset)
             file.write(original xor 0x20)
             file.fd.sync()
         }
         val corruptedBytes = chunk.readBytes()
 
         PersistentAudioChunkStore(root, overwriteOldest = true).use { reopened ->
-            // Initial 64 KiB retention subdivides this history into 4 KiB chunks. Keeping
-            // 14 KiB therefore requires a 2 KiB partial trim of the corrupted oldest chunk.
+            // The oldest 4 KiB chunk spans the trim boundary.
             assertThrows(IOException::class.java) { configure(reopened, 14_000L) }
         }
         assertTrue(chunk.isFile)
