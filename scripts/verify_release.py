@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Iterable
 import hashlib
 import json
 from pathlib import Path
@@ -16,6 +17,13 @@ PACKAGE = "app.smallthingz.reverb"
 SIGNER = "3866bc43d3dd58bc0cfa9c716a93aaa6f34abdfaa7315a3b924079397d1decfe"
 VCS_ENTRY = "META-INF/version-control-info.textproto"
 ALLOWED_BLOCKS = {0x7109871A, 0xF05368C0, 0x1B93AD61, 0x42726577}
+REQUIRED_ERROR_ALLOCATIONS = {
+    b'CatalogFirstPaintUnavailableException',
+    b'ConfiguredRecordingDirectoryUnavailableException',
+}
+ERROR_ALLOCATION = re.compile(
+    rb'^[0-9a-f]+:[^|\n]*\|[0-9a-f]+: new-instance v\d+, Lapp/smallthingz/reverb/([^;\n]+);'
+)
 
 
 def require(condition: bool, message: str) -> None:
@@ -94,6 +102,22 @@ def run(args: list[str], root: Path) -> str:
 
 
 
+def verify_runtime_error_allocations(apk: Path, tools: Path, root: Path) -> None:
+    """Require both concrete error identities in actual DEX allocation instructions."""
+    # Dexdump includes modified UTF-8 DEX strings. Stream its bytes without decoding the dump.
+    with subprocess.Popen([str(tools / 'dexdump'), '-d', str(apk)], cwd=root,
+                          stdout=subprocess.PIPE) as dump:
+        allocated = error_allocation_types(dump.stdout)
+        status = dump.wait()
+    require(status == 0, f"dexdump failed while checking runtime error allocations ({status})")
+    missing = sorted(name.decode('ascii') for name in REQUIRED_ERROR_ALLOCATIONS - allocated)
+    require(not missing, f"Optimized APK lost runtime error allocations: {', '.join(missing)}")
+
+
+def error_allocation_types(lines: Iterable[bytes]) -> set[bytes]:
+    return {match.group(1) for line in lines if (match := ERROR_ALLOCATION.match(line))}
+
+
 def verify_source_version(source: str, name: str, code: str) -> None:
     """Keep the version literal and unambiguous for F-Droid's static Gradle parser."""
     codes = re.findall(r'^\s*versionCode\s+(\d+)\s*$', source, re.MULTILINE)
@@ -133,6 +157,7 @@ def verify(tag: str, apk: Path, tools: Path) -> dict[str, object]:
     verify_source_version(source, name, code)
     require('application-debuggable' not in badging, "Release APK is debuggable")
     require('android.permission.INTERNET' not in badging, "Unexpected network permission")
+    verify_runtime_error_allocations(apk, tools, root)
     require(run(['git', 'rev-parse', 'HEAD'], root).strip() == commit, "HEAD changed during verification")
     require(not run(['git', 'status', '--porcelain', '--untracked-files=all'], root).strip(),
             "Source changed during verification")
@@ -140,7 +165,8 @@ def verify(tag: str, apk: Path, tools: Path) -> dict[str, object]:
     return {'tag': tag, 'commit': commit, 'package': package, 'versionName': name,
             'versionCode': int(code), 'sha256': initial_hash, 'signerSha256': SIGNER,
             'signingBlocks': [f'0x{x:08x}' for x in sorted(ids)], 'zipalign16KiB': True,
-            'vcsRevisionMatchesTag': True, 'debuggable': False, 'networkPermission': False}
+            'vcsRevisionMatchesTag': True, 'debuggable': False, 'networkPermission': False,
+            'runtimeErrorAllocations': True}
 
 
 def main() -> int:

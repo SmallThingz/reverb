@@ -1,8 +1,11 @@
 """Negative regressions for the release failures documented in F-Droid MR !50231."""
 import sys
 sys.dont_write_bytecode = True
+from pathlib import Path
 import unittest
-from verify_release import SIGNER, verify_revision, verify_block_policy, verify_signer_output, verify_source_version
+from unittest.mock import MagicMock, patch
+from verify_release import (SIGNER, verify_revision, verify_block_policy, verify_signer_output,
+                            verify_source_version, verify_runtime_error_allocations)
 
 
 class ReleaseVerificationTests(unittest.TestCase):
@@ -78,6 +81,38 @@ class SourceVersionTests(unittest.TestCase):
                        self.source.replace('0.1.2-rc1', '0.1.2')):
             with self.subTest(source=source), self.assertRaises(ValueError):
                 verify_source_version(source, '0.1.2-rc1', '3')
+
+
+class RuntimeErrorAllocationTests(unittest.TestCase):
+    catalog = b'CatalogFirstPaintUnavailableException'
+    directory = b'ConfiguredRecordingDirectoryUnavailableException'
+    unrelated = b'AudioStoreAdmissionCancelledException'
+
+    @staticmethod
+    def instruction(name, opcode=b'new-instance'):
+        return b'14daac: 220a 2d03 |00c6: ' + opcode + b' v10, Lapp/smallthingz/reverb/' + name + b'; // type@032d\n'
+
+    def verify_dump(self, lines, status=0):
+        dump = MagicMock()
+        dump.__enter__.return_value = dump
+        dump.stdout = iter(lines)
+        dump.wait.return_value = status
+        with patch('verify_release.subprocess.Popen', return_value=dump):
+            verify_runtime_error_allocations(Path('release.apk'), Path('build-tools'), Path('.'))
+
+    def test_requires_both_concrete_allocations(self):
+        self.verify_dump([b'Other DEX strings can contain modified UTF-8: \xc0\x80\n',
+                          self.instruction(self.catalog), self.instruction(self.directory)])
+
+    def test_descriptor_only_and_unrelated_allocations_do_not_count(self):
+        with self.assertRaisesRegex(ValueError, 'CatalogFirstPaintUnavailableException'):
+            self.verify_dump([b'Class descriptor  : \'Lapp/smallthingz/reverb/' + self.catalog + b';\'\n',
+                              self.instruction(self.catalog, b'check-cast'),
+                              self.instruction(self.unrelated), self.instruction(self.directory)])
+
+    def test_tool_failure_is_rejected_even_after_both_allocations(self):
+        with self.assertRaisesRegex(ValueError, r'dexdump failed.*\(2\)'):
+            self.verify_dump([self.instruction(self.catalog), self.instruction(self.directory)], status=2)
 
 
 if __name__ == '__main__':

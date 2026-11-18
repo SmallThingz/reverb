@@ -29,7 +29,8 @@ that the asset exists.
 
    This checks the embedded Git revision, package/version, original certificate,
    v2 signature, ZIP integrity, 16 KiB alignment, absence of dependency metadata,
-   and absence of debug/network permissions. It does not rewrite the APK.
+   absence of debug/network permissions, and concrete runtime error allocations in
+   the optimized DEX. It does not rewrite the APK.
 5. Make a separate clean checkout at the same tag, build an unsigned release with
    build caches disabled, then use `apksigcopier copy` to transfer the verified
    developer signature onto that independent build. Require byte-for-byte equality
