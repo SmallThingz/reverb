@@ -282,7 +282,7 @@ internal object PcmNormalizer {
             }
 
             PcmSampleFormat.PCM_16 -> {
-                val encoded = if (sample <= -1f) -32768 else (sample * 32767f).roundToInt().coerceIn(-32768, 32767)
+                val encoded = (sample * 32768f).roundToInt().coerceIn(-32768, 32767)
                 output[offset] = encoded.toByte()
                 output[offset + 1] = (encoded shr 8).toByte()
                 offset + 2

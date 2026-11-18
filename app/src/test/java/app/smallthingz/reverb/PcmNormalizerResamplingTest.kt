@@ -77,6 +77,52 @@ class PcmNormalizerResamplingTest {
         return output.toByteArray()
     }
 
+    @Test fun unityRateWavPreviewAndMonoToStereoExportPreservePcm16Codes() {
+        val codes = ShortArray(65536) { (it + Short.MIN_VALUE).toShort() }
+        fun interleaved(channels: Int) = ByteBuffer.allocate(codes.size * channels * 2)
+            .order(ByteOrder.LITTLE_ENDIAN).apply {
+                for (code in codes) repeat(channels) { putShort(code) }
+            }.array()
+        val mono = interleaved(1)
+        val format = PcmSampleFormat.PCM_16
+        withPcm(mono) { file, checksum ->
+            assertArrayEquals(interleaved(2), normalize(file, checksum, format, 1, format, 2,
+                frames = codes.size, targetFrames = codes.size))
+        }
+        withPcm(buildWavHeaderBytes(48000, 1, format, mono.size.toLong()) + mono) { file, _ ->
+            FileInputStream(file).channel.use { channel ->
+                val layout = readWavPcmLayout(channel)
+                assertArrayEquals(mono, readWavPcm16Range(channel, layout, 0.0, layout.durationSeconds, 48000))
+            }
+        }
+    }
+
+    @Test fun unityRateWavRangePreservesStereoBoundsInterpolationAndShortReadFailure() {
+        fun pcm16(vararg samples: Int) = ByteBuffer.allocate(samples.size * 2).order(ByteOrder.LITTLE_ENDIAN)
+            .apply { for (sample in samples) putShort(sample.toShort()) }.array()
+        val data = pcm16(-11, 11, -20000, 20000, -30000, 30000, -22, 22)
+        val rate = 8192
+        val format = PcmSampleFormat.PCM_16
+        withPcm(buildWavHeaderBytes(rate, 2, format, data.size.toLong()) + data) { file, _ ->
+            FileInputStream(file).channel.use { channel ->
+                val layout = readWavPcmLayout(channel)
+                val bounds = PcmPreviewFrameRange(1, 3)
+                assertArrayEquals(data.copyOfRange(4, 12),
+                    readWavPcm16Range(channel, layout, 0.0, layout.durationSeconds, rate, bounds))
+                assertArrayEquals(pcm16(-25000, 25000, -30000, 30000),
+                    readWavPcm16Range(channel, layout, 1.5 / rate, layout.durationSeconds, rate, bounds))
+                java.io.RandomAccessFile(file, "rw").use { it.setLength(layout.dataOffsetBytes + 12) }
+                assertThrows(IOException::class.java) {
+                    readWavPcm16Range(channel, layout, 1.0 / rate, 3.0 / rate, rate)
+                }
+                java.io.RandomAccessFile(file, "rw").use { it.setLength(layout.dataOffsetBytes + 11) }
+                assertThrows(IOException::class.java) {
+                    readWavPcm16Range(channel, layout, 0.0, layout.durationSeconds, rate, bounds)
+                }
+            }
+        }
+    }
+
     @Test fun exportConversionFiltersAllPcmFormatsAndBothChannelsWithoutChangingFrameCounts() {
         for (sourceFormat in PcmSampleFormat.entries) for (channels in 1..2) {
             withPcm(pcm(sourceFormat, channels)) { file, checksum ->

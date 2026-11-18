@@ -335,39 +335,38 @@ internal fun readWavPcm16Range(
     if (!requestedOutputFrames.isFinite() || requestedOutputFrames > Int.MAX_VALUE.toDouble() / outputFrameBytes) {
         throw IOException("Requested PCM output range is too large")
     }
+    val outputFrames = requestedOutputFrames.toInt().coerceAtLeast(1)
+    val sourceStartPosition = start * layout.sampleRate.toDouble() - firstFrame.toDouble()
+    val bytePosition = layout.dataOffsetBytes + firstFrame * layout.frameBytes.toLong()
+    if (layout.sampleFormat == PcmSampleFormat.PCM_16 && layout.sampleRate == targetSampleRate &&
+        sourceStartPosition == 0.0 && outputFrames <= sourceFrameCount) {
+        checkPcmConversionNotInterrupted()
+        val output = ByteArray(outputFrames * outputFrameBytes)
+        requireReadAt(channel, bytePosition, output, output.size)
+        // Keep the resampler's lookahead read so truncation of a previously opened WAV still fails.
+        val lookaheadBytes = sourceByteCount.toInt() - output.size
+        if (lookaheadBytes > 0) {
+            requireReadAt(channel, bytePosition + output.size, ByteArray(lookaheadBytes), lookaheadBytes)
+        }
+        checkPcmConversionNotInterrupted()
+        return output
+    }
     val sourceFrames = sourceFrameCount.toInt()
     val sourceBytes = ByteArray(sourceByteCount.toInt())
     requireReadAt(
         channel = channel,
-        position = layout.dataOffsetBytes + firstFrame * layout.frameBytes.toLong(),
+        position = bytePosition,
         bytes = sourceBytes,
         count = sourceBytes.size,
     )
 
-    val outputFrames = requestedOutputFrames.toInt().coerceAtLeast(1)
     val output = ByteArray(outputFrames * outputFrameBytes)
-    val sourceStartPosition = start * layout.sampleRate.toDouble() - firstFrame.toDouble()
 
     fun sample(frame: Int, channelIndex: Int): Float {
         val boundedFrame = frame.coerceIn(0, sourceFrames - 1)
         val offset = boundedFrame * layout.frameBytes +
             channelIndex.coerceIn(0, layout.channelCount - 1) * layout.sampleFormat.bytesPerSample
-        return when (layout.sampleFormat) {
-            PcmSampleFormat.PCM_8 -> ((sourceBytes[offset].toInt() and 0xff) - 128) / 128f
-            PcmSampleFormat.PCM_16 -> {
-                val bits = (sourceBytes[offset].toInt() and 0xff) or
-                    (sourceBytes[offset + 1].toInt() shl 8)
-                bits.toShort() / 32768f
-            }
-            PcmSampleFormat.PCM_FLOAT -> {
-                val bits = (sourceBytes[offset].toInt() and 0xff) or
-                    ((sourceBytes[offset + 1].toInt() and 0xff) shl 8) or
-                    ((sourceBytes[offset + 2].toInt() and 0xff) shl 16) or
-                    (sourceBytes[offset + 3].toInt() shl 24)
-                val sample = Float.fromBits(bits)
-                if (sample.isFinite()) sample.coerceIn(-1f, 1f) else 0f
-            }
-        }
+        return PcmNormalizer.decodeSample(sourceBytes, offset, layout.sampleFormat)
     }
 
     val converter = PcmRateConverter(sourceFrames, sourceStep, ::sample)
@@ -375,11 +374,8 @@ internal fun readWavPcm16Range(
         val sourcePosition = sourceStartPosition + outputFrame.toDouble() * sourceStep
         val outputBase = outputFrame * outputFrameBytes
         repeat(layout.channelCount) { channelIndex ->
-            val encoded = (converter.sample(sourcePosition, channelIndex).coerceIn(-1f, 1f) * 32767f)
-                .roundToInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
-            val offset = outputBase + channelIndex * 2
-            output[offset] = encoded.toByte()
-            output[offset + 1] = (encoded ushr 8).toByte()
+            PcmNormalizer.encodeSample(output, outputBase + channelIndex * 2,
+                converter.sample(sourcePosition, channelIndex), PcmSampleFormat.PCM_16)
         }
     }
     return output
