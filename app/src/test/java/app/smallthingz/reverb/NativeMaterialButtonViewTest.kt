@@ -55,6 +55,41 @@ class NativeMaterialButtonViewTest {
                 if (assigned) assertEquals(64, row.height) else assertTrue(row.height >= 40)
                 assertTrue(row.label.measuredWidth > 0 && row.label.measuredHeight > 0)
                 assertNotNull("mounted semantic positive control", row.createAccessibilityNodeInfo())
+                var leadingAttaches = 0
+                var leadingDetaches = 0
+                val leading = object : View(activity) {
+                    override fun onAttachedToWindow() { super.onAttachedToWindow(); leadingAttaches++ }
+                    override fun onDetachedFromWindow() { leadingDetaches++; super.onDetachedFromWindow() }
+                }.apply { importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES }
+                fun semanticChildren(): List<View> = arrayListOf<View>().also(row::addChildrenForAccessibility)
+                val ordinaryChildren = listOf(row.label, row.mergedRowAccessibility.roleView)
+                row.setLeadingView(leading, exposeToAccessibility = false)
+                val leadingParent = leading.parent
+                assertNotNull(leadingParent)
+                assertTrue(leading.isAttachedToWindow)
+                assertEquals(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS, leading.importantForAccessibility)
+                assertEquals(ordinaryChildren, semanticChildren())
+                row.setLeadingView(leading, exposeToAccessibility = true)
+                assertEquals(listOf(leading) + ordinaryChildren, semanticChildren())
+                assertEquals(View.IMPORTANT_FOR_ACCESSIBILITY_YES, leading.importantForAccessibility)
+                assertSame(leadingParent, leading.parent)
+                assertTrue(leading.isAttachedToWindow)
+                row.setLeadingView(leading, exposeToAccessibility = false)
+                assertEquals(ordinaryChildren, semanticChildren())
+                assertEquals(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS, leading.importantForAccessibility)
+                assertSame(leadingParent, leading.parent)
+                assertEquals("exposure rebinding keeps one attachment", 1, leadingAttaches)
+                assertEquals("exposure rebinding never detaches content", 0, leadingDetaches)
+                val replacement = View(activity).apply { importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }
+                row.setLeadingView(replacement, exposeToAccessibility = false)
+                assertNull(leading.parent)
+                assertEquals(View.IMPORTANT_FOR_ACCESSIBILITY_YES, leading.importantForAccessibility)
+                assertTrue(replacement.isAttachedToWindow)
+                row.setLeadingView(null)
+                assertNull(replacement.parent)
+                assertEquals(View.IMPORTANT_FOR_ACCESSIBILITY_NO, replacement.importantForAccessibility)
+                assertEquals(ordinaryChildren, semanticChildren())
+                row.setLeadingView(leading, exposeToAccessibility = false)
                 assertTrue(row.performClick())
                 assertTrue(row.performAccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, null))
                 assertEquals(2, calls)
@@ -86,6 +121,12 @@ class NativeMaterialButtonViewTest {
                 key(KeyEvent.ACTION_UP)
                 assertEquals("platform disable retires held input", 4, calls)
                 row.close()
+                assertNull(leading.parent)
+                assertEquals(View.IMPORTANT_FOR_ACCESSIBILITY_YES, leading.importantForAccessibility)
+                val lateLeading = View(activity).apply { importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES }
+                row.setLeadingView(lateLeading, exposeToAccessibility = false)
+                assertNull(lateLeading.parent)
+                assertEquals(View.IMPORTANT_FOR_ACCESSIBILITY_YES, lateLeading.importantForAccessibility)
                 val motion = NativeMaterialButtonView::class.java.getDeclaredField("colorMotion").apply {
                     isAccessible = true
                 }
