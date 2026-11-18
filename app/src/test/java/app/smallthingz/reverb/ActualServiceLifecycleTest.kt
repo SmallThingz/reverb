@@ -43,6 +43,15 @@ class ActualServiceLifecycleTest {
     class NoMicService : ReverbService() {
         val inputAttempts = AtomicInteger()
         @Volatile internal var syntheticInput: CaptureAudioInput? = null
+        internal var afterCreate: (() -> Unit)? = null
+
+        override fun onCreate() {
+            super.onCreate()
+            val callback = afterCreate
+            afterCreate = null
+            callback?.invoke()
+        }
+
         override fun createAudioRecord(): CaptureAudioInput? {
             inputAttempts.incrementAndGet()
             return syntheticInput ?: throw AssertionError("Unexpected microphone admission")
@@ -215,18 +224,25 @@ class ActualServiceLifecycleTest {
                 if (!capture) assertEquals(pcm.size, seed.append(pcm, 0, pcm.size))
             }
             controller = Robolectric.buildService(NoMicService::class.java)
-            service = controller!!.get()
-            controller!!.create()
-            val actual = controller!!.get()
-            ownedCoordinator = coordinatorField.get(null)
-            checkNotNull(ownedCoordinator)
+            val actual = controller.get()
+            service = actual
             if (rejectNotificationQuickSave) {
-                assertEquals(true, field(actual, "durableRecoveryQueued"))
-                val intent = Intent(actual, NoMicService::class.java).setAction(ReverbService.ACTION_QUICK_SAVE)
-                assertEquals(Service.START_NOT_STICKY, actual.onStartCommand(intent, 0, 1))
-                assertEquals(android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
-                    field(actual, "foregroundServiceTypes"))
+                // Issue the action before Robolectric drains the main-queue recovery completion.
+                actual.afterCreate = {
+                    assertEquals(true, field(actual, "durableRecoveryQueued"))
+                    val intent = Intent(actual, NoMicService::class.java).setAction(ReverbService.ACTION_QUICK_SAVE)
+                    assertEquals(Service.START_NOT_STICKY, actual.onStartCommand(intent, 0, 1))
+                    assertEquals(android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+                        field(actual, "foregroundServiceTypes"))
+                }
             }
+            try {
+                controller.create()
+            } finally {
+                actual.afterCreate = null
+                ownedCoordinator = coordinatorField.get(null)
+            }
+            checkNotNull(ownedCoordinator)
             thread = field(actual, "audioThread") as HandlerThread
             val handler = field(actual, "audioHandler") as Handler
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(8)
@@ -261,8 +277,8 @@ class ActualServiceLifecycleTest {
                     ShadowLooper.idleMainLooper()
 
                     ownedFeedback = AppFeedbackCenter.events.value.single()
-                    assertEquals(event.message, ownedFeedback?.message)
-                    assertEquals(FeedbackTone.ERROR, ownedFeedback?.tone)
+                    assertEquals(event.message, ownedFeedback.message)
+                    assertEquals(FeedbackTone.ERROR, ownedFeedback.tone)
                     assertSame(clearOwner, field(actual, "activeBufferClearOperation"))
                     assertSame(clearNotification, shadow.lastForegroundNotification)
                 } finally {
