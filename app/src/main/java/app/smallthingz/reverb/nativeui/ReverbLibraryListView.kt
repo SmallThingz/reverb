@@ -95,7 +95,6 @@ internal class ReverbLibraryListView(
     private var environment = initialEnvironment
     private val currentActions = actions
     private val rowUpdates = NativeLibraryListUpdates<InlinePlaybackRowOwner>()
-    private var currentRecordingIds = emptySet<String>()
     private var blockedRecordingIds = emptySet<String>()
     private var pendingPosition = NativePendingListPosition(NativeListSavedPosition(0, 0))
     private val layout = object : LinearLayoutManager(context, RecyclerView.VERTICAL, false) {
@@ -157,7 +156,6 @@ internal class ReverbLibraryListView(
 
     /** One main-thread immutable presentation update; no operation, playback or Undo side effects. */
     fun submit(value: LibraryNativeListState) {
-        val preserveTop = !pendingPosition.hasKeyedRequest && savePosition() == NativeListSavedPosition(0, 0)
         val update = rowUpdates.submit(value.items, NativeLibraryRowState(
             selectedIds = value.selectedIds,
             selectionActive = value.selectionActive,
@@ -167,11 +165,13 @@ internal class ReverbLibraryListView(
             trimRequestRecordingId = value.trimRequestRecordingId,
             screenActive = value.screenActive,
         )) ?: return
+        val preserveTop = update.catalogChanged && !pendingPosition.hasKeyedRequest &&
+            savePosition() == NativeListSavedPosition(0, 0)
         blockedRecordingIds = checkNotNull(rowUpdates.current).blockedIds
         rowAdapter.submit(value.items, update)
         // DiffUtil otherwise preserves the old first row as its stable-ID anchor when a fresh
         // save/header arrives after Home's open-at-top request was already laid out.
-        if (update.catalogChanged && preserveTop) {
+        if (preserveTop) {
             pendingPosition.request(NativeListSavedPosition(0, 0))
             list.requestLayout()
         }
@@ -233,7 +233,6 @@ internal class ReverbLibraryListView(
         forEachPendingHolder { it.presentation.close() }
         rowAdapter.clear()
         rowUpdates.clear()
-        currentRecordingIds = emptySet()
         blockedRecordingIds = emptySet()
         // Old detached holders can survive until the next RV layout. A new source branch must save
         // its fresh zero state instead of reading those stale positions during that interval.
@@ -263,7 +262,7 @@ internal class ReverbLibraryListView(
         super.onDetachedFromWindow()
     }
 
-    private fun admit(id: String) = id in currentRecordingIds && id !in blockedRecordingIds
+    private fun admit(id: String) = rowAdapter.containsRecording(id) && id !in blockedRecordingIds
     private fun updateInsets() {
         // Source modifier.padding(horizontal=16.dp) shrinks the viewport; it is not scroll content padding.
         val inset = (16f * environment.textDensity.density).roundToInt()
@@ -303,6 +302,7 @@ internal class ReverbLibraryListView(
         private var nextStableId = 0L
         init { setHasStableIds(true) }
 
+        fun containsRecording(id: String): Boolean = id in recordingsById
         fun recordingIndex(id: String): Int = entries.indexOfFirst { it.recording?.id == id }
 
         fun submit(items: List<LibraryListItem>, update: NativeLibraryListUpdate) {
@@ -319,12 +319,12 @@ internal class ReverbLibraryListView(
 
         private fun submitCatalog(items: List<LibraryListItem>) {
             val previous = entries
-            val ids = previous.associate { it.key to it.stableId }
+            val previousByKey = previous.associateBy { it.key }
             val next = ArrayList<Entry>(items.size + 1)
-            var recordingCount = 0
+            val nextRecordings = HashMap<String, Entry>(items.size)
             items.forEachIndexed { index, item ->
                 val key = libraryListItemKey(item)
-                val id = ids[key] ?: nextStableId++
+                val id = previousByKey[key]?.stableId ?: nextStableId++
                 next.add(when (item) {
                     is LibraryListItem.Header -> Entry(key, id, header = item.dateLabel, compactHeader = index == 0)
                     is LibraryListItem.Pending -> Entry(key, id, pendingSave = item.save,
@@ -333,17 +333,15 @@ internal class ReverbLibraryListView(
                             last = items.getOrNull(index + 1) !is LibraryListItem.Pending))
                     is LibraryListItem.SaveRecoveryStatus -> Entry(key, id, header = item.message, compactHeader = true)
                     LibraryListItem.RetryFailedSaves -> Entry(key, id, retryFailedSaves = true)
-                    is LibraryListItem.Recording -> {
-                        recordingCount++
-                        Entry(key, id, recording = item.recording,
-                            edges = NativeGroupEdges(
-                                first = items.getOrNull(index - 1) !is LibraryListItem.Recording,
-                                last = items.getOrNull(index + 1) !is LibraryListItem.Recording))
-                    }
+                    is LibraryListItem.Recording -> Entry(key, id, recording = item.recording,
+                        edges = NativeGroupEdges(
+                            first = items.getOrNull(index - 1) !is LibraryListItem.Recording,
+                            last = items.getOrNull(index + 1) !is LibraryListItem.Recording))
+                        .also { nextRecordings[item.recording.id] = it }
                 })
             }
             // Released LazyColumn always appends item { Spacer(Modifier.height(84.dp)) }.
-            next.add(Entry("library-footer", ids["library-footer"] ?: nextStableId++, footer = true))
+            next.add(Entry("library-footer", previousByKey["library-footer"]?.stableId ?: nextStableId++, footer = true))
             val diff = DiffUtil.calculateDiff(object : DiffUtil.Callback() {
                 override fun getOldListSize() = previous.size
                 override fun getNewListSize() = next.size
@@ -353,10 +351,7 @@ internal class ReverbLibraryListView(
                     previous[oldItemPosition] == next[newItemPosition]
             })
             entries = next
-            val nextRecordings = LinkedHashMap<String, Entry>((recordingCount / 0.75f + 1f).toInt())
-            for (entry in next) entry.recording?.id?.let { nextRecordings[it] = entry }
             recordingsById = nextRecordings
-            currentRecordingIds = recordingsById.keys
             diff.dispatchUpdatesTo(this)
         }
 
