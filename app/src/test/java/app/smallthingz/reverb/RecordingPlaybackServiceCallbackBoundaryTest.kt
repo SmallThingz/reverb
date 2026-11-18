@@ -1,11 +1,13 @@
 package app.smallthingz.reverb
 
 import android.app.Application
+import android.media.AudioManager
 import android.media.MediaPlayer
 import android.media.session.MediaSession
 import android.os.Handler
 import android.os.Looper
 import android.os.Message
+import android.os.SystemClock
 import android.system.ErrnoException
 import android.system.Os
 import android.system.OsConstants
@@ -129,6 +131,43 @@ class RecordingPlaybackServiceCallbackBoundaryTest {
             assertEquals(1_400, RecordingPlayback.state.value.positionMillis)
             assertFalse(RecordingPlayback.state.value.wantsPlayback)
             assertQuiet()
+        }
+
+    @Test
+    fun preparedServiceResumesOnlyAfterLatestSeekCompletes() =
+        withPlaybackService(startPosition = 300) { media, handler, callback ->
+            val audio = checkNotNull(RuntimeEnvironment.getApplication().getSystemService(AudioManager::class.java))
+            val audioShadow = Shadows.shadowOf(audio)
+            audioShadow.setNextFocusRequestResponse(AudioManager.AUDIOFOCUS_REQUEST_GRANTED)
+            media.setSeekDelay(-1)
+            media.invokePreparedListener()
+            assertEquals(300, media.pendingSeek)
+
+            for (target in listOf(900L, 1_400L)) {
+                handler.post { callback.onSeekTo(target) }
+                ShadowLooper.idleMainLooper()
+            }
+            assertEquals(300, media.pendingSeek)
+            media.invokeSeekCompleteListener()
+            ShadowLooper.idleMainLooper()
+            assertEquals(1_400, media.pendingSeek)
+            assertFalse("Completing the first seek must not play from that position", media.isReallyPlaying)
+            assertFalse(checkNotNull(RecordingPlayback.state.value.playbackAnchor).playing)
+
+            media.invokeSeekCompleteListener()
+            ShadowLooper.idleMainLooper()
+            assertTrue("Playback must start after the latest seek completes", media.isReallyPlaying)
+            assertNotNull(audioShadow.lastAudioFocusRequest)
+            assertEquals(1_400, media.currentPositionRaw)
+            val resumed = RecordingPlayback.state.value
+            assertTrue(resumed.wantsPlayback)
+            assertTrue(resumed.playing)
+            assertEquals(1_400, resumed.positionMillis)
+            val anchor = checkNotNull(resumed.playbackAnchor)
+            assertTrue(anchor.playing)
+            assertEquals(1_400, anchor.positionAt(anchor.sampledAtElapsedRealtimeMillis))
+            ShadowLooper.idleMainLooper(50L, TimeUnit.MILLISECONDS)
+            assertEquals(1_450, anchor.positionAt(SystemClock.elapsedRealtime()))
         }
 
     private fun withPlaybackService(
