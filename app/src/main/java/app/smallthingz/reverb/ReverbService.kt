@@ -2046,6 +2046,11 @@ open class ReverbService : Service() {
 
     private fun rejectQuickSaveRequest(message: String) {
         val receiver = NotifyFileReceiver(applicationContext)
+        // An existing foreground lifetime already satisfies this action's start deadline.
+        if (foregroundServiceTypes != 0) {
+            notifyReceiverFailure(receiver, message)
+            return
+        }
         val token = beginExport(receiver)
         if (token == null) {
             // Cold-start recovery can own the export slot before the notification action arrives.
@@ -2730,7 +2735,8 @@ open class ReverbService : Service() {
         ) {
             return
         }
-        if ((foregroundServiceTypes and ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC) != 0) return
+        val hasDataSyncLifetime = (foregroundServiceTypes and ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC) != 0
+        if (foregroundPublication.hasPublishedBufferClear(foregroundServiceTypes)) return
         try {
             promoteForeground(
                 foregroundServiceTypesForWork(
@@ -2743,6 +2749,7 @@ open class ReverbService : Service() {
             )
         } catch (error: RuntimeException) {
             Log.e(TAG, "Unable to switch foreground service to buffer-clear mode", error)
+            if (hasDataSyncLifetime) return
             reportError(userFacingError(getString(R.string.clear_buffer_failed), error))
             if (requestBufferClearCancellation(reportFailure = true) && !appUiForeground) {
                 AppFeedbackCenter.post(actionableErrorMessage(this@ReverbService, getString(R.string.clear_buffer_failed), error), FeedbackTone.ERROR)

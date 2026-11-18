@@ -242,6 +242,36 @@ class ActualServiceLifecycleTest {
                 assertEquals(actual.getString(R.string.notification_save_disabled), event.message)
                 assertEquals(FeedbackTone.ERROR, event.tone)
                 assertEquals(0, field(actual, "foregroundServiceTypes"))
+
+                AppFeedbackCenter.acknowledge(event.id)
+                val clearWorker = field(actual, "bufferClearExecutor") as ExecutorService
+                val releaseClearWorker = CountDownLatch(1)
+                clearWorker.submit { check(releaseClearWorker.await(8, TimeUnit.SECONDS)) }
+                val shadow = Shadow.extract<ShadowService>(actual)
+                var clearId: Long? = null
+                try {
+                    clearId = requireNotNull(actual.startClearBuffer())
+                    val clearOwner = requireNotNull(field(actual, "activeBufferClearOperation"))
+                    val clearNotification = requireNotNull(shadow.lastForegroundNotification)
+                    assertEquals(actual.getString(R.string.clearing_buffer),
+                        clearNotification.extras.getCharSequence(android.app.Notification.EXTRA_TEXT).toString())
+
+                    val intent = Intent(actual, NoMicService::class.java).setAction(ReverbService.ACTION_QUICK_SAVE)
+                    assertEquals(Service.START_NOT_STICKY, actual.onStartCommand(intent, 0, 2))
+                    ShadowLooper.idleMainLooper()
+
+                    ownedFeedback = AppFeedbackCenter.events.value.single()
+                    assertEquals(event.message, ownedFeedback?.message)
+                    assertEquals(FeedbackTone.ERROR, ownedFeedback?.tone)
+                    assertSame(clearOwner, field(actual, "activeBufferClearOperation"))
+                    assertSame(clearNotification, shadow.lastForegroundNotification)
+                } finally {
+                    clearId?.let { actual.cancelBufferClear(it) }
+                    releaseClearWorker.countDown()
+                    clearWorker.submit {}.get(8, TimeUnit.SECONDS)
+                    fence(handler)
+                    ShadowLooper.idleMainLooper()
+                }
             }
             assertEquals(0, (ownedCoordinator as DurableSaveCoordinator).pendingCount())
             assertTrue(DurableSaveJobs.state.value.isEmpty())
