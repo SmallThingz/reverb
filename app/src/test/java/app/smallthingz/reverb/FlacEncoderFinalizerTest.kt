@@ -63,21 +63,46 @@ class FlacEncoderFinalizerTest {
     }
 
     @Test(timeout = 5_000)
-    fun normalEndFinalizesOnceAndNoProgressTimeoutStillReleases() {
+    fun normalEndAndNoProgressTimeoutEachReleaseCodecAndCloseOutputOnce() {
         for (progress in listOf(false, true)) {
             val finalizer = FlacEncoderFinalizer()
             var eos = false
+            var queued = 0
+            var drains = 0
             var finalizations = 0
-            var releases = 0
+            var codecReleases = 0
+            var outputCloses = 0
             var clock = 0L
-            fun close() = finalizer.close(null, {}, { eos }, {
-                if (progress) eos = true else clock = 31_000_000_000L
-                progress
-            }, { finalizations++ }, { releases++ }, { releases++ }, nowNanos = { clock })
-            if (progress) close() else assertThrows(IOException::class.java) { close() }
+            fun close() = finalizer.close(
+                previousFailure = null,
+                queueEnd = { queued++ },
+                endOfStream = { eos },
+                drain = {
+                    drains++
+                    if (progress) eos = true else clock = 31_000_000_000L
+                    progress
+                },
+                finalizeOutput = { finalizations++ },
+                releaseCodec = { codecReleases++ },
+                closeOutput = { outputCloses++ },
+                nowNanos = { clock },
+            )
+            if (progress) {
+                close()
+            } else {
+                val failure = assertThrows(IOException::class.java) { close() }
+                assertEquals("FLAC finalization timed out", failure.message)
+            }
+            fun assertTerminalCounts() {
+                assertEquals("Queued EOS", 1, queued)
+                assertEquals("Drained codec", 1, drains)
+                assertEquals("Finalized output", if (progress) 1 else 0, finalizations)
+                assertEquals("Released codec", 1, codecReleases)
+                assertEquals("Closed output", 1, outputCloses)
+            }
+            assertTerminalCounts()
             close()
-            assertEquals(if (progress) 1 else 0, finalizations)
-            assertEquals(2, releases)
+            assertTerminalCounts()
         }
     }
 

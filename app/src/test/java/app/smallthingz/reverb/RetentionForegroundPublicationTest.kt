@@ -49,25 +49,6 @@ class RetentionForegroundPublicationTest {
     }
 
     @Test
-    fun clearMustBeRepublishedAfterSavingWithTheSameForegroundTypeAndText() {
-        val owner = PublicationOwner()
-        val clearing = Role(clearing = true)
-        val saving = Role(exporting = true)
-        owner.publish(role = clearing)
-        assertEquals(true, owner.publication.hasPublishedBufferClear(owner.types))
-
-        owner.publish(role = saving)
-        assertEquals(DATA_SYNC, owner.types)
-        assertEquals(false, owner.publication.hasPublishedBufferClear(owner.types))
-
-        repeat(4) {
-            if (!owner.publication.hasPublishedBufferClear(owner.types)) owner.publish(role = clearing)
-        }
-        assertEquals(3, owner.platformPublications)
-        assertEquals(true, owner.publication.hasPublishedBufferClear(owner.types))
-    }
-
-    @Test
     fun stoppedLostAndMicrophoneForegroundTypesCannotReuseDataSyncProof() {
         listOf(0, MICROPHONE, DATA_SYNC or MICROPHONE).forEach { observedType ->
             val owner = PublicationOwner()

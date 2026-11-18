@@ -62,7 +62,7 @@ class ActualServiceLifecycleTest {
     @Test fun publicCaptureStopKeepsCompletedPcmAndRejectsHeldRead() = lifecycle(true)
     @Test fun nullCaptureServiceStartFailsClosedAfterIntentCommit() = lifecycle(false, false)
     @Test fun thrownCaptureServiceStartFailsClosedAfterIntentCommit() = lifecycle(false, true)
-    @Test fun disabledNotificationQuickSaveDuringColdRecoveryDeliversFailure() =
+    @Test fun quickSaveReportsColdRecoveryRejectionAndRestoresOverlappingClear() =
         lifecycle(capture = false, rejectNotificationQuickSave = true)
 
     private fun acceptedStartComponent() = android.content.ComponentName("app.smallthingz.reverb", "fixture.Owner")
@@ -281,6 +281,27 @@ class ActualServiceLifecycleTest {
                     assertEquals(FeedbackTone.ERROR, ownedFeedback.tone)
                     assertSame(clearOwner, field(actual, "activeBufferClearOperation"))
                     assertSame(clearNotification, shadow.lastForegroundNotification)
+
+                    AppFeedbackCenter.acknowledge(ownedFeedback.id)
+                    // A valid tile request acquires Saving even though the notification action is disabled.
+                    // The empty One-shot buffer then settles the admitted Save without writing an output.
+                    intent.putExtra(ReverbService.EXTRA_QUICK_TILE_BUFFER_SLOT,
+                        ReverbService.BufferSlot.ONE_SHOT.storageCode.toInt())
+                        .putExtra(ReverbService.EXTRA_QUICK_SAVE_SECONDS, 1)
+                    assertEquals(Service.START_NOT_STICKY, actual.onStartCommand(intent, 0, 3))
+                    assertEquals(actual.getString(R.string.saving),
+                        shadow.lastForegroundNotification.extras.getCharSequence(android.app.Notification.EXTRA_TEXT).toString())
+
+                    fence(handler)
+                    (field(actual, "durableSaveAdmissionExecutor") as ExecutorService).submit {}.get(8, TimeUnit.SECONDS)
+                    ShadowLooper.idleMainLooper()
+
+                    ownedFeedback = AppFeedbackCenter.events.value.single()
+                    assertEquals(actual.getString(R.string.nothing_to_export), ownedFeedback.message)
+                    assertEquals(FeedbackTone.ERROR, ownedFeedback.tone)
+                    assertSame(clearOwner, field(actual, "activeBufferClearOperation"))
+                    assertEquals(actual.getString(R.string.clearing_buffer),
+                        shadow.lastForegroundNotification.extras.getCharSequence(android.app.Notification.EXTRA_TEXT).toString())
                 } finally {
                     clearId?.let { actual.cancelBufferClear(it) }
                     releaseClearWorker.countDown()
@@ -288,6 +309,8 @@ class ActualServiceLifecycleTest {
                     fence(handler)
                     ShadowLooper.idleMainLooper()
                 }
+                assertNull(field(actual, "activeBufferClearOperation"))
+                assertEquals(0, field(actual, "foregroundServiceTypes"))
             }
             assertEquals(0, (ownedCoordinator as DurableSaveCoordinator).pendingCount())
             assertTrue(DurableSaveJobs.state.value.isEmpty())

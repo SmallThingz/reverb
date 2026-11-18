@@ -52,7 +52,89 @@ import org.robolectric.shadows.ShadowPausedMessageQueue
 @LooperMode(LooperMode.Mode.PAUSED)
 class RecordingPlaybackServiceCallbackBoundaryTest {
     @Test
-    fun registeredCallbacksPauseBeforeQueuedSeekAndDelayedPrepare() {
+    fun registeredCallbacksPauseBeforeQueuedSeekAndDelayedPrepare() = withPlaybackService { media, handler, callback ->
+        val initialRevision = RecordingPlayback.state.value.transportIntentRevision
+        val baseline = PlaybackSessionHandlerShadow.mainPosts.size
+        PlaybackSessionHandlerShadow.stateProbe = { RecordingPlayback.state.value }
+
+        // Queue the registered production callbacks through their configured Handler, in order.
+        handler.post { callback.onSeekTo(900L) }
+        handler.post { callback.onPause() }
+        ShadowLooper.idleMainLooper()
+        val stagedSeek = PlaybackSessionHandlerShadow.mainPosts.drop(baseline).firstOrNull { post ->
+            post.postingStack.any {
+                it.className == RecordingPlaybackService::class.java.name &&
+                    it.methodName == "queueExternalTransport"
+            }
+        }
+        assertNotNull("The registered seek callback must enqueue the real service command", stagedSeek)
+        val deliveredSeek = checkNotNull(stagedSeek)
+        assertTrue("The actual queued service Runnable must dispatch", deliveredSeek.delivered)
+        val pausedBeforeStaleDelivery = RecordingPlayback.state.value
+        assertFalse(pausedBeforeStaleDelivery.wantsPlayback)
+        assertTrue("Both registered callbacks must supersede the initial intent",
+            pausedBeforeStaleDelivery.transportIntentRevision >= initialRevision + 2)
+        assertEquals("Pause must run before the queued seek Runnable",
+            pausedBeforeStaleDelivery, deliveredSeek.stateBeforeDispatch)
+        assertEquals("A stale queued seek cannot mutate service state", pausedBeforeStaleDelivery, deliveredSeek.stateAfterDispatch)
+
+        media.invokePreparedListener()
+        ShadowLooper.idleMainLooper()
+        val finalState = RecordingPlayback.state.value
+        assertTrue(finalState.prepared)
+        assertEquals(0, finalState.positionMillis)
+        assertFalse(finalState.playing)
+        assertFalse(finalState.wantsPlayback)
+        assertFalse("Delayed preparation must not resurrect a paused owner", media.isReallyPlaying)
+    }
+
+    @Test
+    fun preparedServiceSeeksOnlyToLatestTargetAndPauseRevokesResume() =
+        withPlaybackService(startPosition = 300) { media, handler, callback ->
+            fun assertQuiet() {
+                val state = RecordingPlayback.state.value
+                assertFalse(state.playing)
+                assertFalse(checkNotNull(state.playbackAnchor).playing)
+                assertFalse(media.isReallyPlaying)
+            }
+
+            media.setSeekDelay(-1)
+            media.invokePreparedListener()
+            assertEquals(300, media.pendingSeek)
+
+            for (target in listOf(900, 1_400)) {
+                handler.post { callback.onSeekTo(target.toLong()) }
+                ShadowLooper.idleMainLooper()
+                assertEquals(target, RecordingPlayback.state.value.positionMillis)
+                assertEquals("Successive commands must leave the original native seek in flight", 300, media.pendingSeek)
+                assertQuiet()
+            }
+
+            media.invokeSeekCompleteListener()
+            ShadowLooper.idleMainLooper()
+            assertEquals(300, media.currentPositionRaw)
+            assertEquals("Only the latest replacement may be sent to the player", 1_400, media.pendingSeek)
+            assertEquals(1_400, RecordingPlayback.state.value.positionMillis)
+            assertTrue(RecordingPlayback.state.value.wantsPlayback)
+            assertQuiet()
+
+            handler.post { callback.onPause() }
+            ShadowLooper.idleMainLooper()
+            assertFalse(RecordingPlayback.state.value.wantsPlayback)
+            assertEquals(1_400, media.pendingSeek)
+            media.invokeSeekCompleteListener()
+            ShadowLooper.idleMainLooper()
+            assertEquals(-1, media.pendingSeek)
+            assertEquals(1_400, media.currentPositionRaw)
+            assertEquals(1_400, RecordingPlayback.state.value.positionMillis)
+            assertFalse(RecordingPlayback.state.value.wantsPlayback)
+            assertQuiet()
+        }
+
+    private fun withPlaybackService(
+        startPosition: Int? = null,
+        exercise: (ShadowMediaPlayer, Handler, MediaSession.Callback) -> Unit,
+    ) {
         val app = RuntimeEnvironment.getApplication()
         val source = File(app.cacheDir, "playback-session-${System.nanoTime()}.wav")
         PlaybackSessionHandlerShadow.reset()
@@ -84,7 +166,7 @@ class RecordingPlaybackServiceCallbackBoundaryTest {
             val service = createdController.get()
             serviceJob = checkNotNull((readField(service, "scope") as CoroutineScope).coroutineContext[Job])
             createdController.create()
-            assertTrue(RecordingPlayback.play(app, selectedRecording))
+            assertTrue(RecordingPlayback.play(app, selectedRecording, startPosition))
             val startIntent = Shadows.shadowOf(app).getNextStartedService()
             assertNotNull(startIntent)
             createdController.withIntent(startIntent).startCommand(0, 1)
@@ -99,41 +181,7 @@ class RecordingPlaybackServiceCallbackBoundaryTest {
             val callback = readField(callbackHandler, "mCallback") as MediaSession.Callback
             assertSame("The registered MediaSession callback must use the main looper",
                 Looper.getMainLooper(), callbackHandler.looper)
-            val initialRevision = RecordingPlayback.state.value.transportIntentRevision
-            val baseline = PlaybackSessionHandlerShadow.mainPosts.size
-            PlaybackSessionHandlerShadow.stateProbe = { RecordingPlayback.state.value }
-
-            // Queue the registered production callbacks through their configured Handler, in order.
-            callbackHandler.post { callback.onSeekTo(900L) }
-            callbackHandler.post { callback.onPause() }
-            ShadowLooper.idleMainLooper()
-            val stagedSeek = PlaybackSessionHandlerShadow.mainPosts.drop(baseline).firstOrNull { post ->
-                post.postingStack.any {
-                    it.className == RecordingPlaybackService::class.java.name &&
-                        it.methodName == "queueExternalTransport"
-                }
-            }
-            assertNotNull("The registered seek callback must enqueue the real service command", stagedSeek)
-            val deliveredSeek = checkNotNull(stagedSeek)
-            assertTrue("The actual queued service Runnable must dispatch", deliveredSeek.delivered)
-            val pausedBeforeStaleDelivery = RecordingPlayback.state.value
-            assertFalse(pausedBeforeStaleDelivery.wantsPlayback)
-            assertTrue("Both registered callbacks must supersede the initial intent",
-                pausedBeforeStaleDelivery.transportIntentRevision >= initialRevision + 2)
-            assertEquals("Pause must run before the queued seek Runnable",
-                pausedBeforeStaleDelivery, deliveredSeek.stateBeforeDispatch)
-            assertEquals("A stale queued seek cannot mutate service state", pausedBeforeStaleDelivery,
-                deliveredSeek.stateAfterDispatch)
-
-            // Deliver the real OnPreparedListener installed by RecordingPlaybackService.start().
-            mediaShadow.invokePreparedListener()
-            ShadowLooper.idleMainLooper()
-            val finalState = RecordingPlayback.state.value
-            assertTrue(finalState.prepared)
-            assertEquals(0, finalState.positionMillis)
-            assertFalse(finalState.playing)
-            assertFalse(finalState.wantsPlayback)
-            assertFalse("Delayed preparation must not resurrect a paused owner", mediaShadow.isReallyPlaying)
+            exercise(mediaShadow, callbackHandler, callback)
         } catch (error: Throwable) {
             failure = error
             throw error

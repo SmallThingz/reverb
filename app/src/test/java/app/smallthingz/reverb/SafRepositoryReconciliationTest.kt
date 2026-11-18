@@ -106,6 +106,24 @@ class SafRepositoryReconciliationTest {
         }
     }
 
+    @Test fun failedListingAndEmptyItemKeepKnownRecordingVisibleUntilRetry() = runBlocking {
+        fixture { f ->
+            f.provider.listing = "null"
+            f.provider.item = "missing"
+            unavailableRefresh(f.context)
+            assertEquals(f.selected, f.dao.findById(SAF_SELECTED))
+            assertTrue(RecordingRepository.listKnown(f.context).any { it.id == SAF_SELECTED })
+            f.assertOwnedBytes()
+            f.provider.listing = "complete"
+            f.provider.item = "present"
+            val recovered = RecordingRepository.refresh(f.context).single { it.id == SAF_SELECTED }
+            assertEquals(f.selected.fileIdentity, recovered.fileIdentity)
+            assertEquals(f.selected.createdAtMillis, recovered.createdAtMillis)
+            assertNull(recovered.missingSinceMillis)
+            f.assertOwnedBytes()
+        }
+    }
+
     @Test fun completeEmptyListingDistinguishesUnavailableFromMissingAndRestoresSameRow() = runBlocking {
         fixture { f ->
             f.provider.listing = "empty"

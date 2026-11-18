@@ -1,6 +1,7 @@
 package app.smallthingz.reverb
 
 import android.app.Application
+import android.media.AudioRecord
 import android.os.Handler
 import android.os.HandlerThread
 import java.io.Closeable
@@ -92,6 +93,36 @@ class CaptureIoBacklogTest {
             assertEquals(packets.size + 1, f.source.reads.get())
             assertEquals(0, f.failures.get())
             assertEquals(packets.size, f.delivered.size)
+        }
+    }
+
+    @Test fun nativeReadErrorAcknowledgesLeaseAndDrainsOnlyCompletedPacketsBeforeFailure() {
+        val packets = listOf(byteArrayOf(1, 2), byteArrayOf(3, 4, 5, 6), byteArrayOf(7, 8))
+        withFixture(CapturePcmBudget(2, 8, 32, 8), packets, holdNextRead = true,
+            heldReadBytes = byteArrayOf(99, 98)) { f ->
+            f.source.heldReadStatus = AudioRecord.ERROR_DEAD_OBJECT
+            f.start()
+            f.await(f.writerEntered)
+            f.await(f.source.extraReadEntered)
+            assertTrue(f.storage.ring.status().reading)
+            f.source.releaseExtraRead.countDown()
+            f.onReader { Unit }
+            val status = f.storage.ring.status()
+            assertEquals(CapturePcmRing.Terminal.INPUT_FAILURE, status.terminal)
+            assertFalse(status.reading)
+            assertEquals(packets.size, status.occupiedPackets)
+            assertEquals(0, f.failures.get())
+            f.releaseWriter.countDown()
+            f.await(f.failureDelivered)
+            f.detach()
+            assertTrue(f.storage.ring.isDrained())
+            assertEquals(packets.size, f.deliveredAtFailure.get())
+            assertEquals(packets.size, f.delivered.size)
+            packets.indices.forEach { assertArrayEquals(packets[it], f.delivered[it]) }
+            assertEquals(packets.size + 1, f.source.reads.get())
+            assertEquals(1, f.failures.get())
+            assertEquals(AudioRecord.ERROR_DEAD_OBJECT, (f.inputFailure.get() as NativeReadFailure).status)
+            assertNull(f.unexpected.get())
         }
     }
 
@@ -271,6 +302,7 @@ class CaptureIoBacklogTest {
 
     private class Source(private val packets: List<ByteArray>, private val holdNextRead: Boolean,
         private val heldReadBytes: ByteArray, private val writerEntered: CountDownLatch) : CaptureAudioInput {
+        var heldReadStatus: Int? = null
         val reads = AtomicInteger()
         val extraReadEntered = CountDownLatch(1)
         val releaseExtraRead = CountDownLatch(1)
@@ -288,7 +320,7 @@ class CaptureIoBacklogTest {
             check(releaseExtraRead.await(5, TimeUnit.SECONDS)) { "input release timed out" }
             check(heldReadBytes.size <= sizeInBytes) { "held read exceeds requested capacity" }
             buffer.put(heldReadBytes)
-            return heldReadBytes.size
+            return heldReadStatus ?: heldReadBytes.size
         }
     }
 }

@@ -116,6 +116,34 @@ class DurableSaveJournalEncodingTest {
     }
 
     @Test
+    fun bothReadersRejectAValidChecksumWithTheWrongPcmProofInEachSegmentGroup() = withJournal { journal, directory ->
+        val valid = golden("queued-v2.bin")
+        val record = journal.decode(valid, directory)
+        journal.validateEncoded(valid, directory)
+        val source = record.source
+        val groups = with(source.range) {
+            mapOf("selected" to segments, "leading" to leadingContext, "trailing" to trailingContext)
+        }
+        for ((group, segments) in groups) {
+            val segment = segments.single()
+            val proof = source.objects.single { it.sourcePath == segment.record.file.absolutePath }
+            val wrongProofs = source.objects.map {
+                if (it == proof) it.copy(checksum = it.checksum xor 1) else it
+            }
+            val bytes = journal.encode(record.copy(source = source.copy(objects = wrongProofs)))
+            val bodySize = bytes.size - 8
+            val checksum = DataInputStream(ByteArrayInputStream(bytes, bodySize, 8)).readLong()
+            assertEquals(group, CRC32().apply { update(bytes, 0, bodySize) }.value, checksum)
+
+            val expected = "Save pin proof disagrees with source geometry"
+            val decoded = assertThrows(group, InvalidDurableSaveManifest::class.java) { journal.decode(bytes, directory) }
+            val validated = assertThrows(group, InvalidDurableSaveManifest::class.java) { journal.validateEncoded(bytes, directory) }
+            assertEquals(group, expected, decoded.message)
+            assertEquals(group, expected, validated.message)
+        }
+    }
+
+    @Test
     fun validationOnlyStillRequiresFreshLegacyDirectoryAuthorityAfterSuccessfulValidation() = withJournal { journal, directory ->
         val bytes = golden("legacy-pinning-v1.bin")
         journal.validateEncoded(bytes, directory)
