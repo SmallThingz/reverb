@@ -4,7 +4,6 @@ import smallthingz.ui.components.NativeGroupLayout
 import android.content.Context
 import android.view.View
 import android.view.ViewGroup
-import android.widget.LinearLayout
 import app.smallthingz.reverb.R
 import kotlin.math.roundToInt
 
@@ -16,33 +15,23 @@ internal class SettingsAutoStartView(
 ) : ViewGroup(context), AutoCloseable {
     private val group = NativeGroupLayout(context, 20f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
     private val toggle = SettingsToggleRowView(context, context.getString(R.string.auto_start_title),
-        false, false, environment, inputRoot, dimDisabledText = true, changed = changed)
-    private val summary = environment.paragraph(context, context.getString(R.string.auto_start_summary),
-        ReverbTextRole.BODY_SMALL, environment.palette.muted)
-    private val body = LinearLayout(context).apply {
-        orientation = LinearLayout.VERTICAL
-        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
-        addView(toggle, LinearLayout.LayoutParams(-1, -2))
-        addView(summary, LinearLayout.LayoutParams(-1, -2))
-    }
+        false, false, environment, inputRoot, dimDisabledText = true, changed = changed,
+        summary = context.getString(R.string.auto_start_summary))
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
-        group.addRow(body, NativeGroupLayout.LayoutParams(-1, -2))
+        group.addRow(toggle, NativeGroupLayout.LayoutParams(-1, -2))
         addView(group)
     }
     fun bind(checked: Boolean, enabled: Boolean, permissionPending: Boolean, unavailable: Boolean,
         permissionMissing: Boolean, next: ReverbViewEnvironment) {
         environment = next
         group.setPalette(next.palette.field, next.palette.border)
-        toggle.bind(checked, enabled, next)
-        summary.setText(context.getString(when {
+        toggle.bind(checked, enabled, next, context.getString(when {
             unavailable -> R.string.auto_start_unavailable
             permissionPending -> R.string.auto_start_permission_pending
             permissionMissing -> R.string.auto_start_permission_missing
             else -> R.string.auto_start_summary
         }))
-        next.bindParagraphStyle(summary, ReverbTextRole.BODY_SMALL, next.palette.muted)
-        summary.setPadding(dp(14), 0, dp(14), dp(14))
         requestLayout()
     }
     override fun onMeasure(w: Int, h: Int) {

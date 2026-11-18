@@ -11,24 +11,18 @@
  */
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeDropdown
+import smallthingz.ui.components.NativeDropdownColors
+import smallthingz.ui.components.NativeDropdownContent
+import smallthingz.ui.components.NativeDropdownIcon
 import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.text.view.ParagraphView
 import android.content.Context
-import android.graphics.Canvas
-import android.graphics.Paint
-import android.graphics.Rect
-import android.os.Build
-import android.view.KeyEvent
-import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
-import android.view.accessibility.AccessibilityNodeInfo
-import smallthingz.ui.graphics.Color
-import smallthingz.ui.graphics.toArgb
 import smallthingz.ui.text.TextStyle
 import smallthingz.ui.text.font.FontFamily
 import smallthingz.ui.unit.Density
-import androidx.core.view.ViewCompat
 import app.smallthingz.reverb.AudioSourceMode
 import app.smallthingz.reverb.ChannelMode
 import app.smallthingz.reverb.InputRouteMode
@@ -61,13 +55,7 @@ internal data class SettingsAudioSelections(
     val route: (InputRouteMode) -> Unit,
 )
 
-/** Typed data only. The separate popup owner retains released open/dismiss/menu behavior. */
-internal data class SettingsDropdownContent<T>(
-    val label: String,
-    val selected: T,
-    val options: List<T>,
-    val optionLabel: (T) -> String,
-)
+internal typealias SettingsDropdownContent<T> = NativeDropdownContent<T>
 
 internal interface SettingsAudioPopupHost {
     fun <T> update(
@@ -103,17 +91,22 @@ internal class SettingsAudioChoicesView(
     private val sampleRateLabel: (Int) -> String,
     private val popup: SettingsAudioPopupHost,
     private val selections: SettingsAudioSelections,
-    inputRoot: () -> View? = { null },
+    private val inputRoot: () -> View? = { null },
 ) : AutoCloseable {
     val view = NativeGroupLayout(context, cornerRadiusDp = 16f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
-    private var currentPalette = palette
-    private val interactions = OnboardingNativeInteractionsFactory(inputRoot)
-    private fun <T> choice(kind: SettingsAudioChoice, choose: (T) -> Unit) =
-        SettingsAudioDropdownView<T>(context, bodySmall, bodyLarge, density, resolver, currentPalette, interactions,
-            onBinding = { anchor, content -> popup.update(kind, anchor, content, choose) },
-        ) {
-            anchor, content -> popup.open(kind, anchor, content, choose)
+    private val initialDropdownColors = palette.dropdownColors()
+    private fun <T> choice(kind: SettingsAudioChoice, choose: (T) -> Unit): NativeDropdown<T> {
+        val arrow = OnboardingIconView(context, ReverbIcon.ArrowDropDown, initialDropdownColors.muted).apply {
+            contentDescription = context.getString(R.string.open_options)
         }
+        return NativeDropdown(context,
+            ParagraphView(context, bodySmall, density, resolver, initialDropdownColors.muted),
+            ParagraphView(context, bodyLarge, density, resolver, initialDropdownColors.ink),
+            NativeDropdownIcon(arrow, arrow::setTintImmediately), initialDropdownColors, inputRoot,
+            onBinding = { anchor, content -> popup.update(kind, anchor, content, choose) },
+            open = { anchor, content -> popup.open(kind, anchor, content, choose) },
+            foregroundColor = ::transitionInk)
+    }
 
     private val channel = choice(SettingsAudioChoice.CHANNELS, selections.channel)
     private val sampleFormat = choice(SettingsAudioChoice.SAMPLE_FORMAT, selections.sampleFormat)
@@ -131,30 +124,30 @@ internal class SettingsAudioChoicesView(
     }
 
     fun bind(state: SettingsAudioChoicesState, palette: ReverbPalette) {
-        currentPalette = palette
+        val dropdownColors = palette.dropdownColors()
         channel.bind(
             SettingsDropdownContent(context.getString(R.string.channel_mode_label), state.channel, state.channels) {
                 context.getString(it.labelRes)
-            }, SettingsAudioChoice.CHANNELS in state.expanded, palette,
+            }, SettingsAudioChoice.CHANNELS in state.expanded, dropdownColors,
         )
         sampleFormat.bind(
             SettingsDropdownContent(context.getString(R.string.sample_format_label), state.sampleFormat, state.sampleFormats) {
                 context.getString(it.labelRes)
-            }, SettingsAudioChoice.SAMPLE_FORMAT in state.expanded, palette,
+            }, SettingsAudioChoice.SAMPLE_FORMAT in state.expanded, dropdownColors,
         )
         sampleRate.bind(
             SettingsDropdownContent(context.getString(R.string.sample_rate_label), state.sampleRate, state.sampleRates,
-                sampleRateLabel), SettingsAudioChoice.SAMPLE_RATE in state.expanded, palette,
+                sampleRateLabel), SettingsAudioChoice.SAMPLE_RATE in state.expanded, dropdownColors,
         )
         source.bind(
             SettingsDropdownContent(context.getString(R.string.audio_source_label), state.source, state.sources) {
                 context.getString(it.labelRes)
-            }, SettingsAudioChoice.SOURCE in state.expanded, palette,
+            }, SettingsAudioChoice.SOURCE in state.expanded, dropdownColors,
         )
         route.bind(
             SettingsDropdownContent(context.getString(R.string.input_route_label), state.route, state.routes) {
                 context.getString(it.labelRes)
-            }, SettingsAudioChoice.ROUTE in state.expanded, palette,
+            }, SettingsAudioChoice.ROUTE in state.expanded, dropdownColors,
         )
         val showChannels = channel.visibility != View.GONE
         val showSample = sampleFormat.visibility != View.GONE || sampleRate.visibility != View.GONE
@@ -184,183 +177,11 @@ internal class SettingsAudioChoicesView(
     }
 }
 
-private class SettingsAudioDropdownView<T>(
-    context: Context,
-    bodySmall: TextStyle,
-    bodyLarge: TextStyle,
-    density: Density,
-    resolver: FontFamily.Resolver,
-    initialPalette: ReverbPalette,
-    interactions: OnboardingNativeInteractionsFactory,
-    private val onBinding: (View, SettingsDropdownContent<T>) -> Unit,
-    private val open: (View, SettingsDropdownContent<T>) -> Unit,
-) : ViewGroup(context), smallthingz.ui.input.phase.NativeClickPhaseHost, AutoCloseable {
-    private val title = ParagraphView(context, bodySmall, density, resolver, initialPalette.muted)
-    private val selected = ParagraphView(context, bodyLarge, density, resolver, initialPalette.ink)
-    private val arrow = OnboardingIconView(context, ReverbIcon.ArrowDropDown, initialPalette.muted)
-    private val input = interactions.row(this)
-    override val nativeClickEndpoint get() = input.pointerEndpoint
-    private var rippleColor = initialPalette.ink
-    private val fill = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
-    private val divider = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
-        strokeWidth = 1f
-        style = Paint.Style.STROKE
-        strokeCap = Paint.Cap.BUTT
-    }
-    private var colorMotion:smallthingz.ui.animation.view.ViewColorTransition?=null
-    private var content: SettingsDropdownContent<T>? = null
-    private var textHeight = 0
-    private var textGap = 0
-    private var textWidth = 0
-    private var iconGap = 0
-    private var present = false
-    private var closed = false
-    var dividerAtStart: Boolean = false
-        set(value) { if (field != value) { field = value; invalidate() } }
-
-    init {
-        setWillNotDraw(false)
-        isClickable = true
-        isFocusable = true
-        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
-        descendantFocusability = FOCUS_BLOCK_DESCENDANTS
-        ViewCompat.setScreenReaderFocusable(this, true)
-        // A source merging clickable keeps separate unmerged Text/Icon nodes. No joined label.
-        ViewCompat.setScreenReaderFocusable(title, false)
-        ViewCompat.setScreenReaderFocusable(selected, false)
-        arrow.importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
-        arrow.contentDescription = context.getString(R.string.open_options)
-        selected.setTextLayout(maxLines = 1)
-        fill.color = initialPalette.field
-        addView(title)
-        addView(selected)
-        addView(arrow)
-        setOnClickListener { content?.takeIf { !closed && present }?.let { open(this, it) } }
-        if (Build.VERSION.SDK_INT >= 29) isForceDarkAllowed = false
-    }
-
-    fun bind(next: SettingsDropdownContent<T>, expanded: Boolean, palette: ReverbPalette) {
-        content = next
-        val nextPresent = next.options.size > 1
-        val colors=intArrayOf(if(expanded)palette.raised else palette.field,palette.muted,palette.ink,
-            palette.muted,palette.border,palette.ink)
-        if(!present||!nextPresent){colorMotion?.close();colorMotion=null}
-        present = nextPresent
-        visibility = if (present) VISIBLE else GONE
-        title.setText(next.label)
-        selected.setText(next.optionLabel(next.selected))
-        val motion=colorMotion ?: smallthingz.ui.animation.view.ViewColorTransition(this,colors,{publishColors()})
-            .also {colorMotion=it}
-        motion.retarget(*colors);publishColors()
-        input.bind(present, palette.ink)
-        onBinding(this, next)
-        invalidate()
-    }
-
-    private fun publishColors() {
-        val colors=colorMotion ?: return
-        fill.color=colors.color(0)
-        title.setTextColor(transitionInk(colors,fill.color,colors.color(1)))
-        selected.setTextColor(transitionInk(colors,fill.color,colors.color(2)))
-        arrow.setTintImmediately(transitionInk(colors,fill.color,colors.color(3)))
-        divider.color=colors.color(4);rippleColor=colors.color(5)
-        invalidate()
-    }
-
-    fun intrinsicHeight(width: Int): Int {
-        val textWidth = availableTextWidth(width)
-        val stack = title.intrinsicTextHeight(textWidth) + dp(2) + selected.intrinsicTextHeight(textWidth)
-        return max(dp(72), dp(10) * 2 + max(stack, dp(24)))
-    }
-
-    override fun onMeasure(widthSpec: Int, heightSpec: Int) {
-        val width = MeasureSpec.getSize(widthSpec)
-        val innerWidth = (width - dp(14) * 2).coerceAtLeast(0)
-        val unboundedHeight = MeasureSpec.getMode(heightSpec) == MeasureSpec.UNSPECIFIED
-        val innerMaximumHeight = if (unboundedHeight) {
-            Int.MAX_VALUE
-        } else (MeasureSpec.getSize(heightSpec) - dp(10) * 2).coerceAtLeast(0)
-        arrow.measure(exact(minOf(dp(24), innerWidth)), exact(minOf(dp(24), innerMaximumHeight)))
-        iconGap = minOf(dp(10), (innerWidth - arrow.measuredWidth).coerceAtLeast(0))
-        textWidth = (innerWidth - arrow.measuredWidth - iconGap).coerceAtLeast(0)
-        fun heightLimit(limit: Int) = if (unboundedHeight) unspecified() else atMost(limit)
-        title.measure(atMost(textWidth), heightLimit(innerMaximumHeight))
-        val afterTitle = (innerMaximumHeight - title.measuredHeight).coerceAtLeast(0)
-        textGap = minOf(dp(2), afterTitle)
-        selected.measure(atMost(textWidth), heightLimit((afterTitle - textGap).coerceAtLeast(0)))
-        textHeight = title.measuredHeight + textGap + selected.measuredHeight
-        val height = max(dp(72), dp(10) * 2 + max(textHeight, arrow.measuredHeight))
-        setMeasuredDimension(resolveSize(width, widthSpec), resolveSize(height, heightSpec))
-    }
-
-    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
-        val rowHeight = (height - dp(10) * 2).coerceAtLeast(0)
-        val textY = dp(10) + ((rowHeight - textHeight) / 2f).roundToInt()
-        placeStart(title, dp(14), textY)
-        placeStart(selected, dp(14), textY + title.measuredHeight + textGap)
-        placeStart(arrow, dp(14) + textWidth + iconGap,
-            dp(10) + ((rowHeight - arrow.measuredHeight) / 2f).roundToInt())
-        input.measured(width, height)
-    }
-
-    private fun placeStart(child: View, start: Int, top: Int) {
-        val x = if (layoutDirection == LAYOUT_DIRECTION_RTL) width - start - child.measuredWidth else start
-        child.layout(x, top, x + child.measuredWidth, top + child.measuredHeight)
-    }
-    private fun availableTextWidth(width: Int): Int =
-        (width - dp(14) * 2 - dp(10) - dp(24)).coerceAtLeast(0)
-
-    override fun onDraw(canvas: Canvas) {
-        canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), fill)
-        super.onDraw(canvas)
-    }
-    override fun draw(canvas: Canvas) {
-        super.draw(canvas)
-        if (dividerAtStart) {
-            val x = if (layoutDirection == LAYOUT_DIRECTION_RTL) width - 0.5f else 0.5f
-            canvas.drawLine(x, 0f, x, height.toFloat(), divider)
-        }
-    }
-    override fun onTouchEvent(event: MotionEvent): Boolean = input.touch(event)
-    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean = input.key(event)
-    override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean = input.key(event)
-    override fun onHoverEvent(event: MotionEvent): Boolean {
-        val handled = super.onHoverEvent(event)
-        return input.hover(event) || handled
-    }
-    override fun onFocusChanged(gain: Boolean, direction: Int, previous: Rect?) {
-        super.onFocusChanged(gain, direction, previous)
-        input.focusChanged(gain)
-    }
-    override fun onCancelPendingInputEvents() { super.onCancelPendingInputEvents(); input.cancel() }
-    override fun onAttachedToWindow() {
-        super.onAttachedToWindow(); input.attached()
-        if (!closed) input.bind(present, rippleColor)
-    }
-    override fun onDetachedFromWindow() { input.detached(); super.onDetachedFromWindow() }
-    override fun performClick(): Boolean = present && !closed && isAttachedToWindow && super.performClick()
-    override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo) {
-        super.onInitializeAccessibilityNodeInfo(info)
-        // The released clickable Surface supplies no Role.Button and no parent Text value.
-        info.className = View::class.java.name
-        info.text = null
-        info.contentDescription = null
-    }
-    override fun close() {
-        if (closed) return
-        closed = true
-        input.cancel()
-        colorMotion?.close();colorMotion=null
-        content = null
-    }
-    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).roundToInt()
-}
-
 /** Source Row.weight + IntrinsicSize.Min. Each child text remains wrap-content inside its weight. */
 private class SettingsAudioChoicePair(
     context: Context,
-    private val first: SettingsAudioDropdownView<*>,
-    private val second: SettingsAudioDropdownView<*>,
+    private val first: NativeDropdown<*>,
+    private val second: NativeDropdown<*>,
 ) : ViewGroup(context) {
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -404,3 +225,5 @@ private class SettingsAudioChoicePair(
         }
     }
 }
+
+private fun ReverbPalette.dropdownColors() = NativeDropdownColors(field, raised, muted, ink, border)

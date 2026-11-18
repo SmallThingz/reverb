@@ -43,8 +43,6 @@
     <string name="default_folder">Padrão</string>
     <string name="move_recordings">Mover existentes</string>
     <string name="move_recordings_none">Nenhuma gravação para mover.</string>
-    <string name="wake_lock_label">Manter CPU ativa</string>
-    <string name="wake_lock_summary">Geralmente não recomendado. Consome mais bateria.</string>
     <string name="audio_input_init_failed">Não foi possível iniciar o microfone.</string>
     <string name="custom_memory_size_invalid">Insira um número válido.</string>
     <string name="permission_required">Permissão necessária</string>

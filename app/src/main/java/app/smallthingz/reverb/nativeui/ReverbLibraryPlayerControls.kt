@@ -1,27 +1,15 @@
 package app.smallthingz.reverb.nativeui
 
-import smallthingz.ui.components.NativeGroupLayout
-import smallthingz.ui.interaction.view.isNativeClickActivationKey
-import smallthingz.ui.geometry.roundedGroupGeometry
-import smallthingz.ui.interaction.view.NativeClickBinding
-import smallthingz.ui.interaction.view.NativeClickEnvironment
-import smallthingz.ui.interaction.view.RowIndication
-import smallthingz.ui.interaction.view.RowIndicationSink
-import smallthingz.ui.interaction.view.ViewClickController
-import smallthingz.ui.interaction.view.readCachedAnimatorDurationScale
+import smallthingz.ui.components.NativeMaterialButtonStyle
+import smallthingz.ui.components.NativeMaterialButtonView
+import smallthingz.ui.util.closePreservingPrimaryFailure
 import android.content.Context
 import smallthingz.ui.runtime.MonotonicFrameClock
 import kotlinx.coroutines.CoroutineScope
 import android.graphics.Canvas
-import android.graphics.Rect
-import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
-import androidx.core.view.ViewCompat
-import smallthingz.ui.input.phase.NativeClickPhaseEndpoint
-import smallthingz.ui.input.phase.NativeClickPhaseHost
-import smallthingz.ui.input.phase.ViewClickPhaseEndpoint
 import app.smallthingz.reverb.R
 import app.smallthingz.reverb.formatRangeTimeInput
 import kotlin.math.max
@@ -65,7 +53,7 @@ internal class PlayerTrimHeading(context: Context, private var environment: Reve
 }
 
 internal class PlayerTrimButtons(context: Context, private var environment: ReverbViewEnvironment,
-    inputRoot: View, frames: MonotonicFrameClock, scope: CoroutineScope, durationScale: () -> Float) : ViewGroup(context) {
+    inputRoot: View, frames: MonotonicFrameClock, scope: CoroutineScope, durationScale: () -> Float) : ViewGroup(context), AutoCloseable {
     private val cancel = PlayerTrimAction(context, environment, inputRoot, false, frames, scope, durationScale)
     private val save = PlayerTrimAction(context, environment, inputRoot, true, frames, scope, durationScale)
     init { importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO; clipChildren = false; addView(cancel); addView(save) }
@@ -93,33 +81,73 @@ internal class PlayerTrimButtons(context: Context, private var environment: Reve
         }
         place(cancel, width - total); place(save, width - save.measuredWidth)
     }
+    override fun close() {
+        val failure = closePreservingPrimaryFailure(null, cancel::close)
+        closePreservingPrimaryFailure(failure, save::close)?.let { throw it }
+    }
 }
 
-/** Surface(onClick), not Material Button: no implicit disabled text/tint or role is added. */
-private class PlayerTrimAction(context: Context, private var environment: ReverbViewEnvironment,
-                               inputRoot: View, private val savingAction: Boolean,
-    frames: MonotonicFrameClock, scope: CoroutineScope, durationScale: () -> Float) : ViewGroup(context) {
-    private val surface = NativeGroupLayout(context, 14f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
-    private val row = PlayerTrimActionRow(context, environment, inputRoot, savingAction, frames, scope, durationScale)
+private class PlayerTrimAction(
+    context: Context,
+    private var environment: ReverbViewEnvironment,
+    inputRoot: View,
+    private val save: Boolean,
+    private val frames: MonotonicFrameClock,
+    private val scope: CoroutineScope,
+    private val durationScale: () -> Float,
+) : ViewGroup(context), AutoCloseable {
+    private var revision: String? = null
+    private var spinner: ReverbIncidentLoadingView? = null
+    private var glyphDensity = Float.NaN
+    private val surface = NativeMaterialButtonView(context, false, ReverbParagraphStyles[ReverbTextRole.LABEL_LARGE],
+        environment.textDensity, environment.sharedFontResolver,
+        NativeMaterialButtonStyle(horizontalPaddingDp = if (save) 14 else 12,
+            verticalPaddingDp = 9, minimumWidthDp = 0, minimumHeightDp = 0, iconSizeDp = 18,
+            iconGapDp = if (save) 7 else 6, radiusDp = 14f, alignContentStart = true),
+        OnboardingNativeInteractionsFactory { inputRoot }.roundedButton(14f, delayPressForParent = true) { revision }, {})
+
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         clipChildren = false
-        surface.addRow(row, NativeGroupLayout.LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
         addView(surface)
     }
+
     fun bind(value: ReverbViewEnvironment, owner: String, enabled: Boolean, saving: Boolean, action: () -> Unit) {
-        val densityChanged = environment.textDensity.density != value.textDensity.density
-        environment = value
-        if (densityChanged) requestLayout()
-        surface.setPalette(if (savingAction) value.palette.secondaryContainer else value.palette.surfaceContainerHigh,
-            android.graphics.Color.TRANSPARENT)
-        row.bind(value, owner, enabled, saving, action)
+        if (environment !== value) {
+            environment = value
+            surface.bindTypography(ReverbParagraphStyles[ReverbTextRole.LABEL_LARGE],
+                value.textDensity, value.sharedFontResolver)
+        }
+        revision = owner
+        val palette = value.palette
+        val ink = if (save) palette.onSecondaryContainer else palette.onSurface
+        val loading = save && saving
+        val density = value.textDensity.density
+        if (loading) {
+            surface.setLeadingIcon(null)
+            glyphDensity = Float.NaN
+            val indicator = spinner ?: ReverbIncidentLoadingView(context, ink, frames, scope, durationScale).also {
+                spinner = it
+                surface.setLeadingView(it)
+            }
+            indicator.setColor(ink)
+        } else {
+            spinner = null
+            surface.setLeadingView(null)
+            if (glyphDensity != density) {
+                glyphDensity = density
+                surface.setLeadingIcon(ReverbIconDrawable(if (save) ReverbIcon.Save else ReverbIcon.Close, density, ink))
+            }
+        }
+        surface.bind(context.getString(if (!save) R.string.cancel else if (saving) R.string.trim_saving else R.string.trim_save_copy),
+            enabled, if (save) palette.secondaryContainer else palette.surfaceContainerHigh, ink, action)
     }
-    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        surface.measure(widthMeasureSpec, heightMeasureSpec)
+
+    override fun onMeasure(w: Int, h: Int) {
+        surface.measure(w, h)
         val minimum = (48f * environment.textDensity.density).roundToInt()
-        setMeasuredDimension(resolveSize(max(minimum, surface.measuredWidth), widthMeasureSpec),
-            resolveSize(max(minimum, surface.measuredHeight), heightMeasureSpec))
+        setMeasuredDimension(resolveSize(max(minimum, surface.measuredWidth), w),
+            resolveSize(max(minimum, surface.measuredHeight), h))
     }
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
         val x = ((width - surface.measuredWidth) / 2f).roundToInt()
@@ -127,103 +155,11 @@ private class PlayerTrimAction(context: Context, private var environment: Reverb
         surface.layout(x, y, x + surface.measuredWidth, y + surface.measuredHeight)
     }
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
-        val copy = MotionEvent.obtain(event)
-        copy.offsetLocation(-surface.left.toFloat() - row.left, -surface.top.toFloat() - row.top)
-        return try { row.dispatchTouchEvent(copy) } finally { copy.recycle() }
+        val translated = MotionEvent.obtain(event)
+        translated.offsetLocation(-surface.left.toFloat(), -surface.top.toFloat())
+        return try { surface.dispatchTouchEvent(translated) } finally { translated.recycle() }
     }
-}
-
-private class PlayerTrimActionRow(context: Context, private var environment: ReverbViewEnvironment,
-                                  inputRoot: View, private val save: Boolean,
-    private val frames: MonotonicFrameClock, private val scope: CoroutineScope,
-    private val durationScale: () -> Float) : ViewGroup(context), NativeClickPhaseHost {
-    private val label = environment.paragraph(context, "", ReverbTextRole.LABEL_LARGE)
-    private var glyph: PlayerGlyph? = null
-    private var spinner: ReverbIncidentLoadingView? = null
-    private var owner: String? = null
-    private var action: (() -> Unit)? = null
-    private val indication = RowIndication.install(this, environment.palette.onSurface, { readCachedAnimatorDurationScale(context) })
-    private val input = ViewClickController(this, object : NativeClickEnvironment {
-        override val nativeInputRoot: View = inputRoot
-        override val minimumTouchWidthPx get() = 48f * environment.textDensity.density
-        override val minimumTouchHeightPx get() = minimumTouchWidthPx
-        override fun admitDown(event: MotionEvent) = roundedGroupGeometry(width.toFloat(), height.toFloat(),
-            environment.textDensity.density, 14f).acceptsPointer(event.x, event.y,
-            event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER, minimumTouchWidthPx)
-        override fun interestedParent(event: MotionEvent) = true
-        override fun longPressOwnershipChanged(owns: Boolean) = Unit
-    }, RowIndicationSink(indication) { x, y, point -> point.set(x, y) })
-    override val nativeClickEndpoint: NativeClickPhaseEndpoint = ViewClickPhaseEndpoint(input)
-    init {
-        isClickable = true
-        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
-        ViewCompat.setScreenReaderFocusable(this, true)
-        ViewCompat.setScreenReaderFocusable(label, false)
-        addView(label)
-        setOnClickListener { if (isEnabled) action?.invoke() }
-    }
-    fun bind(value: ReverbViewEnvironment, owner: String, enabled: Boolean, saving: Boolean, callback: () -> Unit) {
-        val densityChanged = environment.textDensity.density != value.textDensity.density
-        environment = value
-        if (densityChanged) requestLayout()
-        this.owner = owner
-        action = callback
-        isEnabled = enabled
-        isFocusable = enabled
-        val color = if (save) value.palette.onSecondaryContainer else value.palette.onSurface
-        val showSpinner = save && saving
-        if (showSpinner) {
-            glyph?.let(::removeView); glyph = null
-            if (spinner == null) spinner = ReverbIncidentLoadingView(context, color, frames, scope, durationScale).also { addView(it, 0) }
-            spinner!!.setColor(color)
-        } else {
-            spinner?.let(::removeView); spinner = null
-            if (glyph == null) glyph = PlayerGlyph(context, value, if (save) ReverbIcon.Save else ReverbIcon.Close).also { addView(it, 0) }
-            glyph!!.bind(value, color)
-        }
-        label.setText(context.getString(if (!save) R.string.cancel else if (saving) R.string.trim_saving else R.string.trim_save_copy))
-        value.bindParagraphStyle(label, ReverbTextRole.LABEL_LARGE, color)
-        indication.updateColor(color)
-        bindInput()
-    }
-    private fun bindInput() {
-        input.bind(owner?.let { NativeClickBinding(it, isEnabled, onClick = { performClick() }) })
-        input.focusChanged(isFocused)
-    }
-    private fun dp(value: Float) = (value * environment.textDensity.density).roundToInt()
-    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        val horizontal = dp(if (save) 14f else 12f)
-        val vertical = dp(9f)
-        val width = max(0, MeasureSpec.getSize(widthMeasureSpec) - horizontal - horizontal)
-        val bounded = MeasureSpec.getMode(heightMeasureSpec) != MeasureSpec.UNSPECIFIED
-        val height = max(0, MeasureSpec.getSize(heightMeasureSpec) - vertical - vertical)
-        val leading: View = spinner ?: glyph ?: label
-        val iconSize = dp(18f)
-        leading.measure(libraryPlayerControlsExact(min(width, iconSize)), libraryPlayerControlsExact(if (bounded) min(height, iconSize) else iconSize))
-        label.measure(libraryPlayerControlsAtMost(max(0, width - leading.measuredWidth - dp(if (save) 7f else 6f))),
-            if (bounded) libraryPlayerControlsAtMost(height) else MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED))
-        setMeasuredDimension(resolveSize(horizontal + horizontal + leading.measuredWidth + dp(if (save) 7f else 6f) + label.measuredWidth, widthMeasureSpec),
-            resolveSize(vertical + vertical + max(leading.measuredHeight, label.measuredHeight), heightMeasureSpec))
-    }
-    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
-        val leading: View = spinner ?: glyph ?: return
-        fun place(child: View, logical: Int) {
-            val x = if (layoutDirection == LAYOUT_DIRECTION_RTL) width - logical - child.measuredWidth else logical
-            val y = ((height - child.measuredHeight) / 2f).roundToInt()
-            child.layout(x, y, x + child.measuredWidth, y + child.measuredHeight)
-        }
-        val start = dp(if (save) 14f else 12f)
-        place(leading, start); place(label, start + leading.measuredWidth + dp(if (save) 7f else 6f))
-        indication.onMeasured(width, height, environment.textDensity.density)
-    }
-    override fun onTouchEvent(event: MotionEvent) = input.touch(event)
-    override fun onKeyDown(code: Int, event: KeyEvent): Boolean = if (isNativeClickActivationKey(code)) input.key(event) else super.onKeyDown(code, event)
-    override fun onKeyUp(code: Int, event: KeyEvent): Boolean = if (isNativeClickActivationKey(code)) input.key(event) else super.onKeyUp(code, event)
-    override fun onHoverEvent(event: MotionEvent): Boolean { val handled = super.onHoverEvent(event); return input.hover(event) || handled }
-    override fun onFocusChanged(gain: Boolean, direction: Int, rect: Rect?) { super.onFocusChanged(gain, direction, rect); input.focusChanged(gain) }
-    override fun onAttachedToWindow() { super.onAttachedToWindow(); input.attached(); bindInput() }
-    override fun onDetachedFromWindow() { input.detached(); super.onDetachedFromWindow() }
-    override fun getAccessibilityClassName(): CharSequence = "android.view.View"
+    override fun close() = surface.close()
 }
 
 private class PlayerGlyph(context: Context, private var environment: ReverbViewEnvironment,

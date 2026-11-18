@@ -58,10 +58,10 @@ internal class SettingsSilenceView(
     private var actions:SettingsSilenceActions?=actions
     private var selected=1.coerceAtMost(initial.config.points.lastIndex)
     private val row=SettingsToggleRowView(context,context.getString(R.string.silence_title),
-        initial.config.enabled,initial.enabled,environment,inputRoot,false) {checked->
-        if(state.calibrating)this.actions?.cancel()
-        this.actions?.configChanged(state.config.copy(enabled=checked))
-    }
+        initial.config.enabled,initial.enabled,environment,inputRoot,false,changed={checked->
+            if(state.calibrating)this.actions?.cancel()
+            this.actions?.configChanged(state.config.copy(enabled=checked))
+        })
     private val expansion=SettingsExpansionView(context,initial.config.enabled,parentScope,alignBottom=true) {
         SilenceBody(context,state,environment,inputRoot,{selected},{selected=it},{this.actions})
     }

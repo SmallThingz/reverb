@@ -6,6 +6,7 @@ import android.app.Service
 import android.content.Intent
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.PowerManager
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -32,6 +33,7 @@ import org.robolectric.annotation.RealObject
 import org.robolectric.annotation.LooperMode
 import org.robolectric.shadows.ShadowLooper
 import org.robolectric.shadows.ShadowService
+import org.robolectric.shadows.ShadowPowerManager
 import org.robolectric.shadow.api.Shadow
 
 /** Actual stopped-Service lifecycle, terminal snapshot delivery, and owned PCM recovery. */
@@ -60,6 +62,9 @@ class ActualServiceLifecycleTest {
 
     @Test fun stoppedInvalidTileStartAndDestroyRejectQueuedSnapshotButPreservePcm() = lifecycle(false)
     @Test fun publicCaptureStopKeepsCompletedPcmAndRejectsHeldRead() = lifecycle(true)
+    @Test fun retiredFalseWakePreferenceDoesNotCreateCaptureLock() = lifecycle(true, legacyWake = false)
+    @Test fun retiredTrueWakePreferenceDoesNotCreateCaptureLock() = lifecycle(true, legacyWake = true)
+    @Test fun retiredMalformedWakePreferenceDoesNotCreateCaptureLock() = lifecycle(true, legacyWake = "invalid")
     @Test fun nullCaptureServiceStartFailsClosedAfterIntentCommit() = lifecycle(false, false)
     @Test fun thrownCaptureServiceStartFailsClosedAfterIntentCommit() = lifecycle(false, true)
     @Test fun quickSaveReportsColdRecoveryRejectionAndRestoresOverlappingClear() =
@@ -107,7 +112,7 @@ class ActualServiceLifecycleTest {
     }
 
     private fun lifecycle(capture: Boolean, rejectedStartThrows: Boolean? = null,
-        rejectNotificationQuickSave: Boolean = false) {
+        rejectNotificationQuickSave: Boolean = false, legacyWake: Any? = null) {
         val app = RuntimeEnvironment.getApplication()
         val noBackup = app.noBackupFilesDir
         val appRoot = requireNotNull(app.filesDir.parentFile).canonicalFile
@@ -115,6 +120,13 @@ class ActualServiceLifecycleTest {
         check(noBackup.listFiles().orEmpty().isEmpty()) { "No-backup root already owned" }
         val prefs = getRecorderPreferences(app)
         check(prefs.all.isEmpty()) { "Recorder preferences already owned" }
+        check(ShadowPowerManager.getLatestWakeLock() == null) { "Wake lock observation already owned" }
+        // Positive control proves the platform observer sees creation, even without acquire().
+        val observedLock = requireNotNull(app.getSystemService(PowerManager::class.java))
+            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "fixture:creation-observer")
+        assertSame(observedLock, ShadowPowerManager.getLatestWakeLock())
+        assertFalse(observedLock.isHeld)
+        ShadowPowerManager.clearWakeLocks()
         if (rejectedStartThrows != null || rejectNotificationQuickSave)
             check(AppFeedbackCenter.events.value.isEmpty()) { "Feedback already owned" }
         check(ServiceStateOsShadow.fixtureRoot == null)
@@ -203,6 +215,12 @@ class ActualServiceLifecycleTest {
         }
         fun failDrain(error: Throwable) { ownerDrainFailed = true; failCleanup(error) }
         try {
+            if (legacyWake != null) {
+                val editor = prefs.edit()
+                if (legacyWake is Boolean) editor.putBoolean("WAKE_LOCK_ENABLED", legacyWake)
+                else editor.putString("WAKE_LOCK_ENABLED", legacyWake as String)
+                check(editor.commit())
+            }
             if (capture) {
                 org.robolectric.shadows.ShadowProcess.setPid(47_191)
                 ownsPid = true
@@ -234,6 +252,7 @@ class ActualServiceLifecycleTest {
                     assertEquals(Service.START_NOT_STICKY, actual.onStartCommand(intent, 0, 1))
                     assertEquals(android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
                         field(actual, "foregroundServiceTypes"))
+                    assertNull(ShadowPowerManager.getLatestWakeLock())
                 }
             }
             try {
@@ -291,6 +310,7 @@ class ActualServiceLifecycleTest {
                     assertEquals(Service.START_NOT_STICKY, actual.onStartCommand(intent, 0, 3))
                     assertEquals(actual.getString(R.string.saving),
                         shadow.lastForegroundNotification.extras.getCharSequence(android.app.Notification.EXTRA_TEXT).toString())
+                    assertNull(ShadowPowerManager.getLatestWakeLock())
 
                     fence(handler)
                     (field(actual, "durableSaveAdmissionExecutor") as ExecutorService).submit {}.get(8, TimeUnit.SECONDS)
@@ -316,6 +336,7 @@ class ActualServiceLifecycleTest {
             assertTrue(DurableSaveJobs.state.value.isEmpty())
             assertNull(field(actual, "audioRecord"))
             assertEquals(0, actual.inputAttempts.get())
+            assertNull(ShadowPowerManager.getLatestWakeLock())
             assertEquals(false, getRecorderPreferences(actual).getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, true))
             if (capture) {
                 check(!SilenceGatePreferences.read(actual).config.enabled)
@@ -446,6 +467,8 @@ class ActualServiceLifecycleTest {
                 check(incidentRetriesEmpty()) { "Fixture left incident retries" }
                 check(RecordingIncidentStore.historyRevision.value == incidentRevision) { "Unexpected incident history mutation" }
             } catch (error: Throwable) { failDrain(error) }
+            try { assertNull(ShadowPowerManager.getLatestWakeLock()) }
+            catch (error: Throwable) { failCleanup(error) }
             service?.let { actual ->
                 listOf("durableSaveAdmissionExecutor", "exportWorkExecutor", "durabilitySyncExecutor", "bufferClearExecutor")
                     .forEach { name -> try {
@@ -594,6 +617,7 @@ class ActualServiceLifecycleTest {
             assertTrue(event.message.contains(actual.getString(R.string.audio_input_init_failed)))
             assertTrue(event.message.contains(if (thrown) "fixture foreground denial" else "Service start returned no component"))
             assertNull(Shadow.extract<ShadowService>(actual).lastForegroundNotification)
+            assertNull(ShadowPowerManager.getLatestWakeLock())
             assertEquals(0, actual.inputAttempts.get())
             assertEquals(0, ProbeAudioRecordShadow.created.get())
             assertNull(field(actual, "audioRecord"))
@@ -682,12 +706,14 @@ class ActualServiceLifecycleTest {
         var failure: Throwable? = null
         try {
             assertTrue(actual.enableListening(ReverbService.BufferSlot.LOOPING).accepted)
+            assertNull(ShadowPowerManager.getLatestWakeLock())
             assertTrue(getRecorderPreferences(actual).getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false))
             assertEquals(1, starts.size)
             assertEquals(android.content.ComponentName(actual, NoMicService::class.java), starts.single().component)
             assertEquals(Service.START_STICKY, actual.onStartCommand(starts.single(), 0, 37))
             assertNotNull(Shadow.extract<ShadowService>(actual).lastForegroundNotification)
             assertTrue(packet.secondEntered.await(8, TimeUnit.SECONDS))
+            assertNull(ShadowPowerManager.getLatestWakeLock())
             assertEquals(8_000, field(actual, "sampleRate"))
             assertEquals(2, packet.reads.get())
             val armed = RecordingIncidentStore.beginKnownCaptureStop(actual)
@@ -702,6 +728,7 @@ class ActualServiceLifecycleTest {
             assertEquals(1, packet.releases.get())
             fence(handler)
             assertFalse(RecordingIncidentStore.beginKnownCaptureStop(actual).armed)
+            assertNull(ShadowPowerManager.getLatestWakeLock())
             val incidentRoot = actual.applicationContext.noBackupFilesDir
             assertTrue(listOf("recording-incidents.bin", "recording-incidents.bin.bak", "recording-incidents.bin.new")
                 .all { !File(incidentRoot, it).exists() })

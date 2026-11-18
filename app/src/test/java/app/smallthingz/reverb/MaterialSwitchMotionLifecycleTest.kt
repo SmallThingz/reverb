@@ -88,7 +88,7 @@ class MaterialSwitchMotionLifecycleTest {
         fun stop() { stopMethod.invoke(owner) }
 
         companion object {
-            private val type = Class.forName("app.smallthingz.reverb.nativeui.SwitchFloatMotion")
+            private val type = Class.forName("smallthingz.ui.components.SwitchFloatMotion")
             private val valueGetter = type.getDeclaredMethod("getValue").apply { isAccessible = true }
             private val runningGetter = type.getDeclaredMethod("isRunning").apply { isAccessible = true }
             private val retargetMethod = type.getDeclaredMethod("retarget", java.lang.Float.TYPE,

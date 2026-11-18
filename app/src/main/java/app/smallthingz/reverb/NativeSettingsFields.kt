@@ -70,7 +70,6 @@ internal fun resolveNativeSettingsBaseline(
         route = stored.route.takeIf { it in routes } ?: routes.first(),
         sampleRate = stored.sampleRate,
         exportDirectoryUri = stored.exportTreeUri?.toString(),
-        wakeLockEnabled = stored.wakeLockEnabled,
         flacCompression = stored.flacCompression,
         quickSaveEnabled = stored.quickSaveEnabled,
         quickSaveSeconds = stored.quickSaveSeconds,

@@ -19,7 +19,6 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.IBinder
 import android.os.Looper
-import android.os.PowerManager
 import android.os.Process
 import android.util.Log
 
@@ -439,13 +438,11 @@ open class ReverbService : Service() {
     private lateinit var loopingAudioChunkStore: PersistentAudioChunkStore
     private lateinit var oneShotAudioChunkStore: PersistentAudioChunkStore
 
-    @Volatile private var wakeLock: PowerManager.WakeLock? = null
     private val appUiForegroundOwners = UiForegroundOwnerTracker()
     private val appUiForeground: Boolean get() = appUiForegroundOwners.isForeground()
     private val captureCommands = CaptureCommandAdmission()
     // Main-thread-only delivered capture lifetime: normal starts plus UI and Quick Settings tickets.
     private var captureCommandStartId = 0
-    private var powerManager: PowerManager? = null
 
     private val recorderErrors = RecorderErrorState()
     // State polling and its recovery marker are confined to the audio handler.
@@ -475,7 +472,6 @@ open class ReverbService : Service() {
             onMaintenanceNeeded = { mainHandler.post { scheduleRetentionMaintenanceIfNeeded() } },
         )
         createNotificationChannel()
-        powerManager = getSystemService(PowerManager::class.java)
         audioThread = HandlerThread(THREAD_NAME_AUDIO, Process.THREAD_PRIORITY_AUDIO)
             .also { it.start() }
         audioHandler = Handler(audioThread.looper)
@@ -648,7 +644,6 @@ open class ReverbService : Service() {
         // markServiceStopped already installs the fail-closed snapshot and asynchronously
         // hydrates persisted stopped state. Dispatch it without republishing/invalidation.
         RecordingQuickTiles.refreshCachedSnapshot(this, requestSystemRefresh = true)
-        releaseWakeLock()
         stopForegroundTracked()
 
         if (::exportWorkExecutor.isInitialized) {
@@ -1600,7 +1595,6 @@ open class ReverbService : Service() {
         ) return
         state = STATE_LISTENING
         publishCaptureIngress()
-        updateWakeLockState()
         val attempt = newForegroundCaptureAttempt(generation)
         try {
             requireServiceStarted {
@@ -1655,11 +1649,9 @@ open class ReverbService : Service() {
                 reportTerminalCaptureStoreFailure("seal after foreground start restriction", sealError)
             } finally {
                 releaseAudioRecord()
-                updateWakeLockState()
                 publishQuickTileSnapshotOnAudioThread(refreshTiles = true, persistDurations = true)
             }
         }
-        updateWakeLockState()
         reportTerminalCaptureFailure(userFacingError(getString(R.string.audio_input_init_failed), error))
         requestServiceStopWhenExportIdle()
     }
@@ -1676,7 +1668,6 @@ open class ReverbService : Service() {
             // Stop or publish LISTENING from the intent value observed before that Stop.
             state = STATE_LISTENING
             publishCaptureIngress()
-            updateWakeLockState()
         }
         startAudioInputOnAudioThread(attempt.commandGeneration)
     }
@@ -1847,7 +1838,6 @@ open class ReverbService : Service() {
                 }
             }
             state = STATE_READY
-            updateWakeLockState()
             requestServiceStopWhenExportIdle()
             return
         }
@@ -1864,7 +1854,6 @@ open class ReverbService : Service() {
                 reportTerminalCaptureStoreFailure("seal while stopping", error)
             } finally {
                 releaseAudioRecord()
-                updateWakeLockState()
                 if (captureStoresReady) {
                     publishQuickTileSnapshotOnAudioThread(refreshTiles = true, persistDurations = true)
                 }
@@ -3112,7 +3101,6 @@ open class ReverbService : Service() {
                 pauseListeningForNoWritableBufferOnAudioThread()
             }
         }
-        updateWakeLockState()
         syncOneShotFullQuickTileOnAudioThread()
         captureStoresReady = true
         refreshForegroundNotificationAfterSettings()
@@ -3602,7 +3590,6 @@ open class ReverbService : Service() {
                 reportTerminalCaptureStoreFailure("seal while auto-pausing", error)
             } finally {
                 releaseAudioRecord()
-                updateWakeLockState()
             }
             publishQuickTileSnapshotOnAudioThread(refreshTiles = true, persistDurations = true)
             mainHandler.post {
@@ -3693,7 +3680,6 @@ open class ReverbService : Service() {
             runCatching { sealActiveChunks() }
                 .onFailure { sealError -> reportTerminalCaptureStoreFailure("seal after persistence failure", sealError) }
             releaseAudioRecord()
-            updateWakeLockState()
             publishQuickTileSnapshotOnAudioThread(refreshTiles = true, persistDurations = true)
             mainHandler.post {
                 if (state != STATE_LISTENING) requestServiceStopWhenExportIdle()
@@ -3786,7 +3772,7 @@ open class ReverbService : Service() {
                 reportPendingKnownCaptureStopDrainFailure(it)
                 reportTerminalCaptureStoreFailure("capture dispatch failure cleanup", it)
             })
-        mainHandler.post { updateWakeLockState(); requestServiceStopWhenExportIdle() }
+        mainHandler.post { requestServiceStopWhenExportIdle() }
     }
 
     private fun failCaptureCommandAdmission() {
@@ -3805,7 +3791,6 @@ open class ReverbService : Service() {
             RecordingIncidentStore.recordCaptureInterrupted(this, "Capture stopped after command queue failure")
             runTerminalStoreCleanup(seal = ::sealActiveChunks, releaseInput = ::releaseAudioRecord,
                 onFailure = { reportTerminalCaptureStoreFailure("capture command failure cleanup", it) })
-            updateWakeLockState()
         }
     }
 
@@ -4091,7 +4076,6 @@ open class ReverbService : Service() {
             recordPersistentStoreFailure("seal after audio input failure", sealFailure)
         }
         releaseAudioRecord()
-        updateWakeLockState()
         publishQuickTileSnapshotOnAudioThread(refreshTiles = true, persistDurations = true)
         val primaryFailure = if (error == null) message else userFacingError(message, error)
         reportTerminalCaptureFailure(combineRecorderTerminalPersistenceFailures(
@@ -5381,7 +5365,6 @@ open class ReverbService : Service() {
                     reportTerminalCaptureStoreFailure("seal after foreground timeout", error)
                 },
             )
-            updateWakeLockState()
             publishQuickTileSnapshotOnAudioThread(refreshTiles = true, persistDurations = true)
         }
         stopForegroundTracked()
@@ -5804,7 +5787,6 @@ open class ReverbService : Service() {
         }
         if (state != STATE_LISTENING) {
             state = STATE_PAUSED
-            updateWakeLockState()
         }
         checkpointAudioStores("debug inject checkpoint")
         Log.d(
@@ -5864,71 +5846,6 @@ open class ReverbService : Service() {
 
     private fun createNotificationChannel() {
         ReverbNotificationChannels.ensure(this, ReverbNotificationChannel.BACKGROUND)
-    }
-
-    @SuppressLint("WakelockTimeout")
-    @Synchronized
-    private fun updateWakeLockState() {
-        if (!isWakeLockEnabled(this)) {
-            releaseWakeLock()
-            return
-        }
-
-        val shouldHoldWakeLock = state == STATE_LISTENING
-        if (!shouldHoldWakeLock) {
-            releaseWakeLock()
-            return
-        }
-        if (wakeLock?.isHeld == true) {
-            return
-        }
-
-        val manager = powerManager ?: getSystemService(PowerManager::class.java)?.also { powerManager = it } ?: return
-        wakeLock = acquireWakeLockReportingFailure(
-            create = { manager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, packageName + WAKE_LOCK_TAG_SUFFIX) },
-            configure = { lock ->
-                lock.setReferenceCounted(false)
-                lock.acquire()
-            },
-            isHeld = { it.isHeld },
-            release = { it.release() },
-            onFailure = { error ->
-                Log.e(TAG, "WakeLock acquisition failed", error)
-                RecordingIncidentStore.recordUnexpectedErrorInBackground(
-                    this,
-                    "WakeLock acquisition",
-                    error,
-                )
-                AppFeedbackCenter.post(
-                    actionableErrorMessage(this@ReverbService, getString(R.string.wake_lock_acquire_failed), error),
-                    FeedbackTone.ERROR,
-                )
-            },
-        )
-    }
-
-    @Synchronized
-    private fun releaseWakeLock() {
-        val lock = wakeLock ?: return
-        // Ownership is terminal before touching the platform object. A failed release is
-        // uncertain and must never be retried by a later lifecycle transition.
-        wakeLock = null
-        releaseWakeLockReportingFailure(
-            isHeld = { lock.isHeld },
-            release = { lock.release() },
-            onFailure = { error ->
-                Log.e(TAG, "WakeLock.release failed", error)
-                RecordingIncidentStore.recordUnexpectedErrorInBackground(
-                    this,
-                    "WakeLock terminal release",
-                    error,
-                )
-                AppFeedbackCenter.post(
-                    actionableErrorMessage(this@ReverbService, getString(R.string.wake_lock_release_failed), error),
-                    FeedbackTone.ERROR,
-                )
-            },
-        )
     }
 
     interface AudioFileReceiver {
@@ -6149,8 +6066,6 @@ open class ReverbService : Service() {
         const val ACTION_DEBUG_DUMP_REPORT = "${DEBUG_ACTION_PREFIX}DUMP_REPORT"
         const val EXTRA_DEBUG_SECONDS = "seconds"
         const val DEBUG_REPORT_FILE_NAME = "debug-report.txt"
-
-        const val WAKE_LOCK_TAG_SUFFIX = ":reverbBuffer"
 
         const val STATE_READY = 0
         const val STATE_LISTENING = 1
@@ -6410,35 +6325,6 @@ internal fun shouldCloseAudioStoresOffThread(result: AudioThreadShutdownWaitResu
 internal fun captureReadMayStart(serviceDestroying: Boolean): Boolean = !serviceDestroying
 
 internal fun serviceCommandMayQueue(serviceDestroying: Boolean): Boolean = !serviceDestroying
-
-internal inline fun <Owner> acquireWakeLockReportingFailure(
-    create: () -> Owner,
-    configure: (Owner) -> Unit,
-    isHeld: (Owner) -> Boolean,
-    release: (Owner) -> Unit,
-    onFailure: (Exception) -> Unit,
-): Owner? = try {
-    configureOwnedResourceOrRelease(
-        owner = create(),
-        release = { owner -> if (isHeld(owner)) release(owner) },
-        configure = configure,
-    )
-} catch (error: Exception) {
-    runCatching { onFailure(error) }
-    null
-}
-
-internal inline fun releaseWakeLockReportingFailure(
-    isHeld: () -> Boolean,
-    release: () -> Unit,
-    onFailure: (Exception) -> Unit,
-) {
-    try {
-        if (isHeld()) release()
-    } catch (error: Exception) {
-        runCatching { onFailure(error) }
-    }
-}
 
 internal fun clearBufferCommandMayExecute(
     requestedBuffer: ReverbService.BufferSlot,

@@ -1,39 +1,26 @@
 package app.smallthingz.reverb.nativeui
 
-import smallthingz.ui.text.view.MergedRowAccessibility
-import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
-import smallthingz.ui.text.view.NativeMergedRowAccessibilityState
-import smallthingz.ui.text.view.NativeMergedRowRole
+import smallthingz.ui.components.NativeMaterialButtonInteractionsFactory
+import smallthingz.ui.components.NativeMaterialButtonStyle
+import smallthingz.ui.components.NativeMaterialButtonView
 import smallthingz.ui.text.view.NativePlainTextViewGeometry
 import smallthingz.ui.text.view.NativeSourceAccessibilityNode
-import smallthingz.ui.text.view.ParagraphView
 import smallthingz.ui.text.view.PlainTextAccessibilityWindowScope
 import smallthingz.ui.animation.view.ViewColorTransition
 
 import android.content.Context
 import android.content.res.Configuration
 import android.graphics.Canvas
-import android.graphics.Outline
 import android.graphics.Paint
-import android.graphics.Path
-import android.graphics.Rect
-import android.graphics.drawable.Drawable
 import android.os.Build
-import android.view.KeyEvent
-import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
-import android.view.ViewOutlineProvider
-import android.view.accessibility.AccessibilityNodeInfo
 import smallthingz.ui.text.TextStyle
 import smallthingz.ui.text.font.FontFamily
 import smallthingz.ui.unit.Density
 import app.smallthingz.reverb.R
-import smallthingz.ui.input.phase.NativeClickPhaseEndpoint
-import smallthingz.ui.input.phase.NativeClickPhaseHost
 import java.io.Closeable
 import kotlin.math.max
-import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
@@ -54,40 +41,6 @@ internal data class OnboardingFooterState(
     }
 }
 
-/**
- * Pinned clickable + ripple + ButtonElevation boundary, implemented by
- * OnboardingNativeInteractionsFactory using the shared native input/ripple/elevation components.
- *
- * inputHost.performClick() delivers accepted pointer/key/accessibility clicks to the CURRENT callback.
- * indicationHost exclusively owns the returned foreground drawable and its callback; never install
- * it on inputHost too. FooterButton supplies clipping and draws that foreground after its label.
- * Pointer admission must honor the capsule and source minimum-target hit rules, not the View's
- * rectangular bounds. Do not let platform pressed state create a second interaction stream.
- * setShadowElevationPx must preserve M3's interaction ordering, tween and disabled snap behavior.
- */
-internal fun interface OnboardingFooterInteractionsFactory {
-    fun create(
-        inputHost: View,
-        indicationHost: View,
-        filled: Boolean,
-        setShadowElevationPx: (Float) -> Unit,
-    ): OnboardingFooterInteractions
-}
-
-internal interface OnboardingFooterInteractions {
-    val pointerEndpoint: NativeClickPhaseEndpoint
-    val foreground: Drawable
-    fun bind(enabled: Boolean, contentColor: Int)
-    fun measured(width: Int, height: Int)
-    fun touch(event: MotionEvent): Boolean
-    fun key(event: KeyEvent): Boolean
-    fun hover(event: MotionEvent): Boolean
-    fun focusChanged(focused: Boolean)
-    fun cancel()
-    fun attached()
-    fun detached()
-}
-
 private data class FooterActions(val back: () -> Unit, val continueOrFinish: () -> Unit)
 
 /**
@@ -100,7 +53,7 @@ internal class OnboardingFooterView(
     labelLarge: TextStyle,
     textDensity: Density,
     resolver: FontFamily.Resolver,
-    interactions: OnboardingFooterInteractionsFactory,
+    interactions: NativeMaterialButtonInteractionsFactory,
 ) : ViewGroup(context) {
     /** Same native window cursor as page labels; keep the lease until this footer is disposed. */
     fun bindTextAccessibility(window: NativeWindowTextAccessibilityOwner,
@@ -133,10 +86,12 @@ internal class OnboardingFooterView(
     private var backWidth = 0
     private var continueWidth = 0
     private var stackedButtons = false
-    private val back = FooterButton(context, false, reverbButtonTextStyle(labelLarge), textDensity, resolver, interactions) {
+    private val back = NativeMaterialButtonView(context, false, reverbButtonTextStyle(labelLarge), textDensity, resolver,
+        NativeMaterialButtonStyle(12, assignedSize = true), interactions) {
         actions?.back?.invoke()
     }
-    private val next = FooterButton(context, true, reverbButtonTextStyle(labelLarge), textDensity, resolver, interactions) {
+    private val next = NativeMaterialButtonView(context, true, reverbButtonTextStyle(labelLarge), textDensity, resolver,
+        NativeMaterialButtonStyle(24, assignedSize = true), interactions) {
         actions?.continueOrFinish?.invoke()
     }
 
@@ -184,7 +139,7 @@ internal class OnboardingFooterView(
             context.getString(R.string.onboarding_back),
             enabled = !value.finishing && value.page > 0,
             container = android.graphics.Color.TRANSPARENT,
-            content = if (!value.finishing && value.page > 0) colors.primary
+            contentColor = if (!value.finishing && value.page > 0) colors.primary
                 else reverbColorWithAlpha(colors.onSurfaceVariant, 0.38f),
         )
         val enabled = !value.finishing
@@ -199,7 +154,7 @@ internal class OnboardingFooterView(
                 value.ready -> colors.primary
                 else -> colors.field
             },
-            content = when {
+            contentColor = when {
                 !enabled -> reverbColorWithAlpha(colors.onSurfaceVariant, 0.38f)
                 value.ready -> colors.onPrimary
                 else -> colors.ink
@@ -315,207 +270,22 @@ internal class OnboardingFooterView(
     private fun exact(value: Int) = MeasureSpec.makeMeasureSpec(value.coerceAtLeast(0), MeasureSpec.EXACTLY)
 }
 
-/** One native button body; fill/shadow are outside the outline-clipped label/ripple layer. */
-private class FooterButton(
-    context: Context,
-    private val filled: Boolean,
-    style: TextStyle,
-    density: Density,
-    resolver: FontFamily.Resolver,
-    factory: OnboardingFooterInteractionsFactory,
-    private val onActivate: () -> Unit,
-) : ViewGroup(context), NativeClickPhaseHost, NativeMergedRowAccessibilityHost {
-    private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
-    private val label = ParagraphView(context, style, density, resolver, android.graphics.Color.TRANSPARENT)
-    private var colorMotion: ViewColorTransition? = null
-    var compactPadding = false
-    private val accessibilityChildren = listOf(label)
-    private val content = object : ViewGroup(context) {
-        private val softwareClip = Path()
-        init {
-            // TextStringSimpleNode clips only actual layout overflow. A glyph's ink can extend
-            // past its measured advance (for example the final k in Back); preserve that ink
-            // inside the existing button capsule instead of clipping at the label View bounds.
-            clipChildren = false
-            clipToPadding = false
-        }
-        override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
-            super.onSizeChanged(w, h, oldw, oldh)
-            val radius = min(w, h) / 2f
-            softwareClip.rewind()
-            softwareClip.addRoundRect(0f, 0f, w.toFloat(), h.toFloat(), radius, radius, Path.Direction.CW)
-        }
-        override fun draw(canvas: Canvas) {
-            if (canvas.isHardwareAccelerated) {
-                super.draw(canvas)
-            } else {
-                // Pinned Compose ViewLayer clips its whole content on software Canvas too.
-                val checkpoint = canvas.save()
-                try {
-                    canvas.clipPath(softwareClip)
-                    super.draw(canvas)
-                } finally {
-                    canvas.restoreToCount(checkpoint)
-                }
-            }
-        }
-        override fun onMeasure(w: Int, h: Int) {
-            val horizontal = horizontalPadding()
-            val vertical = dp(8)
-            val contentWidth = (MeasureSpec.getSize(w) - horizontal * 2).coerceAtLeast(0)
-            val contentHeight = (MeasureSpec.getSize(h) - vertical * 2).coerceAtLeast(0)
-            label.measure(
-                MeasureSpec.makeMeasureSpec(contentWidth, MeasureSpec.AT_MOST),
-                MeasureSpec.makeMeasureSpec(contentHeight, MeasureSpec.AT_MOST),
-            )
-            setMeasuredDimension(MeasureSpec.getSize(w), MeasureSpec.getSize(h))
-        }
-        override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
-            val x = ((width - label.measuredWidth) / 2f).roundToInt()
-            val y = ((height - label.measuredHeight) / 2f).roundToInt()
-            label.layout(x, y, x + label.measuredWidth, y + label.measuredHeight)
-        }
+private fun NativeMaterialButtonView.bindAccessibility(
+    cursor: PlainTextAccessibilityWindowScope,
+    geometry: NativePlainTextViewGeometry,
+    sourceNode: ((View) -> NativeSourceAccessibilityNode)?,
+    exposed: (View) -> Boolean,
+): AutoCloseable {
+    val role = if (sourceNode != null) {
+        mergedRowAccessibility.bindSourceGeometry(geometry, sourceNode) { exposed(this) }
+    } else mergedRowAccessibility.bindGeometry(geometry) { exposed(this) }
+    val text = try { label.bindPlainTextAccessibility(cursor, geometry,
+        sourceNode?.let { node -> { node(label) } }) { exposed(label) } }
+    catch (error: Throwable) {
+        try { role.close() } catch (cleanup: Throwable) { error.addSuppressed(cleanup) }
+        throw error
     }
-    private val interaction = factory.create(this, content, filled) { elevation = it }
-    override val nativeClickEndpoint: NativeClickPhaseEndpoint get() = interaction.pointerEndpoint
-    override val mergedRowAccessibility = MergedRowAccessibility(this, NativeMergedRowRole.BUTTON,
-        sourceState = { NativeMergedRowAccessibilityState(isEnabled, null, null, accessibilityChildren) },
-        invokeSourceClick = {
-            if (isEnabled && isAttachedToWindow) { onActivate(); true } else false
-        })
-
-    override fun createAccessibilityNodeInfo(): AccessibilityNodeInfo? =
-        if (mergedRowAccessibility.isNodePresent()) super.createAccessibilityNodeInfo() else null
-
-    override fun addChildrenForAccessibility(outChildren: ArrayList<View>) =
-        mergedRowAccessibility.addChildrenForAccessibility(outChildren)
-
-    fun clipsAccessibilityTextAt(view: View): Boolean = view === content
-
-    fun bindAccessibility(cursor: PlainTextAccessibilityWindowScope,
-                          geometry: NativePlainTextViewGeometry,
-                          sourceNode: ((View) -> NativeSourceAccessibilityNode)?,
-                          exposed: (View) -> Boolean): AutoCloseable {
-        val role = if (sourceNode != null) {
-            mergedRowAccessibility.bindSourceGeometry(geometry, sourceNode) { exposed(this) }
-        } else mergedRowAccessibility.bindGeometry(geometry) { exposed(this) }
-        val text = try { label.bindPlainTextAccessibility(cursor, geometry,
-            sourceNode?.let { node -> { node(label) } }) { exposed(label) } }
-        catch (error: Throwable) {
-            try { role.close() } catch (cleanup: Throwable) { error.addSuppressed(cleanup) }
-            throw error
-        }
-        return AutoCloseable { closeNativeFooterAccessibility(role, text) }
-    }
-    private val capsuleOutline = object : ViewOutlineProvider() {
-        override fun getOutline(view: View, outline: Outline) {
-            outline.setRoundRect(0, 0, view.width, view.height, min(view.width, view.height) / 2f)
-        }
-    }
-
-    init {
-        setWillNotDraw(false)
-        isClickable = true
-        isFocusable = true
-        // AndroidComposeView disables the framework highlight; the source indication below owns
-        // keyboard focus feedback. Drawing both would add a second rectangular focus layer.
-        defaultFocusHighlightEnabled = false
-        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
-        descendantFocusability = FOCUS_BLOCK_DESCENDANTS
-        outlineProvider = capsuleOutline
-        content.outlineProvider = capsuleOutline
-        content.clipToOutline = true
-        content.foreground = interaction.foreground
-        content.importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
-        label.isScreenReaderFocusable = false
-        content.addView(label)
-        addView(content)
-        addView(mergedRowAccessibility.roleView)
-        accessibilityDelegate = mergedRowAccessibility
-        setOnClickListener { if (isEnabled && isAttachedToWindow) onActivate() }
-        if (Build.VERSION.SDK_INT >= 29) isForceDarkAllowed = false
-    }
-
-    fun bind(text: String, enabled: Boolean, container: Int, content: Int) {
-        // Publish enabled state before cancellation/focus-loss interaction ends. The pinned
-        // elevation effect sees the new enabled value when deciding whether a new target snaps.
-        interaction.bind(enabled, content)
-        if (isEnabled && !enabled) interaction.cancel()
-        isEnabled = enabled
-        isFocusable = enabled
-        label.setText(text)
-        val motion=colorMotion ?: ViewColorTransition(this,intArrayOf(container,content),{
-            colorMotion?.let {applyColors(it.color(0),it.color(1))}
-        }).also {colorMotion=it;applyColors(container,content)}
-        motion.retarget(container,content)
-    }
-
-    private fun applyColors(container:Int,content:Int) {
-        paint.color=container;label.setTextColor(transitionInk(colorMotion,container,content));invalidate()
-    }
-
-    fun bindTypography(style: TextStyle, density: Density, resolver: FontFamily.Resolver) {
-        label.setTypography(style, density, resolver)
-    }
-
-    fun preferredWidth(compact: Boolean): Int =
-        label.maxIntrinsicTextWidth() + dp(if (filled && !compact) 24 else 12) * 2
-
-    private fun horizontalPadding(): Int = dp(if (filled && !compactPadding) 24 else 12)
-
-    fun intrinsicHeight(width: Int): Int {
-        val horizontal = horizontalPadding()
-        label.measure(
-            MeasureSpec.makeMeasureSpec((width - horizontal * 2).coerceAtLeast(0), MeasureSpec.AT_MOST),
-            MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED),
-        )
-        return max(dp(40), label.measuredHeight + dp(8) * 2)
-    }
-
-    override fun onMeasure(w: Int, h: Int) {
-        content.measure(w, h)
-        setMeasuredDimension(MeasureSpec.getSize(w), MeasureSpec.getSize(h))
-        mergedRowAccessibility.roleView.measure(w, h)
-    }
-    override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
-        content.layout(0, 0, width, height)
-        mergedRowAccessibility.roleView.layout(0, 0, width, height)
-        invalidateOutline()
-        content.invalidateOutline()
-        interaction.measured(width, height)
-    }
-    override fun onDraw(canvas: Canvas) {
-        val radius = min(width, height) / 2f
-        canvas.drawRoundRect(0f, 0f, width.toFloat(), height.toFloat(), radius, radius, paint)
-        super.onDraw(canvas)
-    }
-    override fun onTouchEvent(event: MotionEvent): Boolean = interaction.touch(event)
-    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean = interaction.key(event)
-    override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean = interaction.key(event)
-    override fun onHoverEvent(event: MotionEvent): Boolean {
-        // Keep native touch-exploration hover events. This outer host has no indication drawable;
-        // the explicit interaction policy remains the sole ripple/elevation event stream.
-        val nativeHandled = super.onHoverEvent(event)
-        return interaction.hover(event) || nativeHandled
-    }
-    override fun onFocusChanged(gain: Boolean, direction: Int, previous: Rect?) {
-        super.onFocusChanged(gain, direction, previous)
-        interaction.focusChanged(gain)
-    }
-    override fun onCancelPendingInputEvents() {
-        super.onCancelPendingInputEvents()
-        interaction.cancel()
-    }
-    override fun onAttachedToWindow() {
-        super.onAttachedToWindow()
-        interaction.attached()
-    }
-    override fun onDetachedFromWindow() {
-        interaction.detached()
-        super.onDetachedFromWindow()
-    }
-    override fun performClick(): Boolean = isEnabled && isAttachedToWindow && super.performClick()
-    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).roundToInt()
+    return AutoCloseable { closeNativeFooterAccessibility(role, text) }
 }
 
 private fun closeNativeFooterAccessibility(vararg leases: AutoCloseable) {

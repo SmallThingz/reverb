@@ -6,7 +6,7 @@ The native leaves use the source palette, icons, grouping, dividers and independ
 
 OnboardingNativeInteractionsFactory joins ReverbClickController, ReverbRowIndication and the filled Button elevation helper. The same identity-bound interaction stream reaches ripple and elevation. Permission/card bodies use explicit logical-start/center rounding. Native vertical viewports and the parent pager retain their existing pointer-phase and cancellation coordination.
 
-Shared dependencies: resolved ReverbPalette, caller-supplied exact TextStyle/Density/resolver, ReverbParagraphView, ReverbIconDrawable, ReverbGroupLayout, and ReverbMaterialSwitchView. Configuration replacement recreates these immutable rendering inputs; the owner saves/restores per-page scroll after layout.
+Shared dependencies include the resolved ReverbPalette, caller typography, paragraph, icon and group views, and the library `NativeControlRow` and `NativeMaterialSwitchView`. Configuration replacement recreates the rendering inputs. The owner saves and restores per-page scroll after layout.
 
 The page bodies and footer follow released v0.1.2: the permission intro precedes its group by16dp; permission and buffer explanations use the original resources. Requests are explicit row actions. The audio group contains only the compression and skip-silence switches and the original warnings, and its footer remains Get started. Configured preferences determine initial switch values.
 

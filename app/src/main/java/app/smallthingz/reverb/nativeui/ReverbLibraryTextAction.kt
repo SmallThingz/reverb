@@ -1,42 +1,22 @@
 package app.smallthingz.reverb.nativeui
 
-import smallthingz.ui.input.phase.NativePointerLayerShape
-import smallthingz.ui.interaction.view.isNativeClickActivationKey
-import smallthingz.ui.geometry.roundedGroupGeometry
-import smallthingz.ui.interaction.view.NativeClickBinding
-import smallthingz.ui.interaction.view.NativeClickEnvironment
-import smallthingz.ui.interaction.view.RowIndication
-import smallthingz.ui.interaction.view.RowIndicationSink
-import smallthingz.ui.interaction.view.ViewClickController
-import smallthingz.ui.interaction.view.readCachedAnimatorDurationScale
-import smallthingz.ui.text.view.MergedRowAccessibility
-import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
-import smallthingz.ui.text.view.NativeMergedRowAccessibilityState
-import smallthingz.ui.text.view.NativeMergedRowRole
-import smallthingz.ui.text.view.ParagraphView
 import android.content.Context
-import android.graphics.Canvas
-import android.graphics.Outline
-import android.graphics.Path
-import android.graphics.Rect
-import android.view.KeyEvent
+import android.graphics.Color
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
-import android.view.ViewOutlineProvider
-import android.view.accessibility.AccessibilityNodeInfo
-import androidx.core.view.ViewCompat
-import smallthingz.ui.input.phase.NativeClickPhaseEndpoint
-import smallthingz.ui.input.phase.NativeClickPhaseHost
-import smallthingz.ui.input.phase.ViewClickPhaseEndpoint
+import smallthingz.ui.components.NativeMaterialButtonStyle
+import smallthingz.ui.components.NativeMaterialButtonView
+import smallthingz.ui.text.view.ParagraphView
 import kotlin.math.max
-import kotlin.math.min
 import kotlin.math.roundToInt
 
 /** Natural-width released TextButton used by Library Retry and Undo; no timer/operation owner. */
 internal class ReverbLibraryTextAction(context: Context, environment: ReverbViewEnvironment, inputRoot: View) : ViewGroup(context) {
     private var density = environment.textDensity.density
-    private val visual = LibraryTextActionSurface(context, environment, inputRoot)
+    private val visual = NativeMaterialButtonView(context, false, reverbButtonTextStyle(),
+        environment.textDensity, environment.sharedFontResolver, NativeMaterialButtonStyle(12),
+        OnboardingNativeInteractionsFactory { inputRoot }, {})
     val textView: ParagraphView get() = visual.label
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -46,7 +26,8 @@ internal class ReverbLibraryTextAction(context: Context, environment: ReverbView
     }
     fun bind(environment: ReverbViewEnvironment, text: String, textColor: Int = environment.palette.primary, onClick: () -> Unit) {
         density = environment.textDensity.density
-        visual.bind(environment, text, textColor, onClick)
+        visual.bindTypography(reverbButtonTextStyle(), environment.textDensity, environment.sharedFontResolver)
+        visual.bind(text, true, Color.TRANSPARENT, textColor, onClick, environment.palette.primary)
         requestLayout()
     }
 
@@ -77,115 +58,4 @@ internal class ReverbLibraryTextAction(context: Context, environment: ReverbView
         copy.offsetLocation(-visual.left.toFloat(), -visual.top.toFloat())
         return try { visual.dispatchTouchEvent(copy) } finally { copy.recycle() }
     }
-}
-
-private class LibraryTextActionSurface(context: Context, private var environment: ReverbViewEnvironment, inputRoot: View) :
-    ViewGroup(context), NativeClickPhaseHost, NativePointerLayerShape, NativeMergedRowAccessibilityHost {
-    private val identity = Any()
-    private var action: (() -> Unit)? = null
-    val label = ParagraphView(context, reverbButtonTextStyle(), environment.textDensity,
-        environment.sharedFontResolver, environment.palette.primary)
-    private val path = Path()
-    private val indication = RowIndication.install(this, environment.palette.primary, { readCachedAnimatorDurationScale(context) })
-    private val controller = ViewClickController(this, object : NativeClickEnvironment {
-        override val nativeInputRoot: View = inputRoot
-        override val minimumTouchWidthPx get() = 48f * environment.textDensity.density
-        override val minimumTouchHeightPx get() = minimumTouchWidthPx
-        override fun admitDown(event: MotionEvent) = roundedGroupGeometry(width.toFloat(), height.toFloat(),
-            environment.textDensity.density, min(width, height) / (2f * environment.textDensity.density))
-            .acceptsPointer(event.x, event.y, event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER, minimumTouchWidthPx)
-        override fun interestedParent(event: MotionEvent): Boolean = false
-        override fun longPressOwnershipChanged(owns: Boolean) = Unit
-    }, RowIndicationSink(indication) { x, y, point -> point.set(x, y) })
-    override val nativeClickEndpoint: NativeClickPhaseEndpoint = ViewClickPhaseEndpoint(controller)
-    override val mergedRowAccessibility = run {
-        val children = listOf(label)
-        MergedRowAccessibility(this, NativeMergedRowRole.BUTTON,
-            sourceState = { NativeMergedRowAccessibilityState(isEnabled, null, null, children) },
-            invokeSourceClick = {
-                if (isEnabled && isAttachedToWindow && action != null) { action?.invoke(); true } else false
-            })
-    }
-    override fun createAccessibilityNodeInfo(): AccessibilityNodeInfo? =
-        if (mergedRowAccessibility.isNodePresent()) super.createAccessibilityNodeInfo() else null
-    override fun addChildrenForAccessibility(outChildren: ArrayList<View>) =
-        mergedRowAccessibility.addChildrenForAccessibility(outChildren)
-    override fun containsPointerLayer(x: Float, y: Float) =
-        roundedGroupGeometry(width.toFloat(), height.toFloat(), environment.textDensity.density,
-            min(width, height) / (2f * environment.textDensity.density)).contains(x, y)
-    init {
-        isClickable = true
-        isFocusable = true
-        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
-        ViewCompat.setScreenReaderFocusable(this, true)
-        ViewCompat.setScreenReaderFocusable(label, false)
-        addView(label)
-        addView(mergedRowAccessibility.roleView)
-        accessibilityDelegate = mergedRowAccessibility
-        setOnClickListener { action?.invoke() }
-        clipToOutline = true
-        outlineProvider = object : ViewOutlineProvider() {
-            override fun getOutline(view: View, outline: Outline) {
-                outline.setRoundRect(0, 0, width, height, min(width, height) / 2f)
-            }
-        }
-        if (android.os.Build.VERSION.SDK_INT >= 29) isForceDarkAllowed = false
-    }
-    fun bind(value: ReverbViewEnvironment, text: String, color: Int, callback: () -> Unit) {
-        environment = value
-        action = callback
-        label.setText(text)
-        label.setTypography(reverbButtonTextStyle(), value.textDensity, value.sharedFontResolver)
-        label.animateTextColor(color)
-        // An explicit Text color in FeedbackCard does not replace Button's LocalContentColor.
-        indication.updateColor(value.palette.primary)
-        bindInput()
-        requestLayout()
-    }
-    private fun bindInput() {
-        controller.bind(if (action == null) null else NativeClickBinding(identity, true, onClick = { performClick() }))
-        controller.focusChanged(isFocused)
-    }
-    private fun dp(value: Float) = (value * environment.textDensity.density).roundToInt()
-    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        val horizontal = dp(12f)
-        val vertical = dp(8f)
-        fun contentSpec(spec: Int, padding: Int): Int =
-            if (MeasureSpec.getMode(spec) == MeasureSpec.UNSPECIFIED) spec
-            else MeasureSpec.makeMeasureSpec(max(0, MeasureSpec.getSize(spec) - padding), MeasureSpec.AT_MOST)
-        label.measure(contentSpec(widthMeasureSpec, horizontal + horizontal),
-            contentSpec(heightMeasureSpec, vertical + vertical))
-        setMeasuredDimension(resolveSize(max(dp(58f), label.measuredWidth + horizontal + horizontal), widthMeasureSpec),
-            resolveSize(max(dp(40f), label.measuredHeight + vertical + vertical), heightMeasureSpec))
-        mergedRowAccessibility.roleView.measure(MeasureSpec.makeMeasureSpec(measuredWidth, MeasureSpec.EXACTLY),
-            MeasureSpec.makeMeasureSpec(measuredHeight, MeasureSpec.EXACTLY))
-    }
-    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
-        val x = ((width - label.measuredWidth) / 2f).roundToInt()
-        val y = ((height - label.measuredHeight) / 2f).roundToInt()
-        label.layout(x, y, x + label.measuredWidth, y + label.measuredHeight)
-        mergedRowAccessibility.roleView.layout(0, 0, width, height)
-    }
-    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
-        indication.onMeasured(w, h, environment.textDensity.density)
-        path.rewind()
-        path.addRoundRect(0f, 0f, w.toFloat(), h.toFloat(), min(w, h) / 2f, min(w, h) / 2f, Path.Direction.CW)
-        invalidateOutline()
-    }
-    override fun draw(canvas: Canvas) {
-        if (canvas.isHardwareAccelerated) super.draw(canvas) else {
-            val checkpoint = canvas.save()
-            try { canvas.clipPath(path); super.draw(canvas) } finally { canvas.restoreToCount(checkpoint) }
-        }
-    }
-    override fun onTouchEvent(event: MotionEvent) = controller.touch(event)
-    override fun onKeyDown(code: Int, event: KeyEvent): Boolean =
-        if (isNativeClickActivationKey(code)) controller.key(event) else super.onKeyDown(code, event)
-    override fun onKeyUp(code: Int, event: KeyEvent): Boolean =
-        if (isNativeClickActivationKey(code)) controller.key(event) else super.onKeyUp(code, event)
-    override fun onHoverEvent(event: MotionEvent): Boolean { val handled = super.onHoverEvent(event); return controller.hover(event) || handled }
-    override fun onFocusChanged(focused: Boolean, direction: Int, rect: Rect?) { super.onFocusChanged(focused, direction, rect); controller.focusChanged(focused) }
-    override fun onAttachedToWindow() { super.onAttachedToWindow(); controller.attached(); bindInput() }
-    override fun onDetachedFromWindow() { controller.detached(); super.onDetachedFromWindow() }
-    override fun getAccessibilityClassName(): CharSequence = "android.view.View"
 }

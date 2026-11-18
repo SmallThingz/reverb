@@ -176,7 +176,11 @@ private class PlayerColumn(context: Context, private var environment: ReverbView
             buttons!!.bind(value, next, actions)
         } else {
             heading?.let(::removeView); heading = null
-            buttons?.let(::removeView); buttons = null
+            buttons?.let {
+                removeView(it)
+                buttons = null
+                it.close()
+            }
         }
         if (next.trimMode && next.trimError != null) {
             if (error == null) error = value.paragraph(context, next.trimError, ReverbTextRole.BODY_SMALL, value.palette.error)

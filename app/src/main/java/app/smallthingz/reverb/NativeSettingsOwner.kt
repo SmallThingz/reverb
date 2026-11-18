@@ -452,10 +452,6 @@ internal class NativeSettingsOwner(
         }
     }
 
-    fun wakeLockChanged(owner: Any, enabled: Boolean) {
-        if (acceptsInput(owner)) editSnapshot(snapshot.copy(wakeLockEnabled = enabled))
-    }
-
     private fun editSnapshot(next: SettingsSnapshot, explicitOutputChoice: Boolean = false) {
         draft.edited(state.displayed.copy(snapshot = next), explicitOutputChoice)
     }

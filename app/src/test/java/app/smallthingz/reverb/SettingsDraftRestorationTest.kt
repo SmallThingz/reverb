@@ -224,7 +224,6 @@ class SettingsDraftRestorationTest {
                 route = InputRouteMode.BUILTIN_MIC,
                 sampleRate = 96_000,
                 exportDirectoryUri = "content://example.documents/tree/primary%3AMusic",
-                wakeLockEnabled = true,
                 flacCompression = 7,
                 quickSaveEnabled = false,
                 quickSaveSeconds = 123,
@@ -234,6 +233,29 @@ class SettingsDraftRestorationTest {
         val saved = state.save(true, true, false, baseline, current)
         assertTrue(saved.all { it is String || it is Int || it is Long || it is Boolean })
         assertEquals(visible, SettingsUiDraft.restore(saved))
+    }
+
+    @Test
+    fun retiredWakeSettingKeepsLegacyDraftPositionsWithoutRestoringAuthority() {
+        val histogram = encodeSilenceCalibrationHistogram(SilenceCalibrationHistogram(
+            SilenceCalibrationInput(48_000, PcmSampleFormat.PCM_16, ChannelMode.MONO,
+                AudioSourceMode.MIC, InputRouteMode.AUTO), 48_000, List(SILENCE_GRAPH_BINS) { -42f }))
+        val current = SettingsUiDraft.normalized(baseline.copy(flacCompression = 7,
+            quickSaveEnabled = false, quickSaveSeconds = 123, silenceHistogram = histogram))
+            .copy(oneShotTimeText = "1:", loopingSizeText = "9.")
+        for (version in listOf(1, 2)) for (oldWake in listOf(false, true)) {
+            val saved = current.save().toMutableList()
+            saved[0] = version
+            saved[15] = oldWake
+            if (version == 1) saved.removeAt(24)
+            val expected = if (version == 1) current.copy(snapshot = current.snapshot.copy(silenceHistogram = null))
+                else current
+            val restored = requireNotNull(SettingsUiDraft.restore(saved))
+            assertEquals(expected, restored)
+            assertEquals(false, restored.save()[15])
+            saved[15] = "invalid"
+            assertNull(SettingsUiDraft.restore(saved))
+        }
     }
 
     @Test

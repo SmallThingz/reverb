@@ -30,7 +30,6 @@ internal class NativeSettingsPersistence(
                 channelMode = getConfiguredChannelMode(context),
                 sampleRate = getConfiguredSampleRate(context),
                 exportTreeUri = getConfiguredExportTreeUriForSettings(context),
-                wakeLockEnabled = isWakeLockEnabled(context),
                 flacCompression = getConfiguredFlacCompression(context),
                 quickSaveEnabled = getConfiguredQuickSaveEnabled(context),
                 quickSaveSeconds = getConfiguredQuickSaveSeconds(context),
@@ -100,7 +99,6 @@ internal class NativeSettingsPersistence(
             .putInt(PrefKey.CHANNEL_MODE, channelMode.storageCode.toInt())
             .putInt(PrefKey.INPUT_ROUTE, route.storageCode.toInt())
             .putInt(PrefKey.SAMPLE_RATE, sampleRate)
-            .putBoolean(PrefKey.WAKE_LOCK_ENABLED, currentSnapshot.wakeLockEnabled)
             .putInt(PrefKey.THEME_MODE, selectedTheme.storageCode.toInt())
         if (invalidateCachedOneShotFull) {
             settingsEditor.putBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false)
@@ -239,7 +237,6 @@ internal data class NativeSettingsStoredConfiguration(
     val channelMode: ChannelMode,
     val sampleRate: Int,
     val exportTreeUri: Uri?,
-    val wakeLockEnabled: Boolean,
     val flacCompression: Int,
     val quickSaveEnabled: Boolean,
     val quickSaveSeconds: Int,

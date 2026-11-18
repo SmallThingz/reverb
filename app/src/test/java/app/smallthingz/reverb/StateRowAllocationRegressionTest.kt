@@ -75,7 +75,7 @@ class StateRowAllocationRegressionTest {
                     RetentionMode.SIZE -> parseRetentionSizeMib(raw)?.takeIf { it >= 0.0 } == null
                 }
                 assertEquals("$mode/$raw", invalid, draft.hasUnsavedChanges(baseline))
-                val changed = draft.copy(snapshot = baseline.copy(wakeLockEnabled = !baseline.wakeLockEnabled))
+                val changed = draft.copy(snapshot = baseline.copy(quickSaveEnabled = !baseline.quickSaveEnabled))
                 assertTrue("$mode/$raw", changed.hasUnsavedChanges(baseline))
             }
             val inactiveInvalid = if (mode == RetentionMode.TIME) normalized.copy(oneShotSizeText = "-")

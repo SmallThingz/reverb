@@ -24,6 +24,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import smallthingz.ui.animation.ColorTransition
 import smallthingz.ui.animation.view.ViewColorTransition
+import smallthingz.ui.components.NativeDropdown
 import smallthingz.ui.controls.textSurfaceForeground
 import smallthingz.ui.text.view.ParagraphView
 import smallthingz.ui.graphics.Color as NativeColor
@@ -277,7 +278,7 @@ private class SettingsThemeSamples(
             fullyVisible(view) && (view === settings.topBar.title ||
                 if (scene == SettingsSectionKey.RETENTION) view.parent is SettingsRetentionValueView ||
                     view.getText() == view.context.getString(R.string.retention_mode_title)
-                else view.parent?.javaClass?.simpleName == "SettingsAudioDropdownView")
+                else view.parent is NativeDropdown<*>)
         }
         check(paragraphs.size >= 3) { "Missing visible real Settings labels: ${paragraphs.map { it.getText() }}" }
         targets = paragraphs + listOfNotNull(editor)
@@ -346,7 +347,7 @@ private class SettingsThemeSamples(
         }
     }
     private fun surface(view: View): Long {
-        if (view.parent?.javaClass?.simpleName == "SettingsAudioDropdownView") {
+        if (view.parent is NativeDropdown<*>) {
             val fill = themeField(view.parent!!, "fill").get(view.parent) as Paint
             return smallthingz.ui.controls.textSurfaceRange(fill.color)
         }

@@ -35,7 +35,7 @@ internal data class SettingsUiDraft(
         snapshot.route?.storageCode?.toInt() ?: -1,
         snapshot.sampleRate,
         snapshot.exportDirectoryUri.orEmpty(),
-        snapshot.wakeLockEnabled,
+        false, // Reserved legacy CPU-awake slot; later fields keep their wire positions.
         snapshot.flacCompression,
         snapshot.quickSaveEnabled,
         snapshot.quickSaveSeconds,
@@ -58,6 +58,7 @@ internal data class SettingsUiDraft(
 
         fun restore(saved: List<Any>): SettingsUiDraft? = runCatching {
             require((saved.size == 24 && saved[0] == 1) || (saved.size == 25 && saved[0] == 2))
+            require(saved[15] is Boolean)
             fun <T> nullableCode(index: Int, decode: (Int) -> T?): T? {
                 val code = saved[index] as Int
                 return if (code == -1) null else requireNotNull(decode(code))
@@ -80,7 +81,6 @@ internal data class SettingsUiDraft(
                     route = nullableCode(12, InputRouteMode::fromStorageCode),
                     sampleRate = saved[13] as Int,
                     exportDirectoryUri = (saved[14] as String).takeIf { it.isNotEmpty() },
-                    wakeLockEnabled = saved[15] as Boolean,
                     flacCompression = saved[16] as Int,
                     quickSaveEnabled = saved[17] as Boolean,
                     quickSaveSeconds = saved[18] as Int,

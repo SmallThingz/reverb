@@ -1,29 +1,15 @@
 package app.smallthingz.reverb.nativeui
 
-import smallthingz.ui.input.phase.NativePointerLayerShape
 import smallthingz.ui.components.NativeGroupLayout
-import smallthingz.ui.interaction.view.isNativeClickActivationKey
-import smallthingz.ui.geometry.roundedGroupGeometry
-import smallthingz.ui.interaction.view.NativeClickBinding
-import smallthingz.ui.interaction.view.NativeClickEnvironment
-import smallthingz.ui.interaction.view.RowIndication
-import smallthingz.ui.interaction.view.RowIndicationSink
-import smallthingz.ui.interaction.view.ViewClickController
-import smallthingz.ui.interaction.view.readCachedAnimatorDurationScale
+import smallthingz.ui.components.NativeMaterialButtonStyle
+import smallthingz.ui.components.NativeMaterialButtonView
 import android.content.Context
-import android.graphics.Rect
-import android.view.KeyEvent
-import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
-import android.view.accessibility.AccessibilityNodeInfo
 import smallthingz.ui.runtime.MonotonicFrameClock
 import smallthingz.ui.MotionDurationScale
 import smallthingz.ui.text.font.FontWeight
-import androidx.core.view.ViewCompat
-import smallthingz.ui.input.phase.NativeClickPhaseHost
 import app.smallthingz.reverb.RangeExportEditorState
-import smallthingz.ui.input.phase.ViewClickPhaseEndpoint
 import app.smallthingz.reverb.ReverbService
 import app.smallthingz.reverb.R
 import kotlinx.coroutines.CoroutineScope
@@ -195,118 +181,44 @@ private class BufferPill(context: Context, private var environment: ReverbViewEn
     private fun dp(value: Int) = (value * environment.textDensity.density).roundToInt()
 }
 
-/** Source clickable Surface has NO Button role; preserve original Text/progress descendants. */
 internal class ExportContent(
     context: Context,
-    private var environment: ReverbViewEnvironment,
+    initialEnvironment: ReverbViewEnvironment,
     inputRoot: () -> View?,
     private val scope: CoroutineScope,
-) : ViewGroup(context), NativeClickPhaseHost, NativePointerLayerShape {
-    private val identity = Any()
-    private var action: () -> Unit = {}
-    private val glyph = OnboardingIconView(context, ReverbIcon.Save, environment.palette.muted)
+) : NativeMaterialButtonView(context, false, ReverbParagraphStyles[ReverbTextRole.LABEL_LARGE],
+    initialEnvironment.textDensity, initialEnvironment.sharedFontResolver,
+    NativeMaterialButtonStyle(15, verticalPaddingDp = 0, minimumWidthDp = 48,
+        minimumHeightDp = 48, iconSizeDp = 20, radiusDp = 20f, alignContentStart = true),
+    OnboardingNativeInteractionsFactory(inputRoot).roundedButton(20f), {}) {
     private var loadingView: ReverbIncidentLoadingView? = null
-    val label = environment.paragraph(context, context.getString(R.string.export), ReverbTextRole.LABEL_LARGE)
-    private val indication = RowIndication.install(this, environment.palette.onSurface,
-        { readCachedAnimatorDurationScale(context) })
-    private val controller = ViewClickController(this, object : NativeClickEnvironment {
-        override val nativeInputRoot get() = inputRoot()
-        override val minimumTouchWidthPx get() = 48f * environment.textDensity.density
-        override val minimumTouchHeightPx get() = minimumTouchWidthPx
-        override fun interestedParent(event: MotionEvent) = false
-        override fun longPressOwnershipChanged(owns: Boolean) = Unit
-        override fun admitDown(event: MotionEvent) = roundedGroupGeometry(width.toFloat(), height.toFloat(),
-            environment.textDensity.density, 20f).acceptsPointer(event.x, event.y,
-            event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER, minimumTouchWidthPx)
-    }, RowIndicationSink(indication) { x, y, point -> point.set(x, y) })
-    override val nativeClickEndpoint = ViewClickPhaseEndpoint(controller)
-    override fun containsPointerLayer(x: Float, y: Float) = roundedGroupGeometry(
-        width.toFloat(), height.toFloat(), environment.textDensity.density, 20f).contains(x, y)
+    private var glyphDensity = Float.NaN
 
-    init {
-        clipChildren = false; clipToPadding = false
-        isClickable = true; isFocusable = true
-        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
-        ViewCompat.setScreenReaderFocusable(this, true)
-        ViewCompat.setScreenReaderFocusable(label, false)
-        addView(glyph); addView(label)
-        setOnClickListener { if (isEnabled) action() }
-    }
     fun bind(value: ReverbViewEnvironment, loading: Boolean, enabled: Boolean, color: Int, action: () -> Unit) {
-        environment = value; this.action = action
-        isEnabled = enabled; isFocusable = enabled
-        value.bindParagraphStyle(label, ReverbTextRole.LABEL_LARGE, color)
-        glyph.bind(ReverbIcon.Save, color)
-        if (loading && loadingView == null) {
-            loadingView = ReverbIncidentLoadingView(context, value.palette.primary,
+        bindTypography(ReverbParagraphStyles[ReverbTextRole.LABEL_LARGE], value.textDensity, value.sharedFontResolver)
+        if (loading) {
+            setLeadingIcon(null)
+            glyphDensity = Float.NaN
+            val indicator = loadingView ?: ReverbIncidentLoadingView(context, value.palette.primary,
                 requireNotNull(scope.coroutineContext[MonotonicFrameClock]), scope,
                 { scope.coroutineContext[MotionDurationScale]?.scaleFactor ?: 1f }).also {
                 it.contentDescription = context.getString(R.string.preparing_audio_selection)
-                addView(it, 0)
+                loadingView = it
+                setLeadingView(it, exposeToAccessibility = true)
             }
-        } else if (!loading && loadingView != null) {
-            removeView(loadingView); loadingView = null
+            indicator.setColor(value.palette.primary)
+        } else {
+            loadingView = null
+            setLeadingView(null)
+            val density = value.textDensity.density
+            if (glyphDensity != density) {
+                glyphDensity = density
+                setLeadingIcon(ReverbIconDrawable(ReverbIcon.Save, density, color))
+            }
         }
-        loadingView?.setColor(value.palette.primary)
-        glyph.visibility = if (loading) GONE else VISIBLE
-        // M3 Surface's inherited color is contentColorFor(container), independent of Text override.
-        indication.updateColor(if (enabled) value.palette.onPrimary else value.palette.onSurface)
-        controller.bind(NativeClickBinding(identity, enabled, { performClick() }))
-        requestLayout()
+        bind(context.getString(R.string.export), enabled, android.graphics.Color.TRANSPARENT,
+            color, action, if (enabled) value.palette.onPrimary else value.palette.onSurface)
     }
-    fun cancelInput() = controller.cancel()
-    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        val maxW = MeasureSpec.getSize(widthMeasureSpec); val maxH = MeasureSpec.getSize(heightMeasureSpec)
-        val innerW = max(0, maxW - dp(15) - dp(15))
-        val icon = loadingView ?: glyph
-        icon.measure(rangeControlExact(min(dp(20), innerW)), rangeControlExact(min(dp(20), maxH)))
-        val gap = min(dp(7), max(0, innerW - icon.measuredWidth))
-        label.measure(rangeControlAtMost(max(0, innerW - icon.measuredWidth - gap)), rangeControlAtMost(maxH))
-        setMeasuredDimension(resolveSize(max(dp(48), icon.measuredWidth + gap + label.measuredWidth + dp(15) + dp(15)),
-            widthMeasureSpec), resolveSize(max(dp(48), max(icon.measuredHeight, label.measuredHeight)), heightMeasureSpec))
-    }
-    override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
-        var logicalX = dp(15)
-        val icon = loadingView ?: glyph
-        for (index in 0..1) {
-            val child = if (index == 0) icon else label
-            val x = if (layoutDirection == LAYOUT_DIRECTION_RTL) width - logicalX - child.measuredWidth else logicalX
-            val y = ((height - child.measuredHeight) * .5f).roundToInt()
-            child.layout(x, y, x + child.measuredWidth, y + child.measuredHeight)
-            logicalX += child.measuredWidth + min(dp(7), max(0, width - dp(15) - logicalX - child.measuredWidth))
-        }
-    }
-    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) =
-        indication.onMeasured(w, h, environment.textDensity.density)
-    override fun onAttachedToWindow() {
-        super.onAttachedToWindow(); controller.attached()
-        controller.bind(NativeClickBinding(identity, isEnabled, { performClick() }))
-        controller.focusChanged(isFocused)
-    }
-    override fun onDetachedFromWindow() { controller.detached(); super.onDetachedFromWindow() }
-    override fun onCancelPendingInputEvents() { super.onCancelPendingInputEvents(); controller.cancel() }
-    override fun onTouchEvent(event: MotionEvent) = controller.touch(event)
-    override fun onKeyDown(code: Int, event: KeyEvent) =
-        if (isNativeClickActivationKey(code)) controller.key(event) else super.onKeyDown(code, event)
-    override fun onKeyUp(code: Int, event: KeyEvent) =
-        if (isNativeClickActivationKey(code)) controller.key(event) else super.onKeyUp(code, event)
-    override fun onHoverEvent(event: MotionEvent): Boolean {
-        val platform = super.onHoverEvent(event); return controller.hover(event) || platform
-    }
-    override fun onFocusChanged(focus: Boolean, direction: Int, old: Rect?) {
-        super.onFocusChanged(focus, direction, old); controller.focusChanged(focus)
-    }
-    override fun addChildrenForAccessibility(children: ArrayList<View>) {
-        loadingView?.let(children::add); children.add(label)
-    }
-    override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo) {
-        super.onInitializeAccessibilityNodeInfo(info)
-        info.className = View::class.java.name
-        info.text = null; info.contentDescription = null
-        if (isEnabled) info.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_CLICK)
-        else info.removeAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_CLICK)
-    }
-    private fun dp(value: Int) = (value * environment.textDensity.density).roundToInt()
 }
 
 private fun rangeControlExact(size: Int) = View.MeasureSpec.makeMeasureSpec(size, View.MeasureSpec.EXACTLY)

@@ -337,9 +337,6 @@ internal fun readCaptureBufferSlotPreference(prefs: SharedPreferences): ReverbSe
     return ReverbService.BufferSlot.fromLegacyName(legacy)
 }
 
-fun isWakeLockEnabled(context: Context): Boolean =
-    getRecorderPreferences(context).safeBoolean(PrefKey.WAKE_LOCK_ENABLED, false)
-
 fun isIgnoringBatteryOptimizations(context: Context): Boolean {
     val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return false
     return powerManager.isIgnoringBatteryOptimizations(context.packageName)

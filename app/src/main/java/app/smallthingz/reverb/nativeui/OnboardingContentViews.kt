@@ -1,9 +1,8 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeControlRow
 import smallthingz.ui.components.NativeGroupLayout
-import smallthingz.ui.text.view.MergedRowAccessibility
-import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
-import smallthingz.ui.text.view.NativeMergedRowAccessibilityState
+import smallthingz.ui.components.NativeMaterialSwitchView
 import smallthingz.ui.text.view.NativeMergedRowRole
 import smallthingz.ui.text.view.NativeSourceAccessibilityNode
 import smallthingz.ui.text.view.ParagraphView
@@ -12,11 +11,8 @@ import smallthingz.ui.text.view.PlainTextAccessibilitySnapshot
 import smallthingz.ui.text.view.PlainTextAccessibilityWindowScope
 import android.content.Context
 import android.graphics.Canvas
-import android.graphics.Rect
 import android.os.Build
 import android.os.Bundle
-import android.view.KeyEvent
-import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
@@ -220,11 +216,9 @@ internal open class OnboardingCardView(
     private val trailingHeightDp: Int,
     interactions: OnboardingNativeInteractionsFactory,
     accessibilityRole: NativeMergedRowRole = NativeMergedRowRole.BUTTON,
-) : ViewGroup(context), NativeMergedRowAccessibilityHost, smallthingz.ui.input.phase.NativeClickPhaseHost {
+) : NativeControlRow(context, accessibilityRole, interactions.inputRoot) {
     private val title = ParagraphView(context, typography.titleMedium, density, resolver, 0)
     private val body = ParagraphView(context, typography.bodyMedium, density, resolver, 0)
-    private val input = interactions.row(this)
-    override val nativeClickEndpoint get() = input.pointerEndpoint
     private var textHeight = 0
     private var rowPadding = 0
     private var rowGap = 0
@@ -232,50 +226,29 @@ internal open class OnboardingCardView(
     private var stackedHeader = false
     private var headerHeight = 0
     private var bodyVisible = false
-    private var canActivate = false
     var onActivate: (() -> Unit)? = null
-    protected open val accessibilityClickLabel: CharSequence? get() = null
-    protected open val accessibilityChecked: Boolean? get() = null
-    override val mergedRowAccessibility = MergedRowAccessibility(this, accessibilityRole,
-        sourceState = {
-            NativeMergedRowAccessibilityState(canActivate, accessibilityChecked, accessibilityClickLabel,
-                buildList {
-                    marker.text?.let(::add)
-                    add(title)
-                    if (bodyVisible) add(body)
-                    if (!trailing.contentDescription.isNullOrEmpty()) add(trailing)
-                })
-        }, invokeSourceClick = {
-            if (canActivate && isAttachedToWindow) { onActivate?.invoke(); true } else false
-        })
+    override val hasRowAction get() = onActivate != null
+    override fun activateRow() { onActivate?.invoke() }
+    override fun accessibilityChildren(): List<View> = buildList {
+        marker.text?.let(::add)
+        add(title)
+        if (bodyVisible) add(body)
+        if (!trailing.contentDescription.isNullOrEmpty()) add(trailing)
+    }
 
     init {
         clipChildren = false
         clipToPadding = false
-        isClickable = true
-        isFocusable = true
-        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
-        descendantFocusability = FOCUS_BLOCK_DESCENDANTS
         title.isScreenReaderFocusable = false
         body.isScreenReaderFocusable = false
         listOf(marker.view, title, body, trailing).forEach(::addView)
-        addView(mergedRowAccessibility.roleView)
-        accessibilityDelegate = mergedRowAccessibility
-        setOnClickListener { if (canActivate && isAttachedToWindow) onActivate?.invoke() }
+        addRowAccessibilityRole()
         if (Build.VERSION.SDK_INT >= 29) isForceDarkAllowed = false
     }
 
-    override fun createAccessibilityNodeInfo(): AccessibilityNodeInfo? =
-        if (mergedRowAccessibility.isNodePresent()) super.createAccessibilityNodeInfo() else null
-
-    override fun addChildrenForAccessibility(outChildren: ArrayList<View>) =
-        mergedRowAccessibility.addChildrenForAccessibility(outChildren)
-
-    protected fun bindCard(titleText: String, bodyText: String?, enabled: Boolean, palette: ReverbPalette) {
-        input.bind(enabled, palette.ink)
-        canActivate = enabled
-        isEnabled = enabled
-        isFocusable = enabled
+    protected fun bindCard(titleText: String, bodyText: String?, enabled: Boolean, palette: ReverbPalette,
+        checked: Boolean? = null) {
+        bindRow(enabled, palette.ink, checked)
         title.setText(titleText)
         title.animateTextColor(palette.ink)
         bodyVisible = !bodyText.isNullOrEmpty()
@@ -312,7 +285,7 @@ internal open class OnboardingCardView(
         val desired = rowPadding * 2 + if (stackedText) headerHeight + rowGap + textHeight
             else max(headerHeight, textHeight)
         setMeasuredDimension(resolveSize(width, widthMeasureSpec), resolveSize(desired, heightMeasureSpec))
-        mergedRowAccessibility.roleView.measure(exact(measuredWidth), exact(measuredHeight))
+        measureRowRole(measuredWidth, measuredHeight)
     }
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
         val markerY = if (stackedText) {
@@ -328,28 +301,12 @@ internal open class OnboardingCardView(
         placeStart(title, textX, textY)
         if (bodyVisible) placeStart(body, textX, textY + title.measuredHeight + dp(2))
         placeStart(trailing, width - rowPadding - trailing.measuredWidth, trailingY)
-        mergedRowAccessibility.roleView.layout(0, 0, width, height)
-        input.measured(width, height)
+        layoutRowRole()
     }
     private fun placeStart(child: View, start: Int, top: Int) {
         val left = if (layoutDirection == LAYOUT_DIRECTION_RTL) width - start - child.measuredWidth else start
         child.layout(left, top, left + child.measuredWidth, top + child.measuredHeight)
     }
-    override fun onTouchEvent(event: MotionEvent): Boolean = input.touch(event)
-    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean = input.key(event)
-    override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean = input.key(event)
-    override fun onHoverEvent(event: MotionEvent): Boolean {
-        val handled = super.onHoverEvent(event)
-        return input.hover(event) || handled
-    }
-    override fun onFocusChanged(gain: Boolean, direction: Int, previous: Rect?) {
-        super.onFocusChanged(gain, direction, previous)
-        input.focusChanged(gain)
-    }
-    override fun onCancelPendingInputEvents() { super.onCancelPendingInputEvents(); input.cancel() }
-    override fun onAttachedToWindow() { super.onAttachedToWindow(); input.attached() }
-    override fun onDetachedFromWindow() { input.detached(); super.onDetachedFromWindow() }
-    override fun performClick(): Boolean = canActivate && isAttachedToWindow && super.performClick()
     protected fun dp(value: Int): Int = (value * resources.displayMetrics.density).roundToInt()
 }
 
@@ -363,19 +320,15 @@ internal class OnboardingBufferRow(
     interactions: OnboardingNativeInteractionsFactory,
 ) : OnboardingCardView(context, typography, density, resolver,
     OnboardingMarker(context, typography.titleMedium, density, resolver, icon = icon),
-    ReverbMaterialSwitchView(context, initialPalette), 52, 32, interactions, NativeMergedRowRole.SWITCH) {
-    private var checked = false
-    override val accessibilityChecked: Boolean get() = checked
-    init { trailing.importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS }
+    NativeMaterialSwitchView(context, initialPalette.switchPalette()), 52, 32, interactions, NativeMergedRowRole.SWITCH) {
     fun bind(title: String, body: String, checked: Boolean, visuallyEnabled: Boolean,
              interactionEnabled: Boolean, palette: ReverbPalette) {
-        this.checked = checked
         ViewCompat.setStateDescription(this, context.getString(
             if (checked) smallthingz.ui.R.string.state_on else smallthingz.ui.R.string.state_off))
-        val toggle = trailing as ReverbMaterialSwitchView
-        toggle.setPalette(palette)
+        val toggle = trailing as NativeMaterialSwitchView
+        toggle.setPalette(palette.switchPalette())
         toggle.setState(checked, visuallyEnabled)
-        bindCard(title, body, visuallyEnabled && interactionEnabled, palette)
+        bindCard(title, body, visuallyEnabled && interactionEnabled, palette, checked)
     }
 }
 

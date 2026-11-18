@@ -18,7 +18,7 @@ import kotlin.math.roundToInt
 /** Released LazyColumn item identities; retained state belongs to the item, never its current index. */
 internal enum class SettingsSectionKey(val sourceKey:String) {
     BACKGROUND("background-reliability"), THEME("theme"), RETENTION("retention"),
-    RECORDING("recording"), QUICK_TILES("quick-save-tiles"), STORAGE("storage"), WAKE_LOCK("wake-lock"),
+    RECORDING("recording"), QUICK_TILES("quick-save-tiles"), STORAGE("storage"),
     AUTO_START("auto-start");
     companion object {
         fun visible(restricted:Boolean):List<SettingsSectionKey> =

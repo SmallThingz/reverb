@@ -1,41 +1,24 @@
 package app.smallthingz.reverb.nativeui
 
+import android.content.Context
+import android.graphics.Color
+import android.view.View
+import android.view.ViewGroup
 import smallthingz.ui.components.NativeActionSheetContentContext
-
-import smallthingz.ui.input.phase.NativePointerLayerShape
-import smallthingz.ui.interaction.view.isNativeClickActivationKey
-import smallthingz.ui.geometry.roundedGroupGeometry
-import smallthingz.ui.text.view.MergedRowAccessibility
-import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
-import smallthingz.ui.text.view.NativeMergedRowAccessibilityState
-import smallthingz.ui.text.view.NativeMergedRowRole
+import smallthingz.ui.components.NativeMaterialButtonStyle
+import smallthingz.ui.components.NativeMaterialButtonView
+import smallthingz.ui.geometry.Offset
+import smallthingz.ui.input.phase.NativeClickPhaseNode
+import smallthingz.ui.input.phase.NativeDragPointerChange
+import smallthingz.ui.input.phase.NativeViewPhasePointerNode
+import smallthingz.ui.input.phase.NativeViewPointerHitLayout
 import smallthingz.ui.text.view.NativePlainTextViewGeometry
 import smallthingz.ui.text.view.NativeSourceAccessibilityNode
 import smallthingz.ui.text.view.NativeSourceAccessibilityNodeProvider
 import smallthingz.ui.text.view.NativeTextSemanticsClip
-import smallthingz.ui.text.view.ParagraphView
 import smallthingz.ui.text.view.PlainTextAccessibilityWindowScope
-import android.content.Context
-import android.graphics.Canvas
-import android.graphics.Outline
-import android.graphics.Paint
-import android.graphics.Path
-import android.graphics.Rect
-import android.view.KeyEvent
-import android.view.MotionEvent
-import android.view.View
-import android.view.ViewGroup
-import android.view.ViewOutlineProvider
-import android.view.accessibility.AccessibilityNodeInfo
-import smallthingz.ui.input.phase.NativeClickPhaseHost
-import smallthingz.ui.input.phase.NativeClickPhaseNode
-import smallthingz.ui.input.phase.NativeViewPointerHitLayout
-import smallthingz.ui.input.phase.NativeViewPhasePointerNode
-import smallthingz.ui.input.phase.NativeDragPointerChange
-import smallthingz.ui.geometry.Offset
-import smallthingz.ui.animation.view.ViewColorTransition
+import smallthingz.ui.util.closePreservingPrimaryFailure
 import kotlin.math.max
-import kotlin.math.min
 import kotlin.math.roundToInt
 
 /** Direct native-window bindings needed by this Button leaf; no renderer, registry or state tree. */
@@ -79,18 +62,25 @@ internal class NativeMaterialButtonHost(
 /** Released natural-width default Button/TextButton, not the footer's fixed-width control. */
 internal class LibrarySheetButton(
     context: Context,
-    private val host: NativeMaterialButtonHost,
+    host: NativeMaterialButtonHost,
     private val filled: Boolean,
     text: String,
     onClick: () -> Unit,
-    leadingIcon: ReverbIcon? = null,
-    errorColors: Boolean = false,
+    private val leadingIcon: ReverbIcon? = null,
+    private val errorColors: Boolean = false,
 ) : ViewGroup(context), AutoCloseable {
     constructor(context:Context,host:NativeActionSheetContentContext,environment:ReverbViewEnvironment,filled:Boolean,text:String,onClick:()->Unit,
                 leadingIcon:ReverbIcon?=null,errorColors:Boolean=false):
         this(context,NativeMaterialButtonHost.forSheet(host,environment),filled,text,onClick,leadingIcon,errorColors)
     private var environment=host.environment
-    private val surface = ButtonSurface(context,host,filled,text,onClick,leadingIcon,errorColors)
+    private var labelText = text
+    private var action = onClick
+    private val surface = NativeMaterialButtonView(context, filled, reverbButtonTextStyle(),
+        environment.textDensity, environment.sharedFontResolver,
+        NativeMaterialButtonStyle(if (filled) 24 else 12), OnboardingNativeInteractionsFactory { host.inputRoot }, onClick)
+    private val accessibility: AutoCloseable
+    private val textAccessibility: AutoCloseable
+    private val clip: AutoCloseable
     private val click = NativeClickPhaseNode(surface,surface.nativeClickEndpoint,host.interestedParent)
     private var closed=false
     val hitLayout: NativeViewPointerHitLayout = run {
@@ -104,15 +94,51 @@ internal class LibrarySheetButton(
     init {
         importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO;clipChildren=false;clipToPadding=false
         addView(surface)
+        val minimumTouch = { 48f * environment.textDensity.density }
+        val present = { host.sourceNode(surface, minimumTouch()).present }
+        accessibility = host.sourceProvider?.let { surface.mergedRowAccessibility.bindSourceGeometry(host.textGeometry, it, present) }
+            ?: surface.mergedRowAccessibility.bindGeometry(host.textGeometry, { host.sourceNode(surface, minimumTouch()) },
+                { host.sourceNode(it).present }, present)
+        val label = surface.label
+        textAccessibility = label.bindPlainTextAccessibility(host.textWindow, host.textGeometry,
+            { host.sourceNode(label) }) { host.sourceNode(label).present }
+        clip = surface.registerTextClip(host.registerTextClip)
+        bindIcon()
+        bind(text, true, onClick)
     }
-    fun bind(text:String,enabled:Boolean,onClick:()->Unit)=surface.bind(text,enabled,onClick)
+    fun bind(text: String, enabled: Boolean, onClick: () -> Unit) {
+        labelText = text
+        action = onClick
+        val palette = environment.palette
+        val ink = when {
+            !enabled -> reverbColorWithAlpha(palette.onSurface, .38f)
+            errorColors -> palette.onErrorContainer
+            filled -> palette.onPrimary
+            else -> palette.primary
+        }
+        val container = when {
+            !filled -> Color.TRANSPARENT
+            !enabled -> reverbColorWithAlpha(palette.onSurface, .12f)
+            errorColors -> palette.errorContainer
+            else -> palette.primary
+        }
+        surface.bind(text, enabled, container, ink, onClick)
+    }
+    private fun bindIcon() {
+        surface.setLeadingIcon(leadingIcon?.let { ReverbIconDrawable(it, environment.textDensity.density, environment.palette.onPrimary) })
+    }
     internal val accessibilitySemanticView:View get()=surface
     internal fun isAccessibilityNodePresent():Boolean=surface.mergedRowAccessibility.isNodePresent()
     fun bindEnvironment(next:ReverbViewEnvironment) {
         if(closed || environment===next)return
         val densityChanged=environment.textDensity!=next.textDensity
-        environment=next;surface.bindEnvironment(next)
-        if(densityChanged)requestLayout()
+        environment = next
+        surface.bindTypography(reverbButtonTextStyle(), next.textDensity, next.sharedFontResolver)
+        if (densityChanged) {
+            bindIcon()
+            requestLayout()
+        }
+        bind(labelText, surface.isEnabled, action)
     }
     override fun onMeasure(w:Int,h:Int) {
         surface.measure(w,h)
@@ -128,163 +154,11 @@ internal class LibrarySheetButton(
     override fun close() {
         if(closed)return
         closed=true
-        var failure:Throwable?=null
-        try{click.cancel()}catch(error:Throwable){failure=error}
-        try{surface.close()}catch(error:Throwable){if(failure==null)failure=error else if(failure!==error)failure!!.addSuppressed(error)}
-        failure?.let{throw it}
+        action = {}
+        var failure = closePreservingPrimaryFailure(null, click::cancel)
+        for (lease in listOf(surface, clip, textAccessibility, accessibility)) {
+            failure = closePreservingPrimaryFailure(failure, lease::close)
+        }
+        failure?.let { throw it }
     }
 }
-
-private class ButtonSurface(context:Context,private val host:NativeMaterialButtonHost,
-                            private val filled:Boolean,text:String,onClick:()->Unit,private val leadingIcon:ReverbIcon?,
-                            private val errorColors:Boolean):
-    ViewGroup(context),NativeClickPhaseHost,NativePointerLayerShape,NativeMergedRowAccessibilityHost,AutoCloseable {
-    private var environment=host.environment
-    private var labelText=text
-    private var action=onClick
-    private var closed=false
-    private val fill=Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
-    private var colorMotion:ViewColorTransition?=null
-    private val label=ParagraphView(context,reverbButtonTextStyle(),environment.textDensity,
-        environment.sharedFontResolver,environment.palette.primary)
-    private val accessibilityChildren=listOf(label)
-    private var icon=leadingIcon?.let { ReverbIconDrawable(it,environment.textDensity.density,environment.palette.onPrimary) }
-    private val content=object:ViewGroup(context) {
-        private var iconWidth=0
-        private var iconHeight=0
-        private var iconGap=0
-        private val softwareClip=Path()
-        init {importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO;addView(label);clipToOutline=true;setWillNotDraw(false)}
-        override fun onMeasure(w:Int,h:Int) {
-            val horizontal=dp(if(filled)24f else 12f);val vertical=dp(8f)
-            val width=MeasureSpec.getSize(w)
-            val bounded=MeasureSpec.getMode(h)!=MeasureSpec.UNSPECIFIED
-            val innerWidth=max(0,width-horizontal-horizontal)
-            val innerHeight=if(bounded)max(0,MeasureSpec.getSize(h)-vertical-vertical)else Int.MAX_VALUE
-            iconWidth=if(icon==null)0 else min(dp(19f),innerWidth)
-            iconHeight=if(icon==null)0 else min(dp(19f),innerHeight)
-            iconGap=if(icon==null)0 else min(dp(7f),max(0,innerWidth-iconWidth))
-            label.measure(sheetButtonAtMost(max(0,innerWidth-iconWidth-iconGap)),
-                if(bounded)sheetButtonAtMost(innerHeight) else h)
-            setMeasuredDimension(resolveSize(max(dp(58f),horizontal+horizontal+iconWidth+iconGap+label.measuredWidth),w),
-                resolveSize(max(dp(40f),vertical+vertical+max(iconHeight,label.measuredHeight)),h))
-        }
-        override fun onLayout(changed:Boolean,l:Int,t:Int,r:Int,b:Int) {
-            val total=iconWidth+iconGap+label.measuredWidth
-            val start=(width-total)*.5f
-            // Arrangement.Center accumulates Float positions in physical order, then rounds each.
-            val rtl=layoutDirection==LAYOUT_DIRECTION_RTL
-            val x=(if(rtl)start else start+iconWidth+iconGap).roundToInt()
-            val y=((height-label.measuredHeight)*.5f).roundToInt()
-            label.layout(x,y,x+label.measuredWidth,y+label.measuredHeight)
-            val ix=(if(rtl)start+label.measuredWidth+iconGap else start).roundToInt()
-            val iy=((height-iconHeight)*.5f).roundToInt()
-            icon?.setBounds(ix,iy,ix+iconWidth,iy+iconHeight)
-        }
-        override fun onDraw(canvas:Canvas) {icon?.let {it.layoutDirection=layoutDirection;it.draw(canvas)}}
-        override fun onSizeChanged(w:Int,h:Int,oldw:Int,oldh:Int) {
-            softwareClip.rewind();val radius=min(w,h)*.5f
-            softwareClip.addRoundRect(0f,0f,w.toFloat(),h.toFloat(),radius,radius,Path.Direction.CW)
-        }
-        override fun draw(canvas:Canvas) {
-            if(canvas.isHardwareAccelerated)super.draw(canvas) else {
-                val save=canvas.save();try{canvas.clipPath(softwareClip);super.draw(canvas)}finally{canvas.restoreToCount(save)}
-            }
-        }
-    }
-    private val interactions=OnboardingNativeInteractionsFactory {host.inputRoot}.create(this,content,filled) {elevation=it}
-    override val nativeClickEndpoint get()=interactions.pointerEndpoint
-    override val mergedRowAccessibility=MergedRowAccessibility(this,NativeMergedRowRole.BUTTON,
-        {NativeMergedRowAccessibilityState(isEnabled,null,null,accessibilityChildren)},
-        {if(isEnabled&&isAttachedToWindow){action();true}else false})
-    private val leases=ArrayList<AutoCloseable>()
-    private var restoreClip:(()->Unit)?=null
-    private val outline=object:ViewOutlineProvider(){override fun getOutline(view:View,outline:Outline){
-        outline.setRoundRect(0,0,view.width,view.height,min(view.width,view.height)*.5f)
-    }}
-    init {
-        setWillNotDraw(false);importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_YES
-        isClickable=true;isFocusable=true;descendantFocusability=FOCUS_BLOCK_DESCENDANTS
-        outlineProvider=outline;content.outlineProvider=outline
-        label.isScreenReaderFocusable=false
-        addView(content);addView(mergedRowAccessibility.roleView)
-        accessibilityDelegate=mergedRowAccessibility
-        setOnClickListener {if(isEnabled&&isAttachedToWindow)action()}
-        if(android.os.Build.VERSION.SDK_INT>=29)isForceDarkAllowed=false
-        leases+=if(host.sourceProvider!=null) {
-            mergedRowAccessibility.bindSourceGeometry(host.textGeometry,host.sourceProvider) {
-                host.sourceNode(this,48f*environment.textDensity.density).present
-            }
-        } else mergedRowAccessibility.bindGeometry(host.textGeometry,{host.sourceNode(this,48f*environment.textDensity.density)},
-            {host.sourceNode(it).present}){host.sourceNode(this,48f*environment.textDensity.density).present}
-        leases+=label.bindPlainTextAccessibility(host.textWindow,host.textGeometry,{host.sourceNode(label)}){host.sourceNode(label).present}
-        val clipLease=host.registerTextClip(content)
-        restoreClip=clipLease::close
-        bind(text,true,onClick)
-    }
-    fun bind(text:String,enabled:Boolean,onClick:()->Unit) {
-        action=onClick;labelText=text
-        val palette=environment.palette
-        val ink=if(enabled){if(errorColors)palette.onErrorContainer else if(filled)palette.onPrimary else palette.primary}else reverbColorWithAlpha(palette.onSurface,.38f)
-        interactions.bind(enabled,ink)
-        isEnabled=enabled;isFocusable=enabled
-        label.setText(text)
-        val container=if(!filled)android.graphics.Color.TRANSPARENT else if(enabled){if(errorColors)palette.errorContainer else palette.primary}else reverbColorWithAlpha(palette.onSurface,.12f)
-        val motion=colorMotion ?: ViewColorTransition(this,intArrayOf(container,ink),{
-            colorMotion?.let { applyColors(it.color(0),it.color(1)) }
-        }).also {colorMotion=it;applyColors(container,ink)}
-        motion.retarget(container,ink)
-    }
-    private fun applyColors(container:Int,ink:Int) {
-        val readable=transitionInk(colorMotion,container,ink)
-        fill.color=container;label.setTextColor(readable);icon?.setTint(readable)
-        content.invalidate();invalidate()
-    }
-    fun bindEnvironment(next:ReverbViewEnvironment) {
-        if(closed || environment===next)return
-        val densityChanged=environment.textDensity!=next.textDensity
-        environment=next
-        label.setTypography(reverbButtonTextStyle(),next.textDensity,next.sharedFontResolver)
-        if(densityChanged)icon=leadingIcon?.let {ReverbIconDrawable(it,next.textDensity.density,next.palette.onPrimary)}
-        bind(labelText,isEnabled,action)
-        if(densityChanged)requestLayout()
-    }
-    private fun dp(value:Float)=(value*environment.textDensity.density).roundToInt()
-    override fun containsPointerLayer(x:Float,y:Float)=roundedGroupGeometry(width.toFloat(),height.toFloat(),
-        environment.textDensity.density,min(width,height)/(2f*environment.textDensity.density)).contains(x,y)
-    override fun onMeasure(w:Int,h:Int) {
-        content.measure(w,h);setMeasuredDimension(content.measuredWidth,content.measuredHeight)
-        mergedRowAccessibility.roleView.measure(sheetButtonExact(measuredWidth),sheetButtonExact(measuredHeight))
-    }
-    override fun onLayout(changed:Boolean,l:Int,t:Int,r:Int,b:Int) {
-        content.layout(0,0,width,height);mergedRowAccessibility.roleView.layout(0,0,width,height)
-        invalidateOutline();content.invalidateOutline();interactions.measured(width,height)
-    }
-    override fun onDraw(canvas:Canvas){val radius=min(width,height)*.5f;canvas.drawRoundRect(0f,0f,width.toFloat(),height.toFloat(),radius,radius,fill)}
-    override fun createAccessibilityNodeInfo():AccessibilityNodeInfo?=if(mergedRowAccessibility.isNodePresent())super.createAccessibilityNodeInfo()else null
-    override fun addChildrenForAccessibility(out:ArrayList<View>)=mergedRowAccessibility.addChildrenForAccessibility(out)
-    override fun onTouchEvent(event:MotionEvent)=interactions.touch(event)
-    override fun onKeyDown(code:Int,event:KeyEvent)=if(isNativeClickActivationKey(code))interactions.key(event)else super.onKeyDown(code,event)
-    override fun onKeyUp(code:Int,event:KeyEvent)=if(isNativeClickActivationKey(code))interactions.key(event)else super.onKeyUp(code,event)
-    override fun onHoverEvent(event:MotionEvent):Boolean{val handled=super.onHoverEvent(event);return interactions.hover(event)||handled}
-    override fun onFocusChanged(focused:Boolean,direction:Int,rect:Rect?){super.onFocusChanged(focused,direction,rect);interactions.focusChanged(focused)}
-    override fun onAttachedToWindow(){super.onAttachedToWindow();interactions.attached();interactions.focusChanged(isFocused)}
-    override fun onDetachedFromWindow(){interactions.detached();super.onDetachedFromWindow()}
-    override fun getAccessibilityClassName():CharSequence="android.view.View"
-    override fun close() {
-        if(closed)return
-        closed=true
-        var failure:Throwable?=null
-        fun release(block:()->Unit){try{block()}catch(error:Throwable){if(failure==null)failure=error else if(failure!==error)failure!!.addSuppressed(error)}}
-        release(interactions::cancel)
-        release {colorMotion?.close();colorMotion=null}
-        val clip=restoreClip;restoreClip=null
-        release{clip?.invoke()}
-        val owned=leases.toList();leases.clear()
-        owned.asReversed().forEach{release(it::close)}
-        action={}
-        failure?.let{throw it}
-    }
-}
-private fun sheetButtonExact(value:Int)=View.MeasureSpec.makeMeasureSpec(value.coerceAtLeast(0),View.MeasureSpec.EXACTLY)
-private fun sheetButtonAtMost(value:Int)=View.MeasureSpec.makeMeasureSpec(value.coerceAtLeast(0),View.MeasureSpec.AT_MOST)

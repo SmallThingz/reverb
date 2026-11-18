@@ -25,7 +25,6 @@ data class SettingsSnapshot(
     val route: InputRouteMode? = null,
     val sampleRate: Int = 0,
     val exportDirectoryUri: String? = null,
-    val wakeLockEnabled: Boolean = false,
     val flacCompression: Int = DEFAULT_FLAC_COMPRESSION,
     val quickSaveEnabled: Boolean = true,
     val quickSaveSeconds: Int = DEFAULT_QUICK_SAVE_SECONDS,
@@ -52,7 +51,6 @@ private val SETTINGS_ALWAYS_WRITTEN_PREFERENCE_KEYS = listOf(
     PrefKey.CHANNEL_MODE,
     PrefKey.INPUT_ROUTE,
     PrefKey.SAMPLE_RATE,
-    PrefKey.WAKE_LOCK_ENABLED,
     PrefKey.THEME_MODE,
     PrefKey.EXPORT_DIRECTORY_URI,
 )

@@ -47,7 +47,8 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
-import app.smallthingz.reverb.nativeui.ReverbMaterialSwitchView
+import app.smallthingz.reverb.nativeui.switchPalette
+import smallthingz.ui.components.NativeMaterialSwitchView
 import app.smallthingz.reverb.nativeui.ReverbPalette
 import java.io.File
 import java.util.concurrent.CountDownLatch
@@ -404,7 +405,8 @@ private class NativeSwitchBoard(
 ) : ViewGroup(context) {
     private val paint = Paint()
     private val backgrounds = intArrayOf(palette.surface, palette.surfaceContainerLow)
-    private val glyphs = states.map { ReverbMaterialSwitchView(context, palette, it.checked, it.enabled) }
+    private val switchPalette = palette.switchPalette()
+    private val glyphs = states.map { NativeMaterialSwitchView(context, switchPalette, it.checked, it.enabled) }
     init { setWillNotDraw(false); glyphs.forEach { addView(it) } }
     fun update(state: SwitchState) { check(glyphs.size == 1); glyphs.single().setState(state.checked, state.enabled) }
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
@@ -537,6 +539,6 @@ private fun writeSwitchEvidence(directory: File, result: JSONObject, primaryFail
 private fun switchResult(comparison: String): JSONObject = JSONObject()
     .put("baseline_commit", "3e16f8ddb78dca15df4b436d34d330801ce83ffd")
     .put("reference", "Pinned Material3 1.4.0 Switch(checked,onCheckedChange=null,enabled); standard MotionScheme")
-    .put("candidate", "ReverbMaterialSwitchView; no production UI wiring")
+    .put("candidate", "NativeMaterialSwitchView; shared production renderer")
     .put("comparison", comparison).put("sdk", Build.VERSION.SDK_INT)
     .put("device", Build.MANUFACTURER + "/" + Build.MODEL)

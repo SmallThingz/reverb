@@ -46,7 +46,6 @@ internal class NativeSettingsSections(
         SettingsSectionKey.RECORDING -> Recording().also { recordings.add(it) }
         SettingsSectionKey.QUICK_TILES -> tiles()
         SettingsSectionKey.STORAGE -> storage()
-        SettingsSectionKey.WAKE_LOCK -> wakeLock()
         SettingsSectionKey.AUTO_START -> autoStart()
     }
 
@@ -351,22 +350,6 @@ internal class NativeSettingsSections(
         }
     }
 
-    private fun wakeLock(): NativeSettingsSection {
-        val initial = owner.state
-        var activation = initial.activation
-        val body = SettingsWakeLockView(context, initial.displayed.snapshot.wakeLockEnabled, environment(), inputRoot) {
-            owner.wakeLockChanged(activation, it)
-        }
-        return object : NativeSettingsSection {
-            override val view = body
-            override fun bind() {
-                val state = owner.state
-                activation = state.activation
-                body.bind(state.displayed.snapshot.wakeLockEnabled, environment())
-            }
-            override fun close() = body.close()
-        }
-    }
 }
 
 /** Missing background permissions share one compact review surface. */

@@ -1,18 +1,10 @@
 package app.smallthingz.reverb.nativeui
 
-import smallthingz.ui.input.phase.NativePointerLayerShape
 import smallthingz.ui.components.NativeGroupLayout
-import smallthingz.ui.geometry.roundedGroupGeometry
-import smallthingz.ui.interaction.view.NativeClickBinding
-import smallthingz.ui.interaction.view.NativeClickEnvironment
-import smallthingz.ui.interaction.view.RowIndication
-import smallthingz.ui.interaction.view.RowIndicationSink
-import smallthingz.ui.interaction.view.ViewClickController
-import smallthingz.ui.interaction.view.readCachedAnimatorDurationScale
-import smallthingz.ui.text.view.MergedRowAccessibility
+import smallthingz.ui.components.NativeMaterialButtonStyle
+import smallthingz.ui.components.NativeMaterialButtonView
+import smallthingz.ui.util.closePreservingPrimaryFailure
 import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
-import smallthingz.ui.text.view.NativeMergedRowAccessibilityState
-import smallthingz.ui.text.view.NativeMergedRowRole
 import smallthingz.ui.text.view.ParagraphView
 import android.content.Context
 import android.Manifest
@@ -20,21 +12,16 @@ import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Canvas
 import android.graphics.Outline
-import android.graphics.Rect
-import android.os.Bundle
-import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
 import android.view.accessibility.AccessibilityNodeInfo
-import smallthingz.ui.input.phase.NativeClickPhaseHost
 import smallthingz.ui.input.phase.NativeClickPhaseNode
 import smallthingz.ui.input.phase.NativeDragPointerEvent
 import smallthingz.ui.input.phase.NativePointerPass
 import smallthingz.ui.input.phase.NativeViewPhasePointerNode
 import smallthingz.ui.input.phase.NativeViewPointerHitLayout
-import smallthingz.ui.input.phase.ViewClickPhaseEndpoint
 import app.smallthingz.reverb.R
 import app.smallthingz.reverb.requiresLegacyPublicStoragePermission
 import kotlin.math.max
@@ -219,22 +206,19 @@ private class PermissionLibraryAction(context:Context,private val host:NativeMat
                                       action:()->Unit):ViewGroup(context),AutoCloseable {
     private var environment=host.environment
     private val surface=NativeGroupLayout(context,18f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
-    private val visual=LibraryVisual(context)
-    private var action:(()->Unit)?=action
-    private val indication=RowIndication.install(visual,environment.palette.onSurface,
-        { readCachedAnimatorDurationScale(context) })
-    private val controller=ViewClickController(visual,object:NativeClickEnvironment {
-        override val nativeInputRoot:View get()=host.inputRoot
-        override val minimumTouchWidthPx get()=48f*environment.textDensity.density
-        override val minimumTouchHeightPx get()=minimumTouchWidthPx
-        override fun admitDown(event:MotionEvent)=roundedGroupGeometry(visual.width.toFloat(),visual.height.toFloat(),
-            environment.textDensity.density,18f).acceptsPointer(event.x,event.y,
-                event.getToolType(0)==MotionEvent.TOOL_TYPE_FINGER,minimumTouchWidthPx)
-        override fun interestedParent(event:MotionEvent)=false
-        override fun longPressOwnershipChanged(owns:Boolean)=Unit
-    },RowIndicationSink(indication){x,y,p->p.set(x,y)})
-    private val endpoint=ViewClickPhaseEndpoint(controller)
-    private val click=NativeClickPhaseNode(visual,endpoint,host.interestedParent)
+    private val glyph = OnboardingIconView(context, ReverbIcon.Library, environment.palette.onSurfaceVariant).apply {
+        contentDescription = context.getString(R.string.files_tab)
+        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
+        isScreenReaderFocusable = false
+    }
+    private val visual = NativeMaterialButtonView(context, false, reverbButtonTextStyle(),
+        environment.textDensity, environment.sharedFontResolver,
+        NativeMaterialButtonStyle(0, verticalPaddingDp = 0, minimumWidthDp = 54, minimumHeightDp = 54,
+            iconSizeDp = 25, radiusDp = 18f, showLabel = false),
+        OnboardingNativeInteractionsFactory { host.inputRoot }.roundedButton(18f), action).apply {
+        setLeadingView(glyph, exposeToAccessibility = true)
+    }
+    private val click = NativeClickPhaseNode(visual, visual.nativeClickEndpoint, host.interestedParent)
     private val clipLease=host.registerTextClip(surface)
     private val parentLease=if(host.sourceProvider!=null) {
         visual.mergedRowAccessibility.bindSourceGeometry(host.textGeometry,host.sourceProvider) {
@@ -243,8 +227,8 @@ private class PermissionLibraryAction(context:Context,private val host:NativeMat
     } else visual.mergedRowAccessibility.bindGeometry(host.textGeometry,
         {host.sourceNode(visual,48f*environment.textDensity.density)},{host.sourceNode(it).present},
         {!host.sourceNode(visual).hidden})
-    private val glyphLease=visual.glyph.bindDescriptionAccessibility(host.textWindow,
-        {host.sourceNode(visual.glyph)},{!host.sourceNode(visual.glyph).hidden})
+    private val glyphLease=glyph.bindDescriptionAccessibility(host.textWindow,
+        {host.sourceNode(glyph)},{!host.sourceNode(glyph).hidden})
     val hitLayout=run {
         val children=listOf(host.hit(visual,listOf(click),clip={surface.containsVisualPoint(it.x,it.y)}))
         host.hit(surface,emptyList(),children={children},
@@ -255,70 +239,29 @@ private class PermissionLibraryAction(context:Context,private val host:NativeMat
         surface.setPalette(environment.palette.surfaceContainerHigh,Color.TRANSPARENT)
         surface.addRow(visual,NativeGroupLayout.LayoutParams(-1,-1))
         addView(surface)
-        controller.bind(NativeClickBinding(this,true,{visual.performClick()}))
+        visual.bind("", true, Color.TRANSPARENT, environment.palette.onSurfaceVariant,
+            indicationColor = environment.palette.onSurface)
     }
     fun bindEnvironment(next:ReverbViewEnvironment) {
         if(environment===next)return
         val densityChanged=environment.textDensity!=next.textDensity
         environment=next
         surface.setPalette(next.palette.surfaceContainerHigh,Color.TRANSPARENT)
-        visual.glyph.bind(ReverbIcon.Library,next.palette.onSurfaceVariant)
-        indication.updateColor(next.palette.onSurface)
+        glyph.bind(ReverbIcon.Library,next.palette.onSurfaceVariant)
+        visual.bindTypography(reverbButtonTextStyle(), next.textDensity, next.sharedFontResolver)
+        visual.bind("", true, Color.TRANSPARENT, next.palette.onSurfaceVariant, indicationColor = next.palette.onSurface)
         if(densityChanged)requestLayout()
     }
     override fun onMeasure(w:Int,h:Int){surface.measure(w,h);setMeasuredDimension(surface.measuredWidth,surface.measuredHeight)}
     override fun onLayout(changed:Boolean,l:Int,t:Int,r:Int,b:Int){surface.layout(0,0,width,height)}
     val accessibilitySemanticView:View get()=visual
     fun isAccessibilityNodePresent():Boolean=visual.mergedRowAccessibility.isNodePresent()
-    override fun close(){action=null;click.cancel();controller.detached();glyphLease.close();parentLease.close();clipLease.close()}
-
-    private inner class LibraryVisual(context:Context):ViewGroup(context),NativeClickPhaseHost,
-        NativePointerLayerShape,NativeMergedRowAccessibilityHost {
-        val glyph=OnboardingIconView(context,ReverbIcon.Library,environment.palette.onSurfaceVariant).apply {
-            contentDescription=context.getString(R.string.files_tab)
-            importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_YES;isScreenReaderFocusable=false
+    override fun close() {
+        var failure = closePreservingPrimaryFailure(null, click::cancel)
+        for (lease in listOf(visual, glyphLease, parentLease, clipLease)) {
+            failure = closePreservingPrimaryFailure(failure, lease::close)
         }
-        private val accessibilityChildren=listOf(glyph)
-        override val nativeClickEndpoint get()=endpoint
-        override val mergedRowAccessibility=MergedRowAccessibility(this,NativeMergedRowRole.BUTTON,
-            {NativeMergedRowAccessibilityState(true,null,null,accessibilityChildren)},{activate()})
-        init {
-            isClickable=true;isFocusable=true;descendantFocusability=FOCUS_BLOCK_DESCENDANTS
-            importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_YES
-            addView(glyph);addView(mergedRowAccessibility.roleView);accessibilityDelegate=mergedRowAccessibility
-        }
-        private fun activate():Boolean {val callback=action?:return false;callback();return true}
-        override fun performClick():Boolean {if(action==null)return false;super.performClick();return activate()}
-        override fun containsPointerLayer(x:Float,y:Float)=surface.containsVisualPoint(x,y)
-        override fun onMeasure(w:Int,h:Int) {
-            val width=MeasureSpec.getSize(w);val height=MeasureSpec.getSize(h)
-            val icon=(25f*environment.textDensity.density).roundToInt()
-            glyph.measure(permissionExact(min(icon,width)),permissionExact(min(icon,height)))
-            mergedRowAccessibility.roleView.measure(permissionExact(width),permissionExact(height))
-            setMeasuredDimension(width,height)
-        }
-        override fun onLayout(changed:Boolean,l:Int,t:Int,r:Int,b:Int) {
-            val x=((width-glyph.measuredWidth)*.5f).roundToInt();val y=((height-glyph.measuredHeight)*.5f).roundToInt()
-            glyph.layout(x,y,x+glyph.measuredWidth,y+glyph.measuredHeight)
-            mergedRowAccessibility.roleView.layout(0,0,width,height)
-            indication.onMeasured(width,height,environment.textDensity.density)
-        }
-        override fun addChildrenForAccessibility(out:ArrayList<View>)=mergedRowAccessibility.addChildrenForAccessibility(out)
-        override fun createAccessibilityNodeInfo():AccessibilityNodeInfo?=
-            if(mergedRowAccessibility.isNodePresent())super.createAccessibilityNodeInfo()else null
-        override fun onTouchEvent(event:MotionEvent)=controller.touch(event)
-        override fun dispatchKeyEvent(event:KeyEvent)=when(event.keyCode) {
-            KeyEvent.KEYCODE_ENTER,KeyEvent.KEYCODE_NUMPAD_ENTER,KeyEvent.KEYCODE_DPAD_CENTER,KeyEvent.KEYCODE_SPACE->
-                controller.key(event)
-            else->super.dispatchKeyEvent(event)
-        }
-        override fun onHoverEvent(event:MotionEvent):Boolean {val native=super.onHoverEvent(event);return controller.hover(event)||native}
-        override fun onFocusChanged(focused:Boolean,direction:Int,old:Rect?) {
-            super.onFocusChanged(focused,direction,old);controller.focusChanged(focused)
-        }
-        override fun onAttachedToWindow(){super.onAttachedToWindow();controller.attached();controller.focusChanged(isFocused)}
-        override fun onDetachedFromWindow(){controller.detached();super.onDetachedFromWindow()}
-        override fun getAccessibilityClassName():CharSequence="android.view.View"
+        failure?.let { throw it }
     }
 }
 

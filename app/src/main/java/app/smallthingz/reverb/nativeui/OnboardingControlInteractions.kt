@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeMaterialButtonInteractions
+import smallthingz.ui.components.NativeMaterialButtonInteractionsFactory
 import smallthingz.ui.geometry.roundedGroupGeometry
 
 import smallthingz.ui.interaction.view.ButtonElevationInteraction
@@ -28,22 +30,26 @@ import kotlin.math.min
  * consumption/parent interest and preserves its Android ancestor delay policy.
  */
 internal class OnboardingNativeInteractionsFactory(
-    private val inputRoot: () -> View? = { null },
-) : OnboardingFooterInteractionsFactory {
+    val inputRoot: () -> View? = { null },
+) : NativeMaterialButtonInteractionsFactory {
     override fun create(
-        inputHost: View,
-        indicationHost: View,
+        host: View,
+        indication: View,
         filled: Boolean,
-        setShadowElevationPx: (Float) -> Unit,
-    ): OnboardingFooterInteractions = OnboardingNativeInteractions(
-        inputHost, indicationHost, capsule = true, filled = filled,
-        setShadowElevationPx = setShadowElevationPx,
+        setElevationPx: (Float) -> Unit,
+    ): NativeMaterialButtonInteractions = OnboardingNativeInteractions(
+        host, indication, capsule = true, filled = filled,
+        setShadowElevationPx = setElevationPx,
         inputRoot = inputRoot,
     )
 
-    fun row(host: View): OnboardingFooterInteractions =
-        OnboardingNativeInteractions(host, host, capsule = false, filled = false,
-            setShadowElevationPx = null, inputRoot = inputRoot)
+    fun roundedButton(radiusDp: Float, delayPressForParent: Boolean = false,
+                      identity: (() -> Any?)? = null): NativeMaterialButtonInteractionsFactory =
+        NativeMaterialButtonInteractionsFactory { host, indication, _, _ ->
+            OnboardingNativeInteractions(host, indication, capsule = false, filled = false,
+                setShadowElevationPx = null, inputRoot = inputRoot, radiusDp = radiusDp,
+                identity = identity ?: { host }, delayPressForParent = delayPressForParent)
+        }
 }
 
 private class OnboardingNativeInteractions(
@@ -53,7 +59,10 @@ private class OnboardingNativeInteractions(
     filled: Boolean,
     setShadowElevationPx: ((Float) -> Unit)?,
     inputRoot: () -> View?,
-) : OnboardingFooterInteractions {
+    private val radiusDp: Float = 0f,
+    private val identity: () -> Any? = { inputHost },
+    private val delayPressForParent: Boolean = false,
+) : NativeMaterialButtonInteractions {
     private val indication = RowIndication.install(
         indicationHost, android.graphics.Color.BLACK, { readCachedAnimatorDurationScale(inputHost.context) },
     )
@@ -101,12 +110,12 @@ private class OnboardingNativeInteractions(
         override val minimumTouchHeightPx: Float get() = minimumTouchWidthPx
         override fun admitDown(event: MotionEvent): Boolean {
             val density = inputHost.resources.displayMetrics.density
-            val radius = if (capsule) min(inputHost.width, inputHost.height) / (2f * density) else 0f
+            val radius = if (capsule) min(inputHost.width, inputHost.height) / (2f * density) else radiusDp
             return roundedGroupGeometry(inputHost.width.toFloat(), inputHost.height.toFloat(), density, radius)
                 .acceptsPointer(event.x, event.y, event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER, minimumTouchWidthPx)
         }
         // Standalone fixture fallback; native root phase delivery supplies per-change interest.
-        override fun interestedParent(event: MotionEvent): Boolean = false
+        override fun interestedParent(event: MotionEvent): Boolean = delayPressForParent
         // None of these released onboarding controls has a long-click action.
         override fun longPressOwnershipChanged(owns: Boolean) = Unit
     }
@@ -119,7 +128,7 @@ private class OnboardingNativeInteractions(
         // Preserve ButtonElevation's target-key behavior before disable emits cancellation ends.
         shadow?.bindEnabled(enabled)
         indication.updateColor(contentColor)
-        input.bind(NativeClickBinding(inputHost, enabled, onClick = { inputHost.performClick() }))
+        bindInput()
     }
     override fun measured(width: Int, height: Int) {
         indication.onMeasured(indicationHost.width, indicationHost.height, indicationHost.resources.displayMetrics.density)
@@ -132,9 +141,12 @@ private class OnboardingNativeInteractions(
     override fun cancel() = input.cancel()
     override fun attached() {
         input.attached()
-        input.bind(NativeClickBinding(inputHost, enabled, onClick = { inputHost.performClick() }))
+        bindInput()
         shadow?.attached()
     }
+    private fun bindInput() = input.bind(identity()?.let {
+        NativeClickBinding(it, enabled, onClick = { inputHost.performClick() })
+    })
     override fun detached() {
         input.detached()
         elevationTokens.clear()

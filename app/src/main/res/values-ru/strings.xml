@@ -45,8 +45,6 @@
     <string name="default_folder">По умолчанию</string>
     <string name="move_recordings">Переместить существующие</string>
     <string name="move_recordings_none">Нет записей для перемещения.</string>
-    <string name="wake_lock_label">Не давать CPU заснуть</string>
-    <string name="wake_lock_summary">Обычно не рекомендуется. Увеличивает расход батареи.</string>
     <string name="audio_input_init_failed">Не удалось запустить микрофон.</string>
     <string name="custom_memory_size_invalid">Введите корректное число.</string>
     <string name="permission_required">Требуется разрешение</string>
