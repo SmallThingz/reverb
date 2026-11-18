@@ -22,6 +22,9 @@ allprojects {
                 def referenceReliability = maybeCreate('reliability')
                 referenceReliability.java.srcDir 'src/reference/java'
                 referenceReliability.kotlin.srcDir 'src/reference/java'
+                // Keep historical renderer bytes for source provenance; compile the generated compatibility view.
+                referenceReliability.java.exclude '**/SettingsScreenRenderer.kt'
+                referenceReliability.kotlin.exclude '**/SettingsScreenRenderer.kt'
                 if (currentUiSmoke) referenceReliability.manifest.srcFile 'src/currentUiSmoke/AndroidManifest.xml'
             }
             buildTypes {
@@ -41,7 +44,7 @@ allprojects {
             }
         }
         // Separate, reversible QA oracle for the accepted f9610538 selected-color policy.
-        // Frozen source files and existing raw selectors remain unchanged.
+        // The frozen Settings renderer is also the source for the declared wake-setting compatibility edit.
         def readableSelectionDir = layout.buildDirectory.dir('generated/readable-selection-oracle')
         def readableSelectionGenerator = rootProject.file('scripts/generate-settings-selection-oracle.py')
         def generateReadableSelection = tasks.register('generateReadableSelectionOracle', Exec) {
@@ -171,7 +174,7 @@ allprojects {
                         throw new GradleException('Native renderer split manifest changed')
                     }
                     // Namespace seams and explicit published-policy exceptions reconstruct historical source only.
-                    // Pin actual compiled inputs, invert only declared seams, then apply every original release hash.
+                    // Pin historical inputs and invert only declared seams before checking original release hashes.
                     if (splitSha256(backendSourceMapFile.bytes) != 'aee2fce6dd8f87f35b59da9b98061d9a9f962b81f2a1e37e5cb17c73c45caff2') {
                         throw new GradleException('Native backend source manifest changed')
                     }

@@ -1,5 +1,6 @@
 """Source-bound checks for frozen selection oracles and QA-only Theme resource aliases."""
 import importlib.util
+import hashlib
 from pathlib import Path
 import tempfile
 import unittest
@@ -15,10 +16,17 @@ SPEC.loader.exec_module(generator)
 class SelectionOracleSourceTest(unittest.TestCase):
     def test_current_oracles_match_original_pins_and_reverse_exactly(self):
         with tempfile.TemporaryDirectory() as directory:
-            manifest = generator.generate(ROOT, Path(directory))
+            output = Path(directory)
+            manifest = generator.generate(ROOT, output)
+            compatibility = manifest["settings_compatibility"]
+            adapted = (output / "app/smallthingz/reverb" / compatibility["file"]).read_bytes()
         self.assertEqual("ba93936a5ebaa3eddc4271025bb20d1373dcdf96b969974b2fa865d86cf069fb",
                          manifest["inputs_sha256"]["SettingsScreenRenderer.kt"])
         self.assertTrue(manifest["reverse_normalization_matches_original"])
+        self.assertTrue(compatibility["edits_reverse_to_original"])
+        self.assertEqual("bda31a6066fb17b7367d66573b26e59b805e43f55eb0aec64e5e184fbbec3a37",
+                         hashlib.sha256(adapted).hexdigest())
+        self.assertEqual(hashlib.sha256(adapted).hexdigest(), compatibility["sha256"])
 
     def test_undeclared_renderer_change_is_still_rejected(self):
         relative = Path("app/src/reliability/java/app/smallthingz/reverb")

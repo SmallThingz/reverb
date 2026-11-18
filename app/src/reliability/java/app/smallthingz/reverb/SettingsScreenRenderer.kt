@@ -8,11 +8,14 @@ import android.os.IBinder
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.border
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,6 +30,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -118,6 +122,7 @@ private data class SettingsInitialConfiguration(
     val channelMode: ChannelMode,
     val sampleRate: Int,
     val exportTreeUri: Uri?,
+    val wakeLockEnabled: Boolean,
     val flacCompression: Int,
     val quickSaveEnabled: Boolean,
     val quickSaveSeconds: Int,
@@ -320,7 +325,7 @@ fun SettingsScreen(
         route = selectedRoute,
     )
 
-    fun currentSettingsSnapshot() = SettingsSnapshot(
+    fun currentSettingsSnapshot(wakeLockEnabled: Boolean = currentSnapshot.wakeLockEnabled) = SettingsSnapshot(
         themeMode = selectedTheme,
         retentionMode = activeRetentionMode,
         oneShotRetentionTime = oneShotRetentionTimeSecondsValue,
@@ -335,6 +340,7 @@ fun SettingsScreen(
         route = selectedRoute,
         sampleRate = selectedSampleRate,
         exportDirectoryUri = selectedExportTreeUri?.toString(),
+        wakeLockEnabled = wakeLockEnabled,
         flacCompression = selectedFlacCompression,
         quickSaveEnabled = selectedQuickSaveEnabled,
         quickSaveSeconds = selectedQuickSaveSeconds,
@@ -739,6 +745,7 @@ fun SettingsScreen(
             .putInt(PrefKey.CHANNEL_MODE, channelMode.storageCode.toInt())
             .putInt(PrefKey.INPUT_ROUTE, route.storageCode.toInt())
             .putInt(PrefKey.SAMPLE_RATE, sampleRate)
+            .putBoolean(PrefKey.WAKE_LOCK_ENABLED, currentSnapshot.wakeLockEnabled)
             .putInt(PrefKey.THEME_MODE, selectedTheme.storageCode.toInt())
         if (invalidateCachedOneShotFull) {
             settingsEditor.putBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false)
@@ -890,6 +897,7 @@ fun SettingsScreen(
                 channelMode = getConfiguredChannelMode(context),
                 sampleRate = getConfiguredSampleRate(context),
                 exportTreeUri = getConfiguredExportTreeUriForSettings(context),
+                wakeLockEnabled = isWakeLockEnabled(context),
                 flacCompression = getConfiguredFlacCompression(context),
                 quickSaveEnabled = getConfiguredQuickSaveEnabled(context),
                 quickSaveSeconds = getConfiguredQuickSaveSeconds(context),
@@ -950,7 +958,7 @@ fun SettingsScreen(
             refreshExportDirectoryUi()
             refreshBatteryOptimizationUi()
 
-            currentSettingsDraft(currentSettingsSnapshot())
+            currentSettingsDraft(currentSettingsSnapshot(initial.wakeLockEnabled))
         } ?: return false
         originalSnapshot = hydration.baseline
         if (hydration.restored) {
@@ -981,7 +989,7 @@ fun SettingsScreen(
             // A restored explicit output edit remains newer than later save normalization.
             outputSelectionRevision[0]++
         }
-        currentSnapshot = currentSettingsSnapshot()
+        currentSnapshot = currentSettingsSnapshot(hydration.displayed.snapshot.wakeLockEnabled)
         recomputeUnsavedState()
         onThemeChanged(hydration.themePreview)
         settingsHydrated = true
@@ -1782,9 +1790,139 @@ fun SettingsScreen(
                 }
             }
 
+            item(key = "wake-lock") {
+                Column {
+                    Spacer(Modifier.height(16.dp))
+                    ReliabilityRow(
+                        title = stringResource(R.string.wake_lock_label),
+                        summary = stringResource(R.string.wake_lock_summary),
+                        checked = currentSnapshot.wakeLockEnabled,
+                        onCheckedChange = edit@{ enabled ->
+                            if (!settingsInputReady()) return@edit
+                            currentSnapshot = currentSettingsSnapshot(enabled)
+                            pushUndoState()
+                        },
+                        trailing = { interactionSource ->
+                            ReverbSwitch(
+                                checked = currentSnapshot.wakeLockEnabled,
+                                interactionSource = interactionSource,
+                            )
+                        },
+                    )
+                }
+            }
         }
     }
 
+}
+
+@Composable
+private fun ReverbSwitch(
+    checked: Boolean,
+    interactionSource: MutableInteractionSource,
+) {
+    val colors = MaterialTheme.colorScheme
+    val chrome = appChrome()
+    val pressed by interactionSource.collectIsPressedAsState()
+    val pressedOverlayAlpha by animateFloatAsState(
+        targetValue = if (pressed) 0.12f else 0f,
+        label = "reverbSwitchPressedOverlay",
+    )
+    val trackColor by animateColorAsState(
+        targetValue = if (checked) colors.primary else chrome.raised,
+        label = "reverbSwitchTrack",
+    )
+    val thumbColor by animateColorAsState(
+        targetValue = if (checked) colors.onPrimary else colors.onSurfaceVariant.copy(alpha = 0.84f),
+        label = "reverbSwitchThumb",
+    )
+    val thumbOffset by animateDpAsState(
+        targetValue = if (checked) 18.dp else 0.dp,
+        label = "reverbSwitchThumbOffset",
+    )
+
+    Box(
+        modifier = Modifier.size(48.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        val trackShape = RoundedCornerShape(13.dp)
+        Box(
+            modifier = Modifier
+                .size(width = 44.dp, height = 26.dp)
+                .clip(trackShape)
+                .background(trackColor),
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(colors.onSurface.copy(alpha = pressedOverlayAlpha)),
+            )
+            Box(
+                modifier = Modifier
+                    .padding(4.dp)
+                    .fillMaxSize(),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .offset { androidx.compose.ui.unit.IntOffset(thumbOffset.roundToPx(), 0) }
+                        .size(18.dp)
+                        .background(thumbColor, RoundedCornerShape(50)),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReliabilityRow(
+    title: String,
+    summary: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    trailing: @Composable (MutableInteractionSource) -> Unit,
+) {
+    val chrome = appChrome()
+    val interactionSource = remember { MutableInteractionSource() }
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+        shape = RoundedCornerShape(20.dp),
+        color = chrome.field,
+        border = BorderStroke(1.dp, chrome.border),
+    ) {
+        Row(
+            modifier = Modifier
+                .toggleable(
+                    value = checked,
+                    interactionSource = interactionSource,
+                    indication = null,
+                    role = Role.Switch,
+                    onValueChange = onCheckedChange,
+                )
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(end = 8.dp),
+            ) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = chrome.ink,
+                )
+                Text(
+                    text = summary,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = chrome.muted,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
+            trailing(interactionSource)
+        }
+    }
 }
 
 @Composable
