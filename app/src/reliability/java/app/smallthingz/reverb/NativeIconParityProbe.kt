@@ -48,9 +48,9 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import app.smallthingz.reverb.nativeui.ReverbIcon
 import app.smallthingz.reverb.nativeui.ReverbIconDrawable
-import app.smallthingz.reverb.nativeui.fitReverbIcon
 import smallthingz.ui.components.NativeThemeIconDrawable
 import smallthingz.ui.components.NativeThemeMode
+import smallthingz.ui.components.fitCachedPathIcon
 import java.io.File
 import kotlin.math.ceil
 import kotlin.math.round
@@ -324,7 +324,7 @@ private class IconParityBoards(private val activity: NativeParityActivity, densi
         val draw = Size(source.width * scale.scaleX, source.height * scale.scaleY)
         val offset = Alignment.Center.align(IntSize(draw.width.roundToInt(), draw.height.roundToInt()),
             IntSize(width, height), if (frame.rtl) LayoutDirection.Rtl else LayoutDirection.Ltr)
-        val actual = fitReverbIcon(density.density, width, height)
+        val actual = fitCachedPathIcon(density.density, width, height)
         val equal = actual.drawWidth.toBits() == draw.width.toBits() && actual.drawHeight.toBits() == draw.height.toBits() &&
             actual.cacheWidth == ceil(draw.width).toInt() && actual.cacheHeight == ceil(draw.height).toInt() &&
             actual.left == offset.x && actual.top == offset.y
