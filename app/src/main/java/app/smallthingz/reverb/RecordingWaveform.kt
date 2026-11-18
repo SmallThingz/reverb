@@ -158,22 +158,15 @@ internal class RecordingPcm16Reader internal constructor(
             requireReadAt(channel, layout.dataOffsetBytes + firstFrame * layout.frameBytes, input, input.size)
             if (layout.sampleFormat == PcmSampleFormat.PCM_16) input else {
                 val converted = ByteArray(frameCount * channelCount * 2)
-                repeat(frameCount * channelCount) { sample ->
-                    val offset = sample * layout.sampleFormat.bytesPerSample
-                    val value = when (layout.sampleFormat) {
-                        PcmSampleFormat.PCM_8 -> ((input[offset].toInt() and 255) - 128) shl 8
-                        PcmSampleFormat.PCM_FLOAT -> {
-                            val bits = (input[offset].toInt() and 255) or
-                                ((input[offset + 1].toInt() and 255) shl 8) or
-                                ((input[offset + 2].toInt() and 255) shl 16) or
-                                (input[offset + 3].toInt() shl 24)
-                            val value = Float.fromBits(bits)
-                            if (value.isFinite()) (value.coerceIn(-1f, 1f) * 32767f).roundToInt() else 0
-                        }
-                        PcmSampleFormat.PCM_16 -> error("PCM16 is copied directly")
+                when (layout.sampleFormat) {
+                    PcmSampleFormat.PCM_8 -> input.forEachIndexed { index, sample ->
+                        converted[index * 2 + 1] = ((sample.toInt() and 255) - 128).toByte()
                     }
-                    converted[sample * 2] = value.toByte()
-                    converted[sample * 2 + 1] = (value shr 8).toByte()
+                    PcmSampleFormat.PCM_FLOAT -> repeat(frameCount * channelCount) { index ->
+                        val value = PcmNormalizer.decodeSample(input, index * 4, PcmSampleFormat.PCM_FLOAT)
+                        PcmNormalizer.encodeSample(converted, index * 2, value, PcmSampleFormat.PCM_16)
+                    }
+                    PcmSampleFormat.PCM_16 -> error("PCM16 is copied directly")
                 }
                 converted
             }

@@ -123,6 +123,40 @@ class PcmNormalizerResamplingTest {
         }
     }
 
+    @Test fun exactFloatWavFramesMatchUnityRateNormalization() {
+        val samples = floatArrayOf(
+            0.25f, -0.25f,
+            -1f, 1f,
+            -2f, 2f,
+            Float.NaN, Float.POSITIVE_INFINITY,
+            Float.NEGATIVE_INFINITY, -0.75f,
+            -0.5f, 0.5f,
+            -0.25f, 0.25f,
+        )
+        val data = ByteBuffer.allocate(samples.size * 4).order(ByteOrder.LITTLE_ENDIAN)
+            .apply { for (sample in samples) putFloat(sample) }.array()
+        val codes = shortArrayOf(-32768, 32767, -32768, 32767, 0, 0, 0, -24576, -16384, 16384)
+        val expected = ByteBuffer.allocate(codes.size * 2).order(ByteOrder.LITTLE_ENDIAN)
+            .apply { for (code in codes) putShort(code) }.array()
+        val format = PcmSampleFormat.PCM_FLOAT
+        val rate = 8192
+        val bounds = PcmPreviewFrameRange(1, 6)
+
+        withPcm(data) { file, checksum ->
+            assertArrayEquals(expected, normalize(file, checksum, format, 2, PcmSampleFormat.PCM_16,
+                firstFrame = 1, frames = 5, targetFrames = 5))
+        }
+        withPcm(buildWavHeaderBytes(rate, 2, format, data.size.toLong()) + data) { file, _ ->
+            FileInputStream(file).channel.use { channel ->
+                val layout = readWavPcmLayout(channel)
+                RecordingPcm16Reader(channel, { true }, {}, layout).use { reader ->
+                    assertArrayEquals(expected, reader.readRange(0.0, layout.durationSeconds, rate, bounds))
+                    assertArrayEquals(expected, reader.readFramesPcm16(bounds.first, bounds.frameCount.toInt()))
+                }
+            }
+        }
+    }
+
     @Test fun exportConversionFiltersAllPcmFormatsAndBothChannelsWithoutChangingFrameCounts() {
         for (sourceFormat in PcmSampleFormat.entries) for (channels in 1..2) {
             withPcm(pcm(sourceFormat, channels)) { file, checksum ->
