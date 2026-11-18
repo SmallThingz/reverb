@@ -53,6 +53,8 @@ class ActualServiceLifecycleTest {
     @Test fun publicCaptureStopKeepsCompletedPcmAndRejectsHeldRead() = lifecycle(true)
     @Test fun nullCaptureServiceStartFailsClosedAfterIntentCommit() = lifecycle(false, false)
     @Test fun thrownCaptureServiceStartFailsClosedAfterIntentCommit() = lifecycle(false, true)
+    @Test fun disabledNotificationQuickSaveDuringColdRecoveryDeliversFailure() =
+        lifecycle(capture = false, rejectNotificationQuickSave = true)
 
     private fun acceptedStartComponent() = android.content.ComponentName("app.smallthingz.reverb", "fixture.Owner")
 
@@ -95,7 +97,8 @@ class ActualServiceLifecycleTest {
         assertEquals(listOf("start", "promote"), events)
     }
 
-    private fun lifecycle(capture: Boolean, rejectedStartThrows: Boolean? = null) {
+    private fun lifecycle(capture: Boolean, rejectedStartThrows: Boolean? = null,
+        rejectNotificationQuickSave: Boolean = false) {
         val app = RuntimeEnvironment.getApplication()
         val noBackup = app.noBackupFilesDir
         val appRoot = requireNotNull(app.filesDir.parentFile).canonicalFile
@@ -103,7 +106,8 @@ class ActualServiceLifecycleTest {
         check(noBackup.listFiles().orEmpty().isEmpty()) { "No-backup root already owned" }
         val prefs = getRecorderPreferences(app)
         check(prefs.all.isEmpty()) { "Recorder preferences already owned" }
-        if (rejectedStartThrows != null) check(AppFeedbackCenter.events.value.isEmpty()) { "Feedback already owned" }
+        if (rejectedStartThrows != null || rejectNotificationQuickSave)
+            check(AppFeedbackCenter.events.value.isEmpty()) { "Feedback already owned" }
         check(ServiceStateOsShadow.fixtureRoot == null)
         JournalHostIoShadow.reset()
         val snapshotCleanupScope = Class.forName("app.smallthingz.reverb.TimelineSnapshotWorkKt")
@@ -195,6 +199,8 @@ class ActualServiceLifecycleTest {
                 ownsPid = true
                 check(android.os.Process.myPid() == 47_191)
             }
+            if (rejectNotificationQuickSave)
+                check(prefs.edit().putBoolean(PrefKey.QUICK_SAVE_ENABLED, false).commit())
             ServiceStateOsShadow.fixtureRoot = appRoot.toPath()
             check(prefs.edit().putBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)
                 .putInt(PrefKey.CAPTURE_BUFFER_SLOT, ReverbService.BufferSlot.LOOPING.storageCode.toInt())
@@ -214,6 +220,13 @@ class ActualServiceLifecycleTest {
             val actual = controller!!.get()
             ownedCoordinator = coordinatorField.get(null)
             checkNotNull(ownedCoordinator)
+            if (rejectNotificationQuickSave) {
+                assertEquals(true, field(actual, "durableRecoveryQueued"))
+                val intent = Intent(actual, NoMicService::class.java).setAction(ReverbService.ACTION_QUICK_SAVE)
+                assertEquals(Service.START_NOT_STICKY, actual.onStartCommand(intent, 0, 1))
+                assertEquals(android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+                    field(actual, "foregroundServiceTypes"))
+            }
             thread = field(actual, "audioThread") as HandlerThread
             val handler = field(actual, "audioHandler") as Handler
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(8)
@@ -223,6 +236,13 @@ class ActualServiceLifecycleTest {
             } while (field(actual, "captureInitializationPending") != false || field(actual, "captureStoresReady") != true)
             (field(actual, "durableSaveAdmissionExecutor") as ExecutorService).submit {}.get(8, TimeUnit.SECONDS)
             ShadowLooper.idleMainLooper()
+            if (rejectNotificationQuickSave) {
+                val event = AppFeedbackCenter.events.value.single()
+                ownedFeedback = event
+                assertEquals(actual.getString(R.string.notification_save_disabled), event.message)
+                assertEquals(FeedbackTone.ERROR, event.tone)
+                assertEquals(0, field(actual, "foregroundServiceTypes"))
+            }
             assertEquals(0, (ownedCoordinator as DurableSaveCoordinator).pendingCount())
             assertTrue(DurableSaveJobs.state.value.isEmpty())
             assertNull(field(actual, "audioRecord"))
@@ -423,6 +443,9 @@ class ActualServiceLifecycleTest {
                 AppFeedbackCenter.acknowledge(requireNotNull(ownedFeedback).id)
                 assertTrue(AppFeedbackCenter.events.value.isEmpty())
             } catch (error: Throwable) { failCleanup(error) }
+            if (rejectNotificationQuickSave) {
+                ownedFeedback?.let { AppFeedbackCenter.acknowledge(it.id) }
+            }
             if (!ownerDrainFailed) try {
                 check(inputCache.keys.all { it == ownedProbeKey }) { "Unexpected audio capability owner" }
                 inputCache[ownedProbeKey]?.let { check(it && inputCache.remove(ownedProbeKey) == true) }

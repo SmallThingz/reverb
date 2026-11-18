@@ -2046,7 +2046,23 @@ open class ReverbService : Service() {
 
     private fun rejectQuickSaveRequest(message: String) {
         val receiver = NotifyFileReceiver(applicationContext)
-        val token = beginExport(receiver) ?: return
+        val token = beginExport(receiver)
+        if (token == null) {
+            // Cold-start recovery can own the export slot before the notification action arrives.
+            // Honor the foreground start without replacing that owner or an existing notification.
+            if (!serviceDestroying && !foregroundServiceTimedOut && foregroundServiceTypes == 0) {
+                try {
+                    promoteForeground(foregroundServiceTypesForWork(listening = false, exporting = true), exporting = true)
+                } catch (error: RuntimeException) {
+                    Log.w(TAG, "Unable to foreground rejected Quick Save", error)
+                    // The rejected action owns no work. Existing exports and recovery still
+                    // protect and settle their own lifetimes.
+                    refreshForegroundAfterExport()
+                }
+            }
+            notifyReceiverFailure(receiver, message)
+            return
+        }
         // A stale notification PendingIntent can start a stopped foreground Service. Meet its
         // foreground deadline even when the action has since been disabled, then retire this work.
         if (ensureExportForegroundLifetime(token, receiver)) {
@@ -5182,15 +5198,7 @@ open class ReverbService : Service() {
             } else durableCaptureBufferSlot ?: activeBufferSlot
             if (slot != null) quickSave(slot, if (intent.hasExtra(EXTRA_QUICK_SAVE_SECONDS))
                 intent.getIntExtra(EXTRA_QUICK_SAVE_SECONDS, -1) else getConfiguredQuickSaveSeconds(this))
-            else {
-                // A foreground-service start must meet its deadline even for rejected input.
-                val receiver = NotifyFileReceiver(applicationContext)
-                val token = beginExport(receiver)
-                if (token != null && ensureExportForegroundLifetime(token, receiver)) {
-                    clearExportState(token)
-                    finishExportFailure(token, receiver, getString(R.string.recording_unavailable))
-                }
-            }
+            else rejectQuickSaveRequest(getString(R.string.recording_unavailable))
             return retainedCaptureStartMode()
         }
         if (intent?.action == ACTION_RECOMPRESS) {
