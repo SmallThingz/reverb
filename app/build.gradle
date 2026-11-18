@@ -116,6 +116,7 @@ android {
         resources {
             excludes += [
                 'DebugProbesKt.bin',
+                '**/*.kotlin_builtins',
                 'META-INF/LICENSE*',
                 'META-INF/AL2.0',
                 'META-INF/LGPL2.1',

@@ -72,16 +72,39 @@ internal fun verifyFlacOutputBufferRoundTrip(context: Context, report: StringBui
     val nativePreviewDigest = MessageDigest.getInstance("SHA-256")
     var nativePreviewRanges = 0
     var downsampledPreviewFrames = 0
+    var rawBorrowedSliceVerified = false
     RandomAccessFile(file, "r").use { source ->
         FlacPcmDecoder(source.channel, RecordingReadCleanup.Propagate).use { decoder ->
             check(decoder.info.sampleRate == sampleRate && decoder.info.channelCount == channels)
             check(decoder.info.bitsPerSample == 16 && decoder.info.frameCount == frames.toLong())
             check(decoder.info.compressionLevel == DEFAULT_FLAC_COMPRESSION)
             check(decoder.info.md5.contentEquals(MessageDigest.getInstance("MD5").digest(original)))
+            var firstBlockFrames = 0
             decoder.readFrames(0, frames.toLong()) { bytes, offset, count ->
                 check(count <= decoded.size - decodedBytes) { "FLAC decoded too many bytes" }
+                if (decodedBytes == 0) firstBlockFrames = count / frameBytes
                 bytes.copyInto(decoded, decodedBytes, offset, offset + count)
                 decodedBytes += count
+            }
+            if (decoder.rawBlockDecodeCount > 0L) {
+                check(firstBlockFrames >= 3) { "FLAC fixture needs three frames in its first raw block" }
+                val beforeSeek = decoder.rawBlockDecodeCount
+                var callbacks = 0
+                decoder.readFrames(1L, 1L) { bytes, offset, count ->
+                    check(offset == frameBytes && count == frameBytes)
+                    check((0 until count).all { bytes[offset + it] == original[frameBytes + it] })
+                    callbacks++
+                }
+                check(decoder.rawBlockDecodeCount > beforeSeek && callbacks == 1)
+                check(decoder.hasRetainedRawFrames(2L, 1L))
+                val beforeHit = decoder.rawBlockDecodeCount
+                decoder.readFrames(2L, 1L) { bytes, offset, count ->
+                    check(offset == 2 * frameBytes && count == frameBytes)
+                    check((0 until count).all { bytes[offset + it] == original[2 * frameBytes + it] })
+                    callbacks++
+                }
+                check(decoder.rawBlockDecodeCount == beforeHit && callbacks == 2)
+                rawBorrowedSliceVerified = true
             }
             // These times are binary-exact; every requested native-rate frame is known.
             for ((first, end) in listOf(0 to 6_000, 24_000 to 30_000, 60_000 to 63_000)) {
@@ -142,6 +165,8 @@ internal fun verifyFlacOutputBufferRoundTrip(context: Context, report: StringBui
         frameCopyCases++
     }
     report.append("FLAC_FRAME_COPY cases=$frameCopyCases full_checksum_rejected=true selected_pcm_exact=true\n")
+    val rawSliceResult = if (rawBorrowedSliceVerified) "seek_and_cache_hit_exact" else "codec_path_raw_unexercised"
+    report.append("FLAC_RAW_PCM_SLICE result=$rawSliceResult\n")
     check(fileIdentityMatches(requireNotNull(verified.fileKey), resolveFileIdentity(file))) {
         "FLAC fixture identity changed before evidence retention"
     }

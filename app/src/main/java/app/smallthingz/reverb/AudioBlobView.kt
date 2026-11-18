@@ -618,11 +618,12 @@ internal class AudioBlobView(
             val energy = audioBlobMotionEnergy(activity, low, high, silence) * life * active
             for (index in 0 until FALLBACK_POINTS) {
                 val angle = angles[index]
+                val h3 = sin(angle * 3f + timeSeconds * .78f)
+                val h7 = sin(angle * 7f - timeSeconds * .39f + 1.8f)
                 val idle = if (active > 0f) {
-                    (sin(angle * 3f + timeSeconds * .78f) * .0056f +
-                        sin(angle * 7f - timeSeconds * .39f + 1.8f) * .0024f) * minSize * life * active
+                    (h3 * .0056f + h7 * .0024f) * minSize * life * active
                 } else 0f
-                val fold = audioBlobFold(angle, timeSeconds, energy, low, high) * minSize
+                val fold = audioBlobFold(h3, h7, energy, low, high) * minSize
                 val radius = base + fold + idle
                 x[index] = cx + cosines[index] * radius
                 y[index] = cy + sines[index] * radius

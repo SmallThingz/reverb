@@ -5,6 +5,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.sin
 
 class AudioBlobMotionTest {
     @Test fun silenceCalmsMotionAndDigitalZeroHasNoNewMotion() {
@@ -21,8 +22,9 @@ class AudioBlobMotionTest {
             val energy = audioBlobMotionEnergy(.5f, low, high, 0f)
             for (step in 0..360) {
                 val angle = step * PI.toFloat() / 180f
-                val a = audioBlobFold(angle, 0f, energy, low, high)
-                val b = audioBlobFold(angle, 1.3f, energy, low, high)
+                val a = audioBlobFold(sin(angle * 3f), sin(angle * 7f + 1.8f), energy, low, high)
+                val b = audioBlobFold(sin(angle * 3f + 1.3f * .78f),
+                    sin(angle * 7f - 1.3f * .39f + 1.8f), energy, low, high)
                 assertTrue(abs(a) <= .09601f && abs(b) <= .09601f)
                 // Largest base radius + bounded fold + idle + glow stays within the .495 clip.
                 assertTrue(.348f + abs(a) + .008f + .024f < .495f)

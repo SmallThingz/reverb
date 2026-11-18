@@ -354,7 +354,7 @@ internal fun consumeFlacPcmBuffer(
 
 internal interface FlacPcmVerificationSource : Closeable {
     val info: FlacInfo
-    /** The array is borrowed until consume returns; only its offset/count slice is valid. */
+    /** The offset/count slice is read-only and borrowed until consume returns. */
     fun readFrames(start: Long, count: Long, consume: (ByteArray, Int, Int) -> Unit)
 }
 
@@ -365,9 +365,8 @@ internal class FlacPcmDecoder(
     override val info = readFlacInfo(channel)
     private val extractor = MediaExtractor()
     private val codec: MediaCodec?
-    // A waveform pass seeks once per bucket; retain bounded raw buffers across those reads.
+    // Keep the decoded block available for nearby waveform probes.
     private val rawBuffer by lazy { ByteBuffer.allocate(65536 * info.channelCount * 2) }
-    private val rawScratch by lazy { ByteArray(rawBuffer.capacity()) }
     private var codecScratch: ByteArray? = null
     private var rawBlockStart = -1L
     private var rawBlockFrames = 0
@@ -486,17 +485,13 @@ internal class FlacPcmDecoder(
         val frameBytes = info.channelCount * 2
         // The maximum FLAC block has 65535 samples. Do not allocate from a supplied size.
         val buffer = rawBuffer
-        val scratch = rawScratch
+        val block = buffer.array()
         // A partial read leaves its complete decoded block here. Nearby waveform probes can
         // reuse it, but a whole-file verification must still inspect the extractor's terminal.
         if (hasRetainedRawFrames(start, count)) {
             if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("FLAC read cancelled")
             val offset = (start - rawBlockStart).toInt() * frameBytes
-            val bytes = count.toInt() * frameBytes
-            buffer.limit(offset + bytes)
-            buffer.position(offset)
-            buffer.get(scratch, 0, bytes)
-            consume(scratch, 0, bytes)
+            consume(block, offset, count.toInt() * frameBytes)
             return
         }
         rawBlockStart = -1L
@@ -511,7 +506,7 @@ internal class FlacPcmDecoder(
             val bytes = extractor.readSampleData(buffer, 0)
             if (bytes < 0 || stamp < 0) break
             rawBlockDecodeCount++
-            if (bytes == 0 || bytes % frameBytes != 0) throw IOException("Invalid decoded FLAC block")
+            if (bytes == 0 || bytes > block.size || bytes % frameBytes != 0) throw IOException("Invalid decoded FLAC block")
             val first = (stamp.toDouble() * info.sampleRate / 1_000_000.0).roundToLong()
             val available = bytes / frameBytes
             if (first < 0 || first > info.frameCount - available) throw IOException("FLAC exceeds its declared sample count")
@@ -521,9 +516,7 @@ internal class FlacPcmDecoder(
             val skip = (start + copied - first).coerceIn(0, available.toLong()).toInt()
             val take = minOf((available - skip).toLong(), count - copied).toInt()
             if (take > 0) {
-                buffer.position(skip * frameBytes); buffer.limit((skip + take) * frameBytes)
-                buffer.get(scratch, 0, take * frameBytes)
-                consume(scratch, 0, take * frameBytes)
+                consume(block, skip * frameBytes, take * frameBytes)
                 copied += take
             }
             more = extractor.advance()
