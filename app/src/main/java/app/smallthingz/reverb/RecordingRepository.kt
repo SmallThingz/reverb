@@ -1204,13 +1204,9 @@ object RecordingRepository {
         val existingById = HashMap<String, RecordingEntity>(existing.size)
         existing.associateByTo(existingById) { it.id }
         val scanned = scan(existingById)
-        val copies = publication?.let { snapshot ->
-            scanned.mapNotNull { fileCopyPublicationForTarget(snapshot, it) }
-        }.orEmpty()
-        val hiddenSources = if (copies.any { it.purpose == FileCopyPurpose.RENAME }) {
-            val currentRows = (existingById + scanned.associateBy { it.id }).values.toList()
-            fileCopySourceIdsToHide(copies, currentRows)
-        } else emptySet()
+        val copies = if (publication == null || publication.records.isEmpty()) emptyList()
+            else scanned.mapNotNull { fileCopyPublicationForTarget(publication, it) }
+        val hiddenSources = fileCopySourceIdsToHide(existingById, scanned, copies)
         val imported = if (hiddenSources.isEmpty()) scanned else scanned.filterNot { it.id in hiddenSources }
         val nowMillis = System.currentTimeMillis()
         val importedIds = HashSet<String>(imported.size)

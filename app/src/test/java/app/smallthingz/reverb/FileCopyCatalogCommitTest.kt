@@ -114,4 +114,24 @@ class FileCopyCatalogCommitTest {
         assertTrue(fileCopySourceIdsToHide(listOf(receipt), listOf(source.copy(fileIdentity = "replacement"), target)).isEmpty())
         assertTrue(fileCopySourceIdsToHide(listOf(receipt.copy(phase = FileCopyPhase.CREATED)), listOf(source, target)).isEmpty())
     }
+
+    @Test
+    fun lastObservedIdentityOverridesTheCatalogDuringRenameReconciliation() {
+        val source = RecordingEntity("/owned/source.wav", "source.wav", "audio/wav", 0, 1, 4,
+            "PCM", RecordingStorageType.FILE, "/owned", fileIdentity = "source-object")
+        val target = source.copy(id = "/owned/target.wav", displayName = "target.wav", fileIdentity = "target-object")
+        val receipt = FileCopyPublication("token", FileCopyPurpose.RENAME, source.id, target.displayName,
+            target.id, source.fileIdentity, 4, "0".repeat(64), FileCopyPhase.VERIFIED,
+            "created-object", target.fileIdentity)
+        val existing = listOf(source, target).associateBy { it.id }
+        val blankSource = source.copy(fileIdentity = "")
+        val replacedTarget = target.copy(fileIdentity = "replacement")
+
+        assertEquals(setOf(source.id), fileCopySourceIdsToHide(existing, listOf(target), listOf(receipt)))
+        assertTrue(fileCopySourceIdsToHide(existing, listOf(source, blankSource, target), listOf(receipt)).isEmpty())
+        assertTrue(fileCopySourceIdsToHide(existing, listOf(target, replacedTarget), listOf(receipt)).isEmpty())
+        assertEquals(setOf(source.id), fileCopySourceIdsToHide(existing,
+            listOf(blankSource, source, replacedTarget, target), listOf(receipt)))
+        assertTrue(fileCopySourceIdsToHide(mapOf(target.id to target), listOf(target), listOf(receipt)).isEmpty())
+    }
 }

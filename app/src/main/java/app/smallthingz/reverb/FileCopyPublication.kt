@@ -187,15 +187,33 @@ internal fun pendingFileCopyCandidateIds(snapshot: FileCopyPublicationSnapshot):
 internal fun fileCopySourceIdsToHide(
     records: List<FileCopyPublication>,
     recordings: List<RecordingEntity>,
+): Set<String> = fileCopySourceIdsToHide(emptyMap(), recordings, records)
+
+internal fun fileCopySourceIdsToHide(
+    existingById: Map<String, RecordingEntity>,
+    scanned: List<RecordingEntity>,
+    copies: List<FileCopyPublication>,
 ): Set<String> {
-    val renames = records.filter { it.purpose == FileCopyPurpose.RENAME && it.phase >= FileCopyPhase.VERIFIED }
+    if (copies.isEmpty()) return emptySet()
+    val renames = copies.filter { it.purpose == FileCopyPurpose.RENAME && it.phase >= FileCopyPhase.VERIFIED }
     if (renames.isEmpty()) return emptySet()
-    val byId = recordings.associateBy { it.id }
-    return renames.asSequence()
-        .filter { record ->
-            byId[record.targetId]?.fileIdentity == record.targetIdentity &&
-                byId[record.sourceId]?.fileIdentity == record.sourceIdentity
-        }.mapTo(HashSet()) { it.sourceId }
+
+    val identities = HashMap<String, String?>()
+    for (rename in renames) {
+        identities[rename.sourceId] = existingById[rename.sourceId]?.fileIdentity
+        identities[rename.targetId] = existingById[rename.targetId]?.fileIdentity
+    }
+    // The last observed row owns its ID, including when its identity is blank.
+    for (row in scanned) {
+        if (row.id in identities) identities[row.id] = row.fileIdentity
+    }
+    val hidden = HashSet<String>()
+    for (rename in renames) {
+        if (identities[rename.targetId] == rename.targetIdentity &&
+            identities[rename.sourceId] == rename.sourceIdentity
+        ) hidden += rename.sourceId
+    }
+    return hidden
 }
 
 internal fun filterFileCopyCatalogRows(context: Context, rows: List<RecordingEntity>): List<RecordingEntity> {
@@ -216,11 +234,16 @@ internal fun fileCopyPublicationForTarget(
     target: RecordingEntity,
 ): FileCopyPublication? {
     if (target.storageType != RecordingStorageType.FILE) return null
-    val matches = snapshot.records.filter { it.purpose != FileCopyPurpose.CLAIM_RESTORE &&
-        it.targetId == target.id && it.targetIdentity == target.fileIdentity &&
-        it.phase >= FileCopyPhase.VERIFIED }
-    if (matches.size > 1) throw IOException("Conflicting FILE copy publication receipts")
-    val record = matches.singleOrNull() ?: return null
+    var match: FileCopyPublication? = null
+    for (index in snapshot.records.indices) {
+        val candidate = snapshot.records[index]
+        if (candidate.purpose == FileCopyPurpose.CLAIM_RESTORE || candidate.targetId != target.id ||
+            candidate.targetIdentity != target.fileIdentity || candidate.phase < FileCopyPhase.VERIFIED
+        ) continue
+        if (match != null) throw IOException("Conflicting FILE copy publication receipts")
+        match = candidate
+    }
+    val record = match ?: return null
     val current = readCurrentVerifiedFileFingerprint(File(target.id))
         ?: throw IOException("Copied publication is unavailable")
     if (!record.matchesTarget(current)) throw IOException("Copied publication changed before catalog acknowledgement")

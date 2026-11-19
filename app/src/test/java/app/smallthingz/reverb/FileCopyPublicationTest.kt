@@ -146,6 +146,25 @@ class FileCopyPublicationTest {
         assertTrue(progress.zipWithNext().all { (a, b) -> a < b })
     }
 
+    @Test fun targetLookupRejectsOnlyEligibleMatchingConflictsBeforeFingerprinting() {
+        val (store, io, expected) = fixture()
+        val receipt = copy(store, io, expected)
+        val target = RecordingEntity(destination.path, destination.name, "audio/wav", 0, 1,
+            receipt.byteCount, "PCM", RecordingStorageType.FILE, destination.parent!!,
+            fileIdentity = receipt.targetIdentity)
+        val conflict = receipt.copy(token = "other exact receipt")
+        val snapshot = FileCopyPublicationSnapshot(0, listOf(receipt, conflict))
+
+        assertNull(fileCopyPublicationForTarget(snapshot, target.copy(fileIdentity = "replacement")))
+        assertNull(fileCopyPublicationForTarget(snapshot, target.copy(storageType = RecordingStorageType.DOCUMENT)))
+        val ineligible = listOf(receipt.copy(purpose = FileCopyPurpose.CLAIM_RESTORE),
+            conflict.copy(phase = FileCopyPhase.CREATED))
+        assertNull(fileCopyPublicationForTarget(snapshot.copy(records = ineligible), target))
+        assertEquals("Conflicting FILE copy publication receipts", assertThrows(IOException::class.java) {
+            fileCopyPublicationForTarget(snapshot, target)
+        }.message)
+    }
+
     @Test fun ordinaryCreatorWinningAfterReservationIsNeverOpenedOrChanged() {
         val (store, io, expected) = fixture()
         val foreign = byteArrayOf(99, 98, 97)
