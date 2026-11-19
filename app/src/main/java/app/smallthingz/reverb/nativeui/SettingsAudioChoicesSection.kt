@@ -2,9 +2,6 @@ package app.smallthingz.reverb.nativeui
 
 import android.content.Context
 import smallthingz.ui.runtime.MonotonicFrameClock
-import smallthingz.ui.text.TextStyle
-import smallthingz.ui.text.font.FontFamily
-import smallthingz.ui.unit.Density
 import kotlinx.coroutines.CoroutineScope
 
 /**
@@ -13,13 +10,8 @@ import kotlinx.coroutines.CoroutineScope
  */
 internal class SettingsAudioChoicesSection(
     context: Context,
-    bodySmall: TextStyle,
-    bodyLarge: TextStyle,
-    labelLarge: TextStyle,
-    density: Density,
-    resolver: FontFamily.Resolver,
+    initialEnvironment: ReverbViewEnvironment,
     initial: SettingsAudioChoicesState,
-    initialPalette: ReverbPalette,
     sampleRateLabel: (Int) -> String,
     selections: SettingsAudioSelections,
     frames: MonotonicFrameClock,
@@ -28,14 +20,15 @@ internal class SettingsAudioChoicesSection(
     inputRoot: () -> android.view.View? = { null },
 ) : AutoCloseable {
     private var current = initial
-    private var palette = initialPalette
+    private var environment = initialEnvironment
     private val expanded = mutableSetOf<SettingsAudioChoice>()
     private var binding = false
     private var needsBinding = false
     private var closed = false
     private lateinit var choices: SettingsAudioChoicesView
     private val menus = SettingsAudioMenuHost(
-        labelLarge,density,resolver,frames,scope,initialPalette,
+        ReverbParagraphStyles[ReverbTextRole.LABEL_LARGE], initialEnvironment.textDensity,
+        initialEnvironment.sharedFontResolver, frames, scope, initialEnvironment.palette,
         expandedChanged = { kind, value ->
             if (value) expanded.add(kind) else expanded.remove(kind)
             if (::choices.isInitialized) render()
@@ -45,15 +38,16 @@ internal class SettingsAudioChoicesSection(
     val view get() = choices.view
 
     init {
-        choices = SettingsAudioChoicesView(context,bodySmall,bodyLarge,density,resolver,
-            initial.copy(expanded=emptySet()),initialPalette,sampleRateLabel,menus,selections,inputRoot)
+        choices = SettingsAudioChoicesView(context,initialEnvironment,
+            initial.copy(expanded=emptySet()),sampleRateLabel,menus,selections,inputRoot)
     }
 
-    fun bind(next: SettingsAudioChoicesState, palette: ReverbPalette) {
+    fun bind(next: SettingsAudioChoicesState, environment: ReverbViewEnvironment) {
         if (closed) return
         current = next
-        this.palette = palette
-        menus.palette(palette)
+        this.environment = environment
+        menus.bindConfiguration(ReverbParagraphStyles[ReverbTextRole.LABEL_LARGE], environment.textDensity,
+            environment.sharedFontResolver, environment.palette)
         render()
     }
 
@@ -63,7 +57,7 @@ internal class SettingsAudioChoicesSection(
         do {
             needsBinding=false
             binding=true
-            try { choices.bind(current.copy(expanded=expanded.toSet()),palette) }
+            try { choices.bind(current.copy(expanded=expanded.toSet()),environment) }
             finally { binding=false }
         } while (needsBinding)
     }

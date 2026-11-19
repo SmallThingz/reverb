@@ -5,6 +5,7 @@ import android.graphics.Color as AndroidColor
 import android.view.View
 import android.view.ViewGroup
 import smallthingz.ui.components.NativeGroupLayout
+import smallthingz.ui.components.NativeButtonInputPolicy
 import smallthingz.ui.components.NativeMaterialButtonStyle
 import smallthingz.ui.components.NativeMaterialButtonView
 import kotlin.math.max
@@ -27,7 +28,7 @@ internal class SettingsStorageActionView(
         if (icon == null) NativeMaterialButtonStyle(12, radiusDp = radius)
         else NativeMaterialButtonStyle(0, verticalPaddingDp = 0, minimumWidthDp = 48,
             minimumHeightDp = 48, iconSizeDp = 24, radiusDp = radius, showLabel = false),
-        OnboardingNativeInteractionsFactory(inputRoot).roundedButton(radius), onClick)
+        NativeButtonInputPolicy(inputRoot), onClick)
     private val glyph = icon?.let { OnboardingIconView(context, it, initial.palette.onSurfaceVariant).apply {
         contentDescription = description
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES

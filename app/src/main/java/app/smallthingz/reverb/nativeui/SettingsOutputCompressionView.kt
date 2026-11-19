@@ -23,7 +23,7 @@ internal class SettingsOutputCompressionView(
     private var onLevelChange:((Int)->Unit)?,
 ):ViewGroup(context),AutoCloseable {
     private var state=initial
-    private val row=SettingsToggleRowView(context,context.getString(R.string.output_compression),
+    private val row=SettingsToggleRowView(context,R.string.output_compression,
         initial.enabled,initial.interactionEnabled,environment,inputRoot,true,onEnabledChange)
     private val expansion=SettingsExpansionView(context,initial.enabled,parentScope,alignBottom=false) {
         CompressionBody(context,state,environment,parentInterested) {onLevelChange?.invoke(it)}

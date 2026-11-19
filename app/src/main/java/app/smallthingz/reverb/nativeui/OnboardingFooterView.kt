@@ -1,6 +1,6 @@
 package app.smallthingz.reverb.nativeui
 
-import smallthingz.ui.components.NativeMaterialButtonInteractionsFactory
+import smallthingz.ui.components.NativeButtonInputPolicy
 import smallthingz.ui.components.NativeMaterialButtonStyle
 import smallthingz.ui.components.NativeMaterialButtonView
 import smallthingz.ui.text.view.NativePlainTextViewGeometry
@@ -53,7 +53,7 @@ internal class OnboardingFooterView(
     labelLarge: TextStyle,
     textDensity: Density,
     resolver: FontFamily.Resolver,
-    interactions: NativeMaterialButtonInteractionsFactory,
+    inputRoot: () -> View?,
 ) : ViewGroup(context) {
     /** Same native window cursor as page labels; keep the lease until this footer is disposed. */
     fun bindTextAccessibility(window: NativeWindowTextAccessibilityOwner,
@@ -86,12 +86,13 @@ internal class OnboardingFooterView(
     private var backWidth = 0
     private var continueWidth = 0
     private var stackedButtons = false
+    private val inputPolicy = NativeButtonInputPolicy(inputRoot)
     private val back = NativeMaterialButtonView(context, false, reverbButtonTextStyle(labelLarge), textDensity, resolver,
-        NativeMaterialButtonStyle(12, assignedSize = true), interactions) {
+        NativeMaterialButtonStyle(12, assignedSize = true), inputPolicy) {
         actions?.back?.invoke()
     }
     private val next = NativeMaterialButtonView(context, true, reverbButtonTextStyle(labelLarge), textDensity, resolver,
-        NativeMaterialButtonStyle(24, assignedSize = true), interactions) {
+        NativeMaterialButtonStyle(24, assignedSize = true), inputPolicy) {
         actions?.continueOrFinish?.invoke()
     }
 

@@ -50,7 +50,7 @@ internal class OnboardingPermissionGroup(
     private val typography: OnboardingPageTypography,
     private val density: Density,
     private val resolver: FontFamily.Resolver,
-    private val interactions: OnboardingNativeInteractionsFactory,
+    private val inputRoot: () -> View?,
 ) {
     val view = NativeGroupLayout(context, cornerRadiusDp = 20f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
     private val rows = linkedMapOf<OnboardingPermission, PermissionRow>()
@@ -107,7 +107,7 @@ internal class OnboardingPermissionGroup(
         }
         states.forEach { state ->
             rows.getOrPut(state.kind) {
-                PermissionRow(context, typography, density, resolver, interactions, state.marker, state.icon, ::request)
+                PermissionRow(context, typography, density, resolver, inputRoot, state.marker, state.icon, ::request)
             }.bind(state, palette)
         }
         val desiredOrder = states.map { it.kind }
@@ -151,13 +151,13 @@ private class PermissionRow(
     typography: OnboardingPageTypography,
     density: Density,
     resolver: FontFamily.Resolver,
-    interactions: OnboardingNativeInteractionsFactory,
+    inputRoot: () -> View?,
     private val markerText: String,
     icon: ReverbIcon?,
     request: (OnboardingPermission) -> Unit,
 ) : OnboardingCardView(context, typography, density, resolver,
     OnboardingMarker(context, typography.titleMedium, density, resolver, icon = icon, marker = markerText),
-    OnboardingIconView(context, ReverbIcon.Unchecked, 0), 24, 24, interactions) {
+    OnboardingIconView(context, ReverbIcon.Unchecked, 0), 24, 24, inputRoot) {
     private var state: PermissionRowState? = null
     private val allowLabel = context.getString(R.string.allow)
     override val accessibilityClickLabel: CharSequence get() =

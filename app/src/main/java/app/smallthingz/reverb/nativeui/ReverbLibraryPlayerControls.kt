@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeGroupLayout
+import smallthingz.ui.components.NativeButtonInputPolicy
 import smallthingz.ui.components.NativeMaterialButtonStyle
 import smallthingz.ui.components.NativeMaterialButtonView
 import smallthingz.ui.util.closePreservingPrimaryFailure
@@ -7,7 +9,8 @@ import android.content.Context
 import smallthingz.ui.runtime.MonotonicFrameClock
 import kotlinx.coroutines.CoroutineScope
 import android.graphics.Canvas
-import android.view.MotionEvent
+import android.graphics.Color
+import android.widget.LinearLayout
 import android.view.View
 import android.view.ViewGroup
 import app.smallthingz.reverb.R
@@ -52,114 +55,153 @@ internal class PlayerTrimHeading(context: Context, private var environment: Reve
     }
 }
 
-internal class PlayerTrimButtons(context: Context, private var environment: ReverbViewEnvironment,
-    inputRoot: View, frames: MonotonicFrameClock, scope: CoroutineScope, durationScale: () -> Float) : ViewGroup(context), AutoCloseable {
-    private val cancel = PlayerTrimAction(context, environment, inputRoot, false, frames, scope, durationScale)
-    private val save = PlayerTrimAction(context, environment, inputRoot, true, frames, scope, durationScale)
-    init { importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO; clipChildren = false; addView(cancel); addView(save) }
-    fun bind(value: ReverbViewEnvironment, state: LibraryPlayerUiState, actions: LibraryPlayerActions) {
-        val densityChanged = environment.textDensity.density != value.textDensity.density
-        environment = value
-        if (densityChanged) requestLayout()
-        cancel.bind(value, state.recordingRevisionKey, !state.trimSaving, false, actions.cancelTrim)
-        save.bind(value, state.recordingRevisionKey, !state.trimSaving && state.trimEndMillis > state.trimStartMillis,
-            state.trimSaving, actions.saveTrim)
-    }
-    private fun dp(value: Float) = (value * environment.textDensity.density).roundToInt()
-    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        val width = MeasureSpec.getSize(widthMeasureSpec)
-        cancel.measure(libraryPlayerControlsAtMost(width), heightMeasureSpec.toAtMost())
-        save.measure(libraryPlayerControlsAtMost(max(0, width - cancel.measuredWidth - dp(8f))), heightMeasureSpec.toAtMost())
-        setMeasuredDimension(width, resolveSize(max(cancel.measuredHeight, save.measuredHeight), heightMeasureSpec))
-    }
-    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
-        val total = cancel.measuredWidth + dp(8f) + save.measuredWidth
-        fun place(child: View, logical: Int) {
-            val x = if (layoutDirection == LAYOUT_DIRECTION_RTL) width - logical - child.measuredWidth else logical
-            val y = ((height - child.measuredHeight) / 2f).roundToInt()
-            child.layout(x, y, x + child.measuredWidth, y + child.measuredHeight)
-        }
-        place(cancel, width - total); place(save, width - save.measuredWidth)
-    }
-    override fun close() {
-        val failure = closePreservingPrimaryFailure(null, cancel::close)
-        closePreservingPrimaryFailure(failure, save::close)?.let { throw it }
-    }
-}
-
-private class PlayerTrimAction(
+internal class PlayerTrimButtons(
     context: Context,
     private var environment: ReverbViewEnvironment,
     inputRoot: View,
-    private val save: Boolean,
     private val frames: MonotonicFrameClock,
     private val scope: CoroutineScope,
     private val durationScale: () -> Float,
 ) : ViewGroup(context), AutoCloseable {
     private var revision: String? = null
+    private var saving = false
+    private var saveEnabled = false
+    private var closed = false
+    private var locales = resources.configuration.locales
+    private var cancelAction: (() -> Unit)? = null
+    private var saveAction: (() -> Unit)? = null
     private var spinner: ReverbIncidentLoadingView? = null
     private var glyphDensity = Float.NaN
-    private val surface = NativeMaterialButtonView(context, false, ReverbParagraphStyles[ReverbTextRole.LABEL_LARGE],
-        environment.textDensity, environment.sharedFontResolver,
-        NativeMaterialButtonStyle(horizontalPaddingDp = if (save) 14 else 12,
-            verticalPaddingDp = 9, minimumWidthDp = 0, minimumHeightDp = 0, iconSizeDp = 18,
-            iconGapDp = if (save) 7 else 6, radiusDp = 14f, alignContentStart = true),
-        OnboardingNativeInteractionsFactory { inputRoot }.roundedButton(14f, delayPressForParent = true) { revision }, {})
+    private val cancelClick: () -> Unit = { cancelAction?.invoke() }
+    private val saveClick: () -> Unit = { saveAction?.invoke() }
+    private val typography = ReverbParagraphStyles[ReverbTextRole.LABEL_LARGE]
+    private val input = NativeButtonInputPolicy(inputRoot = { inputRoot }, revisionKey = { revision }, delayPressForParent = true)
+    private val cancel = makeButton(cancelClick)
+    private val save = makeButton(saveClick)
+    private val cancelLayout = NativeGroupLayout.LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.MATCH_PARENT)
+    private val saveLayout = NativeGroupLayout.LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.MATCH_PARENT)
+    private val group = NativeGroupLayout(context, 14f, LinearLayout.HORIZONTAL)
 
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         clipChildren = false
-        addView(surface)
+        group.addRow(cancel, cancelLayout)
+        group.addRow(save, saveLayout)
+        addView(group)
+        group.setPalette(environment.palette.surfaceContainerHigh, environment.palette.border)
     }
 
-    fun bind(value: ReverbViewEnvironment, owner: String, enabled: Boolean, saving: Boolean, action: () -> Unit) {
-        if (environment !== value) {
-            environment = value
-            surface.bindTypography(ReverbParagraphStyles[ReverbTextRole.LABEL_LARGE],
-                value.textDensity, value.sharedFontResolver)
-        }
-        revision = owner
+    private fun makeButton(onClick: () -> Unit) = NativeMaterialButtonView(context, false, typography,
+        environment.textDensity, environment.sharedFontResolver,
+        NativeMaterialButtonStyle(horizontalPaddingDp = 12, iconSizeDp = 18, radiusDp = 0f,
+            minimumWidthDp = 48, minimumHeightDp = 48), input, onClick)
+
+    fun bind(value: ReverbViewEnvironment, state: LibraryPlayerUiState, actions: LibraryPlayerActions) {
+        if (closed) return
+        cancelAction = actions.cancelTrim
+        saveAction = actions.saveTrim
+        val nextLocales = resources.configuration.locales
+        val nextSaveEnabled = !state.trimSaving && state.trimEndMillis > state.trimStartMillis
+        val environmentChanged = environment !== value
+        val firstBind = revision == null
+        if (!environmentChanged && revision == state.recordingRevisionKey && saving == state.trimSaving &&
+            saveEnabled == nextSaveEnabled && locales == nextLocales) return
+
+        revision = state.recordingRevisionKey
+        val leaveSaving = saving && !state.trimSaving
+        saving = state.trimSaving
+        saveEnabled = nextSaveEnabled
+        locales = nextLocales
         val palette = value.palette
-        val ink = if (save) palette.onSecondaryContainer else palette.onSurface
-        val loading = save && saving
-        val density = value.textDensity.density
-        if (loading) {
-            surface.setLeadingIcon(null)
-            glyphDensity = Float.NaN
-            val indicator = spinner ?: ReverbIncidentLoadingView(context, ink, frames, scope, durationScale).also {
-                spinner = it
-                surface.setLeadingView(it)
-            }
-            indicator.setColor(ink)
-        } else {
-            spinner = null
-            surface.setLeadingView(null)
-            if (glyphDensity != density) {
-                glyphDensity = density
-                surface.setLeadingIcon(ReverbIconDrawable(if (save) ReverbIcon.Save else ReverbIcon.Close, density, ink))
-            }
+        if (environmentChanged) {
+            environment = value
+            cancel.bindTypography(typography, value.textDensity, value.sharedFontResolver)
+            save.bindTypography(typography, value.textDensity, value.sharedFontResolver)
+            group.setPalette(palette.surfaceContainerHigh, palette.border)
         }
-        surface.bind(context.getString(if (!save) R.string.cancel else if (saving) R.string.trim_saving else R.string.trim_save_copy),
-            enabled, if (save) palette.secondaryContainer else palette.surfaceContainerHigh, ink, action)
+        val density = value.textDensity.density
+        if (glyphDensity != density) {
+            cancel.setLeadingIcon(ReverbIconDrawable(ReverbIcon.Close, density, palette.onSurface))
+            glyphDensity = density
+            if (!saving) save.setLeadingIcon(ReverbIconDrawable(ReverbIcon.Save, density, palette.primary))
+        } else if (leaveSaving) {
+            save.setLeadingIcon(ReverbIconDrawable(ReverbIcon.Save, density, palette.primary))
+        }
+        if (saving) {
+            if (spinner == null) {
+                save.setLeadingIcon(null)
+                spinner = ReverbIncidentLoadingView(context, palette.primary, frames, scope, durationScale)
+                    .also { save.setLeadingView(it) }
+            }
+            spinner?.setColor(palette.primary)
+        } else if (spinner != null) {
+            save.setLeadingView(null)
+            spinner = null
+        }
+        cancel.bind(context.getString(R.string.cancel), !saving, Color.TRANSPARENT, palette.onSurface)
+        save.bind(context.getString(if (saving) R.string.trim_saving else R.string.trim_save_copy),
+            saveEnabled, Color.TRANSPARENT, if (saveEnabled || saving) palette.primary else palette.muted)
+        if (firstBind || environmentChanged) requestLayout()
     }
 
     override fun onMeasure(w: Int, h: Int) {
-        surface.measure(w, h)
-        val minimum = (48f * environment.textDensity.density).roundToInt()
-        setMeasuredDimension(resolveSize(max(minimum, surface.measuredWidth), w),
-            resolveSize(max(minimum, surface.measuredHeight), h))
+        val width = MeasureSpec.getSize(w)
+        val minimum = dp(48)
+        val cancelPreferred = cancel.preferredWidth(compact = false)
+        val savePreferred = save.preferredWidth(compact = false)
+        val boundedHeight = MeasureSpec.getMode(h) != MeasureSpec.UNSPECIFIED
+        val maxHeight = MeasureSpec.getSize(h)
+        val stacked = width < 2 * minimum || (cancelPreferred + savePreferred > width &&
+            (!boundedHeight || maxHeight >= 2 * minimum))
+        val groupWidth: Int
+        if (stacked) {
+            group.setRowOrientation(LinearLayout.VERTICAL)
+            groupWidth = min(width, max(cancelPreferred, savePreferred))
+            val childHeight = if (boundedHeight) libraryPlayerControlsAtMost(maxHeight / 2) else h
+            val childWidth = libraryPlayerControlsExact(groupWidth)
+            cancel.measure(childWidth, childHeight)
+            save.measure(childWidth, childHeight)
+            setChildLayout(cancel, cancelLayout, groupWidth, cancel.measuredHeight)
+            setChildLayout(save, saveLayout, groupWidth, save.measuredHeight, dividerTop = true)
+        } else {
+            group.setRowOrientation(LinearLayout.HORIZONTAL)
+            groupWidth = min(width, cancelPreferred + savePreferred)
+            val cancelWidth = cancelPreferred.coerceIn(minimum, groupWidth - minimum)
+            setChildLayout(cancel, cancelLayout, cancelWidth, LayoutParams.MATCH_PARENT)
+            setChildLayout(save, saveLayout, groupWidth - cancelWidth, LayoutParams.MATCH_PARENT, dividerStart = true)
+        }
+        group.measure(libraryPlayerControlsExact(groupWidth), h.toAtMost())
+        setMeasuredDimension(width, resolveSize(group.measuredHeight, h))
     }
-    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
-        val x = ((width - surface.measuredWidth) / 2f).roundToInt()
-        val y = ((height - surface.measuredHeight) / 2f).roundToInt()
-        surface.layout(x, y, x + surface.measuredWidth, y + surface.measuredHeight)
+
+    private fun setChildLayout(child: View, params: NativeGroupLayout.LayoutParams, width: Int,
+                               height: Int, dividerTop: Boolean = false, dividerStart: Boolean = false) {
+        if (params.width == width && params.height == height && params.dividerTop == dividerTop &&
+            params.dividerStart == dividerStart) return
+        params.width = width
+        params.height = height
+        params.dividerTop = dividerTop
+        params.dividerStart = dividerStart
+        child.layoutParams = params
     }
-    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
-        val translated = MotionEvent.obtain(event)
-        translated.offsetLocation(-surface.left.toFloat(), -surface.top.toFloat())
-        return try { surface.dispatchTouchEvent(translated) } finally { translated.recycle() }
+
+    override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
+        val x = if (layoutDirection == LAYOUT_DIRECTION_RTL) 0 else width - group.measuredWidth
+        val y = (height - group.measuredHeight) / 2
+        group.layout(x, y, x + group.measuredWidth, y + group.measuredHeight)
     }
-    override fun close() = surface.close()
+
+    override fun close() {
+        if (closed) return
+        closed = true
+        cancelAction = null
+        saveAction = null
+        spinner = null
+        val failure = closePreservingPrimaryFailure(null, cancel::close)
+        closePreservingPrimaryFailure(failure, save::close)?.let { throw it }
+    }
+
+    private fun dp(value: Int) = (value * environment.textDensity.density).roundToInt()
 }
 
 private class PlayerGlyph(context: Context, private var environment: ReverbViewEnvironment,

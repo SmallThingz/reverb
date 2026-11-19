@@ -11,6 +11,7 @@ import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 import smallthingz.ui.components.NativeDropdown
 import smallthingz.ui.components.NativeDropdownColors
 import smallthingz.ui.components.NativeDropdownContent
@@ -23,6 +24,7 @@ import smallthingz.ui.unit.sp
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], application = Application::class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 class NativeDropdownTest {
     @Test fun selectedTextAndPopupHandoffTrackCurrentTypedBindingAcrossAvailabilityChanges() {
         val owner = Robolectric.buildActivity(Activity::class.java).setup().visible()
@@ -89,6 +91,22 @@ class NativeDropdownTest {
             assertSame(row, opens.last().first)
             assertSame(next, opens.last().second)
             assertEquals(listOf(initial, unavailable, next), bindings)
+            val oldHeight = title.measuredHeight
+            assertTrue("baseline native text metrics", oldHeight > 0)
+            val oldCount = opens.size
+            val newResolver = createFontFamilyResolver(activity)
+            row.bindTypography(TextStyle(fontSize = 36.sp), TextStyle(fontSize = 30.sp), Density(1f, 2f), newResolver)
+            row.bindDescription("Ouvrir les options")
+            layout(View.LAYOUT_DIRECTION_RTL)
+            assertTrue("retained title uses current typography", title.measuredHeight > oldHeight)
+            val reference = ParagraphView(activity, TextStyle(fontSize = 36.sp), Density(1f, 2f), newResolver, Color.BLACK)
+            reference.setText(title.getText())
+            reference.measure(View.MeasureSpec.makeMeasureSpec(title.measuredWidth, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED))
+            assertEquals("retained metrics match a fresh current-style paragraph", reference.measuredHeight, title.measuredHeight)
+            assertEquals("Ouvrir les options", arrow.contentDescription)
+            assertEquals("configuration cannot select or open", oldCount, opens.size)
+            assertEquals("44100 Hz", selected.getText())
             root.removeView(row)
             assertFalse(row.performClick())
             assertEquals(2, opens.size)

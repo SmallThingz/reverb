@@ -4,7 +4,7 @@ Reference: released v0.1.2, commit 3e16f8ddb78dca15df4b436d34d330801ce83ffd, Mai
 
 The native leaves use the source palette, icons, grouping, dividers and independent visual/interaction enabled states. Each OnboardingPageContentView has a fixed page identity and its own vertical scroll viewport. Pager state/motion, permission launchers, draft persistence and Finish remain external to these leaves; production MainActivity uses the native host.
 
-OnboardingNativeInteractionsFactory joins ReverbClickController, ReverbRowIndication and the filled Button elevation helper. The same identity-bound interaction stream reaches ripple and elevation. Permission/card bodies use explicit logical-start/center rounding. Native vertical viewports and the parent pager retain their existing pointer-phase and cancellation coordination.
+The shared `NativeMaterialButtonView` sends admitted interactions to its ripple and filled-button elevation owners. Onboarding supplies the native input root. Permission/card bodies use explicit logical-start/center rounding. Native vertical viewports and the parent pager retain their existing pointer-phase and cancellation coordination.
 
 Shared dependencies include the resolved ReverbPalette, caller typography, paragraph, icon and group views, and the library `NativeControlRow` and `NativeMaterialSwitchView`. Configuration replacement recreates the rendering inputs. The owner saves and restores per-page scroll after layout.
 

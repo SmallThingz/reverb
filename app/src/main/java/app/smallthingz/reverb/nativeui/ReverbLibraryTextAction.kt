@@ -5,6 +5,7 @@ import android.graphics.Color
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import smallthingz.ui.components.NativeButtonInputPolicy
 import smallthingz.ui.components.NativeMaterialButtonStyle
 import smallthingz.ui.components.NativeMaterialButtonView
 import smallthingz.ui.text.view.ParagraphView
@@ -16,7 +17,7 @@ internal class ReverbLibraryTextAction(context: Context, environment: ReverbView
     private var density = environment.textDensity.density
     private val visual = NativeMaterialButtonView(context, false, reverbButtonTextStyle(),
         environment.textDensity, environment.sharedFontResolver, NativeMaterialButtonStyle(12),
-        OnboardingNativeInteractionsFactory { inputRoot }, {})
+        NativeButtonInputPolicy(inputRoot = { inputRoot }), {})
     val textView: ParagraphView get() = visual.label
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO

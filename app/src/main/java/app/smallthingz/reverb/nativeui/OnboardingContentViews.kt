@@ -214,9 +214,9 @@ internal open class OnboardingCardView(
     protected val trailing: View,
     private val trailingWidthDp: Int,
     private val trailingHeightDp: Int,
-    interactions: OnboardingNativeInteractionsFactory,
+    inputRoot: () -> View?,
     accessibilityRole: NativeMergedRowRole = NativeMergedRowRole.BUTTON,
-) : NativeControlRow(context, accessibilityRole, interactions.inputRoot) {
+) : NativeControlRow(context, accessibilityRole, inputRoot) {
     private val title = ParagraphView(context, typography.titleMedium, density, resolver, 0)
     private val body = ParagraphView(context, typography.bodyMedium, density, resolver, 0)
     private var textHeight = 0
@@ -317,10 +317,10 @@ internal class OnboardingBufferRow(
     resolver: FontFamily.Resolver,
     icon: ReverbIcon,
     initialPalette: ReverbPalette,
-    interactions: OnboardingNativeInteractionsFactory,
+    inputRoot: () -> View?,
 ) : OnboardingCardView(context, typography, density, resolver,
     OnboardingMarker(context, typography.titleMedium, density, resolver, icon = icon),
-    NativeMaterialSwitchView(context, initialPalette.switchPalette()), 52, 32, interactions, NativeMergedRowRole.SWITCH) {
+    NativeMaterialSwitchView(context, initialPalette.switchPalette()), 52, 32, inputRoot, NativeMergedRowRole.SWITCH) {
     fun bind(title: String, body: String, checked: Boolean, visuallyEnabled: Boolean,
              interactionEnabled: Boolean, palette: ReverbPalette) {
         ViewCompat.setStateDescription(this, context.getString(

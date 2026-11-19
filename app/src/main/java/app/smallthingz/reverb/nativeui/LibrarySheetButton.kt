@@ -5,6 +5,7 @@ import android.graphics.Color
 import android.view.View
 import android.view.ViewGroup
 import smallthingz.ui.components.NativeActionSheetContentContext
+import smallthingz.ui.components.NativeButtonInputPolicy
 import smallthingz.ui.components.NativeMaterialButtonStyle
 import smallthingz.ui.components.NativeMaterialButtonView
 import smallthingz.ui.geometry.Offset
@@ -77,7 +78,7 @@ internal class LibrarySheetButton(
     private var action = onClick
     private val surface = NativeMaterialButtonView(context, filled, reverbButtonTextStyle(),
         environment.textDensity, environment.sharedFontResolver,
-        NativeMaterialButtonStyle(if (filled) 24 else 12), OnboardingNativeInteractionsFactory { host.inputRoot }, onClick)
+        NativeMaterialButtonStyle(if (filled) 24 else 12), NativeButtonInputPolicy(inputRoot = { host.inputRoot }), onClick)
     private val accessibility: AutoCloseable
     private val textAccessibility: AutoCloseable
     private val clip: AutoCloseable

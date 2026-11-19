@@ -1,6 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
 import smallthingz.ui.input.phase.NativePointerLayerShape
+import smallthingz.ui.geometry.roundedGroupContains
 import smallthingz.ui.geometry.roundedGroupGeometry
 import smallthingz.ui.interaction.view.NativeClickBinding
 import smallthingz.ui.interaction.view.NativeClickEnvironment
@@ -65,10 +66,9 @@ internal class ReverbIncidentBackView(
 
     override val nativeClickEndpoint = ViewClickPhaseEndpoint(controller)
 
-    override fun containsPointerLayer(x: Float, y: Float): Boolean = roundedGroupGeometry(
+    override fun containsPointerLayer(x: Float, y: Float): Boolean = roundedGroupContains(
         width.toFloat(), height.toFloat(), resources.displayMetrics.density,
-        min(width, height) / (2f * resources.displayMetrics.density),
-    ).contains(x, y)
+        min(width, height) / (2f * resources.displayMetrics.density), x, y)
 
     init {
         isClickable = true

@@ -3,6 +3,7 @@ package app.smallthingz.reverb.nativeui
 import smallthingz.ui.input.phase.NativePointerLayerShape
 import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.interaction.view.isNativeClickActivationKey
+import smallthingz.ui.geometry.roundedGroupContains
 import smallthingz.ui.geometry.roundedGroupGeometry
 import smallthingz.ui.interaction.view.NativeClickBinding
 import smallthingz.ui.interaction.view.NativeClickEnvironment
@@ -115,9 +116,8 @@ internal class ReverbIncidentCardView(
     private val outerClip = Path()
     private val outerBounds = RectF()
 
-    override fun containsPointerLayer(x: Float, y: Float): Boolean = roundedGroupGeometry(
-        width.toFloat(), height.toFloat(), appearance.density.density, cornerRadiusDp = 18f,
-    ).contains(x, y)
+    override fun containsPointerLayer(x: Float, y: Float): Boolean = roundedGroupContains(
+        width.toFloat(), height.toFloat(), appearance.density.density, cornerRadiusDp = 18f, x, y)
 
     private class Binding(
         val row: IncidentPresentation,

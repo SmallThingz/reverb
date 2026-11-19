@@ -20,9 +20,6 @@ import smallthingz.ui.text.view.ParagraphView
 import android.content.Context
 import android.view.View
 import android.view.ViewGroup
-import smallthingz.ui.text.TextStyle
-import smallthingz.ui.text.font.FontFamily
-import smallthingz.ui.unit.Density
 import app.smallthingz.reverb.AudioSourceMode
 import app.smallthingz.reverb.ChannelMode
 import app.smallthingz.reverb.InputRouteMode
@@ -82,37 +79,37 @@ internal interface SettingsAudioPopupHost {
  */
 internal class SettingsAudioChoicesView(
     private val context: Context,
-    private val bodySmall: TextStyle,
-    private val bodyLarge: TextStyle,
-    private val density: Density,
-    private val resolver: FontFamily.Resolver,
+    initialEnvironment: ReverbViewEnvironment,
     initial: SettingsAudioChoicesState,
-    palette: ReverbPalette,
     private val sampleRateLabel: (Int) -> String,
     private val popup: SettingsAudioPopupHost,
     private val selections: SettingsAudioSelections,
     private val inputRoot: () -> View? = { null },
 ) : AutoCloseable {
     val view = NativeGroupLayout(context, cornerRadiusDp = 16f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
-    private val initialDropdownColors = palette.dropdownColors()
-    private fun <T> choice(kind: SettingsAudioChoice, choose: (T) -> Unit): NativeDropdown<T> {
+    private val initialDropdownColors = initialEnvironment.palette.dropdownColors()
+    private fun <T> choice(kind: SettingsAudioChoice, choose: (T) -> Unit,
+        environment: ReverbViewEnvironment): NativeDropdown<T> {
         val arrow = OnboardingIconView(context, ReverbIcon.ArrowDropDown, initialDropdownColors.muted).apply {
             contentDescription = context.getString(R.string.open_options)
         }
         return NativeDropdown(context,
-            ParagraphView(context, bodySmall, density, resolver, initialDropdownColors.muted),
-            ParagraphView(context, bodyLarge, density, resolver, initialDropdownColors.ink),
+            ParagraphView(context, ReverbParagraphStyles[ReverbTextRole.BODY_SMALL],
+                environment.textDensity, environment.sharedFontResolver, initialDropdownColors.muted),
+            ParagraphView(context, ReverbParagraphStyles[ReverbTextRole.BODY_LARGE],
+                environment.textDensity, environment.sharedFontResolver, initialDropdownColors.ink),
             NativeDropdownIcon(arrow, arrow::setTintImmediately), initialDropdownColors, inputRoot,
             onBinding = { anchor, content -> popup.update(kind, anchor, content, choose) },
             open = { anchor, content -> popup.open(kind, anchor, content, choose) },
             foregroundColor = ::transitionInk)
     }
 
-    private val channel = choice(SettingsAudioChoice.CHANNELS, selections.channel)
-    private val sampleFormat = choice(SettingsAudioChoice.SAMPLE_FORMAT, selections.sampleFormat)
-    private val sampleRate = choice(SettingsAudioChoice.SAMPLE_RATE, selections.sampleRate)
-    private val source = choice(SettingsAudioChoice.SOURCE, selections.source)
-    private val route = choice(SettingsAudioChoice.ROUTE, selections.route)
+    private val channel = choice(SettingsAudioChoice.CHANNELS, selections.channel, initialEnvironment)
+    private val sampleFormat = choice(SettingsAudioChoice.SAMPLE_FORMAT, selections.sampleFormat, initialEnvironment)
+    private val sampleRate = choice(SettingsAudioChoice.SAMPLE_RATE, selections.sampleRate, initialEnvironment)
+    private val source = choice(SettingsAudioChoice.SOURCE, selections.source, initialEnvironment)
+    private val route = choice(SettingsAudioChoice.ROUTE, selections.route, initialEnvironment)
+    private val dropdowns = listOf(channel, sampleFormat, sampleRate, source, route)
     private val samplePair = SettingsAudioChoicePair(context, sampleFormat, sampleRate)
     private val inputPair = SettingsAudioChoicePair(context, source, route)
 
@@ -120,10 +117,17 @@ internal class SettingsAudioChoicesView(
         view.addRow(channel, NativeGroupLayout.LayoutParams(-1, -2))
         view.addRow(samplePair, NativeGroupLayout.LayoutParams(-1, -2))
         view.addRow(inputPair, NativeGroupLayout.LayoutParams(-1, -2))
-        bind(initial, palette)
+        bind(initial, initialEnvironment)
     }
 
-    fun bind(state: SettingsAudioChoicesState, palette: ReverbPalette) {
+    fun bind(state: SettingsAudioChoicesState, environment: ReverbViewEnvironment) {
+        val palette = environment.palette
+        val description = context.getString(R.string.open_options)
+        for (dropdown in dropdowns) {
+            dropdown.bindTypography(ReverbParagraphStyles[ReverbTextRole.BODY_SMALL],
+                ReverbParagraphStyles[ReverbTextRole.BODY_LARGE], environment.textDensity, environment.sharedFontResolver)
+            dropdown.bindDescription(description)
+        }
         val dropdownColors = palette.dropdownColors()
         channel.bind(
             SettingsDropdownContent(context.getString(R.string.channel_mode_label), state.channel, state.channels) {

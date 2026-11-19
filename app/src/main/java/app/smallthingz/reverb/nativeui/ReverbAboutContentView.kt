@@ -3,6 +3,7 @@ package app.smallthingz.reverb.nativeui
 import smallthingz.ui.components.NativeModalWindowRuntime
 
 import smallthingz.ui.components.NativeGroupLayout
+import smallthingz.ui.geometry.roundedGroupContains
 import smallthingz.ui.geometry.roundedGroupGeometry
 import smallthingz.ui.scroll.NativeVerticalNestedHost
 import smallthingz.ui.scroll.NativeVerticalScrollSource
@@ -620,8 +621,7 @@ private class AboutInputGeometry(private val density: Float) : AutoCloseable {
             dx * dx + dy * dy <= radius * radius
         }
         val repositoryHit = Hit(repository, listOf(repositoryNode), emptyList()) { p ->
-            roundedGroupGeometry(repository.width.toFloat(), repository.height.toFloat(), density, 20f)
-                .contains(p.x, p.y)
+            roundedGroupContains(repository.width.toFloat(), repository.height.toFloat(), density, 20f, p.x, p.y)
         }
         val viewport = surface.viewport
         val inflation = (30f * density).roundToInt()

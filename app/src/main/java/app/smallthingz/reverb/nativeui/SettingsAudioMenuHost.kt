@@ -21,9 +21,9 @@ import java.util.EnumMap
  * Selection invokes the current typed callback before dismissing, as in SettingsDropdown.
  */
 internal class SettingsAudioMenuHost(
-    private val style: TextStyle,
-    private val density: Density,
-    private val resolver: FontFamily.Resolver,
+    private var style: TextStyle,
+    private var density: Density,
+    private var resolver: FontFamily.Resolver,
     private val frames: MonotonicFrameClock,
     private val scope: CoroutineScope,
     initialPalette: ReverbPalette,
@@ -48,7 +48,21 @@ internal class SettingsAudioMenuHost(
         }
     }
 
-    fun palette(palette: ReverbPalette) { this.palette = palette }
+    fun bindConfiguration(style: TextStyle, density: Density, resolver: FontFamily.Resolver, palette: ReverbPalette) {
+        if (closed) return
+        this.palette = palette
+        if (this.style == style && this.density === density && this.resolver === resolver) return
+        this.style = style
+        this.density = density
+        this.resolver = resolver
+        // Popup geometry is immutable. Retire old windows before typed updates recreate the
+        // still-expanded choices; their scroll owners and expansion intent remain unchanged.
+        val retiring = sessions.values.toList()
+        sessions.clear()
+        var failure: Throwable? = null
+        for (session in retiring) failure = closePreservingPrimaryFailure(failure, session::close)
+        failure?.let { throw it }
+    }
 
     override fun <T> open(
         kind: SettingsAudioChoice,
@@ -58,19 +72,24 @@ internal class SettingsAudioMenuHost(
     ) {
         check(!closed)
         val previous = sessions[kind]
-        if (previous != null && previous.anchor === anchor) {
+        if (previous != null && previous.anchor === anchor && previous.window.layoutDirection == anchor.layoutDirection) {
             bindSession(kind, previous, content, onSelected)
             previous.window.expanded(true)
             publishExpanded(kind, true)
             return
         }
-        if (previous != null) retire(kind, previous)
+        if (previous != null) {
+            if (previous.anchor === anchor) {
+                sessions.remove(kind)
+                previous.close()
+            } else retire(kind, previous)
+        }
         val scroll = scrollStates.getOrPut(kind) { NativeVerticalScrollState() }
         lateinit var session: Session
         val window = NativePopupMenu(
             anchor, density, reverbDefaultTextStyle().merge(style), resolver, palette.menuColors(),
             scroll, frames, scope, ReverbMenuIcons,
-            onDismissRequest = { dismiss(kind) },
+            onDismissRequest = { if (sessions[kind] === session) dismiss(kind) },
             onTerminal = {
                 if (sessions[kind] === session) retire(kind, session)
             },
@@ -97,11 +116,19 @@ internal class SettingsAudioMenuHost(
     ) {
         if (closed) return
         if (content.options.size <= 1) {
-            sessions[kind]?.let { retire(kind, it) }
+            sessions[kind]?.let { retire(kind, it) } ?: publishExpanded(kind, false)
             scrollStates.remove(kind)
             return
         }
-        sessions[kind]?.let {
+        var session = sessions[kind]
+        if (session != null && session.anchor === anchor && session.window.layoutDirection != anchor.layoutDirection) {
+            sessions.remove(kind)
+            session.close()
+            session = null
+        }
+        if (session == null && kind in expanded) {
+            open(kind, anchor, content, onSelected)
+        } else session?.let {
             if (it.anchor !== anchor) retire(kind, it)
             else bindSession(kind,it,content,onSelected)
         }
@@ -114,6 +141,7 @@ internal class SettingsAudioMenuHost(
         select: (T) -> Unit,
     ) {
         session.window.bindChoices(NativeMenuChoices(content.selected, content.options, content.optionLabel), palette.menuColors()) { value ->
+            if (sessions[kind] !== session) return@bindChoices
             select(value)
             // A callback that throws deliberately does not run the following source statement.
             if (sessions[kind] === session) dismiss(kind)
@@ -123,16 +151,16 @@ internal class SettingsAudioMenuHost(
     /** The panel's released active=false effect closes menus, preserving each retained scroll. */
     fun dismissAll() {
         var failure: Throwable? = null
-        for (kind in sessions.keys.toList()) {
+        for (kind in expanded.toList()) {
             failure = closePreservingPrimaryFailure(failure) { dismiss(kind) }
         }
         failure?.let { throw it }
     }
 
     private fun dismiss(kind: SettingsAudioChoice) {
-        val session = sessions[kind] ?: return
+        val session = sessions[kind]
         var failure = closePreservingPrimaryFailure(null) { publishExpanded(kind,false) }
-        failure = closePreservingPrimaryFailure(failure) { session.window.expanded(false) }
+        failure = closePreservingPrimaryFailure(failure) { session?.window?.expanded(false) }
         failure?.let { throw it }
     }
 

@@ -6,6 +6,7 @@ import smallthingz.ui.components.NativeTopBarLayout
 import smallthingz.ui.input.phase.NativePointerLayerShape
 import smallthingz.ui.components.NativeTopBarAction
 import smallthingz.ui.interaction.view.isNativeClickActivationKey
+import smallthingz.ui.geometry.roundedGroupContains
 import smallthingz.ui.geometry.roundedGroupGeometry
 import smallthingz.ui.interaction.view.NativeClickBinding
 import smallthingz.ui.interaction.view.NativeClickEnvironment
@@ -321,8 +322,8 @@ private class ReverbTopBarBrandAction(context: Context, private var environment:
     }, RowIndicationSink(indication) { x, y, point -> point.set(x, y) })
     override val nativeClickEndpoint: NativeClickPhaseEndpoint = ViewClickPhaseEndpoint(controller)
     override fun containsPointerLayer(x: Float, y: Float) =
-        roundedGroupGeometry(width.toFloat(), height.toFloat(), environment.textDensity.density,
-            min(width, height) / (2f * environment.textDensity.density)).contains(x, y)
+        roundedGroupContains(width.toFloat(), height.toFloat(), environment.textDensity.density,
+            min(width, height) / (2f * environment.textDensity.density), x, y)
     init {
         isClickable = true
         isFocusable = true

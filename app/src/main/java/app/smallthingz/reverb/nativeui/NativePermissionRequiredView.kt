@@ -1,6 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
 import smallthingz.ui.components.NativeGroupLayout
+import smallthingz.ui.components.NativeButtonInputPolicy
 import smallthingz.ui.components.NativeMaterialButtonStyle
 import smallthingz.ui.components.NativeMaterialButtonView
 import smallthingz.ui.util.closePreservingPrimaryFailure
@@ -215,7 +216,7 @@ private class PermissionLibraryAction(context:Context,private val host:NativeMat
         environment.textDensity, environment.sharedFontResolver,
         NativeMaterialButtonStyle(0, verticalPaddingDp = 0, minimumWidthDp = 54, minimumHeightDp = 54,
             iconSizeDp = 25, radiusDp = 18f, showLabel = false),
-        OnboardingNativeInteractionsFactory { host.inputRoot }.roundedButton(18f), action).apply {
+        NativeButtonInputPolicy(inputRoot = { host.inputRoot }), action).apply {
         setLeadingView(glyph, exposeToAccessibility = true)
     }
     private val click = NativeClickPhaseNode(visual, visual.nativeClickEndpoint, host.interestedParent)

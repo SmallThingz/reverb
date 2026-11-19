@@ -57,7 +57,7 @@ internal class SettingsSilenceView(
     private var state=initial
     private var actions:SettingsSilenceActions?=actions
     private var selected=1.coerceAtMost(initial.config.points.lastIndex)
-    private val row=SettingsToggleRowView(context,context.getString(R.string.silence_title),
+    private val row=SettingsToggleRowView(context,R.string.silence_title,
         initial.config.enabled,initial.enabled,environment,inputRoot,false,changed={checked->
             if(state.calibrating)this.actions?.cancel()
             this.actions?.configChanged(state.config.copy(enabled=checked))

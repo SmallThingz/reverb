@@ -15,6 +15,7 @@ import app.smallthingz.reverb.R
 import smallthingz.ui.animation.core.AnimationVector1D
 import smallthingz.ui.animation.view.ViewColorTransition
 import smallthingz.ui.animation.view.ViewSpringDriver
+import smallthingz.ui.components.NativeButtonInputPolicy
 import smallthingz.ui.components.NativeMaterialButtonStyle
 import smallthingz.ui.components.NativeMaterialButtonView
 import smallthingz.ui.graphics.Color
@@ -82,7 +83,7 @@ private class CalibrationActionSurface(
     action: () -> Unit,
 ) : NativeMaterialButtonView(context, false, reverbButtonTextStyle(), environment.textDensity,
     environment.sharedFontResolver, NativeMaterialButtonStyle(12, iconSizeDp = 20, iconGapDp = 8),
-    OnboardingNativeInteractionsFactory(inputRoot), action) {
+    NativeButtonInputPolicy(inputRoot), action) {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private var progress: Float? = null
     private var running = false

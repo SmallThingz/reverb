@@ -62,7 +62,7 @@ internal class SettingsNotificationSaveView(
     }
 
     private var state=initial
-    private val row=SettingsToggleRowView(context,context.getString(R.string.feature_notification_save),
+    private val row=SettingsToggleRowView(context,R.string.feature_notification_save,
         initial.enabled,initial.interactionReady,environment,inputRoot,false,onEnabledChange)
     private var onInteractionChanged:()->Unit={}
     private var wheel:NativeNotificationDurationWheel?=null

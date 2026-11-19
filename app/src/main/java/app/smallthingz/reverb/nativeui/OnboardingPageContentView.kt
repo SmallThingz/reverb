@@ -75,7 +75,6 @@ internal class OnboardingPageContentView(
     scrollFrames: MonotonicFrameClock,
     scrollScope: CoroutineScope,
     scrollNested: NativeVerticalNestedHost,
-    interactions: OnboardingNativeInteractionsFactory = OnboardingNativeInteractionsFactory(),
     inputRoot: () -> View? = { null },
     parentInterested: (NativeDragPointerChange) -> Boolean = { false },
 ) : FrameLayout(context), AutoCloseable {
@@ -99,12 +98,12 @@ internal class OnboardingPageContentView(
     private val permissionBody = if (page == 0) label(context, typography.bodyMedium, density, resolver,
         R.string.onboarding_permissions_body, initialPalette.onSurfaceVariant) else null
     private val permissions = if (page == 0)
-        OnboardingPermissionGroup(context, typography, density, resolver, interactions) else null
+        OnboardingPermissionGroup(context, typography, density, resolver, inputRoot) else null
     private val bufferGroup = if (page == 1) NativeGroupLayout(context, cornerRadiusDp = 20f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast) else null
     private val oneShot = if (page == 1)
-        OnboardingBufferRow(context, typography, density, resolver, ReverbIcon.OneShot, initialPalette, interactions) else null
+        OnboardingBufferRow(context, typography, density, resolver, ReverbIcon.OneShot, initialPalette, inputRoot) else null
     private val looping = if (page == 1)
-        OnboardingBufferRow(context, typography, density, resolver, ReverbIcon.Looping, initialPalette, interactions) else null
+        OnboardingBufferRow(context, typography, density, resolver, ReverbIcon.Looping, initialPalette, inputRoot) else null
     private val bufferOrder = if (page == 1) label(context, typography.bodyMedium, density, resolver,
         R.string.onboarding_order, initialPalette.onSurfaceVariant) else null
     private val audioGroup = if (page == 2) NativeGroupLayout(context, cornerRadiusDp = 20f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast) else null

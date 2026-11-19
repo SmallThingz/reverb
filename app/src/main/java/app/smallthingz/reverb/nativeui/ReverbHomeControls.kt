@@ -2,6 +2,7 @@ package app.smallthingz.reverb.nativeui
 
 import smallthingz.ui.interaction.view.isNativeClickActivationKey
 
+import smallthingz.ui.geometry.roundedGroupContains
 import smallthingz.ui.geometry.roundedGroupGeometry
 
 import smallthingz.ui.interaction.view.NativeClickBinding
@@ -262,10 +263,9 @@ internal abstract class HomeClickable(
             override val nodes = listOf(node)
             override val childrenInHitOrder = emptyList<NativeViewPointerHitLayout>()
             override fun screenToLocal(screen: Offset) = coordinates.coordinates(this@HomeClickable).local(screen)
-            override fun withinLayerBounds(local: Offset) = roundedGroupGeometry(
+            override fun withinLayerBounds(local: Offset) = roundedGroupContains(
                 width.toFloat(), height.toFloat(), currentEnvironment.textDensity.density,
-                radiusDp ?: min(width, height) / (2f * currentEnvironment.textDensity.density),
-            ).contains(local.x, local.y)
+                radiusDp ?: min(width, height) / (2f * currentEnvironment.textDensity.density), local.x, local.y)
         }
     }
 

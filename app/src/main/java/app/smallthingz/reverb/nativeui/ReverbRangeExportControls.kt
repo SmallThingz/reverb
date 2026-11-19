@@ -1,6 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
 import smallthingz.ui.components.NativeGroupLayout
+import smallthingz.ui.components.NativeButtonInputPolicy
 import smallthingz.ui.components.NativeMaterialButtonStyle
 import smallthingz.ui.components.NativeMaterialButtonView
 import android.content.Context
@@ -190,7 +191,7 @@ internal class ExportContent(
     initialEnvironment.textDensity, initialEnvironment.sharedFontResolver,
     NativeMaterialButtonStyle(15, verticalPaddingDp = 0, minimumWidthDp = 48,
         minimumHeightDp = 48, iconSizeDp = 20, radiusDp = 20f, alignContentStart = true),
-    OnboardingNativeInteractionsFactory(inputRoot).roundedButton(20f), {}) {
+    NativeButtonInputPolicy(inputRoot), {}) {
     private var loadingView: ReverbIncidentLoadingView? = null
     private var glyphDensity = Float.NaN
 

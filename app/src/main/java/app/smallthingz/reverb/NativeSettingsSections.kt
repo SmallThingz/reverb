@@ -164,11 +164,7 @@ internal class NativeSettingsSections(
         private var histogram: SilenceCalibrationHistogram? = null
         private val choices = SettingsAudioChoicesSection(
             context,
-            ReverbParagraphStyles[ReverbTextRole.BODY_SMALL],
-            ReverbParagraphStyles[ReverbTextRole.BODY_LARGE],
-            ReverbParagraphStyles[ReverbTextRole.LABEL_LARGE],
-            environment().textDensity, environment().sharedFontResolver,
-            audioState(), environment().palette, ::sampleRateLabel,
+            environment(), audioState(), ::sampleRateLabel,
             SettingsAudioSelections(
                 { owner.channelChanged(activation, it) },
                 { owner.sampleFormatChanged(activation, it) },
@@ -197,7 +193,7 @@ internal class NativeSettingsSections(
             activation = state.activation
             val env = environment()
             choices.active(state.active)
-            choices.bind(audioState(), env.palette)
+            choices.bind(audioState(), env)
             compression.bind(compressionState(), env)
             env.bindParagraphStyle(warning, ReverbTextRole.BODY_SMALL, env.palette.error)
             skip.bind(silenceState(), env, silenceActions())

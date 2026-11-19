@@ -5,7 +5,7 @@ import smallthingz.ui.components.NativeFloatingPredictiveMotion
 
 import smallthingz.ui.input.phase.NativePointerLayerShape
 import smallthingz.ui.components.NativeGroupLayout
-import smallthingz.ui.geometry.roundedGroupGeometry
+import smallthingz.ui.geometry.roundedGroupContains
 import smallthingz.ui.scroll.NativeVerticalPhaseBinding
 import smallthingz.ui.scroll.NativeVerticalScrollAccessibilityBinding
 import smallthingz.ui.scroll.NativeVerticalScrollState
@@ -120,7 +120,6 @@ internal class NativeOnboardingScreenView private constructor(
         this::viewport.isInitialized && viewport.isAttachedToWindow
     }
     private val scrollStates = List(3) { NativeVerticalScrollState(restored.verticalPositions[it]) }
-    private val interactions = OnboardingNativeInteractionsFactory { this }
     private val typography = OnboardingPageTypography(
         ReverbParagraphStyles[ReverbTextRole.HEADLINE_MEDIUM],
         ReverbParagraphStyles[ReverbTextRole.TITLE_MEDIUM],
@@ -134,7 +133,7 @@ internal class NativeOnboardingScreenView private constructor(
     private val vertical = java.util.IdentityHashMap<NativeVerticalViewport, NativeVerticalPhaseBinding>()
     private val verticalAccessibility = java.util.IdentityHashMap<NativeVerticalViewport, NativeVerticalScrollAccessibilityBinding>()
     private val footer = OnboardingFooterView(context, ReverbParagraphStyles[ReverbTextRole.LABEL_LARGE],
-        density, environment.sharedFontResolver, interactions)
+        density, environment.sharedFontResolver, inputRoot = { this })
     private val pageActions = mutableListOf<AutoCloseable>()
     private val pageText = mutableListOf<AutoCloseable>()
     private var preview: OnboardingPageContentView? = null
@@ -325,7 +324,7 @@ internal class NativeOnboardingScreenView private constructor(
 
     private fun createPage(page: Int, value: OnboardingPageContentState): OnboardingPageContentView = OnboardingPageContentView(
         context, page, typography, density, environment.sharedFontResolver, value,
-        environment.palette, scrollStates[page], frames, scope, scrolling.pageNestedHost, interactions,
+        environment.palette, scrollStates[page], frames, scope, scrolling.pageNestedHost,
         inputRoot = { this },
         parentInterested = { change ->
             pages.getOrNull(page)?.sourceVerticalViewport?.let { vertical[it]?.interested(change) } == true ||
@@ -641,10 +640,9 @@ private class OnboardingPointerGeometry(private val environment: ReverbViewEnvir
                 target is NativePointerLayerShape -> target.containsPointerLayer(local.x, local.y)
                 target is NativeGroupLayout -> target.containsVisualPoint(local.x, local.y)
                 target is SettingsOutputCompressionView || target is SettingsSilenceView -> true // One outer group clips both consecutive controls.
-                target.parent is NativeGroupLayout -> roundedGroupGeometry(width, height, environment.textDensity.density, 20f)
-                    .contains(local.x, local.y)
-                root.isFooterButton(target) -> roundedGroupGeometry(width, height, environment.textDensity.density,
-                    minOf(width, height) / (2f * environment.textDensity.density)).contains(local.x, local.y)
+                target.parent is NativeGroupLayout -> roundedGroupContains(width, height, environment.textDensity.density, 20f, local.x, local.y)
+                root.isFooterButton(target) -> roundedGroupContains(width, height, environment.textDensity.density,
+                    minOf(width, height) / (2f * environment.textDensity.density), local.x, local.y)
                 else -> true // The remaining released Column/Box/page/body boundaries have no clip.
             }
         }

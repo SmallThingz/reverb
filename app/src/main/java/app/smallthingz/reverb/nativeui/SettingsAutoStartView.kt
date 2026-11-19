@@ -14,7 +14,7 @@ internal class SettingsAutoStartView(
     changed: (Boolean) -> Unit,
 ) : ViewGroup(context), AutoCloseable {
     private val group = NativeGroupLayout(context, 20f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
-    private val toggle = SettingsToggleRowView(context, context.getString(R.string.auto_start_title),
+    private val toggle = SettingsToggleRowView(context, R.string.auto_start_title,
         false, false, environment, inputRoot, dimDisabledText = true, changed = changed,
         summary = context.getString(R.string.auto_start_summary))
     init {
