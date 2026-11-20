@@ -125,7 +125,7 @@ internal class NativeLibraryScrollOwner(
 ) : View.OnAttachStateChangeListener, AutoCloseable {
     private val mutex = MutatorMutex()
     private var fraction = NativeLibraryScrollAccumulator()
-    private val decay = splineBasedDecay<Float>(environment.textDensity)
+    private val decay = splineBasedDecay(environment.textDensity)
     private val overscroll = NativeVerticalOverscroll(view.context, environment.textDensity, 0xff666666.toInt(), view::invalidate)
     private var scope: CoroutineScope? = null
     private var channel: Channel<Event>? = null
