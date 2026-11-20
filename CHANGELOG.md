@@ -2,7 +2,7 @@
 
 ## 0.1.3-rc5 (unreleased)
 
-- Preserve PCM16 samples during recording recovery and match float WAV trim playback to export.
+- Preserve PCM16 samples in previews and normalized exports, and match float WAV trim playback to export.
 - Improve capture handling during slow writes and report stalled audio input.
 - Reduce repeated work in the recording catalog, previews, and UI animations.
 - Combine save progress and outcomes under the Save results notification category.

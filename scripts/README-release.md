@@ -55,11 +55,10 @@ Stable releases and release candidates are intended for F-Droid pickup as well a
 F-Droid Gradle parser cannot resolve arbitrary variables. The signing guard reads
 that same Android configuration instead of maintaining a second version constant.
 
-The prospective `0.1.3-rc5` uses code 9. The repository's `.fdroid.yml` continues
-to describe published `0.1.3-rc4` (8). Once publication is authorized, prepare
-the `0.1.3-rc5` entry and current-version fields before the release source is
-frozen. Use `v0.1.3-rc5` as its commit, retain the offline bootstrap prebuild
-from rc4, and verify `reverb-0.1.3-rc5.apk` as the expected asset name.
+The prospective `0.1.3-rc5` uses code 9. The repository's `.fdroid.yml` records
+that candidate with the offline bootstrap prebuild and expected `v0.1.3-rc5`
+tag. The tag and `reverb-0.1.3-rc5.apk` release asset remain pending separate
+authorization. Published `0.1.3-rc4` continues to use code 8.
 
 After publication is separately authorized, verify the current upstream
 `check_tags` and Gradle parser against the published tag and current central
