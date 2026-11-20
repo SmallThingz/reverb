@@ -8,6 +8,7 @@ import androidx.compose.ui.geometry.Offset as OracleOffset
 import androidx.compose.ui.geometry.Rect as OracleRect
 import androidx.compose.ui.geometry.Size as OracleSize
 import androidx.compose.ui.graphics.Color as OracleColor
+import app.smallthingz.reverb.populateOnboardingPreviewSemanticTransform
 import androidx.compose.ui.graphics.Matrix as OracleMatrix
 import androidx.compose.ui.graphics.colorspace.ColorSpaces as OracleColorSpaces
 import androidx.compose.ui.graphics.lerp as oracleColorLerp
@@ -68,9 +69,9 @@ class NativePrimitiveOracleParityTest {
         }
         for (angle in floatArrayOf(-179.9f, -90f, 0f, 13.37f, 90f, 180f)) {
             val oracle = OracleMatrix().apply { translate(14.7f, -29.2f, .5f); rotateZ(angle); scale(.83f, 1.07f) }
-            val native = NativeMatrix().apply { translate(14.7f, -29.2f, .5f); rotateZ(angle); scale(.83f, 1.07f) }
-            oracle.values[3] = .00013f; native.values[3] = .00013f
-            oracle.values[7] = -.00004f; native.values[7] = -.00004f
+            oracle.values[3] = .00013f
+            oracle.values[7] = -.00004f
+            val native = NativeMatrix(oracle.values.copyOf())
             for (x in scalars) for (y in scalars) {
                 assertEquals(oracle.map(OracleOffset(x,y)).packedValue, native.map(NativeOffset(x,y)).packedValue)
             }
@@ -80,26 +81,68 @@ class NativePrimitiveOracleParityTest {
             assertEquals(expected.top.toRawBits(), actual.top.toRawBits())
             assertEquals(expected.right.toRawBits(), actual.right.toRawBits())
             assertEquals(expected.bottom.toRawBits(), actual.bottom.toRawBits())
-            oracle.invert(); native.invert()
-            for (index in 0..15) assertEquals(oracle.values[index].toRawBits(), native.values[index].toRawBits())
+        }
+    }
+
+    @Test fun onboardingSemanticTransformMatchesPinnedBinaryBits() {
+        val translations = floatArrayOf(-45.79199981689453f, -0f, 0f, -Float.MIN_VALUE, 9.125f)
+        val scales = floatArrayOf(-1f, -0f, 0f, 0.9820000529289246f, 1f, 1.075f)
+        val native = NativeMatrix()
+        val oracle = OracleMatrix()
+        for (width in intArrayOf(0, 317, 954)) for (height in intArrayOf(0, 685, 1968)) {
+            for (translationX in translations) for (translationY in translations) {
+                for (scaleX in scales) for (scaleY in scales) {
+                    populateOnboardingPreviewSemanticTransform(native,
+                        width, height, translationX, translationY, scaleX, scaleY)
+                    oracle.resetToPivotedTransform(pivotX = width / 2f, pivotY = height / 2f,
+                        translationX = translationX, translationY = translationY,
+                        scaleX = scaleX, scaleY = scaleY)
+                    for (index in 0..15) {
+                        assertEquals(oracle.values[index].toRawBits(), native.values[index].toRawBits())
+                    }
+                }
+            }
+        }
+    }
+
+    @Test fun onboardingNonfiniteTranslationRetainsSourcePropagation() {
+        val translations = floatArrayOf(Float.NEGATIVE_INFINITY, Float.POSITIVE_INFINITY,
+            Float.NaN, -0f, 0f, 3.125f)
+        val native = NativeMatrix()
+        val oracle = OracleMatrix()
+        for (translationX in translations) for (translationY in translations) {
+            populateOnboardingPreviewSemanticTransform(native, 317, 685,
+                translationX, translationY, -0f, .97f)
+            oracle.resetToPivotedTransform(pivotX = 158.5f, pivotY = 342.5f,
+                translationX = translationX, translationY = translationY, scaleX = -0f, scaleY = .97f)
+            for (index in 0..15) {
+                // JVMs may select different NaN payloads. Check all non-NaN coefficients bitwise.
+                assertEquals(oracle.values[index].toBits(), native.values[index].toBits())
+            }
         }
     }
 
     @Test fun constraintsPackingBoundariesKeepValuesAndRejections() {
-        val limits = intArrayOf(0, 1, 1080, 8191, 8192, 16383, 16384, 32767, 65535, 262142, Int.MAX_VALUE)
-        for (width in limits) for (height in limits) {
-            val oracle = runCatching { OracleConstraints(0, width, 0, height) }
-            val native = runCatching { NativeConstraints(0, width, 0, height) }
-            assertEquals("$width/$height", oracle.isSuccess, native.isSuccess)
+        val limits = intArrayOf(0, 1, 1080, 8190, 8191, 8192, 16383, 16384, 32766, 32767,
+            65534, 65535, 262142, 262143, Int.MAX_VALUE)
+        val ranges = limits.map { 0 to it } + limits.filter { it != 0 && it != Int.MAX_VALUE }
+            .flatMap { listOf(it to it, it to Int.MAX_VALUE) } + listOf(-1 to 1, 2 to 1)
+        for ((minWidth, maxWidth) in ranges) for ((minHeight, maxHeight) in ranges) {
+            val oracle = runCatching { OracleConstraints(minWidth, maxWidth, minHeight, maxHeight) }
+            val native = runCatching { NativeConstraints(minWidth, maxWidth, minHeight, maxHeight) }
+            val bounds = "$minWidth/$maxWidth, $minHeight/$maxHeight"
+            assertEquals(bounds, oracle.isSuccess, native.isSuccess)
             if (oracle.isSuccess) {
                 val expected = oracle.getOrThrow(); val actual = native.getOrThrow()
-                assertEquals(expected.minWidth, actual.minWidth)
-                assertEquals(expected.maxWidth, actual.maxWidth)
-                assertEquals(expected.minHeight, actual.minHeight)
-                assertEquals(expected.maxHeight, actual.maxHeight)
-                assertEquals(expected.hasBoundedWidth, actual.hasBoundedWidth)
-                assertEquals(expected.hasBoundedHeight, actual.hasBoundedHeight)
-            } else assertEquals(oracle.exceptionOrNull()!!::class.java, native.exceptionOrNull()!!::class.java)
+                assertEquals(bounds, expected.minWidth, actual.minWidth)
+                assertEquals(bounds, expected.maxWidth, actual.maxWidth)
+                assertEquals(bounds, expected.minHeight, actual.minHeight)
+                assertEquals(bounds, expected.maxHeight, actual.maxHeight)
+                assertEquals(bounds, expected.hasBoundedWidth, actual.hasBoundedWidth)
+                assertEquals(bounds, expected.hasBoundedHeight, actual.hasBoundedHeight)
+            } else {
+                assertEquals(bounds, oracle.exceptionOrNull()!!::class.java, native.exceptionOrNull()!!::class.java)
+            }
         }
     }
 
