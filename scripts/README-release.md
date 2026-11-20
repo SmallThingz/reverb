@@ -10,7 +10,10 @@ GitHub release; asset upload/download and central F-Droid publication checks bel
 require a separately authorized publication. An expected asset URL is not evidence
 that the asset exists.
 
-1. Finish version, changelog, documentation and source changes. Commit them all.
+1. Finish version, changelog, documentation and source changes. Run
+   `python3 scripts/bootstrap-native-ui.py --check` after staging any UI gitlink
+   update, then commit all source changes. Verify bootstrap also succeeds in a
+   plain clone of the candidate before signing.
 2. Create the matching `v<versionName>` tag on that clean commit; never move a
    published tag or replace an already published APK. Keep the application ID and
    existing developer signing certificate unchanged.
@@ -22,8 +25,8 @@ that the asset exists.
 
    ```sh
    python3 scripts/test_verify_release.py
-   python3 scripts/verify_release.py v0.1.3-rc4 \
-     .maintenance/release-0.1.3-rc4-20261118/reverb-0.1.3-rc4.apk \
+   python3 scripts/verify_release.py v0.1.3-rc5 \
+     /path/to/reverb-0.1.3-rc5.apk \
      --build-tools ../../.android/sdk/build-tools/37.0.0
    ```
 
@@ -52,10 +55,11 @@ Stable releases and release candidates are intended for F-Droid pickup as well a
 F-Droid Gradle parser cannot resolve arbitrary variables. The signing guard reads
 that same Android configuration instead of maintaining a second version constant.
 
-For the local candidate, verify the exact local tag and literal Gradle version
-select `0.1.3-rc4` (8), with `reverb-0.1.3-rc4.apk` as the expected asset on
-`v0.1.3-rc4`. Local `.fdroid.yml` candidate metadata does not make that asset
-available or change the currently published release.
+The prospective `0.1.3-rc5` uses code 9. The repository's `.fdroid.yml` continues
+to describe published `0.1.3-rc4` (8). Once publication is authorized, prepare
+the `0.1.3-rc5` entry and current-version fields before the release source is
+frozen. Use `v0.1.3-rc5` as its commit, retain the offline bootstrap prebuild
+from rc4, and verify `reverb-0.1.3-rc5.apk` as the expected asset name.
 
 After publication is separately authorized, verify the current upstream
 `check_tags` and Gradle parser against the published tag and current central

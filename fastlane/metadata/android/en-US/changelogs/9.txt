@@ -1,0 +1,5 @@
+Preserve audio samples and improve trim playback consistency.
+Improve recovery from slow writes and stalled audio input.
+Reduce repeated work in Library, previews, and animations.
+Combine save progress and outcomes under Save results.
+Retire the CPU-awake setting.
