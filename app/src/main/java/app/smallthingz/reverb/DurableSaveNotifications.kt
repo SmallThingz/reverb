@@ -20,7 +20,7 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
 internal const val DURABLE_SAVE_NOTIFICATION_ID = 44
-private val DURABLE_SAVE_CHANNEL = ReverbNotificationChannel.SAVE_PROGRESS.id
+private val DURABLE_SAVE_CHANNEL = ReverbNotificationChannel.SAVE_RESULTS.id
 private const val DURABLE_SAVE_TAG_PREFIX = "reverb-save-job:"
 
 /** A UUID remains the identity; equal numeric hashes can never replace another pending job. */
@@ -41,7 +41,7 @@ internal object DurableSaveNotifications {
             combine(DurableSaveJobs.state, DurableSaveJobs.readiness) { jobs, readiness -> jobs to readiness }
                 .collect { (jobs, readiness) ->
                     try {
-                        ReverbNotificationChannels.ensure(app, ReverbNotificationChannel.SAVE_PROGRESS)
+                        ReverbNotificationChannels.ensure(app, ReverbNotificationChannel.SAVE_RESULTS)
                         val desired = jobs.filter(::durableSaveNeedsProgressNotification)
                             .associateBy(PendingSave::id)
                         val explicitlyFinished = jobs.filterNot(::durableSaveNeedsProgressNotification)
@@ -61,7 +61,10 @@ internal object DurableSaveNotifications {
                             }
                             rendered.keys.retainAll(desired.keys)
                         }
-                        if (!notificationDeliveryAvailable(app, manager)) return@collect
+                        if (!notificationDeliveryAvailable(app, manager)) {
+                            ReverbNotificationChannels.retireLegacySaveProgress(manager)
+                            return@collect
+                        }
                         for (job in desired.values) {
                             val view = renderedSaveNotification(job)
                             if (rendered[job.id] == view) continue
@@ -69,6 +72,7 @@ internal object DurableSaveNotifications {
                                 buildNotification(app, job, view))
                             rendered[job.id] = view
                         }
+                        ReverbNotificationChannels.retireLegacySaveProgress(manager)
                     } catch (error: Exception) {
                         if (error is CancellationException) throw error
                         // Progress delivery is optional; the durable job and terminal feedback retain ownership.

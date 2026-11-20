@@ -73,7 +73,7 @@
         <item quantity="other">%1$d 个录音已移动。</item>
     </plurals>
 
-    <string name="boot_resume_channel">设备重启后的录音恢复提醒</string>
+    <string name="boot_resume_channel">重启提醒</string>
     <string name="boot_resume_title">恢复录音</string>
     <string name="boot_resume_detail">设备重启后，打开 Reverb 以恢复录音。</string>
     <string name="boot_resume_in_progress">正在恢复录音…</string>
@@ -82,9 +82,7 @@
     <string name="notification_channel_background">录音和后台任务</string>
     <string name="notification_channel_background_description">录音状态与控制，以及导出、清空缓冲区和存储更新。</string>
     <string name="notification_channel_save_results">保存结果</string>
-    <string name="notification_channel_save_results_description">录音保存成功和保存失败的通知，包括 Quick Save 和裁剪后的录音。</string>
-    <string name="notification_channel_save_progress">录音保存进度</string>
-    <string name="notification_channel_save_progress_description">排队保存录音的进度、恢复和失败通知。</string>
+    <string name="notification_channel_save_results_description">录音保存进度、恢复、确认和失败通知。</string>
     <string name="notification_channel_playback_description">已保存录音的播放状态与控制。</string>
     <string name="notification_channel_restart_description">提醒您在设备重启后打开 Reverb 以恢复录音。</string>
 
@@ -105,4 +103,5 @@
     <string name="restart_access_not_now">暂不</string>
     <string name="restart_invitation_read_failed">无法检查自动启动权限提醒</string>
     <string name="restart_invitation_save_failed">无法保存您对自动启动权限提醒的选择</string>
+    <string name="recording_playback_channel">录音播放</string>
 </resources>

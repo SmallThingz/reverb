@@ -73,7 +73,7 @@
         <item quantity="other">%1$d개의 녹음을 이동했습니다.</item>
     </plurals>
 
-    <string name="boot_resume_channel">기기 재시작 후 녹음 재개 알림</string>
+    <string name="boot_resume_channel">재시작 알림</string>
     <string name="boot_resume_title">녹음 재개</string>
     <string name="boot_resume_detail">기기 재시작 후 녹음을 재개하려면 Reverb를 여세요.</string>
     <string name="boot_resume_in_progress">녹음 재개 중…</string>
@@ -82,9 +82,7 @@
     <string name="notification_channel_background">녹음 및 백그라운드 작업</string>
     <string name="notification_channel_background_description">녹음 상태와 제어, 내보내기, 버퍼 비우기 및 저장소 업데이트.</string>
     <string name="notification_channel_save_results">저장 결과</string>
-    <string name="notification_channel_save_results_description">Quick Save 및 잘라낸 녹음의 저장을 포함한 녹음 저장 확인 및 저장 실패 알림.</string>
-    <string name="notification_channel_save_progress">녹음 저장 진행 상황</string>
-    <string name="notification_channel_save_progress_description">대기 중인 녹음 저장 작업의 진행 상황, 복구 및 실패 알림.</string>
+    <string name="notification_channel_save_results_description">녹음 저장 진행 상황, 복구, 확인 및 실패 알림.</string>
     <string name="notification_channel_playback_description">저장된 녹음의 재생 상태와 제어.</string>
     <string name="notification_channel_restart_description">기기 재시작 후 녹음을 재개하도록 Reverb 열기를 안내합니다.</string>
 
@@ -105,4 +103,5 @@
     <string name="restart_access_not_now">나중에</string>
     <string name="restart_invitation_read_failed">자동 시작 권한 알림을 확인할 수 없습니다</string>
     <string name="restart_invitation_save_failed">자동 시작 권한 알림에 대한 선택을 저장할 수 없습니다</string>
+    <string name="recording_playback_channel">녹음 재생</string>
 </resources>

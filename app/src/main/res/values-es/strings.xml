@@ -75,7 +75,7 @@
         <item quantity="other">Se movieron %1$d grabaciones.</item>
     </plurals>
 
-    <string name="boot_resume_channel">Recordatorios de grabación tras reiniciar el dispositivo</string>
+    <string name="boot_resume_channel">Recordatorios tras reiniciar</string>
     <string name="boot_resume_title">Reanudar la grabación</string>
     <string name="boot_resume_detail">Abre Reverb para reanudar la grabación tras reiniciar el dispositivo.</string>
     <string name="boot_resume_in_progress">Reanudando la grabación…</string>
@@ -84,9 +84,7 @@
     <string name="notification_channel_background">Grabación y tareas en segundo plano</string>
     <string name="notification_channel_background_description">Estado y controles de grabación, exportaciones, borrado del búfer y actualizaciones del almacenamiento.</string>
     <string name="notification_channel_save_results">Resultados del guardado</string>
-    <string name="notification_channel_save_results_description">Confirmaciones de guardado y errores, incluidos Quick Save y las grabaciones recortadas.</string>
-    <string name="notification_channel_save_progress">Progreso del guardado de grabaciones</string>
-    <string name="notification_channel_save_progress_description">Progreso, recuperación y errores de las grabaciones en la cola de guardado.</string>
+    <string name="notification_channel_save_results_description">Progreso, recuperación, confirmaciones y errores al guardar grabaciones.</string>
     <string name="notification_channel_playback_description">Estado y controles de reproducción de las grabaciones guardadas.</string>
     <string name="notification_channel_restart_description">Te recuerda que abras Reverb para reanudar la grabación tras reiniciar el dispositivo.</string>
 
@@ -107,4 +105,5 @@
     <string name="restart_access_not_now">Ahora no</string>
     <string name="restart_invitation_read_failed">No se pudo comprobar el recordatorio del permiso para el inicio automático</string>
     <string name="restart_invitation_save_failed">No se pudo guardar tu elección sobre el recordatorio del permiso para el inicio automático</string>
+    <string name="recording_playback_channel">Reproducción de grabaciones</string>
 </resources>

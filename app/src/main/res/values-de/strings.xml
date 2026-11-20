@@ -74,7 +74,7 @@
         <item quantity="other">%1$d Aufnahmen verschoben.</item>
     </plurals>
 
-    <string name="boot_resume_channel">Erinnerungen zur Aufnahme nach Geräteneustart</string>
+    <string name="boot_resume_channel">Erinnerungen nach Neustart</string>
     <string name="boot_resume_title">Aufnahme fortsetzen</string>
     <string name="boot_resume_detail">Öffne Reverb, um die Aufnahme nach einem Geräteneustart fortzusetzen.</string>
     <string name="boot_resume_in_progress">Aufnahme wird fortgesetzt…</string>
@@ -83,9 +83,7 @@
     <string name="notification_channel_background">Aufnahme und Hintergrundaufgaben</string>
     <string name="notification_channel_background_description">Aufnahmestatus und Steuerung sowie Exporte, Leeren des Puffers und Speicheraktualisierungen.</string>
     <string name="notification_channel_save_results">Speicherergebnisse</string>
-    <string name="notification_channel_save_results_description">Bestätigungen gespeicherter Aufnahmen und Speicherfehler, auch für Quick Save und zugeschnittene Aufnahmen.</string>
-    <string name="notification_channel_save_progress">Fortschritt beim Speichern von Aufnahmen</string>
-    <string name="notification_channel_save_progress_description">Fortschritt, Wiederherstellung und Fehler bei Aufnahmen in der Speicherwarteschlange.</string>
+    <string name="notification_channel_save_results_description">Fortschritt, Wiederherstellung, Bestätigungen und Fehler beim Speichern von Aufnahmen.</string>
     <string name="notification_channel_playback_description">Wiedergabestatus und Steuerung für gespeicherte Aufnahmen.</string>
     <string name="notification_channel_restart_description">Erinnert dich daran, Reverb zu öffnen, um die Aufnahme nach einem Geräteneustart fortzusetzen.</string>
 
@@ -106,4 +104,5 @@
     <string name="restart_access_not_now">Jetzt nicht</string>
     <string name="restart_invitation_read_failed">Erinnerung an die Autostart-Berechtigung konnte nicht geprüft werden</string>
     <string name="restart_invitation_save_failed">Deine Auswahl zur Erinnerung an die Autostart-Berechtigung konnte nicht gespeichert werden</string>
+    <string name="recording_playback_channel">Aufnahmewiedergabe</string>
 </resources>

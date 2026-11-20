@@ -75,7 +75,7 @@
         <item quantity="other">%1$d enregistrements déplacés.</item>
     </plurals>
 
-    <string name="boot_resume_channel">Rappels de reprise après redémarrage de l’appareil</string>
+    <string name="boot_resume_channel">Rappels après redémarrage</string>
     <string name="boot_resume_title">Reprendre l’enregistrement</string>
     <string name="boot_resume_detail">Ouvrez Reverb pour reprendre l’enregistrement après un redémarrage de l’appareil.</string>
     <string name="boot_resume_in_progress">Reprise de l’enregistrement…</string>
@@ -84,9 +84,7 @@
     <string name="notification_channel_background">Enregistrement et tâches en arrière-plan</string>
     <string name="notification_channel_background_description">État et commandes de l’enregistrement, exportations, vidage du tampon et mises à jour du stockage.</string>
     <string name="notification_channel_save_results">Résultats des sauvegardes</string>
-    <string name="notification_channel_save_results_description">Confirmations de sauvegarde et échecs, y compris pour Quick Save et les enregistrements découpés.</string>
-    <string name="notification_channel_save_progress">Progression de la sauvegarde des enregistrements</string>
-    <string name="notification_channel_save_progress_description">Progression, récupération et échecs des sauvegardes d’enregistrements en attente.</string>
+    <string name="notification_channel_save_results_description">Progression, récupération, confirmations et échecs de sauvegarde des enregistrements.</string>
     <string name="notification_channel_playback_description">État et commandes de lecture des enregistrements sauvegardés.</string>
     <string name="notification_channel_restart_description">Vous rappelle d’ouvrir Reverb pour reprendre l’enregistrement après un redémarrage de l’appareil.</string>
 
@@ -107,4 +105,5 @@
     <string name="restart_access_not_now">Pas maintenant</string>
     <string name="restart_invitation_read_failed">Impossible de vérifier le rappel d’autorisation de démarrage automatique</string>
     <string name="restart_invitation_save_failed">Impossible de sauvegarder votre choix concernant le rappel d’autorisation de démarrage automatique</string>
+    <string name="recording_playback_channel">Lecture des enregistrements</string>
 </resources>

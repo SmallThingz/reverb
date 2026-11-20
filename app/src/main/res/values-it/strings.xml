@@ -75,7 +75,7 @@
     <string name="format_label">Formato</string>
     <string name="format_wav">WAV</string>
 
-    <string name="boot_resume_channel">Promemoria di ripresa dopo il riavvio del dispositivo</string>
+    <string name="boot_resume_channel">Promemoria dopo il riavvio</string>
     <string name="boot_resume_title">Riprendi la registrazione</string>
     <string name="boot_resume_detail">Apri Reverb per riprendere la registrazione dopo il riavvio del dispositivo.</string>
     <string name="boot_resume_in_progress">Ripresa della registrazione…</string>
@@ -84,9 +84,7 @@
     <string name="notification_channel_background">Registrazione e attività in background</string>
     <string name="notification_channel_background_description">Stato e controlli della registrazione, esportazioni, svuotamento del buffer e aggiornamenti dell’archiviazione.</string>
     <string name="notification_channel_save_results">Risultati dei salvataggi</string>
-    <string name="notification_channel_save_results_description">Conferme di salvataggio ed errori, anche per Quick Save e le registrazioni ritagliate.</string>
-    <string name="notification_channel_save_progress">Avanzamento del salvataggio delle registrazioni</string>
-    <string name="notification_channel_save_progress_description">Avanzamento, recupero ed errori dei salvataggi di registrazioni in coda.</string>
+    <string name="notification_channel_save_results_description">Avanzamento, recupero, conferme ed errori nel salvataggio delle registrazioni.</string>
     <string name="notification_channel_playback_description">Stato e controlli di riproduzione delle registrazioni salvate.</string>
     <string name="notification_channel_restart_description">Ti ricorda di aprire Reverb per riprendere la registrazione dopo il riavvio del dispositivo.</string>
 
@@ -107,4 +105,5 @@
     <string name="restart_access_not_now">Non ora</string>
     <string name="restart_invitation_read_failed">Impossibile controllare il promemoria dell’autorizzazione per l’avvio automatico</string>
     <string name="restart_invitation_save_failed">Impossibile salvare la scelta relativa al promemoria dell’autorizzazione per l’avvio automatico</string>
+    <string name="recording_playback_channel">Riproduzione delle registrazioni</string>
 </resources>

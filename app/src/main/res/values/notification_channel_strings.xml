@@ -3,9 +3,7 @@
     <string name="notification_channel_background">Recording and background tasks</string>
     <string name="notification_channel_background_description">Recording status and controls, plus exports, buffer clearing and storage updates.</string>
     <string name="notification_channel_save_results">Save results</string>
-    <string name="notification_channel_save_results_description">Saved recording confirmations and save failures, including Quick Save and trimmed recordings.</string>
-    <string name="notification_channel_save_progress">Recording save progress</string>
-    <string name="notification_channel_save_progress_description">Progress, recovery and failures for queued recording saves.</string>
+    <string name="notification_channel_save_results_description">Recording save progress, recovery, confirmations, and failures.</string>
     <string name="notification_channel_playback_description">Playback status and controls for saved recordings.</string>
     <string name="notification_channel_restart_description">Reminds you to open Reverb to resume recording after a device restart.</string>
 </resources>

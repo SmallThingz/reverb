@@ -73,7 +73,7 @@
         <item quantity="other">%1$d rekaman dipindahkan.</item>
     </plurals>
 
-    <string name="boot_resume_channel">Pengingat melanjutkan perekaman</string>
+    <string name="boot_resume_channel">Pengingat setelah mulai ulang</string>
     <string name="boot_resume_title">Lanjutkan perekaman</string>
     <string name="boot_resume_detail">Buka Reverb untuk melanjutkan perekaman setelah perangkat dimulai ulang.</string>
     <string name="boot_resume_in_progress">Melanjutkan perekaman…</string>
@@ -82,9 +82,7 @@
     <string name="notification_channel_background">Perekaman dan tugas latar belakang</string>
     <string name="notification_channel_background_description">Status dan kontrol perekaman, serta ekspor, pembersihan buffer, dan pembaruan penyimpanan.</string>
     <string name="notification_channel_save_results">Hasil penyimpanan</string>
-    <string name="notification_channel_save_results_description">Konfirmasi dan kegagalan penyimpanan rekaman, termasuk Quick Save dan rekaman yang dipangkas.</string>
-    <string name="notification_channel_save_progress">Progres penyimpanan rekaman</string>
-    <string name="notification_channel_save_progress_description">Progres, pemulihan, dan kegagalan penyimpanan rekaman dalam antrean.</string>
+    <string name="notification_channel_save_results_description">Progres, pemulihan, konfirmasi, dan kegagalan penyimpanan rekaman.</string>
     <string name="notification_channel_playback_description">Status dan kontrol pemutaran rekaman yang tersimpan.</string>
     <string name="notification_channel_restart_description">Mengingatkan Anda untuk membuka Reverb dan melanjutkan perekaman setelah perangkat dimulai ulang.</string>
 
@@ -105,4 +103,5 @@
     <string name="restart_access_not_now">Sekarang tidak</string>
     <string name="restart_invitation_read_failed">Tidak dapat memeriksa pengingat izin mulai otomatis</string>
     <string name="restart_invitation_save_failed">Tidak dapat menyimpan pilihan pengingat izin mulai otomatis Anda</string>
+    <string name="recording_playback_channel">Pemutaran rekaman</string>
 </resources>

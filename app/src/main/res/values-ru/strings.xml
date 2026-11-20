@@ -76,7 +76,7 @@
         <item quantity="other">Перемещено %1$d записей.</item>
     </plurals>
 
-    <string name="boot_resume_channel">Напоминания о записи после перезагрузки</string>
+    <string name="boot_resume_channel">Напоминания после перезагрузки</string>
     <string name="boot_resume_title">Возобновить запись</string>
     <string name="boot_resume_detail">Откройте Reverb, чтобы возобновить запись после перезагрузки устройства.</string>
     <string name="boot_resume_in_progress">Возобновление записи…</string>
@@ -85,9 +85,7 @@
     <string name="notification_channel_background">Запись и фоновые задачи</string>
     <string name="notification_channel_background_description">Состояние записи и управление ею, а также экспорт, очистка буфера и обновления хранилища.</string>
     <string name="notification_channel_save_results">Результаты сохранения</string>
-    <string name="notification_channel_save_results_description">Подтверждения сохранения записей и ошибки сохранения, включая Quick Save и обрезанные записи.</string>
-    <string name="notification_channel_save_progress">Ход сохранения записей</string>
-    <string name="notification_channel_save_progress_description">Ход выполнения, восстановление и ошибки сохранения записей в очереди.</string>
+    <string name="notification_channel_save_results_description">Ход сохранения записей, восстановление, подтверждения и ошибки.</string>
     <string name="notification_channel_playback_description">Состояние воспроизведения сохранённых записей и управление им.</string>
     <string name="notification_channel_restart_description">Напоминает открыть Reverb, чтобы возобновить запись после перезагрузки устройства.</string>
 
@@ -108,4 +106,5 @@
     <string name="restart_access_not_now">Не сейчас</string>
     <string name="restart_invitation_read_failed">Не удалось проверить напоминание о разрешении для автозапуска</string>
     <string name="restart_invitation_save_failed">Не удалось сохранить ваш выбор для напоминания о разрешении для автозапуска</string>
+    <string name="recording_playback_channel">Воспроизведение записей</string>
 </resources>

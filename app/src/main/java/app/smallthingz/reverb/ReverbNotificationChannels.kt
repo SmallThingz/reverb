@@ -19,8 +19,6 @@ internal enum class ReverbNotificationChannel(
         R.string.notification_channel_background_description, NotificationManager.IMPORTANCE_LOW),
     SAVE_RESULTS(ReverbService.NOTIFICATION_CHANNEL_ID, R.string.notification_channel_save_results,
         R.string.notification_channel_save_results_description, NotificationManager.IMPORTANCE_DEFAULT),
-    SAVE_PROGRESS("durable-save-progress", R.string.notification_channel_save_progress,
-        R.string.notification_channel_save_progress_description, NotificationManager.IMPORTANCE_LOW),
     PLAYBACK("saved_recording_playback", R.string.recording_playback_channel,
         R.string.notification_channel_playback_description, NotificationManager.IMPORTANCE_LOW),
     RESTART_REMINDERS("recording-resume", R.string.boot_resume_channel,
@@ -28,6 +26,7 @@ internal enum class ReverbNotificationChannel(
 }
 
 internal object ReverbNotificationChannels {
+    private const val LEGACY_SAVE_PROGRESS_ID = "durable-save-progress"
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1))
 
     /** Create only at the existing producer boundary; existing user settings remain authoritative. */
@@ -49,6 +48,7 @@ internal object ReverbNotificationChannels {
                     val metadata = ReverbNotificationChannel.entries.firstOrNull { it.id == channel.id } ?: continue
                     updateMetadata(app, manager, channel, metadata)
                 }
+                retireLegacySaveProgress(manager)
             } catch (error: Exception) {
                 Log.w("ReverbNotificationChannels", "Unable to refresh notification category descriptions", error)
             }
@@ -65,5 +65,15 @@ internal object ReverbNotificationChannels {
         channel.name = name
         channel.description = description
         manager.createNotificationChannel(channel)
+    }
+
+    // Deleting a channel also cancels its notifications. Keep active notices until they move
+    // or retire, unless the user has blocked the combined Save results category.
+    fun retireLegacySaveProgress(manager: NotificationManager) {
+        if (manager.getNotificationChannel(LEGACY_SAVE_PROGRESS_ID) != null &&
+            (manager.activeNotifications.none { it.notification.channelId == LEGACY_SAVE_PROGRESS_ID } ||
+                manager.getNotificationChannel(ReverbNotificationChannel.SAVE_RESULTS.id)?.importance == NotificationManager.IMPORTANCE_NONE)) {
+            manager.deleteNotificationChannel(LEGACY_SAVE_PROGRESS_ID)
+        }
     }
 }

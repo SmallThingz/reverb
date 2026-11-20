@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="boot_resume_channel">Recording restart reminders</string>
+    <string name="boot_resume_channel">Restart reminders</string>
     <string name="boot_resume_title">Resume recording</string>
     <string name="boot_resume_detail">Open Reverb to resume recording after restart.</string>
     <string name="boot_resume_in_progress">Resuming recording…</string>

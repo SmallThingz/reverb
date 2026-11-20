@@ -74,7 +74,7 @@
         <item quantity="other">%1$d रिकॉर्डिंग्स स्थानांतरित की गईं।</item>
     </plurals>
 
-    <string name="boot_resume_channel">रिकॉर्डिंग फिर शुरू करने के रिमाइंडर</string>
+    <string name="boot_resume_channel">रीस्टार्ट रिमाइंडर</string>
     <string name="boot_resume_title">रिकॉर्डिंग फिर शुरू करें</string>
     <string name="boot_resume_detail">डिवाइस फिर शुरू होने के बाद रिकॉर्डिंग फिर शुरू करने के लिए Reverb खोलें।</string>
     <string name="boot_resume_in_progress">रिकॉर्डिंग फिर शुरू हो रही है…</string>
@@ -83,9 +83,7 @@
     <string name="notification_channel_background">रिकॉर्डिंग और बैकग्राउंड कार्य</string>
     <string name="notification_channel_background_description">रिकॉर्डिंग की स्थिति और नियंत्रण, साथ ही एक्सपोर्ट, बफ़र साफ़ करने और स्टोरेज के अपडेट।</string>
     <string name="notification_channel_save_results">सहेजने के नतीजे</string>
-    <string name="notification_channel_save_results_description">सहेजी गई रिकॉर्डिंग की पुष्टि और सहेजने में विफलताएँ, जिनमें Quick Save और काटी गई रिकॉर्डिंग शामिल हैं।</string>
-    <string name="notification_channel_save_progress">रिकॉर्डिंग सहेजने की प्रगति</string>
-    <string name="notification_channel_save_progress_description">कतार में लगी रिकॉर्डिंग सहेजने की प्रगति, पुनर्प्राप्ति और विफलताएँ।</string>
+    <string name="notification_channel_save_results_description">रिकॉर्डिंग सहेजने की प्रगति, पुनर्प्राप्ति, पुष्टि और विफलताएँ।</string>
     <string name="notification_channel_playback_description">सहेजी गई रिकॉर्डिंग के प्लेबैक की स्थिति और नियंत्रण।</string>
     <string name="notification_channel_restart_description">डिवाइस फिर शुरू होने के बाद रिकॉर्डिंग फिर शुरू करने के लिए Reverb खोलने की याद दिलाता है।</string>
 
@@ -106,4 +104,5 @@
     <string name="restart_access_not_now">अभी नहीं</string>
     <string name="restart_invitation_read_failed">अन्य ऐप्स के ऊपर दिखने की अनुमति का रिमाइंडर जाँचा नहीं जा सका</string>
     <string name="restart_invitation_save_failed">अन्य ऐप्स के ऊपर दिखने की अनुमति के रिमाइंडर के लिए आपका चुनाव सहेजा नहीं जा सका</string>
+    <string name="recording_playback_channel">रिकॉर्डिंग प्लेबैक</string>
 </resources>

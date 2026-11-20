@@ -74,7 +74,7 @@
         <item quantity="other">%1$d ضبط منتقل شد.</item>
     </plurals>
 
-    <string name="boot_resume_channel">یادآوری‌های ازسرگیری ضبط پس از راه‌اندازی مجدد</string>
+    <string name="boot_resume_channel">یادآوری‌های راه‌اندازی مجدد</string>
     <string name="boot_resume_title">ازسرگیری ضبط</string>
     <string name="boot_resume_detail">برای ازسرگیری ضبط پس از راه‌اندازی مجدد دستگاه، Reverb را باز کنید.</string>
     <string name="boot_resume_in_progress">در حال ازسرگیری ضبط…</string>
@@ -83,9 +83,7 @@
     <string name="notification_channel_background">ضبط و کارهای پس‌زمینه</string>
     <string name="notification_channel_background_description">وضعیت و کنترل‌های ضبط، به‌همراه خروجی گرفتن، پاک کردن بافر و به‌روزرسانی‌های فضای ذخیره‌سازی.</string>
     <string name="notification_channel_save_results">نتایج ذخیره</string>
-    <string name="notification_channel_save_results_description">تأیید ذخیره ضبط‌ها و خطاهای ذخیره، از جمله Quick Save و ضبط‌های برش‌خورده.</string>
-    <string name="notification_channel_save_progress">پیشرفت ذخیره ضبط‌ها</string>
-    <string name="notification_channel_save_progress_description">پیشرفت، بازیابی و خطاهای ذخیره ضبط‌های در صف.</string>
+    <string name="notification_channel_save_results_description">پیشرفت، بازیابی، تأییدها و خطاهای ذخیره ضبط‌ها.</string>
     <string name="notification_channel_playback_description">وضعیت و کنترل‌های پخش ضبط‌های ذخیره‌شده.</string>
     <string name="notification_channel_restart_description">یادآوری می‌کند پس از راه‌اندازی مجدد دستگاه، برای ازسرگیری ضبط Reverb را باز کنید.</string>
 
@@ -106,4 +104,5 @@
     <string name="restart_access_not_now">الان نه</string>
     <string name="restart_invitation_read_failed">بررسی یادآوری مجوز نمایش روی برنامه‌های دیگر ممکن نشد</string>
     <string name="restart_invitation_save_failed">ذخیره انتخاب شما برای یادآوری مجوز نمایش روی برنامه‌های دیگر ممکن نشد</string>
+    <string name="recording_playback_channel">پخش ضبط‌ها</string>
 </resources>

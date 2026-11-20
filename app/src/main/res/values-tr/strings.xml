@@ -74,7 +74,7 @@
         <item quantity="other">%1$d kayıt taşındı.</item>
     </plurals>
 
-    <string name="boot_resume_channel">Kaydı sürdürme hatırlatıcıları</string>
+    <string name="boot_resume_channel">Yeniden başlatma hatırlatıcıları</string>
     <string name="boot_resume_title">Kaydı sürdür</string>
     <string name="boot_resume_detail">Cihaz yeniden başladıktan sonra kaydı sürdürmek için Reverb uygulamasını açın.</string>
     <string name="boot_resume_in_progress">Kayıt sürdürülüyor…</string>
@@ -83,9 +83,7 @@
     <string name="notification_channel_background">Kayıt ve arka plan görevleri</string>
     <string name="notification_channel_background_description">Kayıt durumu ve kontrollerinin yanı sıra dışa aktarma, arabellek temizleme ve depolama güncellemeleri.</string>
     <string name="notification_channel_save_results">Kaydetme sonuçları</string>
-    <string name="notification_channel_save_results_description">Quick Save ve kırpılmış kayıtlar dahil, kayıtların kaydedildiğine dair onaylar ve kaydetme hataları.</string>
-    <string name="notification_channel_save_progress">Kayıt kaydetme ilerlemesi</string>
-    <string name="notification_channel_save_progress_description">Sıraya alınan kayıtları kaydetme ilerlemesi, kurtarma ve hatalar.</string>
+    <string name="notification_channel_save_results_description">Kayıt kaydetme ilerlemesi, kurtarma, onaylar ve hatalar.</string>
     <string name="notification_channel_playback_description">Kaydedilmiş kayıtların oynatma durumu ve kontrolleri.</string>
     <string name="notification_channel_restart_description">Cihaz yeniden başladıktan sonra kaydı sürdürmek için Reverb uygulamasını açmanızı hatırlatır.</string>
 
@@ -106,4 +104,5 @@
     <string name="restart_access_not_now">Şimdi değil</string>
     <string name="restart_invitation_read_failed">Otomatik başlatma izni hatırlatıcısı kontrol edilemedi</string>
     <string name="restart_invitation_save_failed">Otomatik başlatma izni hatırlatıcısı seçiminiz kaydedilemedi</string>
+    <string name="recording_playback_channel">Kayıt oynatma</string>
 </resources>
