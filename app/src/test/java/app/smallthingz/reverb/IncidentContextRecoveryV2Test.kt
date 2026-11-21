@@ -11,6 +11,11 @@ import java.io.File
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.file.Files
+import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -29,6 +34,100 @@ class IncidentContextRecoveryV2Test {
     private val sentinel = hex("02000000000000025800000000000002bc0000000000000320000000030000000400000063000000640000000000000065000000000000006600000000000001900000000000000000000873656e74696e656c0000000000000000")
     private val deleted = hex("0100000000000000960000000000000000800000000000000000000000800000000000002980000000ffffffffffffffffffffffffffffffff00000000000000640000000000000064000764656c657465640000000000000000")
     private val expectedEnrichedHistory = hex("5249483104000201000000000000009600000000000000000000000000000000000000040000001100000029000000640000000000000065000000000000006600000000000000640000000000000064000a6c6174652d6372617368000000000000000002000000000000025800000000000002bc0000000000000320000000030000000400000063000000640000000000000065000000000000006600000000000001900000000000000000000873656e74696e656c0000000000000000")
+
+    @Test fun observationEndAfterVisibleBarrierFailureRetainsAcknowledgementAndSignalsDurableRevision() = fixture { context, root ->
+        val duration = CaptureObservationDuration(1_000L)
+        try {
+            assertTrue(RecordingIncidentStore.recordCaptureInputObservation(
+                context, 10_000L, CaptureInputObservationReason.POLICY_SILENCED, duration))
+            val opened = awaitOpenObservation(context, duration)
+            RecordingIncidentStore.toggleIncidentAcknowledged(context, opened)
+            val revision = RecordingIncidentStore.historyRevision.value
+            val barriers = JournalHostIoShadow.directorySyncAttempts
+            JournalHostIoShadow.failDirectorySyncs = 1
+            duration.finish(3_250L)
+            awaitHistoryWriters()
+
+            val raw = wireRows(File(root, "recording-incidents.bin").readBytes()).single()
+            assertEquals(12_250L, ByteBuffer.wrap(raw).getLong(9))
+            assertEquals(opened.observationId, ByteBuffer.wrap(raw).getLong(raw.size - 8))
+            assertTrue(ByteBuffer.wrap(raw).getLong(17) > 0)
+            assertTrue(JournalHostIoShadow.directorySyncAttempts >= barriers + 2)
+            assertTrue(RecordingIncidentStore.historyRevision.value >= revision + 2)
+            val closed = RecordingIncidentStore.readIncidents(context).single()
+            assertNull(closed.ongoingPolicyDuration)
+            assertEquals(2_250L, recordingIncidentDowntimeMillis(closed))
+        } finally {
+            duration.finish(-1L)
+            awaitHistoryWriters()
+        }
+    }
+
+    @Test fun exactObservationEndCannotReinsertDeletedOrEvictedHistory() = fixture { context, root ->
+        val deletedDuration = CaptureObservationDuration(1_000L)
+        val evictedDuration = CaptureObservationDuration(2_000L)
+        val file = File(root, "recording-incidents.bin")
+        try {
+            assertTrue(RecordingIncidentStore.recordCaptureInputObservation(
+                context, 10_000L, CaptureInputObservationReason.POLICY_SILENCED, deletedDuration))
+            val deleted = awaitOpenObservation(context, deletedDuration)
+            RecordingIncidentStore.deleteIncidentInBackground(context, deleted)
+            awaitCondition { RecordingIncidentStore.readIncidents(context).none { it.observationId == deleted.observationId } }
+            assertTrue(RecordingIncidentStore.recordCaptureInputObservation(
+                context, 10_001L, CaptureInputObservationReason.POLICY_SILENCED, evictedDuration))
+            val evicted = awaitOpenObservation(context, evictedDuration)
+            // Reproduce the history remaining after this exact row fell out of the bounded list.
+            val remaining = java.io.DataInputStream(file.inputStream()).use(RecordingIncidentStore::readHistoryPayload)
+                .filterNot { it.observationId == evicted.observationId }
+            java.io.DataOutputStream(file.outputStream()).use { RecordingIncidentStore.writeHistoryPayload(it, remaining) }
+            val expectedBytes = file.readBytes()
+
+            deletedDuration.finish(4_000L)
+            evictedDuration.finish(4_001L)
+            awaitHistoryWriters()
+            assertTrue(RecordingIncidentStore.readIncidents(context).isEmpty())
+            assertArrayEquals(expectedBytes, file.readBytes())
+        } finally {
+            deletedDuration.finish(-1L)
+            evictedDuration.finish(-1L)
+            awaitHistoryWriters()
+        }
+    }
+
+    @Test fun alreadyEndedObservationSurvivesUncertainFirstPublicationAsOneRow() = fixture { context, root ->
+        assertTrue(RecordingIncidentStore.readIncidents(context).isEmpty())
+        val duration = CaptureObservationDuration(2_000L)
+        synchronized(RecordingIncidentStore) {
+            JournalHostIoShadow.failDirectorySyncs = 1
+            assertTrue(RecordingIncidentStore.recordCaptureInputObservation(
+                context, 10_000L, CaptureInputObservationReason.POLICY_SILENCED, duration))
+            duration.finish(3_000L)
+        }
+        awaitHistoryWriters()
+
+        val closed = RecordingIncidentStore.readIncidents(context).single()
+        assertNull(closed.ongoingPolicyDuration)
+        assertEquals(1_000L, recordingIncidentDowntimeMillis(closed))
+        val raw = wireRows(File(root, "recording-incidents.bin").readBytes()).single()
+        assertEquals(11_000L, ByteBuffer.wrap(raw).getLong(9))
+        assertEquals(closed.observationId, ByteBuffer.wrap(raw).getLong(raw.size - 8))
+    }
+
+    @Test fun orphanedV4OngoingRecordShowsUnknownWithoutRewritingHistory() = fixture { context, root ->
+        val file = File(root, "recording-incidents.bin")
+        val orphan = RecordingIncident(10_000L, resumedAtMillis = 0L,
+            kind = RecordingIncidentKind.CAPTURE_INPUT_OBSERVATION, pid = 41,
+            processStartedAtMillis = 7L, observationId = 1L,
+            description = CaptureInputObservationReason.POLICY_SILENCED.description)
+        java.io.DataOutputStream(file.outputStream()).use { RecordingIncidentStore.writeHistoryPayload(it, listOf(orphan)) }
+        val original = file.readBytes()
+        val loaded = RecordingIncidentStore.readIncidents(context).single()
+        assertEquals(-1L, loaded.resumedAtMillis)
+        assertNull(loaded.ongoingPolicyDuration)
+        assertEquals(recordingIncidentPresentationKey(orphan), recordingIncidentPresentationKey(loaded))
+        assertTrue(formatIncidentSummary(loaded).endsWith("duration unknown"))
+        assertArrayEquals(original, file.readBytes())
+    }
 
     @Test fun priorArmedProcessPublishesPendingAndProvisionalHistoryBeforeRetiringMarker() = fixture { context, root ->
         seed(root)
@@ -174,6 +273,31 @@ class IncidentContextRecoveryV2Test {
     private fun seed(root: File) {
         File(root, "recording-session.bin").writeBytes(priorSession)
         File(root, "recording-incidents.bin").writeBytes(history(sentinel))
+    }
+
+    private fun awaitOpenObservation(context: Context, duration: CaptureObservationDuration): RecordingIncident {
+        var seen: RecordingIncident? = null
+        awaitCondition {
+            seen = RecordingIncidentStore.readIncidents(context).firstOrNull { it.ongoingPolicyDuration === duration }
+            seen != null
+        }
+        return checkNotNull(seen)
+    }
+
+    private fun awaitCondition(condition: () -> Boolean) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(8)
+        while (!condition()) {
+            check(System.nanoTime() < deadline) { "Observation did not settle in isolated history" }
+            Thread.sleep(2)
+        }
+    }
+
+    private fun awaitHistoryWriters() {
+        val field = RecordingIncidentStore::class.java.getDeclaredField("historyMutationScope").apply { isAccessible = true }
+        val scope = field.get(RecordingIncidentStore) as CoroutineScope
+        runBlocking { withTimeout(8_000) {
+            checkNotNull(scope.coroutineContext[Job]).children.toList().forEach { it.join() }
+        } }
     }
 
     private fun addLateCrash(context: Context) {

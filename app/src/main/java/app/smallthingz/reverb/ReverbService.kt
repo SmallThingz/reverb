@@ -378,6 +378,8 @@ open class ReverbService : Service() {
     private val foregroundPublication = RetentionForegroundPublication(
         ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
     )
+    // Main-owned proof that the current foreground notification presents microphone status.
+    private var publishedRecordingNotificationText: Int? = null
 
     @Volatile
     private var foregroundServiceTimedOut = false
@@ -414,6 +416,11 @@ open class ReverbService : Service() {
     // Audio-owner-only; lifetimes without a visualizer never allocate FFT scratch.
     private var visualizationAnalyzer: AudioVisualizationAnalyzer? = null
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val capturePolicyNotificationRefreshQueued = AtomicBoolean(false)
+    private val capturePolicyNotificationRefresh = Runnable {
+        capturePolicyNotificationRefreshQueued.set(false)
+        refreshCapturePolicyNotificationOnMain()
+    }
     private val visualizationDispatchScheduled = AtomicBoolean(false)
     private var visualizationFaulted = false
 
@@ -626,6 +633,7 @@ open class ReverbService : Service() {
         visualizationCallbacks.clearAll()
         mainHandler.removeCallbacks(visualizationDispatcher)
         visualizationDispatchScheduled.set(false)
+        mainHandler.removeCallbacks(capturePolicyNotificationRefresh)
         if (::durabilitySyncExecutor.isInitialized) {
             durabilitySyncExecutor.shutdownNow()
         }
@@ -1238,6 +1246,7 @@ open class ReverbService : Service() {
                     false
                 }
                 if (reserved) {
+                    finishCapturePolicyAtKnownStop()
                     durableCaptureIntentAuthorityValid = true
                     durableListeningIntentEnabled = false
                     durableCaptureBufferSlot = requestedSlot
@@ -1254,7 +1263,8 @@ open class ReverbService : Service() {
                 }
             }
             if (acceptedGeneration != null) {
-                if (!enabled) BootResumeNotification.dismiss(this)
+                if (enabled) BootResumeNotification.dismissAutomaticStatus(this)
+                else BootResumeNotification.dismiss(this)
                 foregroundAdmissionGeneration.incrementAndGet()
                 foregroundCaptureRetryGate.resetForExplicitIntent()
                 captureControlFence.recordAcceptedControl(expectedControl)
@@ -1959,29 +1969,67 @@ open class ReverbService : Service() {
     }
 
     private val capturePolicySubscriptions = java.util.IdentityHashMap<CaptureAudioInput, CapturePolicySubscription>()
+    private class CapturePolicyOwner(
+        val owner: CaptureInputOperationOwner,
+        val subscription: CapturePolicySubscription,
+    ) {
+        // Guarded by listeningIntentLock. Witnesses update their own end independently.
+        var activated = false
+        var dropout: OwnedCapturePolicyDropout? = null
+    }
+
+    private class OwnedCapturePolicyDropout(
+        val witness: CapturePolicyDropout,
+        val duration: CaptureObservationDuration,
+    )
+    @Volatile private var capturePolicyOwner: CapturePolicyOwner? = null
+
+    private fun capturePolicyOwnerIsCurrent(owner: CaptureInputOperationOwner): Boolean =
+        !serviceDestroying && state == STATE_LISTENING && durableCaptureIntentAuthorityValid &&
+            durableListeningIntentEnabled && !persistenceFailureBlocked &&
+            captureInputOwnerMatches(owner) && captureContinuityGeneration.get() == owner.continuityGeneration
 
     private fun registerCapturePolicyObservation(record: CaptureAudioInput) {
         val owner = CaptureInputOperationOwner(record, captureContinuityGeneration.get(), audioRecordReleaseGeneration.get())
         val subscription = try {
-            record.observeClientSilencing({ silenced, observedAt ->
-                synchronized(listeningIntentLock) {
-                    val generation = continuingCaptureGeneration(owner) ?: return@synchronized
-                    if (silenced == true) {
-                        RecordingIncidentStore.recordCaptureInputObservation(this, observedAt,
-                            CaptureInputObservationReason.POLICY_SILENCED)
-                    } else if (silenced == false && BootResumeNotification.needsCaptureProof) {
-                        audioHandler.post {
-                            if (continuingCaptureGeneration(owner) == generation && bootNoticeInputEpoch == owner.releaseGeneration) {
-                                bootNoticeConfirmation?.requestPolicyRecheck()
+            record.observeClientSilencing(
+                onState = { silenced, observedAt ->
+                    synchronized(listeningIntentLock) {
+                        currentCapturePolicyOwner(owner) ?: return@synchronized
+                        val generation = continuingCaptureGeneration(owner) ?: return@synchronized
+                        if (silenced == true) {
+                            RecordingIncidentStore.recordCaptureInputObservation(this, observedAt,
+                                CaptureInputObservationReason.POLICY_SILENCED)
+                        } else if (silenced == false && BootResumeNotification.needsCaptureProof) {
+                            audioHandler.post {
+                                if (continuingCaptureGeneration(owner) == generation && bootNoticeInputEpoch == owner.releaseGeneration) {
+                                    bootNoticeConfirmation?.requestPolicyRecheck()
+                                }
                             }
                         }
                     }
-                }
-            }, { error ->
-                synchronized(listeningIntentLock) {
-                    if (continuingCaptureGeneration(owner) != null) reportCapturePolicyObservationFailure(error)
-                }
-            })
+                },
+                onFailure = { error ->
+                    synchronized(listeningIntentLock) {
+                        val policy = currentCapturePolicyOwner(owner) ?: return@synchronized
+                        drainCapturePolicyDropouts(policy)
+                        reportCapturePolicyObservationFailure(error)
+                    }
+                },
+                onCallbackStateChanged = {
+                    if (capturePolicyOwner?.owner === owner) requestCapturePolicyNotificationRefresh()
+                },
+                onDropoutsAvailable = {
+                    synchronized(listeningIntentLock) {
+                        val policy = capturePolicyOwner?.takeIf { it.owner === owner } ?: return@synchronized
+                        if (policy.activated && capturePolicyOwnerIsCurrent(owner)) {
+                            drainCapturePolicyDropouts(policy)
+                        } else {
+                            while (policy.subscription.pollDropout() != null) Unit
+                        }
+                    }
+                },
+            )
         } catch (error: Exception) {
             synchronized(listeningIntentLock) {
                 if (continuingCaptureGeneration(owner) != null) reportCapturePolicyObservationFailure(error)
@@ -1992,6 +2040,7 @@ open class ReverbService : Service() {
             val installed = synchronized(listeningIntentLock) {
                 if (!captureInputOwnerMatches(owner) || serviceDestroying) false else {
                     capturePolicySubscriptions[record] = subscription
+                    capturePolicyOwner = CapturePolicyOwner(owner, subscription)
                     true
                 }
             }
@@ -2003,9 +2052,44 @@ open class ReverbService : Service() {
 
     private fun activateCapturePolicyObservation(record: CaptureAudioInput) {
         synchronized(listeningIntentLock) {
-            try { capturePolicySubscriptions[record]?.activate() }
+            val policy = capturePolicyOwner ?: return
+            if (policy.owner.input !== record || !capturePolicyOwnerIsCurrent(policy.owner)) return
+            policy.activated = true
+            try { policy.subscription.activate() }
             catch (error: Exception) { reportCapturePolicyObservationFailure(error) }
         }
+    }
+
+    // Admission and Stop take the intent lock before polling the witness. The witness signals
+    // after releasing its own lock so neither path waits for a callback holding that lock.
+    private fun currentCapturePolicyOwner(owner: CaptureInputOperationOwner): CapturePolicyOwner? =
+        capturePolicyOwner?.takeIf { it.owner === owner && it.activated && capturePolicyOwnerIsCurrent(owner) }
+
+    private fun drainCapturePolicyDropouts(policy: CapturePolicyOwner) {
+        while (true) {
+            val next = policy.subscription.pollDropout()
+            policy.dropout?.let { open ->
+                open.witness.endedAtElapsedMillis?.let { end ->
+                    open.duration.finish(end)
+                    policy.dropout = null
+                }
+            }
+            if (next == null) return
+            val duration = CaptureObservationDuration(next.elapsedMillis)
+            next.endedAtElapsedMillis?.let(duration::finish)
+            if (RecordingIncidentStore.recordCaptureInputObservation(this, next.wallMillis,
+                    CaptureInputObservationReason.POLICY_SILENCED, duration) && duration.isOngoing
+            ) {
+                policy.dropout = OwnedCapturePolicyDropout(next, duration)
+            }
+        }
+    }
+
+    private fun finishCapturePolicyAtKnownStop() {
+        val policy = capturePolicyOwner ?: return
+        if (!policy.activated || !capturePolicyOwnerIsCurrent(policy.owner)) return
+        policy.subscription.sealDropouts(android.os.SystemClock::elapsedRealtime)
+        drainCapturePolicyDropouts(policy)
     }
 
     private fun reportCapturePolicyObservationFailure(error: Exception) {
@@ -3553,10 +3637,6 @@ open class ReverbService : Service() {
                 }
                 persistenceFailureBlocked = true
             }
-            if (committed) {
-                durableListeningIntentEnabled = false
-                BootResumeNotification.dismiss(this)
-            }
             // Keep known-Stop incident state in the same lifetime transaction as the intent.
             // onDestroy takes this lock before it can classify an armed marker as interrupted.
             val incidentStopPersisted = committed && try {
@@ -3566,6 +3646,12 @@ open class ReverbService : Service() {
                 Log.e(TAG, "Unable to reserve automatic Stop evidence", error)
                 false
             }
+            if (committed) {
+                if (incidentStopPersisted) finishCapturePolicyAtKnownStop()
+                durableListeningIntentEnabled = false
+            }
+            if (!BootResumeNotification.captureFailed(BootResumeFailure.NO_WRITABLE_BUFFER, intentCleared = committed) && committed)
+                BootResumeNotification.dismiss(this)
             listeningCommandGeneration.incrementAndGet()
             captureContinuityGeneration.incrementAndGet()
             state = STATE_PAUSED
@@ -3734,6 +3820,14 @@ open class ReverbService : Service() {
     private var captureIngress: CaptureIngressSnapshot? = null
 
     private fun publishCaptureIngress() = synchronized(listeningIntentLock) {
+        val policy = capturePolicyOwner
+        if (policy != null && !capturePolicyOwnerIsCurrent(policy.owner)) {
+            policy.subscription.sealDropouts { -1L }
+            policy.dropout?.let { it.duration.finish(it.witness.endedAtElapsedMillis ?: -1L) }
+            policy.dropout = null
+            capturePolicyOwner = null
+            requestCapturePolicyNotificationRefresh()
+        }
         if (!::captureIo.isInitialized) return@synchronized
         val current = captureIo.currentInput()
         val record = audioRecord
@@ -4049,7 +4143,8 @@ open class ReverbService : Service() {
             // Runtime capture has failed regardless of preference persistence. Keep this Service's
             // in-memory intent disabled and authority invalid on commit failure; a later Service
             // may retry the prior durable intent only after decoding the restored/disk state.
-            if (committed) BootResumeNotification.dismiss(this)
+            if (!BootResumeNotification.captureFailed(BootResumeFailure.AUDIO_INPUT, committed, message, error) && committed)
+                BootResumeNotification.dismiss(this)
             listeningCommandGeneration.incrementAndGet()
             captureContinuityGeneration.incrementAndGet()
             state = STATE_READY
@@ -5445,14 +5540,55 @@ open class ReverbService : Service() {
         exporting: Boolean,
         clearing: Boolean,
         retaining: Boolean,
+        recordingText: Int = R.string.quick_tile_recording,
     ): ForegroundNotificationContent {
         val contentText = when {
             clearing -> R.string.clearing_buffer
             retaining -> R.string.updating_buffer_retention
             exporting -> R.string.saving
-            else -> R.string.quick_tile_recording
+            else -> recordingText
         }
         return ForegroundNotificationContent(getString(R.string.app_name), getString(contentText))
+    }
+
+    private fun recordingNotificationText(): Int {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return R.string.quick_tile_recording
+        val policy = capturePolicyOwner ?: return R.string.recording_microphone_status_unavailable
+        val silenced = policy.subscription.callbackSilenced
+        if (capturePolicyOwner !== policy || !capturePolicyOwnerIsCurrent(policy.owner)) {
+            return R.string.recording_microphone_status_unavailable
+        }
+        return when (silenced) {
+            true -> R.string.recording_microphone_unavailable
+            false -> R.string.quick_tile_recording
+            null -> R.string.recording_microphone_status_unavailable
+        }
+    }
+
+    private fun requestCapturePolicyNotificationRefresh() {
+        if (serviceDestroying || !capturePolicyNotificationRefreshQueued.compareAndSet(false, true)) return
+        if (!mainHandler.post(capturePolicyNotificationRefresh)) capturePolicyNotificationRefreshQueued.set(false)
+    }
+
+    @SuppressLint("MissingPermission") // The existing foreground notification retains the platform's visibility policy.
+    private fun refreshCapturePolicyNotificationOnMain() {
+        val publishedText = publishedRecordingNotificationText ?: return
+        if (serviceDestroying || foregroundServiceTimedOut ||
+            foregroundServiceTypes and ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE == 0
+        ) return
+        val recordingText = recordingNotificationText()
+        if (publishedText == recordingText) return
+        try {
+            val manager = getSystemService(NotificationManager::class.java) ?: return
+            val content = foregroundNotificationContent(false, false, false, recordingText)
+            manager.notify(
+                FOREGROUND_NOTIFICATION_ID,
+                buildNotification(false, false, false, content, onlyAlertOnce = true),
+            )
+            publishedRecordingNotificationText = recordingText
+        } catch (error: RuntimeException) {
+            Log.w(TAG, "Unable to update microphone status notification", error)
+        }
     }
 
     private fun buildNotification(
@@ -5460,6 +5596,7 @@ open class ReverbService : Service() {
         clearing: Boolean,
         retaining: Boolean,
         content: ForegroundNotificationContent,
+        onlyAlertOnce: Boolean = false,
     ): Notification {
         val intent = Intent(this, MainActivity::class.java)
         val pendingIntent = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE)
@@ -5471,6 +5608,7 @@ open class ReverbService : Service() {
             .setContentIntent(pendingIntent)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
+            .setOnlyAlertOnce(onlyAlertOnce)
             .apply {
                 if (!exporting && !clearing && !retaining && getConfiguredQuickSaveEnabled(this@ReverbService)) {
                     val saveIntent = Intent(this@ReverbService, ReverbService::class.java).setAction(ACTION_QUICK_SAVE)
@@ -5491,12 +5629,21 @@ open class ReverbService : Service() {
         check(Looper.myLooper() == Looper.getMainLooper()) { "Foreground transitions belong to main" }
         check(!serviceDestroying) { "Recorder foreground owner was destroyed" }
         require(types != 0) { "Foreground service requires at least one active type" }
+        val recordingText = if (exporting || clearing || retaining ||
+            types and ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE == 0
+        ) {
+            null
+        } else {
+            recordingNotificationText()
+        }
+        publishedRecordingNotificationText = null
         foregroundPublication.publish(
             types = types,
             exporting = exporting,
             clearing = clearing,
             retaining = retaining,
-            content = { foregroundNotificationContent(exporting, clearing, retaining) },
+            content = { foregroundNotificationContent(exporting, clearing, retaining,
+                recordingText ?: R.string.quick_tile_recording) },
         ) { content ->
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 startForeground(
@@ -5511,12 +5658,14 @@ open class ReverbService : Service() {
                 )
             }
             foregroundServiceTypes = types
+            publishedRecordingNotificationText = recordingText
         }
     }
 
     private fun stopForegroundTracked() {
         check(Looper.myLooper() == Looper.getMainLooper()) { "Foreground transitions belong to main" }
         foregroundPublication.invalidate()
+        publishedRecordingNotificationText = null
         stopForeground(STOP_FOREGROUND_REMOVE)
         foregroundServiceTypes = 0
     }

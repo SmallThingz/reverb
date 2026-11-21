@@ -475,6 +475,19 @@ class RecordingIncidentStoreTest {
         assertEquals(incident.description, prepared.rows.single().description)
     }
 
+    @Test fun policySummaryShowsOnlyRecordedDurationEvenAcrossLongIntervals() {
+        val start = 10_000L
+        val incident = RecordingIncident(start, kind = RecordingIncidentKind.CAPTURE_INPUT_OBSERVATION,
+            description = CaptureInputObservationReason.POLICY_SILENCED.description)
+        val clock = java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss", java.util.Locale.US)
+        val zone = java.time.ZoneId.of("UTC")
+        assertEquals("Microphone input issue at 00:00:10 · duration unknown", formatIncidentSummary(incident, clock, zone))
+        assertEquals("Microphone input issue at 00:00:10 for 1:23",
+            formatIncidentSummary(incident.copy(resumedAtMillis = start + 83_000L), clock, zone))
+        assertEquals("Microphone input issue at 00:00:10 for 27:01:01",
+            formatIncidentSummary(incident.copy(resumedAtMillis = start + 97_261_000L), clock, zone))
+    }
+
     @Test
     fun genericProcessExitRecovery_recordsOnlyCrashLikeUnexpectedReasons() {
         assertTrue(unexpectedAppExitShouldCreateIncident(ApplicationExitInfo.REASON_CRASH, 0))

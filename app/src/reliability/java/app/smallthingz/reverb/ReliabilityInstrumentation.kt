@@ -14,6 +14,7 @@ private class ProviderFixtureAbort : RuntimeException(null, null, false, false)
 /** Standalone runner: no production/test framework dependency and a separate installed package. */
 class ReliabilityInstrumentation : Instrumentation() {
     private var requestedTest: String? = null
+    private var bootResumeScenario = "retry"
     private var consentFixtureManifest: String? = null
     private var consentFixtureManifestSha256: String? = null
     private var keyboardSessionNonce: String? = null
@@ -39,6 +40,7 @@ class ReliabilityInstrumentation : Instrumentation() {
     override fun onCreate(arguments: Bundle?) {
         super.onCreate(arguments)
         requestedTest = arguments?.getString("test")
+        bootResumeScenario = arguments?.getString("boot_resume_mode") ?: "retry"
         consentFixtureManifest = arguments?.getString("fixture_manifest")
         consentFixtureManifestSha256 = arguments?.getString("fixture_manifest_sha256")
         keyboardSessionNonce = arguments?.getString("keyboard_session_nonce")
@@ -77,7 +79,7 @@ class ReliabilityInstrumentation : Instrumentation() {
                 check(targetContext.applicationContext.javaClass == android.app.Application::class.java &&
                     (currentUiBrandGeometry || requestedTest in setOf("current_file_staged_recovery", "native_home_label_height", "native_rename_editor_current", "native_click_ripple_current", "native_retention_input_parity", "native_retention_keyboard", "native_icon_parity", "native_settings_library_selectors", "native_theme_matrix", "native_settings_calibration_current", "current_media_delete_consent",
                         "native_silence_blob_current", "native_silence_diagnostic_current", "native_blob_feel_current", "native_material_progress_current", "native_library_admission", "native_library_expansion_measurement", "native_library_expansion_clipping", "native_segmented_contrast", "native_settings_theme_contrast", "native_restart_permission_ui", "native_settings_ime_bounds",
-                        "native_action_sheet_dismissal_current",
+                        "native_action_sheet_dismissal_current", "native_incidents_observation",
                         "range_preview_short_end", "range_preview_short_controls", "range_preview_short_retirement", "range_preview_normalization_sampling", "native_ui_consistency_current", "native_settings_hydration_current", "native_settings_folder_pointer"))) {
                     "Current UI smoke accepts only explicit current UI selectors with plain Application"
                 }
@@ -297,6 +299,9 @@ class ReliabilityInstrumentation : Instrumentation() {
             } else if (requestedTest == "capture_frame_identity") {
                 executed++
                 verifyCaptureFrameIdentity(targetContext, report)
+            } else if (requestedTest == "boot_resume_activity") {
+                executed++
+                verifyBootResumeActivity(this, report, bootResumeScenario)
             } else if (requestedTest == "boot_resume_policy_confirmation") {
                 executed++
                 verifyBootResumeMicrophonePolicy(this, report)

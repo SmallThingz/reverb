@@ -68,8 +68,6 @@
         <activity android:name=".BootResumeActivity"
             android:exported="false"
             android:excludeFromRecents="true"
-            android:showWhenLocked="true"
-            android:turnScreenOn="true"
             android:taskAffinity="${applicationId}.bootresume"
             android:theme="@style/Theme.Reverb" />
 

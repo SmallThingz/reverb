@@ -92,7 +92,11 @@ internal object AutoStartAfterRestart {
         }
     }
 
-    fun request(context: Context, enabled: Boolean) = persist(context, policy.request(enabled))
+    fun request(context: Context, enabled: Boolean) {
+        val change = policy.request(enabled)
+        if (!enabled) BootResumeNotification.dismissAutomaticStatus(context)
+        persist(context, change)
+    }
 
     fun persist(context: Context, change: AutoStartChange) {
         val app = context.applicationContext

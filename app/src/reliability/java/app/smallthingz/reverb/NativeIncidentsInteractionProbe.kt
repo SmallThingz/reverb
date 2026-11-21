@@ -207,7 +207,8 @@ internal fun verifyNativeIncidentsInteraction(instrumentation: Instrumentation, 
 /** New kind-3 native scenario, explicitly outside the historical source/native oracle. */
 internal fun verifyNativeIncidentsObservation(instrumentation: Instrumentation, report: StringBuilder) {
     val context = instrumentation.targetContext
-    check(context.packageName == "app.smallthingz.reverb.nativeparity.reliability")
+    val currentUiSmoke = context.packageName == "app.smallthingz.reverb.uitheme.reliability"
+    check(currentUiSmoke || context.packageName == "app.smallthingz.reverb.nativeparity.reliability")
     check(context.applicationContext.javaClass == Application::class.java)
     check(Build.VERSION.SDK_INT >= 30)
     val directory = File(context.filesDir, "native-incidents-observation-${System.currentTimeMillis()}")
@@ -215,6 +216,7 @@ internal fun verifyNativeIncidentsObservation(instrumentation: Instrumentation, 
     val states = JSONArray()
     val result = JSONObject().put("passed", false).put("states", states)
         .put("scope", "Native-only kind-3 memory history; actual RecyclerView IDs and row actions")
+        .put("fixture_package", context.packageName)
         .put("historical_parity", false)
         .put("unqualified", JSONArray(listOf("Physical input", "Live incident storage", "Clipboard", "Historical kind-3 parity")))
     publishIncidentInteraction(directory, result)
@@ -225,14 +227,16 @@ internal fun verifyNativeIncidentsObservation(instrumentation: Instrumentation, 
     var completed = false
     try {
         val windowScope = NativeParityInteractiveWindows.open(instrumentation, result).also { windows = it }
-        val activity = launchNativeParityActivity(instrumentation).also { host = it }
+        val activity = (if (currentUiSmoke) launchCurrentUiSmokeActivity(instrumentation)
+            else launchNativeParityActivity(instrumentation)).also { host = it }
         awaitNativeParityDraw(instrumentation, activity.fixtureRoot)
         windowScope.recordHost(instrumentation, activity)
-        val labels = listOf("QA microphone policy observation", "QA microphone restart observation")
+        val labels = listOf(CaptureInputObservationReason.POLICY_SILENCED.description, "QA microphone restart observation")
+        val duration = CaptureObservationDuration(SystemClock.elapsedRealtime())
         val incidents = labels.mapIndexed { index, description ->
             RecordingIncident(1_700_000_000_000, kind = RecordingIncidentKind.CAPTURE_INPUT_OBSERVATION,
                 pid = 73, processStartedAtMillis = 1_699_000_000_000, observationId = 11L + index,
-                description = description)
+                description = description, ongoingPolicyDuration = duration.takeIf { index == 0 })
         }
         val keys = listOf("3:observation:73:1699000000000:11", "3:observation:73:1699000000000:12")
         val summary = "Microphone input issue at 10:13:20 PM"
@@ -280,7 +284,7 @@ internal fun verifyNativeIncidentsObservation(instrumentation: Instrumentation, 
                     try { info.text?.toString()?.takeIf { info.isVisibleToUser } }
                     finally { @Suppress("DEPRECATION") info.recycle() }
                 }
-                label in visible && summary in visible
+                label in visible && visible.any { it == summary || it.startsWith("$summary · ongoing ") }
             }
             captureIncidentStep(instrumentation, activity, content, false, directory, name, pictures)
         }
@@ -296,6 +300,27 @@ internal fun verifyNativeIncidentsObservation(instrumentation: Instrumentation, 
         }
         val initial = snapshot("initial")
         resubmit("same-initial-submission", initial)
+        reveal(labels[0], "ongoing-initial")
+        val incidentsView = nativeParityOnMain(instrumentation) {
+            onboardingViewDescendants(content.interactiveContent(false))
+                .filterIsInstance<app.smallthingz.reverb.nativeui.ReverbIncidentsContentView>().single()
+        }
+        fun ongoingText() = onboardingViewDescendants(incidentsView)
+            .filterIsInstance<smallthingz.ui.text.view.ParagraphView>()
+            .map { it.getText() }.single { it.startsWith("$summary · ongoing ") }
+        val firstElapsed = nativeParityOnMain(instrumentation, ::ongoingText)
+        awaitIncidentCondition(instrumentation, activity, "visible ongoing duration advances") { ongoingText() != firstElapsed }
+        val hiddenElapsed = nativeParityOnMain(instrumentation) {
+            ongoingText().also { incidentsView.visibility = View.INVISIBLE }
+        }
+        try {
+            val hiddenInterval = CountDownLatch(1)
+            Handler(Looper.getMainLooper()).postDelayed(hiddenInterval::countDown, 1_200L)
+            check(hiddenInterval.await(5, TimeUnit.SECONDS))
+            check(nativeParityOnMain(instrumentation, ::ongoingText) == hiddenElapsed) { "Hidden incident duration advanced" }
+        } finally { nativeParityOnMain(instrumentation) { incidentsView.visibility = View.VISIBLE } }
+        awaitIncidentCondition(instrumentation, activity, "shown ongoing duration catches up") { ongoingText() != hiddenElapsed }
+        result.put("ongoing_visible_hidden_visible", true)
         for ((index, label) in labels.withIndex()) reveal(label, "initial-$index")
         for ((index, label) in labels.withIndex()) {
             reveal(label, "before-ack-$index")
@@ -326,6 +351,10 @@ internal fun verifyNativeIncidentsObservation(instrumentation: Instrumentation, 
         awaitNativeParityDraw(instrumentation, activity.fixtureRoot)
         check(snapshot("deleted-first") == mapOf(keys[1] to initial.getValue(keys[1])))
         reveal(labels[1], "remaining-observation")
+        awaitIncidentCondition(instrumentation, activity, "retire ongoing row after deletion") {
+            onboardingViewDescendants(incidentsView).filterIsInstance<smallthingz.ui.text.view.ParagraphView>()
+                .none { it.getText().startsWith("$summary · ongoing ") }
+        }
         val expected = listOf("ack:${keys[0]}", "ack:${keys[1]}", "delete:${keys[0]}")
         check(nativeParityOnMain(instrumentation) { content.interactiveCommands(false) } == expected)
         result.put("commands", JSONArray(expected)).put("captures", JSONArray(pictures.keys.toList()))
@@ -464,7 +493,10 @@ private class IncidentMenuWindowNotPublished(val observation: JSONObject) :
 /** Current physical0 QA popup only. No historical window labels or app request substitute. */
 private fun currentIncidentMenu(instrumentation: Instrumentation, host: NativeParityActivity,
                                 expectedWindow: Int? = null): Pair<AccessibilityNodeInfo, JSONObject> {
-    check(host.packageName == "app.smallthingz.reverb.nativeparity.reliability")
+    check(host.packageName == instrumentation.targetContext.packageName &&
+        (host.packageName == "app.smallthingz.reverb.nativeparity.reliability" ||
+            host.packageName == "app.smallthingz.reverb.uitheme.reliability") &&
+        host.applicationContext.javaClass == Application::class.java)
     val root = checkNotNull(nativeParityUiAutomation(instrumentation).rootInActiveWindow)
     try {
         check(root.refresh() && root.packageName?.toString() == host.packageName && root.isVisibleToUser)

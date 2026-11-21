@@ -18,12 +18,26 @@ class ReverbNotificationChannelsTest {
     private val context: Context get() = RuntimeEnvironment.getApplication()
     private val manager: NotificationManager get() = context.getSystemService(NotificationManager::class.java)
 
-    @Test fun producersExposeExactlyTheFourRequestedCategories() {
+    @Test fun producersExposeExactlyTheFiveRequestedCategories() {
         ReverbNotificationChannel.entries.forEach { ReverbNotificationChannels.ensure(context, it) }
-        assertEquals(setOf("Recording and background tasks", "Save results", "Restart reminders", "Recording playback"),
+        assertEquals(setOf("Recording and background tasks", "Save results", "Restart reminders", "Recording playback", "Auto-start"),
             manager.notificationChannels.map { it.name.toString() }.toSet())
         assertEquals("Recording save progress, recovery, confirmations, and failures.",
             manager.getNotificationChannel(ReverbService.NOTIFICATION_CHANNEL_ID).description)
+    }
+
+    @Test fun autoStartHasIndependentSettingsAndPreservesUserImportance() {
+        val reminder = ReverbNotificationChannel.RESTART_REMINDERS
+        val automatic = ReverbNotificationChannel.AUTO_START
+        manager.createNotificationChannel(NotificationChannel(automatic.id, "Old auto-start name", NotificationManager.IMPORTANCE_NONE))
+        repeat(2) {
+            ReverbNotificationChannels.ensure(context, reminder)
+            ReverbNotificationChannels.ensure(context, automatic)
+        }
+        assertEquals(NotificationManager.IMPORTANCE_NONE, manager.getNotificationChannel(automatic.id).importance)
+        assertEquals("Auto-start", manager.getNotificationChannel(automatic.id).name.toString())
+        assertEquals(NotificationManager.IMPORTANCE_LOW, manager.getNotificationChannel(reminder.id).importance)
+        assertEquals("Restart reminders", manager.getNotificationChannel(reminder.id).name.toString())
     }
 
     @Test fun metadataRefreshPreservesExistingSaveResultsPreferences() {

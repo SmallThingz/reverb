@@ -938,7 +938,7 @@ internal class PipelineInput(
     val allowHeldRead = CountDownLatch(1)
     val released = CountDownLatch(1)
     var beforeRelease: (() -> Unit)? = null
-    var observePolicy: (((Boolean?, Long) -> Unit, (Exception) -> Unit) -> CapturePolicySubscription?)? = null
+    var observePolicy: (((Boolean?, Long) -> Unit, (Exception) -> Unit, () -> Unit, () -> Unit) -> CapturePolicySubscription?)? = null
     var beforeReadReturn: ((Int) -> Unit)? = null
     private val permits = java.util.concurrent.Semaphore(0)
     private val allReturns = java.util.concurrent.atomic.AtomicBoolean()
@@ -968,7 +968,9 @@ internal class PipelineInput(
     override val supportsClientSilencing: Boolean get() = clientSilenced != null
     override fun isClientSilenced(): Boolean? = clientSilenced?.invoke()
     override fun observeClientSilencing(onState: (Boolean?, Long) -> Unit,
-        onFailure: (Exception) -> Unit): CapturePolicySubscription? = observePolicy?.invoke(onState, onFailure)
+        onFailure: (Exception) -> Unit, onCallbackStateChanged: () -> Unit,
+        onDropoutsAvailable: () -> Unit): CapturePolicySubscription? =
+        observePolicy?.invoke(onState, onFailure, onCallbackStateChanged, onDropoutsAvailable)
     fun permitFenceReturn() { permits.release() }
     fun unblockAll() { allReturns.set(true); allowFirst.countDown(); allowHeldRead.countDown(); permits.release() }
     override fun startRecording() {
