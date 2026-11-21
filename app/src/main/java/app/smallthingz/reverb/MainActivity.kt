@@ -13,13 +13,10 @@ import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
-import android.util.TypedValue
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.ActivityResultLauncher
-import smallthingz.ui.text.font.createFontFamilyResolver
-import smallthingz.ui.unit.Density
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.DefaultLifecycleObserver
@@ -97,11 +94,7 @@ class MainActivity : ComponentActivity() {
         deletionConsentToken = savedInstanceState?.getString(STATE_DELETION_CONSENT_TOKEN)
             ?.takeIf(RecordingDeletionConsent::owns)
         deletionConsentToken?.let(::registerDeletionConsent)
-        val windowBackground = TypedValue()
-        if (theme.resolveAttribute(android.R.attr.colorBackground, windowBackground, true)) {
-            val color = if (windowBackground.resourceId != 0) getColor(windowBackground.resourceId) else windowBackground.data
-            window.setBackgroundDrawable(ReverbNoiseDrawable(resources, color))
-        }
+        reverbAppearance.backdrops.windowBackground(this)?.let { window.setBackgroundDrawable(it) }
 
         val restoredUi = restoreReleased012SavedUi(
             registry = savedStateRegistry,
@@ -124,7 +117,7 @@ class MainActivity : ComponentActivity() {
         }
         val dark = themePresentation.mode.nativeIsDark(systemDark())
         renderedDark = dark
-        environment = ReverbViewEnvironment(Density(this), createFontFamilyResolver(this), ReverbPalette.resolve(this, dark))
+        environment = ReverbViewEnvironment(this, dark)
         runtime = NativeModalWindowRuntime(this)
         lifecycle.addObserver(runtimeLifecycle)
         runtime.setStarted(lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
@@ -237,8 +230,7 @@ class MainActivity : ComponentActivity() {
         if (renderedDark != dark) {
             renderedDark = dark
             // A palette preview retains the current Density/resolver and every live native owner.
-            environment = ReverbViewEnvironment(environment.textDensity, environment.sharedFontResolver,
-                ReverbPalette.resolve(this, dark))
+            environment = environment.withPalette(environment.appearance.resolveColorScheme(this, dark))
             content.bind(owner.snapshot, environment)
         }
     }

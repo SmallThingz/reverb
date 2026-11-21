@@ -3,11 +3,9 @@ package app.smallthingz.reverb.nativeui
 import smallthingz.ui.text.view.NativeSourceAccessibilityNode
 import smallthingz.ui.text.view.PlainTextAccessibilityWindowScope
 import android.content.Context
-import android.graphics.Canvas
-import android.graphics.Paint
 import android.view.View
 import android.view.ViewConfiguration
-import android.view.ViewGroup
+import smallthingz.ui.components.blob.NativeBlobHandoffLayer
 import smallthingz.ui.runtime.MonotonicFrameClock
 import androidx.lifecycle.Lifecycle
 import smallthingz.ui.input.NativeAndroidInteropHost
@@ -40,7 +38,8 @@ internal class ReverbRangeExportContent(
     private val sourceWindow: View,
     inputRoot: () -> View?,
     onWaveformPositioned: (View) -> Unit,
-) : ViewGroup(context), NativeAndroidInteropHost, AutoCloseable {
+) : NativeBlobHandoffLayer(context, initialEnvironment.palette.waveformStyle.bodyColor),
+    NativeAndroidInteropHost, AutoCloseable {
     private var environment = initialEnvironment
     private var presentation: NativeRangeExportPresentation? = null
     private var selectedBuffer = ReverbService.BufferSlot.ONE_SHOT
@@ -53,14 +52,12 @@ internal class ReverbRangeExportContent(
     val durationWheel: View? get() = wheel?.view
     override val nativeInteropRequests = NativeAndroidInteropRequests()
     val timeline = ReverbRangeTimelineView(context, initialEnvironment, onWaveformPositioned)
-    val fine = ReverbSpringFineSeekView(context, SpringFineSeekEnvironment(
+    val fine = createReverbSpringFineSeekView(context, SpringFineSeekEnvironment(
         initialEnvironment.palette, initialEnvironment.textDensity,
         ViewConfiguration.get(context).scaledTouchSlop.toFloat(),
         requireNotNull(scope.coroutineContext[MonotonicFrameClock]), scope, sourceWindow, { false },
-    ))
+    ), initialEnvironment.appearance.springFineSeek)
     val controls = ReverbRangeExportControls(context, initialEnvironment, inputRoot, scope)
-    private val initialCircle = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
-    private val initialCircleMotion=colorTransition(initialEnvironment.palette.primary) {initialCircle.color=it;invalidate()}
     private data class FineKey(val enabled: Boolean, val playing: Boolean, val duration: Float, val target: RangeEditTarget)
     private data class WheelKey(val environment: ReverbViewEnvironment, val maximum: Double,
         val reachableMaximum: Double, val duration: Double, val enabled: Boolean, val visible: Boolean)
@@ -81,7 +78,6 @@ internal class ReverbRangeExportContent(
         clipChildren = false; clipToPadding = false
         if (android.os.Build.VERSION.SDK_INT >= 29) isForceDarkAllowed = false
         addView(timeline); addView(fine); addView(controls)
-        initialCircle.color = initialEnvironment.palette.primary
     }
 
     var interactionEnabled: Boolean = false
@@ -99,12 +95,15 @@ internal class ReverbRangeExportContent(
         val changedEnvironment = this.environment !== environment
         this.environment = environment
         this.presentation = frame; this.selectedBuffer = selectedBuffer
+        val source = frame.sourceGeometry
+        if (source == null || frame.transitionStarted) clearHandoffCircle()
+        else bindHandoffCircle(source.centerXInLocalPx, source.centerYInLocalPx, source.bodyDiameterPx)
         interactionEnabled = frame.interactionReady && frame.backProgress <= 0f && !state.selectionDurationEditing
         this.onCancel = onCancel; this.onExport = onExport
         if (changedEnvironment) {
             timeline.setEnvironment(environment)
-            fine.setPalette(environment.palette)
-            initialCircleMotion.retarget(environment.palette.primary)
+            fine.setAppearance(environment.appearance.springFineSeek, environment.palette)
+            setHandoffColor(environment.palette.waveformStyle.bodyColor)
             requestLayout()
         }
         timeline.bind(state, frame)
@@ -195,7 +194,8 @@ internal class ReverbRangeExportContent(
             }
             wheel = null
         } else {
-            wheel = NativeRangeSelectionDurationWheel(context, state, lifecycle).also { addView(it.view, 0) }
+            wheel = NativeRangeSelectionDurationWheel(context, state, lifecycle,
+                environment.appearance.durationWheel).also { addView(it.view, 0) }
         }
         wheelKey = null
         bindWheel()
@@ -213,7 +213,9 @@ internal class ReverbRangeExportContent(
         val controlsHeight = min(dp(70), h)
         val bottomSpace = min(dp(18), (h - controlsHeight).coerceAtLeast(0))
         bodyHeight = (h - controlsHeight - bottomSpace).coerceAtLeast(0)
-        updateCompact(bodyHeight / environment.textDensity.density < 390f)
+        val wheelStyle = environment.appearance.durationWheel
+        val fineSeekStyle = environment.appearance.springFineSeek
+        updateCompact(bodyHeight / environment.textDensity.density < wheelStyle.rangeMinimumRoomDp)
         controls.measure(exact(w), exact(controlsHeight))
 
         // Column's unweighted children consume available height in source order. A short window
@@ -221,18 +223,19 @@ internal class ReverbRangeExportContent(
         var remaining = bodyHeight
         wheelGap = 0
         if (!compact) {
-            val wheelHeight = min(dp(160), remaining)
-            wheel?.view?.measure(exact((w - dp(24) - dp(24)).coerceAtLeast(0)), exact(wheelHeight))
+            val inset = dp(wheelStyle.rangeInsetDp)
+            val wheelHeight = min(dp(wheelStyle.heightDp), remaining)
+            wheel?.view?.measure(exact((w - inset - inset).coerceAtLeast(0)), exact(wheelHeight))
             remaining -= wheelHeight
-            wheelGap = min(dp(4), remaining)
+            wheelGap = min(dp(wheelStyle.rangeGapDp), remaining)
             remaining -= wheelGap
         }
         val timelineHeight = min(dp(if (compact) 232 else 250), remaining)
         timeline.measure(exact(w), exact(timelineHeight))
         remaining -= timelineHeight
-        fineGap = min(dp(if (compact) 2 else 8), remaining)
+        fineGap = min(dp(if (compact) fineSeekStyle.rangeCompactGapDp else fineSeekStyle.rangeExpandedGapDp), remaining)
         remaining -= fineGap
-        val fineHeight = min(dp(if (compact) 120 else 132), remaining)
+        val fineHeight = min(dp(if (compact) fineSeekStyle.rangeCompactHeightDp else fineSeekStyle.rangeExpandedHeightDp), remaining)
         fine.measure(exact(w), exact(fineHeight))
         remaining -= fineHeight
         contentHeight = bodyHeight - remaining
@@ -242,7 +245,8 @@ internal class ReverbRangeExportContent(
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
         var y = ((bodyHeight - contentHeight) * .5f).roundToInt()
         wheel?.view?.let {
-            it.layout(dp(24), y, dp(24) + it.measuredWidth, y + it.measuredHeight)
+            val inset = dp(environment.appearance.durationWheel.rangeInsetDp)
+            it.layout(inset, y, inset + it.measuredWidth, y + it.measuredHeight)
             y += it.measuredHeight + wheelGap
         }
         timeline.layout(0, y, width, y + timeline.measuredHeight)
@@ -250,16 +254,6 @@ internal class ReverbRangeExportContent(
         fine.layout(0, y, width, y + fine.measuredHeight)
         controls.layout(0, bodyHeight, width, bodyHeight + controls.measuredHeight)
         onGeometryChanged()
-    }
-
-    override fun dispatchDraw(canvas: Canvas) {
-        super.dispatchDraw(canvas)
-        val frame = presentation ?: return
-        val source = frame.sourceGeometry ?: return
-        if (!frame.transitionStarted) {
-            canvas.drawCircle(source.centerXInLocalPx, source.centerYInLocalPx,
-                source.bodyDiameterPx * .5f, initialCircle)
-        }
     }
 
     override fun close() {
@@ -284,5 +278,6 @@ internal class ReverbRangeExportContent(
     }
 
     private fun dp(value: Int) = (value * environment.textDensity.density).roundToInt()
+    private fun dp(value: Float) = (value * environment.textDensity.density).roundToInt()
     private fun exact(value: Int) = MeasureSpec.makeMeasureSpec(value, MeasureSpec.EXACTLY)
 }

@@ -13,7 +13,8 @@ internal class SettingsAutoStartView(
     inputRoot: () -> View?,
     changed: (Boolean) -> Unit,
 ) : ViewGroup(context), AutoCloseable {
-    private val group = NativeGroupLayout(context, 20f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
+    private val groupRecipe = environment.appearance.groupSurfaces.settingsGroup
+    private val group = groupRecipe.create(context, ::invalidateSettingsTextContrast)
     private val toggle = SettingsToggleRowView(context, R.string.auto_start_title,
         false, false, environment, inputRoot, dimDisabledText = true, changed = changed,
         summary = context.getString(R.string.auto_start_summary))
@@ -25,7 +26,7 @@ internal class SettingsAutoStartView(
     fun bind(checked: Boolean, enabled: Boolean, permissionPending: Boolean, unavailable: Boolean,
         permissionMissing: Boolean, next: ReverbViewEnvironment) {
         environment = next
-        group.setPalette(next.palette.field, next.palette.border)
+        groupRecipe.bind(group, next.palette)
         toggle.bind(checked, enabled, next, context.getString(when {
             unavailable -> R.string.auto_start_unavailable
             permissionPending -> R.string.auto_start_permission_pending

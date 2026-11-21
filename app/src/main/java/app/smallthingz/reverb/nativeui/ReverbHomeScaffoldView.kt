@@ -19,8 +19,7 @@ internal open class ReverbHomeScaffoldView(
     private var insets = initialInsets
     private var navigation = initialNavigation
     private var hasIncidents = initialHasIncidents
-    private val noise = ReverbNoiseDrawable(resources, environment.palette.surface)
-    private val noiseColor = noise.colorTransition(this, environment.palette.surface)
+    private val backdrop = initialEnvironment.appearance.backdrops.attachPage(this, initialEnvironment.palette)
     private val header = ReverbAppTopBarView(context, environment, nativeInputRoot)
     val topBar: ReverbAppTopBarView get() = header
     private var body: View? = null
@@ -29,7 +28,6 @@ internal open class ReverbHomeScaffoldView(
         clipChildren = false
         clipToPadding = false
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
-        background = noise
         if (Build.VERSION.SDK_INT >= 29) isForceDarkAllowed = false
         addView(header)
         header.bind(environment, initialHasIncidents, initialNavigation,
@@ -57,7 +55,7 @@ internal open class ReverbHomeScaffoldView(
 
     open fun setEnvironment(value: ReverbViewEnvironment) {
         environment = value
-        noiseColor.retarget(value.palette.surface)
+        value.appearance.backdrops.bindPage(backdrop, value.palette)
         header.bind(value, hasIncidents, navigation, statusInsetPx = insets.statusTop)
         requestLayout()
     }

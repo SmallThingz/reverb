@@ -2,14 +2,15 @@ package app.smallthingz.reverb.nativeui
 
 import smallthingz.ui.components.NativeTopBarInsets
 import smallthingz.ui.components.NativeCenteredTopBarLayout
-import smallthingz.ui.interaction.view.readCachedAnimatorDurationScale
+import smallthingz.ui.components.NativeToolbarBackground
+import smallthingz.ui.components.NativeToolbarHint
+import smallthingz.ui.components.NativeToolbarActionTone
 import smallthingz.ui.text.view.NativePlainTextViewGeometry
 import smallthingz.ui.text.view.NativeSourceAccessibilityNode
 import smallthingz.ui.text.view.NativeTextSemanticsClip
 import smallthingz.ui.text.view.ParagraphView
 import smallthingz.ui.text.view.PlainTextAccessibilityWindowScope
 import android.content.Context
-import android.graphics.drawable.ColorDrawable
 import android.os.Build
 import android.view.MotionEvent
 import android.view.View
@@ -19,12 +20,7 @@ import smallthingz.ui.input.phase.NativeDragPointerEvent
 import smallthingz.ui.input.phase.NativePointerPass
 import smallthingz.ui.input.phase.NativeViewPhasePointerNode
 import app.smallthingz.reverb.R
-import smallthingz.ui.animation.core.Animatable
-import smallthingz.ui.animation.core.tween
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 
 /**
  * Values projected by SettingsScreen's existing draft/save owner. Callbacks retain all original
@@ -58,24 +54,17 @@ internal data class SettingsTopBarBinding(
 internal class ReverbSettingsTopBarView(
     context: Context,
     initialEnvironment: ReverbViewEnvironment,
-    private val animationScope: CoroutineScope,
+    animationScope: CoroutineScope,
     inputRoot: () -> View?,
 ) : ViewGroup(context), AutoCloseable {
     private var insets = NativeTopBarInsets(0, 0, 0)
-    private val noise = ReverbNoiseDrawable(resources, initialEnvironment.palette.surface,
-        ReverbNoiseDrawable.SEED_TOP_BAR)
-    private val noiseColor = noise.colorTransition(this, initialEnvironment.palette.surface) {
+    private val chrome = NativeToolbarBackground(this, initialEnvironment.appearance.toolbars,
+        initialEnvironment.appearance.toolbars.backgroundColor(initialEnvironment.palette)) {
         invalidateSettingsTextContrast(this)
     }
     private val content = TopBarContent(context, initialEnvironment, inputRoot)
-    private var hint: Any? = null
-    private var hintJob: Job? = null
-    private val hintProgress = Animatable(0f)
-    private val navigationHint = ColorDrawable()
-    private val doneHint = ColorDrawable()
-    private var hintColor = initialEnvironment.palette.onSurface
-    private val hintColorMotion=colorTransition(hintColor) {hintColor=it;paintHint(hintStrength)}
-    private var hintStrength = 0f
+    private val backHint = NativeToolbarHint(this, animationScope, initialEnvironment.appearance.toolbars,
+        initialEnvironment.appearance.toolbars.contentColor(initialEnvironment.palette), content.navigation.visual, content.done.visual)
     val title: ParagraphView get() = content.title
     val navigation: ReverbTopBarIconAction get() = content.navigation
     val done: ReverbTopBarIconAction get() = content.done
@@ -87,59 +76,27 @@ internal class ReverbSettingsTopBarView(
     }
 
     init {
-        background = noise
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         clipChildren = false; clipToPadding = false
         if (Build.VERSION.SDK_INT >= 29) isForceDarkAllowed = false
         addView(content)
-        navigation.visual.background = navigationHint
-        done.visual.background = doneHint
     }
 
     fun bind(value: ReverbViewEnvironment, binding: SettingsTopBarBinding) {
-        noiseColor.retarget(value.palette.surface)
+        val style = value.appearance.toolbars
+        chrome.bind(style, style.backgroundColor(value.palette))
         content.bind(value, binding)
-        hintColorMotion.retarget(value.palette.onSurface)
-        paintHint(hintStrength)
-        if (hint !== binding.backHint) {
-            hint = binding.backHint
-            hintJob?.cancel()
-            hintJob = null
-            paintHint(0f)
-            val expected = hint
-            if (expected != null) hintJob = animationScope.launch {
-                try {
-                    hintProgress.snapTo(1f)
-                    paintHint(1f)
-                    if (readCachedAnimatorDurationScale(context) == 0f) delay(600L)
-                    else hintProgress.animateTo(0f, tween(600)) { paintHint(this.value) }
-                } finally {
-                    if (hint === expected) paintHint(0f)
-                }
-            }
-        }
+        backHint.bind(style, style.contentColor(value.palette), binding.backHint)
         requestLayout()
     }
 
-    private fun paintHint(strength: Float) {
-        hintStrength = strength
-        val color = reverbColorWithAlpha(hintColor, strength.coerceIn(0f, 1f) * .18f)
-        navigationHint.color = color
-        doneHint.color = color
-    }
-
     override fun onDetachedFromWindow() {
-        hintJob?.cancel()
-        hintJob = null
-        paintHint(0f)
+        backHint.clearPulse()
         super.onDetachedFromWindow()
     }
 
     override fun close() {
-        hint = null
-        hintJob?.cancel()
-        hintJob = null
-        paintHint(0f)
+        backHint.close()
         cancelInput()
     }
 
@@ -196,19 +153,19 @@ internal class ReverbSettingsTopBarView(
         val navigation: ReverbTopBarIconAction = ReverbTopBarIconAction(context, environment, inputRoot,
             ReverbIcon.Back, R.string.onboarding_back, selectionWrapper = true, rolePresent = true),
         val title: ParagraphView = environment.paragraph(context, context.getString(R.string.settings_title),
-            ReverbTextRole.TITLE_LARGE, environment.palette.onSurface),
+            environment.appearance.toolbars.centeredTitleRole, environment.appearance.toolbars.contentColor(environment.palette)),
         val done: ReverbTopBarIconAction = ReverbTopBarIconAction(context, environment, inputRoot,
             ReverbIcon.Check, R.string.done, selectionWrapper = true, rolePresent = true),
-    ) : NativeCenteredTopBarLayout(context, environment.textDensity.density, navigation, title, done) {
+    ) : NativeCenteredTopBarLayout(context, environment.textDensity.density, navigation, title, done, environment.appearance.toolbars) {
         fun bind(value: ReverbViewEnvironment, state: SettingsTopBarBinding) {
-            bindDensity(value.textDensity.density)
-            val colors = value.palette
-            value.bindParagraphStyle(title, ReverbTextRole.TITLE_LARGE, colors.onSurface)
+            val style = value.appearance.toolbars
+            bindStyle(value.textDensity.density, style)
+            value.bindParagraphStyle(title, style.centeredTitleRole, style.contentColor(value.palette))
             title.setText(context.getString(R.string.settings_title))
             navigation.bindIcon(if (state.hasUnsavedChanges) ReverbIcon.Undo else ReverbIcon.Back,
                 context.getString(if (state.hasUnsavedChanges) R.string.undo else R.string.onboarding_back))
-            navigation.bind(value, true, colors.muted, colors.border, state.onNavigation)
-            done.bind(value, state.doneEnabled, colors.muted, colors.border, state.onDone)
+            navigation.bind(value, true, NativeToolbarActionTone.MUTED, state.onNavigation)
+            done.bind(value, state.doneEnabled, NativeToolbarActionTone.MUTED, state.onDone)
         }
     }
 

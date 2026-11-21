@@ -4,8 +4,14 @@ import smallthingz.ui.text.view.ParagraphView
 import android.content.Context
 import androidx.annotation.ColorInt
 import androidx.annotation.MainThread
+import smallthingz.ui.components.NativeSettingsVisualEnvironment
+import smallthingz.ui.components.NativeUiAppearance
 import smallthingz.ui.text.font.FontFamily
+import smallthingz.ui.text.font.createFontFamilyResolver
 import smallthingz.ui.unit.Density
+
+/** The appearance used by each Reverb window. */
+internal val reverbAppearance = NativeUiAppearance.Default
 
 /**
  * Immutable bindings for one native host window and one configuration/theme generation.
@@ -19,25 +25,35 @@ import smallthingz.ui.unit.Density
  * existing labels. For a palette-only change it can retain the existing density/resolver.
  */
 internal class ReverbViewEnvironment(
-    val textDensity: Density,
-    val sharedFontResolver: FontFamily.Resolver,
-    val palette: ReverbPalette,
+    override val textDensity: Density,
+    override val sharedFontResolver: FontFamily.Resolver,
+    override val palette: ReverbPalette,
     private val settingsTextContrast: Boolean = false,
-) {
+    override val appearance: NativeUiAppearance = reverbAppearance,
+) : NativeSettingsVisualEnvironment {
+    val audioBlobStyle = appearance.audioBlob.resolve(palette, appearance.typography)
+
+    constructor(context: Context, darkTheme: Boolean, appearance: NativeUiAppearance = reverbAppearance) :
+        this(Density(context), createFontFamilyResolver(context), appearance.resolveColorScheme(context, darkTheme),
+            appearance = appearance)
+
     /** Same immutable typography/palette, scoped once per Settings environment identity. */
     fun forSettings():ReverbViewEnvironment = if(settingsTextContrast)this else
-        ReverbViewEnvironment(textDensity,sharedFontResolver,palette,true)
+        ReverbViewEnvironment(textDensity, sharedFontResolver, palette, true, appearance)
+
+    fun withPalette(value: ReverbPalette): ReverbViewEnvironment =
+        ReverbViewEnvironment(textDensity, sharedFontResolver, value, settingsTextContrast, appearance)
 
     /** Direct factory: returns the real View, without a feature-specific wrapper. */
     @MainThread
-    fun paragraph(
+    override fun paragraph(
         context: Context,
         text: String,
         role: ReverbTextRole,
-        @ColorInt textColor: Int = palette.ink,
+        @ColorInt textColor: Int,
     ): ParagraphView = ParagraphView(
         context = context,
-        initialStyle = ReverbParagraphStyles[role],
+        initialStyle = appearance.typography[role],
         initialDensity = textDensity,
         initialFontResolver = sharedFontResolver,
         initialTextColor = textColor,
@@ -48,12 +64,12 @@ internal class ReverbViewEnvironment(
      * Text/content, overflow, layout parameters, focus, accessibility and translation are untouched.
      */
     @MainThread
-    fun bindParagraphStyle(
+    override fun bindParagraphStyle(
         view: ParagraphView,
         role: ReverbTextRole,
-        @ColorInt textColor: Int = palette.ink,
+        @ColorInt textColor: Int,
     ) {
-        view.setTypography(ReverbParagraphStyles[role], textDensity, sharedFontResolver)
+        view.setTypography(appearance.typography[role], textDensity, sharedFontResolver)
         bindTextContrast(view,textColor)
         view.animateTextColor(textColor)
     }

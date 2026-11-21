@@ -2,14 +2,12 @@ package app.smallthingz.reverb.nativeui
 
 import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.components.NativeButtonInputPolicy
-import smallthingz.ui.components.NativeMaterialButtonStyle
 import smallthingz.ui.components.NativeMaterialButtonView
 import smallthingz.ui.util.closePreservingPrimaryFailure
 import android.content.Context
 import smallthingz.ui.runtime.MonotonicFrameClock
 import kotlinx.coroutines.CoroutineScope
 import android.graphics.Canvas
-import android.graphics.Color
 import android.widget.LinearLayout
 import android.view.View
 import android.view.ViewGroup
@@ -20,6 +18,7 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 
 internal class PlayerTrimHeading(context: Context, private var environment: ReverbViewEnvironment) : ViewGroup(context) {
+    private val layoutStyle = environment.appearance.listDecorations.recordingPlayer
     private val icon = PlayerGlyph(context, environment, ReverbIcon.Trim)
     val title = environment.paragraph(context, context.getString(R.string.trim_recording), ReverbTextRole.LABEL_LARGE)
     val duration = environment.paragraph(context, "", ReverbTextRole.BODY_SMALL)
@@ -31,7 +30,7 @@ internal class PlayerTrimHeading(context: Context, private var environment: Reve
         icon.bind(value, value.palette.primary)
         value.bindParagraphStyle(title, ReverbTextRole.LABEL_LARGE, value.palette.ink)
         duration.setText(formatRangeTimeInput((state.trimEndMillis - state.trimStartMillis).coerceAtLeast(0) / 1000.0))
-        duration.setTypography(playerTimeTypography,
+        duration.setTypography(value.appearance.readoutTypography.playerTimestamp,
             value.textDensity, value.sharedFontResolver)
         duration.animateTextColor(value.palette.muted)
     }
@@ -39,10 +38,13 @@ internal class PlayerTrimHeading(context: Context, private var environment: Reve
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val width = MeasureSpec.getSize(widthMeasureSpec)
         val hs = heightMeasureSpec.toAtMost()
-        val size = min(width, dp(17f))
-        icon.measure(libraryPlayerControlsExact(size), if (View.MeasureSpec.getMode(hs) == MeasureSpec.UNSPECIFIED) libraryPlayerControlsExact(dp(17f)) else libraryPlayerControlsExact(min(dp(17f), MeasureSpec.getSize(hs))))
-        title.measure(libraryPlayerControlsAtMost(max(0, width - icon.measuredWidth - dp(7f))), hs)
-        duration.measure(libraryPlayerControlsAtMost(max(0, width - icon.measuredWidth - dp(7f) - title.measuredWidth)), hs)
+        val glyph = dp(layoutStyle.headingGlyphDp)
+        val glyphHeight = if (View.MeasureSpec.getMode(hs) == MeasureSpec.UNSPECIFIED) glyph
+            else min(glyph, MeasureSpec.getSize(hs))
+        icon.measure(libraryPlayerControlsExact(min(width, glyph)), libraryPlayerControlsExact(glyphHeight))
+        val textWidth = max(0, width - icon.measuredWidth - dp(layoutStyle.headingGlyphGapDp))
+        title.measure(libraryPlayerControlsAtMost(textWidth), hs)
+        duration.measure(libraryPlayerControlsAtMost(max(0, textWidth - title.measuredWidth)), hs)
         setMeasuredDimension(width, resolveSize(max(icon.measuredHeight, max(title.measuredHeight, duration.measuredHeight)), heightMeasureSpec))
     }
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
@@ -51,7 +53,9 @@ internal class PlayerTrimHeading(context: Context, private var environment: Reve
             val y = ((height - child.measuredHeight) / 2f).roundToInt()
             child.layout(x, y, x + child.measuredWidth, y + child.measuredHeight)
         }
-        place(icon, 0); place(title, icon.measuredWidth + dp(7f)); place(duration, width - duration.measuredWidth)
+        place(icon, 0)
+        place(title, icon.measuredWidth + dp(layoutStyle.headingGlyphGapDp))
+        place(duration, width - duration.measuredWidth)
     }
 }
 
@@ -74,13 +78,15 @@ internal class PlayerTrimButtons(
     private var glyphDensity = Float.NaN
     private val cancelClick: () -> Unit = { cancelAction?.invoke() }
     private val saveClick: () -> Unit = { saveAction?.invoke() }
-    private val typography = ReverbParagraphStyles[ReverbTextRole.LABEL_LARGE]
+    private val recipes = environment.appearance.buttons.trimActions
     private val input = NativeButtonInputPolicy(inputRoot = { inputRoot }, revisionKey = { revision }, delayPressForParent = true)
-    private val cancel = makeButton(cancelClick)
-    private val save = makeButton(saveClick)
+    private val cancel = NativeMaterialButtonView(context, recipes.cancel,
+        environment.textDensity, environment.sharedFontResolver, input, cancelClick)
+    private val save = NativeMaterialButtonView(context, recipes.save.button,
+        environment.textDensity, environment.sharedFontResolver, input, saveClick)
     private val cancelLayout = NativeGroupLayout.LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.MATCH_PARENT)
     private val saveLayout = NativeGroupLayout.LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.MATCH_PARENT)
-    private val group = NativeGroupLayout(context, 14f, LinearLayout.HORIZONTAL)
+    private val group = NativeGroupLayout(context, recipes.cornerRadiusDp, LinearLayout.HORIZONTAL)
 
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -88,13 +94,8 @@ internal class PlayerTrimButtons(
         group.addRow(cancel, cancelLayout)
         group.addRow(save, saveLayout)
         addView(group)
-        group.setPalette(environment.palette.surfaceContainerHigh, environment.palette.border)
+        recipes.bindSurface(group, environment.palette)
     }
-
-    private fun makeButton(onClick: () -> Unit) = NativeMaterialButtonView(context, false, typography,
-        environment.textDensity, environment.sharedFontResolver,
-        NativeMaterialButtonStyle(horizontalPaddingDp = 12, iconSizeDp = 18, radiusDp = 0f,
-            minimumWidthDp = 48, minimumHeightDp = 48), input, onClick)
 
     fun bind(value: ReverbViewEnvironment, state: LibraryPlayerUiState, actions: LibraryPlayerActions) {
         if (closed) return
@@ -112,41 +113,42 @@ internal class PlayerTrimButtons(
         saving = state.trimSaving
         saveEnabled = nextSaveEnabled
         locales = nextLocales
-        val palette = value.palette
+        val palette = value.palette.buttonPalette
         if (environmentChanged) {
             environment = value
-            cancel.bindTypography(typography, value.textDensity, value.sharedFontResolver)
-            save.bindTypography(typography, value.textDensity, value.sharedFontResolver)
-            group.setPalette(palette.surfaceContainerHigh, palette.border)
+            cancel.bindTypography(value.textDensity, value.sharedFontResolver)
+            save.bindTypography(value.textDensity, value.sharedFontResolver)
+            recipes.bindSurface(group, value.palette)
         }
         val density = value.textDensity.density
         if (glyphDensity != density) {
-            cancel.setLeadingIcon(ReverbIconDrawable(ReverbIcon.Close, density, palette.onSurface))
+            cancel.setLeadingIcon(ReverbIconDrawable(ReverbIcon.Close, density, recipes.cancel.contentColor(palette, !saving)))
             glyphDensity = density
-            if (!saving) save.setLeadingIcon(ReverbIconDrawable(ReverbIcon.Save, density, palette.primary))
+            if (!saving) save.setLeadingIcon(ReverbIconDrawable(ReverbIcon.Save, density, recipes.save.button.contentColor(palette, saveEnabled)))
         } else if (leaveSaving) {
-            save.setLeadingIcon(ReverbIconDrawable(ReverbIcon.Save, density, palette.primary))
+            save.setLeadingIcon(ReverbIconDrawable(ReverbIcon.Save, density, recipes.save.button.contentColor(palette, saveEnabled)))
         }
         if (saving) {
+            val spinnerColor = recipes.save.progressColor(palette)
             if (spinner == null) {
                 save.setLeadingIcon(null)
-                spinner = ReverbIncidentLoadingView(context, palette.primary, frames, scope, durationScale)
+                spinner = ReverbIncidentLoadingView(context, spinnerColor, frames, scope, durationScale)
                     .also { save.setLeadingView(it) }
             }
-            spinner?.setColor(palette.primary)
+            spinner?.setColor(spinnerColor)
         } else if (spinner != null) {
             save.setLeadingView(null)
             spinner = null
         }
-        cancel.bind(context.getString(R.string.cancel), !saving, Color.TRANSPARENT, palette.onSurface)
+        cancel.bind(context.getString(R.string.cancel), !saving, palette)
         save.bind(context.getString(if (saving) R.string.trim_saving else R.string.trim_save_copy),
-            saveEnabled, Color.TRANSPARENT, if (saveEnabled || saving) palette.primary else palette.muted)
+            saveEnabled, palette, busy = saving)
         if (firstBind || environmentChanged) requestLayout()
     }
 
     override fun onMeasure(w: Int, h: Int) {
         val width = MeasureSpec.getSize(w)
-        val minimum = dp(48)
+        val minimum = dp(max(cancel.minimumTouchTargetDp, save.minimumTouchTargetDp))
         val cancelPreferred = cancel.preferredWidth(compact = false)
         val savePreferred = save.preferredWidth(compact = false)
         val boundedHeight = MeasureSpec.getMode(h) != MeasureSpec.UNSPECIFIED

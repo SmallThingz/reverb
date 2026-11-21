@@ -3,7 +3,6 @@ package app.smallthingz.reverb.nativeui
 import android.content.Context
 import android.view.View
 import android.view.ViewGroup
-import smallthingz.ui.unit.sp
 import app.smallthingz.reverb.R
 import app.smallthingz.reverb.RetentionMode
 import java.util.Locale
@@ -54,9 +53,10 @@ internal class SettingsRetentionValueView(
         bindTypography();requestLayout()
     }
     private fun bindTypography() {
-        heading.setTypography(retentionValueLabelStyle,environment.textDensity,environment.sharedFontResolver)
-        unit.setTypography(retentionValueLabelStyle,environment.textDensity,environment.sharedFontResolver)
-        estimate.setTypography(retentionValueEstimateStyle,environment.textDensity,environment.sharedFontResolver)
+        val typography = environment.appearance.readoutTypography
+        heading.setTypography(typography.retentionLabel,environment.textDensity,environment.sharedFontResolver)
+        unit.setTypography(typography.retentionLabel,environment.textDensity,environment.sharedFontResolver)
+        estimate.setTypography(typography.retentionEstimate,environment.textDensity,environment.sharedFontResolver)
         heading.animateTextColor(environment.palette.muted);unit.animateTextColor(environment.palette.muted)
         estimate.animateTextColor(environment.palette.muted);icon.bind(glyph,environment.palette.muted)
     }
@@ -95,6 +95,3 @@ private fun formatRetentionMinutesEstimate(seconds:Long):String {
     return if(seconds%60L==0L)(seconds/60L).toString()
         else String.format(Locale.US,"%.1f",seconds/60.0)
 }
-
-private val retentionValueLabelStyle = reverbDefaultTextStyle().copy(fontSize=14.sp,lineHeight=20.sp)
-private val retentionValueEstimateStyle = reverbDefaultTextStyle().copy(fontSize=13.sp,lineHeight=20.sp)

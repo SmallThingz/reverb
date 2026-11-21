@@ -5,7 +5,8 @@ import smallthingz.ui.animation.core.FastOutSlowInEasing
 import smallthingz.ui.animation.core.VectorConverter
 import smallthingz.ui.animation.core.tween
 import smallthingz.ui.runtime.MonotonicFrameClock
-import app.smallthingz.reverb.RangeWaveformPass
+import smallthingz.ui.components.waveform.ProgressiveWaveformData
+import smallthingz.ui.components.waveform.ProgressiveWaveformFrame
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -37,7 +38,7 @@ internal class NativeInlineWaveformMotion(
         val scale = scale()
         val coarseTarget = if (data.coarse.size == 0) 0f else
             (data.coarse.builtCount.toFloat() / data.coarse.size.toFloat()).coerceIn(0f, 1f)
-        val detailTarget = if (data.pass == RangeWaveformPass.DETAIL && data.detail.size > 0)
+        val detailTarget = if (data.detailAvailable && data.detail.size > 0)
             (data.detail.builtCount.toFloat() / data.detail.size.toFloat()).coerceIn(0f, 1f) else 0f
         coarse.target(coarseTarget, scale)
         detail.target(detailTarget, scale)

@@ -3,8 +3,6 @@ package app.smallthingz.reverb.nativeui
 import android.content.Context
 import android.view.View
 import android.view.ViewConfiguration
-import android.view.ViewGroup
-import androidx.core.view.ViewCompat
 import smallthingz.ui.input.phase.NativeDragPointerEvent
 import smallthingz.ui.input.phase.NativePointerPass
 import smallthingz.ui.input.phase.NativeViewPhasePointerNode
@@ -12,9 +10,13 @@ import app.smallthingz.reverb.R
 import app.smallthingz.reverb.SilenceCurveView
 import app.smallthingz.reverb.SilenceGateConfig
 import app.smallthingz.reverb.sampledSilenceCurve
+import app.smallthingz.reverb.SILENCE_DEFAULT_CLEARANCE_DB
+import app.smallthingz.reverb.SILENCE_MAX_CLEARANCE_DB
+import app.smallthingz.reverb.SILENCE_MIN_CLEARANCE_DB
+import smallthingz.ui.components.NativeArcDialRange
+import smallthingz.ui.components.NativeCalibrationBodyLayout
+import smallthingz.ui.components.NativeExpandableSettingsSectionLayout
 import kotlinx.coroutines.CoroutineScope
-import kotlin.math.max
-import kotlin.math.roundToInt
 
 internal data class SettingsSilenceState(
     val config:SilenceGateConfig,
@@ -53,7 +55,7 @@ internal class SettingsSilenceView(
     private val inputRoot:()->View?,
     parentScope:CoroutineScope,
     actions:SettingsSilenceActions,
-):ViewGroup(context),AutoCloseable {
+):NativeExpandableSettingsSectionLayout(context),AutoCloseable {
     private var state=initial
     private var actions:SettingsSilenceActions?=actions
     private var selected=1.coerceAtMost(initial.config.points.lastIndex)
@@ -67,7 +69,7 @@ internal class SettingsSilenceView(
     }
     /** Custom pointer node is outside TextButton's minimum-interactive-size wrapper. */
     val calibrationPointerNode:NativeViewPhasePointerNode? get()=(expansion.content as? SilenceBody)?.pointerNode
-    init {importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO;addView(row);addView(expansion)}
+    init {installExpansion(row, expansion)}
     fun bind(next:SettingsSilenceState,colors:ReverbViewEnvironment,callbacks:SettingsSilenceActions) {
         val progressOnly=colors===environment&&state.samePresentationExceptProgress(next)&&
             (state.calibrationProgress==null)==(next.calibrationProgress==null)
@@ -80,17 +82,6 @@ internal class SettingsSilenceView(
         (expansion.content as? SilenceBody)?.bind(next,colors)
         expansion.visible(next.config.enabled)
         requestLayout()
-    }
-    override fun onMeasure(w:Int,h:Int) {
-        val width=MeasureSpec.getSize(w)
-        row.measure(exact(width),unspecified())
-        expansion.measure(atMost(width),unspecified())
-        setMeasuredDimension(resolveSize(width,w),resolveSize(row.measuredHeight+expansion.measuredHeight,h))
-    }
-    override fun onLayout(changed:Boolean,l:Int,t:Int,r:Int,b:Int) {
-        row.layout(0,0,width,row.measuredHeight)
-        val x=if(layoutDirection==LAYOUT_DIRECTION_RTL)width-expansion.measuredWidth else 0
-        expansion.layout(x,row.measuredHeight,x+expansion.measuredWidth,row.measuredHeight+expansion.measuredHeight)
     }
     override fun close() {
         // The source pointer detector must cancel its owned held sample before callbacks are retired.
@@ -106,16 +97,12 @@ private class SilenceBody(
     private val selected:()->Int,
     private val select:(Int)->Unit,
     private val actions:()->SettingsSilenceActions?,
-):ViewGroup(context),SettingsExpansionContent, smallthingz.ui.input.NativeAndroidInteropHost {
-    override val nativeInteropRequests = smallthingz.ui.input.NativeAndroidInteropRequests()
-    override fun requestDisallowInterceptTouchEvent(disallowIntercept: Boolean) {
-        nativeInteropRequests.request(disallowIntercept)
-        super.requestDisallowInterceptTouchEvent(disallowIntercept)
-    }
-
+): NativeCalibrationBodyLayout(context, environment,
+    context.getString(R.string.silence_calibration_heading), context.getString(R.string.silence_calibration_hint)),
+    SettingsExpansionContent {
     override val view:View get()=this
     private var state=initial
-    val curve=SilenceCurveView(context)
+    val curve=SilenceCurveView(context, environment.appearance.calibration)
     private val configuration=ViewConfiguration.get(context)
     private var closed=false
     private val calibrate:SettingsCalibrationActionView=SettingsCalibrationActionView(context,environment,inputRoot,
@@ -127,18 +114,17 @@ private class SilenceBody(
             else if(canBegin())actions()?.calibrate()
         }
     }
-    private val fit=SettingsCalibrationFitDial(context,environment) {clearance->
+    private val fit=SettingsCalibrationFitDial(context, environment,
+        NativeArcDialRange(SILENCE_MIN_CLEARANCE_DB, SILENCE_MAX_CLEARANCE_DB, SILENCE_DEFAULT_CLEARANCE_DB),
+        context.getString(R.string.silence_fit_description), R.id.silence_fit_reset,
+        { context.getString(R.string.silence_fit_reset) },
+        { context.getString(R.string.silence_fit_short, it) },
+        { context.getString(R.string.silence_fit_value, it) }) { clearance ->
         if(canEdit()) {
             val points=state.sampledPeaks?.let {sampledSilenceCurve(it,state.maximumHz,clearance)} ?: state.config.points
             actions()?.configChanged(state.config.copy(points=points,clearanceDb=clearance))
         }
     }
-    private val heading=environment.paragraph(context,context.getString(R.string.silence_calibration_heading),
-        ReverbTextRole.TITLE_SMALL,environment.palette.ink)
-    private val hint=environment.paragraph(context,context.getString(R.string.silence_calibration_hint),
-        ReverbTextRole.BODY_SMALL,environment.palette.muted)
-    private val buttonRow=CalibrationButtonRow(context,calibrate,fit)
-    private val error=environment.paragraph(context,"",ReverbTextRole.BODY_SMALL,environment.palette.error)
     private val gesture:SettingsCalibrationGesture=SettingsCalibrationGesture(::canBegin,
         {actions()?.beginHeld()==true},{actions()?.completeTap()},{actions()?.finishHeld()},
         {actions()?.cancel()},{refresh()},
@@ -151,10 +137,7 @@ private class SilenceBody(
     }
 
     init {
-        importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO
-        ViewCompat.setAccessibilityHeading(heading,true)
-        ViewCompat.setAccessibilityLiveRegion(error,ViewCompat.ACCESSIBILITY_LIVE_REGION_POLITE)
-        addView(heading);addView(hint);addView(curve);addView(buttonRow);addView(error)
+        installControls(curve, calibrate, fit)
         curve.onCommit={points,index->
             if(canEdit()) {
                 select(index.coerceIn(points.indices))
@@ -185,44 +168,13 @@ private class SilenceBody(
         if(closed)return
         bindCurve()
         fit.bind(state.config.clearanceDb,canEdit(),environment)
-        environment.bindParagraphStyle(heading,ReverbTextRole.TITLE_SMALL,environment.palette.ink)
-        environment.bindParagraphStyle(hint,ReverbTextRole.BODY_SMALL,environment.palette.muted)
         val pointerDown=gesture.pointerDown
         val buttonEnabled=canCancel()||state.enabled&&state.config.enabled&&
             (state.calibrationAllowed||pointerDown)&&(!state.calibrating||pointerDown)
         calibrate.bind(context.getString(if(state.holdingCalibration)R.string.silence_release_to_finish
             else if(canCancel())R.string.cancel else R.string.silence_calibrate),buttonEnabled,environment)
-        environment.bindParagraphStyle(error,ReverbTextRole.BODY_SMALL,environment.palette.error)
-        error.setText(state.calibrationError.orEmpty())
         calibrate.bindProgress(state.calibrationProgress,state.calibrating)
-        error.visibility=if(!state.calibrationError.isNullOrBlank())VISIBLE else GONE
-        requestLayout()
-    }
-    override fun onMeasure(w:Int,h:Int) {
-        val width=MeasureSpec.getSize(w)
-        val inner=(width-2*dp(16)).coerceAtLeast(0)
-        curve.measure(exact(inner),unspecified())
-        buttonRow.measure(exact(inner),unspecified())
-        heading.measure(atMost(inner),unspecified())
-        hint.measure(atMost(inner),unspecified())
-        val errorHeight=if(error.visibility==VISIBLE) {
-            error.measure(atMost(inner),unspecified())
-            dp(8)+error.measuredHeight
-        } else 0
-        val height=dp(12)+3*dp(8)+heading.measuredHeight+hint.measuredHeight+curve.measuredHeight+buttonRow.measuredHeight+errorHeight
-        setMeasuredDimension(resolveSize(width,w),resolveSize(height,h))
-    }
-    override fun onLayout(changed:Boolean,l:Int,t:Int,r:Int,b:Int) {
-        var y=dp(12)
-        fun place(child:View) {
-            val x=if(layoutDirection==LAYOUT_DIRECTION_RTL)width-dp(16)-child.measuredWidth else dp(16)
-            child.layout(x,y,x+child.measuredWidth,y+child.measuredHeight)
-        }
-        place(heading);y+=heading.measuredHeight+dp(8)
-        place(hint);y+=hint.measuredHeight+dp(8)
-        place(curve);y+=curve.measuredHeight+dp(8)
-        place(buttonRow)
-        if(error.visibility==VISIBLE) {y+=buttonRow.measuredHeight+dp(8);place(error)}
+        bindContent(environment, state.calibrationError)
     }
     override fun onDetachedFromWindow() {gesture.cancel();super.onDetachedFromWindow()}
     override fun close() {
@@ -235,34 +187,5 @@ private class SilenceBody(
             curve.bind(presentation,selected().coerceIn(presentation.points.indices),null,state.maximumHz,
                 environment.palette.primary,environment.palette.ink,environment.palette.muted,false)
         }
-    }
-    private fun dp(value:Int)=(value*environment.textDensity.density).roundToInt()
-}
-
-private class CalibrationButtonRow(
-    context:Context,
-    private val calibrate:View,
-    private val fit:View,
-):ViewGroup(context),smallthingz.ui.input.NativeAndroidInteropHost {
-    override val nativeInteropRequests=smallthingz.ui.input.NativeAndroidInteropRequests()
-    override fun requestDisallowInterceptTouchEvent(disallowIntercept:Boolean) {
-        nativeInteropRequests.request(disallowIntercept)
-        super.requestDisallowInterceptTouchEvent(disallowIntercept)
-    }
-    init {importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO;addView(calibrate);addView(fit)}
-    override fun onMeasure(w:Int,h:Int) {
-        val width=MeasureSpec.getSize(w)
-        fit.measure(atMost(width/3),unspecified())
-        val trailing=fit.measuredWidth
-        calibrate.measure(exact((width-trailing).coerceAtLeast(0)),unspecified())
-        setMeasuredDimension(resolveSize(width,w),resolveSize(max(calibrate.measuredHeight,fit.measuredHeight),h))
-    }
-    override fun onLayout(changed:Boolean,l:Int,t:Int,r:Int,b:Int) {
-        val rtl=layoutDirection==LAYOUT_DIRECTION_RTL
-        val first=if(rtl)width-calibrate.measuredWidth else 0
-        val top=(height-calibrate.measuredHeight)/2
-        calibrate.layout(first,top,first+calibrate.measuredWidth,top+calibrate.measuredHeight)
-        val fx=if(rtl)0 else width-fit.measuredWidth
-        fit.layout(fx,0,fx+fit.measuredWidth,fit.measuredHeight)
     }
 }

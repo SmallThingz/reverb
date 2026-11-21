@@ -1,5 +1,6 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeDurationWheelView
 import smallthingz.ui.input.phase.NativePointerLayerShape
 import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.input.NativeAndroidInteropHost
@@ -88,7 +89,7 @@ internal class NativeSettingsPointerBinding(
         }
         return parentInterested(change)
     }
-    private fun isAndroidLeaf(view:View)=view is RangeDurationWheelView||view is SilenceCurveView||
+    private fun isAndroidLeaf(view:View)=view is NativeDurationWheelView||view is SilenceCurveView||
         view is SettingsRetentionInputView || view is smallthingz.ui.components.NativeSegmentedChoice ||
         view is SettingsCalibrationFitDial
     private inner class Layout(private val view:View):NativeViewPointerHitLayout,AutoCloseable {

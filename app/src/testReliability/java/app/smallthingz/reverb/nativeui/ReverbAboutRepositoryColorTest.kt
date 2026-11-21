@@ -10,13 +10,15 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class ReverbAboutRepositoryColorTest {
+    private val style = reverbAppearance.modals.floating.link
+
     @Test
     fun distinctContainerRoleUsesReleasedMaterialContentColor() {
         for (dark in listOf(false, true)) {
             val palette = ReverbPalette.fallback(dark)
             val scheme = if (dark) darkColorScheme() else lightColorScheme()
             assertEquals(scheme.contentColorFor(scheme.surfaceContainerHighest).toArgb(),
-                reverbAboutRepositoryTitleColor(palette, TextStyle.Default))
+                style.titleColor(palette, TextStyle.Default))
         }
     }
 
@@ -29,7 +31,7 @@ class ReverbAboutRepositoryColorTest {
                 .copy(surfaceContainerHighest = Color(base.surfaceVariant))
             assertEquals(base.onSurfaceVariant, scheme.contentColorFor(scheme.surfaceContainerHighest).toArgb())
             assertEquals(scheme.contentColorFor(scheme.surfaceContainerHighest).toArgb(),
-                reverbAboutRepositoryTitleColor(palette, TextStyle.Default))
+                style.titleColor(palette, TextStyle.Default))
         }
     }
 
@@ -41,8 +43,8 @@ class ReverbAboutRepositoryColorTest {
         val scheme = darkColorScheme().copy(surfaceContainerHighest = Color(base.primaryContainer),
             surfaceVariant = Color(base.primaryContainer))
         assertEquals(scheme.contentColorFor(scheme.surfaceContainerHighest).toArgb(),
-            reverbAboutRepositoryContentColor(palette))
-        assertEquals(base.onPrimaryContainer, reverbAboutRepositoryContentColor(palette))
+            style.content(palette))
+        assertEquals(base.onPrimaryContainer, style.content(palette))
     }
 
     @Test
@@ -51,7 +53,7 @@ class ReverbAboutRepositoryColorTest {
         val palette = base.copy(surfaceContainerHighest = base.surfaceVariant)
         val explicit = Color(0x80426A91)
         assertEquals(explicit.toArgb(),
-            reverbAboutRepositoryTitleColor(palette, TextStyle(color = smallthingz.ui.graphics.Color(explicit.toArgb()))))
-        assertEquals(base.onSurfaceVariant, reverbAboutRepositoryContentColor(palette))
+            style.titleColor(palette, TextStyle(color = smallthingz.ui.graphics.Color(explicit.toArgb()))))
+        assertEquals(base.onSurfaceVariant, style.content(palette))
     }
 }

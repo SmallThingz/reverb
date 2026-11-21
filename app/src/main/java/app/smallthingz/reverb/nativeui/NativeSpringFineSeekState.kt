@@ -1,5 +1,9 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeSpringFineSeekBinding
+import smallthingz.ui.components.NativeSpringFineSeekGeometry
+import smallthingz.ui.components.NativeSpringFineSeekInput
+import smallthingz.ui.components.NativeSpringFineSeekStyle
 import smallthingz.ui.geometry.Offset
 import app.smallthingz.reverb.FineSeekInputSession
 import smallthingz.ui.input.phase.NativeDragPointerEvent
@@ -17,16 +21,15 @@ import app.smallthingz.reverb.rangeFineTuneSeekPull
 import app.smallthingz.reverb.rangeFineTuneShuttleRate
 import app.smallthingz.reverb.rangeFineTuneVerticalDragPull
 import kotlin.math.abs
-import kotlin.math.cosh
 import kotlin.math.roundToInt
 
 /** Source callback set; the optional Range gesture factory retains the editor's generation owner. */
 internal data class SpringFineSeekBinding(
-    val enabled: Boolean,
-    val isPlaying: Boolean,
+    override val enabled: Boolean,
+    override val isPlaying: Boolean,
     val durationSeconds: Float,
-    val interactionKey: Any?,
-    val onTogglePlayback: () -> Unit,
+    override val interactionKey: Any?,
+    override val onTogglePlayback: () -> Unit,
     val onInteractionStart: () -> Unit,
     val onBeginFineAdjust: (Float) -> Unit,
     val onFineAdjust: (Float, Float) -> Unit,
@@ -34,40 +37,7 @@ internal data class SpringFineSeekBinding(
     val onEndFineAdjust: () -> Unit,
     val onCancelFineAdjust: () -> Unit,
     val createInputGesture: (((Boolean) -> Unit) -> RangeInputGesture)? = null,
-)
-
-/** Source uses two intentionally distinct travel clamps:1 physical px in input,1dp in drawing. */
-internal data class SpringFineSeekGeometry(
-    val width: Int,
-    val height: Int,
-    val density: Float,
-    val verticalGestureHeight: Int = height,
-) {
-    val inputHorizontalTravel = (width * .5f - 10f * density - 24f * density).coerceAtLeast(1f)
-    val inputVerticalTravel = (height * .5f - 10f * density - 24f * density).coerceAtLeast(1f)
-    val verticalGestureTravel = (verticalGestureHeight * .5f - 10f * density - 24f * density).coerceAtLeast(1f)
-    val drawHorizontalTravel = (width / density * .5f - 10f - 24f).coerceAtLeast(1f) * density
-    val drawVerticalTravel = (height / density * .5f - 10f - 24f).coerceAtLeast(1f) * density
-    val hitWidth = minOf(width, (64f * density).roundToInt())
-    val hitHeight = minOf(height, (64f * density).roundToInt())
-    fun puckLeft(horizontal: Float): Int {
-        val offset = (horizontal * drawHorizontalTravel).roundToInt()
-        val centeredLeft = ((width - hitWidth) * .5f).roundToInt()
-        // Pull is physical screen X in both input and field drawing, regardless of text direction.
-        return centeredLeft + offset
-    }
-    fun puckTop(horizontal: Float, rawVertical: Float): Int =
-        ((height - hitHeight) * .5f).roundToInt() +
-            (rangeFineTuneConstrainedY(rawVertical, horizontal) * drawVerticalTravel).roundToInt()
-}
-
-private const val FINE_SEEK_RETURN_STRENGTH = 3.4f
-private val fineSeekReturnDenominator = cosh(FINE_SEEK_RETURN_STRENGTH) - 1f
-
-internal fun springFineSeekReturnRemaining(elapsedNanos: Long): Float {
-    val t = (elapsedNanos.toFloat() / 210_000_000L).coerceIn(0f, 1f)
-    return (cosh(FINE_SEEK_RETURN_STRENGTH * (1f - t)) - 1f) / fineSeekReturnDenominator
-}
+) : NativeSpringFineSeekBinding
 
 /**
  * Source SpringFineSeekControl's awaitEachGesture + two frame effects.
@@ -80,13 +50,14 @@ internal fun springFineSeekReturnRemaining(elapsedNanos: Long): Float {
 internal class NativeSpringFineSeekState(
     private val invalidate: () -> Unit,
     private val requestFrames: () -> Unit,
-) {
-    var horizontalPull: Float = 0f
+) : NativeSpringFineSeekInput<SpringFineSeekBinding> {
+    override var horizontalPull: Float = 0f
         private set
     var rawVerticalPull: Float = 0f
         private set
-    val dragging: Boolean get() = dragSession != null
-    val needsFrames: Boolean get() = dragging || returning
+    override val constrainedVerticalPull: Float get() = rangeFineTuneConstrainedY(rawVerticalPull, horizontalPull)
+    override val dragging: Boolean get() = dragSession != null
+    override val needsFrames: Boolean get() = dragging || returning
     private var binding: SpringFineSeekBinding? = null
     private var handlerBinding: SpringFineSeekBinding? = null
     private var frameBinding: SpringFineSeekBinding? = null
@@ -96,6 +67,8 @@ internal class NativeSpringFineSeekState(
     private var run: PointerRun? = null
     private var waitingForAllUp = false
     private var lastDragFrame = 0L
+    private var visualStyle = NativeSpringFineSeekStyle.Default
+    private var returnStyle = visualStyle
     private var returning = false
     private var returnStartFrame = 0L
     private var returnStartX = 0f
@@ -108,7 +81,7 @@ internal class NativeSpringFineSeekState(
         val binding: SpringFineSeekBinding,
         val id: Long,
         val down: Offset,
-        val geometry: SpringFineSeekGeometry,
+        val geometry: NativeSpringFineSeekGeometry,
         val startedOnPuck: Boolean,
         val ownsPointerTap: Boolean,
         var dragStartRawVertical: Float,
@@ -116,7 +89,12 @@ internal class NativeSpringFineSeekState(
         var awaitingDownFinal: Boolean = ownsPointerTap,
     )
 
-    fun bind(next: SpringFineSeekBinding, newTouchSlop: Float) {
+    override fun setVisualStyle(style: NativeSpringFineSeekStyle) {
+        visualStyle = style
+    }
+
+    override fun bind(value: SpringFineSeekBinding, newTouchSlop: Float) {
+        val next = value
         val previous = binding
         val pointerRestart = previous?.interactionKey != next.interactionKey ||
             previous?.enabled != next.enabled || touchSlop != newTouchSlop
@@ -140,7 +118,7 @@ internal class NativeSpringFineSeekState(
     }
 
     /** Source pointerInput restarts only for its keys, not every playback-position rebind. */
-    fun pointer(event: NativeDragPointerEvent, pass: NativePointerPass, geometry: SpringFineSeekGeometry) {
+    override fun pointer(event: NativeDragPointerEvent, pass: NativePointerPass, geometry: NativeSpringFineSeekGeometry) {
         try {
             pointerEvent(event, pass, geometry)
         } catch (error: Throwable) {
@@ -152,7 +130,7 @@ internal class NativeSpringFineSeekState(
         }
     }
 
-    private fun pointerEvent(event: NativeDragPointerEvent, pass: NativePointerPass, geometry: SpringFineSeekGeometry) {
+    private fun pointerEvent(event: NativeDragPointerEvent, pass: NativePointerPass, geometry: NativeSpringFineSeekGeometry) {
         if (binding?.enabled != true) return
         if (waitingForAllUp) {
             if (pass==NativePointerPass.MAIN&&event.changes.none { it.pressed }) {
@@ -196,7 +174,7 @@ internal class NativeSpringFineSeekState(
             val puckY = geometry.height * .5f +
                 rangeFineTuneConstrainedY(rawVerticalPull, horizontalPull) * geometry.inputVerticalTravel
             val pointerRun = PointerRun(session, captured, down.id, down.position, geometry,
-                rangeFineTunePuckContains(down.position.x, down.position.y, puckX, puckY, 32f * geometry.density),
+                rangeFineTunePuckContains(down.position.x, down.position.y, puckX, puckY, geometry.inputCircleRadius),
                 rangeOwnsPointerTap,
                 rawVerticalPull)
             run = pointerRun
@@ -221,7 +199,7 @@ internal class NativeSpringFineSeekState(
 
         val change = event.changes.firstOrNull { it.id == active.id }
         if(change!=null&&active.ownsPointerTap) {
-            val hitSize=(64f*active.geometry.density).roundToInt()
+            val hitSize=active.geometry.fullHitSize
             val centerX=((active.geometry.width-hitSize)*.5f).roundToInt()+hitSize*.5f
             val centerY=((active.geometry.height-hitSize)*.5f).roundToInt()+hitSize*.5f
             active.session.observePointerTap(fineSeekPointerTapInsideBounds(
@@ -296,17 +274,19 @@ internal class NativeSpringFineSeekState(
 
     private fun stopDrag() {
         dragSession = null
+        returnStyle = visualStyle
         frameBinding = null
         lastDragFrame = 0L
         returnStartX = horizontalPull; returnStartY = rawVerticalPull
         returnStartFrame = 0L
-        returning = abs(returnStartX) >= .0001f || abs(returnStartY) >= .0001f
+        returning = returnStyle.returnDurationNanos > 0L &&
+            (abs(returnStartX) >= .0001f || abs(returnStartY) >= .0001f)
         if (!returning) { horizontalPull = 0f; rawVerticalPull = 0f }
         invalidate()
         if (returning) requestFrames()
     }
 
-    fun frame(frameNanos: Long) {
+    override fun frame(frameNanos: Long) {
         val session = dragSession
         if (session != null) {
             val captured = checkNotNull(frameBinding)
@@ -326,16 +306,16 @@ internal class NativeSpringFineSeekState(
         if (!returning) return
         if (returnStartFrame == 0L) { returnStartFrame = frameNanos; return }
         val elapsed = frameNanos - returnStartFrame
-        val remaining = springFineSeekReturnRemaining(elapsed)
+        val remaining = returnStyle.returnRemaining(elapsed)
         horizontalPull = returnStartX * remaining; rawVerticalPull = returnStartY * remaining
-        if (elapsed >= 210_000_000L) {
+        if (elapsed >= returnStyle.returnDurationNanos) {
             horizontalPull = 0f; rawVerticalPull = 0f; returning = false
         }
         invalidate()
     }
 
     /** ACTION_CANCEL, disabled pointerInput, identity replacement or detach retires this session. */
-    fun cancel() {
+    override fun cancel() {
         val active = run
         if (active != null) finishRun(active, normal = false, stillPressed = false)
         else pointerOwner?.cancel()
@@ -343,7 +323,7 @@ internal class NativeSpringFineSeekState(
         awaitingRangeTapOwner = binding?.createInputGesture != null
     }
 
-    fun release() {
+    override fun release() {
         cancel()
         handlerBinding = null
         binding = null

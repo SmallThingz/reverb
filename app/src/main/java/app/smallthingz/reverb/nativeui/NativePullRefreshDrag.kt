@@ -5,8 +5,6 @@
 package app.smallthingz.reverb.nativeui
 
 import kotlin.math.abs
-import kotlin.math.max
-import kotlin.math.min
 import kotlin.math.pow
 
 /** Physical Y drag accumulator. No View, dispatcher, refresh work or additional input policy. */
@@ -48,23 +46,4 @@ internal fun nativePullRefreshOffset(adjustedDistance: Float, thresholdPx: Int):
     val linearTension = overshootPercent.coerceIn(0f, 2f)
     val tensionPercent = linearTension - linearTension.pow(2) / 4
     return thresholdPx + thresholdPx * tensionPercent
-}
-
-internal data class NativePullRefreshArrow(
-    val rotation: Float,
-    val startAngle: Float,
-    val endAngle: Float,
-    val scale: Float,
-)
-
-/** Keep source's operation order, including rotation being used as degrees by the outer rotate. */
-internal fun nativePullRefreshArrow(progress: Float): NativePullRefreshArrow {
-    val adjustedPercent = max(min(1f, progress) - .4f, 0f) * 5 / 3
-    val overshootPercent = abs(progress) - 1f
-    val linearTension = overshootPercent.coerceIn(0f, 2f)
-    val tensionPercent = linearTension - linearTension.pow(2) / 4
-    val endTrim = adjustedPercent * .8f
-    val rotation = (-.25f + .4f * adjustedPercent + tensionPercent) * .5f
-    return NativePullRefreshArrow(rotation, rotation * 360, (rotation + endTrim) * 360,
-        min(1f, adjustedPercent))
 }

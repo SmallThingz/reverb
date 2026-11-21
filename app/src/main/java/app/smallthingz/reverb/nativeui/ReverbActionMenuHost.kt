@@ -33,7 +33,7 @@ internal class ReverbActionMenuHost(
     private var closed = false
 
     fun bindPalette(palette: ReverbPalette) {
-        environment = ReverbViewEnvironment(environment.textDensity, environment.sharedFontResolver, palette)
+        environment = environment.withPalette(palette)
     }
 
     fun show(identity: Any, anchor: View, actions: List<NativeMenuAction<ReverbIcon>>, background: Int,
@@ -50,7 +50,7 @@ internal class ReverbActionMenuHost(
         if (prior != null) retire(entry, prior)
         lateinit var session: Session
         val window = NativePopupMenu(anchor, environment.textDensity,
-            reverbDefaultTextStyle().merge(ReverbParagraphStyles[ReverbTextRole.LABEL_LARGE]),
+            environment.appearance.typography.buttonLabelStyle,
             environment.sharedFontResolver, environment.palette.menuColors(), entry.scroll, frames, scope, ReverbMenuIcons,
             onDismissRequest = {
                 if (entries[identity] === entry && entry.session === session) {

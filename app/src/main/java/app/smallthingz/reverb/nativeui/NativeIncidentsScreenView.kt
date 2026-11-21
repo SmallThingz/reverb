@@ -87,14 +87,16 @@ internal class NativeIncidentsScreenView(
         }
     }
 
-    private fun appearance() = IncidentsContentAppearance(
-        IncidentCardAppearance(environment.palette,
-            ReverbParagraphStyles[ReverbTextRole.BODY_LARGE],
-            ReverbParagraphStyles[ReverbTextRole.BODY_MEDIUM],
-            ReverbParagraphStyles[ReverbTextRole.BODY_SMALL],
-            environment.textDensity, environment.sharedFontResolver),
-        ReverbParagraphStyles[ReverbTextRole.TITLE_LARGE],
-        ReverbParagraphStyles[ReverbTextRole.TITLE_MEDIUM])
+    private fun appearance(): IncidentsContentAppearance {
+        val typography = environment.appearance.typography
+        val toolbar = environment.appearance.toolbars
+        return IncidentsContentAppearance(
+            IncidentCardAppearance(environment.palette, typography[ReverbTextRole.BODY_LARGE],
+                typography[ReverbTextRole.BODY_MEDIUM], typography[ReverbTextRole.BODY_SMALL],
+                environment.textDensity, environment.sharedFontResolver, environment.appearance.listDecorations.alertCard),
+            typography[toolbar.leadingTitleRole], typography[ReverbTextRole.TITLE_MEDIUM],
+            toolbar, environment.appearance.backdrops)
+    }
 
     override fun historyChanged(state: IncidentHistoryUiState) {
         if (closed) return
@@ -164,7 +166,7 @@ internal class NativeIncidentsScreenView(
     /** Palette changes retain list/scroll/row identity; window density/resolver remain host-owned. */
     fun bindPalette(palette: ReverbPalette) {
         if (closed) return
-        environment = ReverbViewEnvironment(environment.textDensity, environment.sharedFontResolver, palette)
+        environment = environment.withPalette(palette)
         menus?.bindPalette(palette)
         content?.setAppearance(appearance(), owner::requestBack, incidentContentActions(context, owner.history))
     }

@@ -12,7 +12,6 @@ import smallthingz.ui.text.view.NativeTextSemanticsTransformPolicy
 import smallthingz.ui.text.view.ParagraphView
 import smallthingz.ui.text.view.PlainTextAccessibilityGeometry
 import smallthingz.ui.text.view.nativeMergedRoleBoundsInScreen
-import app.smallthingz.reverb.nativeui.colorTransition
 import android.content.Context
 import android.graphics.Rect
 import android.net.Uri
@@ -67,8 +66,7 @@ internal class NativeActivityContentView(
     private var sourceFocus: NativeSourceFocusPolicy? = null
     private var renderAgain = false
     private var windowInsets = WindowInsetsCompat.Builder().build()
-    private val noise = ReverbNoiseDrawable(resources, initialEnvironment.palette.surface)
-    private val noiseColor=noise.colorTransition(this,initialEnvironment.palette.surface) {
+    private val backdrop = initialEnvironment.appearance.backdrops.attachPage(this, initialEnvironment.palette) {
         main?.invalidateSettingsTextSurface()
     }
     private val hostClip = NativeTextSemanticsClipPolicy { view ->
@@ -100,7 +98,6 @@ internal class NativeActivityContentView(
         isFocusableInTouchMode = true
         defaultFocusHighlightEnabled = false
         if (Build.VERSION.SDK_INT >= 29) isForceDarkAllowed = false
-        background = noise
         foreground = statusBarProtection
         sourceFocus = NativeSourceFocusPolicy(this,
             takeOwnerFocus = { super.requestFocus(FOCUS_DOWN, null) },
@@ -139,7 +136,7 @@ internal class NativeActivityContentView(
     }
 
     private fun renderBranch() {
-        noiseColor.retarget(environment.palette.surface)
+        environment.appearance.backdrops.bindPage(backdrop, environment.palette)
         if (snapshot.showingOnboarding) {
             retireMain()
             retireDenied()

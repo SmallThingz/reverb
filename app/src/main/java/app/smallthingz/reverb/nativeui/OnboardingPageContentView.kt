@@ -1,6 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
 import smallthingz.ui.components.NativeGroupLayout
+import smallthingz.ui.components.NativeUiAppearance
 import smallthingz.ui.scroll.NativeVerticalNestedHost
 import smallthingz.ui.scroll.NativeVerticalScrollState
 import smallthingz.ui.scroll.NativeVerticalViewport
@@ -77,6 +78,7 @@ internal class OnboardingPageContentView(
     scrollNested: NativeVerticalNestedHost,
     inputRoot: () -> View? = { null },
     parentInterested: (NativeDragPointerChange) -> Boolean = { false },
+    appearance: NativeUiAppearance = reverbAppearance,
 ) : FrameLayout(context), AutoCloseable {
     private var state = initialState
     private var boundPalette = initialPalette
@@ -85,7 +87,7 @@ internal class OnboardingPageContentView(
     private var pageInteractionAllowed = true
     private var owner: ActionOwner? = null
     private var textAccessibility: NativePageTextAccessibilityOwner? = null
-    private var environment = ReverbViewEnvironment(density, resolver, initialPalette)
+    private var environment = ReverbViewEnvironment(density, resolver, initialPalette, appearance = appearance)
     private val viewport = NativeVerticalViewport(context, scrollState, density, scrollFrames, scrollScope, scrollNested)
     val sourceVerticalViewport: NativeVerticalViewport get() = viewport
     private val column = OnboardingPageColumn(context)
@@ -97,16 +99,18 @@ internal class OnboardingPageContentView(
     private val header = ParagraphView(context, typography.headlineMedium, density, resolver, initialPalette.onSurface)
     private val permissionBody = if (page == 0) label(context, typography.bodyMedium, density, resolver,
         R.string.onboarding_permissions_body, initialPalette.onSurfaceVariant) else null
+    private val detailCards = environment.appearance.detailCards
     private val permissions = if (page == 0)
-        OnboardingPermissionGroup(context, typography, density, resolver, inputRoot) else null
-    private val bufferGroup = if (page == 1) NativeGroupLayout(context, cornerRadiusDp = 20f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast) else null
+        OnboardingPermissionGroup(context, typography, density, resolver, inputRoot, detailCards) else null
+    private val bufferGroup = if (page == 1) detailCards.createGroup(context, ::invalidateSettingsTextContrast) else null
     private val oneShot = if (page == 1)
-        OnboardingBufferRow(context, typography, density, resolver, ReverbIcon.OneShot, initialPalette, inputRoot) else null
+        OnboardingBufferRow(context, typography, density, resolver, ReverbIcon.OneShot, initialPalette, inputRoot, detailCards) else null
     private val looping = if (page == 1)
-        OnboardingBufferRow(context, typography, density, resolver, ReverbIcon.Looping, initialPalette, inputRoot) else null
+        OnboardingBufferRow(context, typography, density, resolver, ReverbIcon.Looping, initialPalette, inputRoot, detailCards) else null
     private val bufferOrder = if (page == 1) label(context, typography.bodyMedium, density, resolver,
         R.string.onboarding_order, initialPalette.onSurfaceVariant) else null
-    private val audioGroup = if (page == 2) NativeGroupLayout(context, cornerRadiusDp = 20f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast) else null
+    private val groupRecipe = appearance.groupSurfaces.settingsGroup
+    private val audioGroup = if (page == 2) groupRecipe.create(context, ::invalidateSettingsTextContrast) else null
     private val silenceCallbacks = createSilenceCallbacks()
     private val compression = if (page == 2)
         SettingsOutputCompressionView(context, compressionState(initialState), environment, inputRoot,
@@ -184,7 +188,7 @@ internal class OnboardingPageContentView(
         val paletteChanged = boundPalette !== palette
         if (paletteChanged) {
             boundPalette = palette
-            environment = ReverbViewEnvironment(environment.textDensity, environment.sharedFontResolver, palette)
+            environment = environment.withPalette(palette)
         }
         state = next
         updateAudioExposure()
@@ -209,7 +213,7 @@ internal class OnboardingPageContentView(
         permissionBody?.animateTextColor(palette.onSurfaceVariant)
         val permissionMembershipChanged = permissions?.bind(
             next.permissions.copy(interactionEnabled = next.interactionEnabled), palette) == true
-        bufferGroup?.setPalette(palette.field, palette.border)
+        bufferGroup?.let { groupRecipe.bind(it, palette) }
         oneShot?.bind(context.getString(R.string.onboarding_one_shot_title),
             context.getString(R.string.onboarding_one_shot_body), next.oneShotEnabled,
             next.controlsEnabled && (!next.oneShotEnabled || next.loopingEnabled), next.interactionEnabled, palette)
@@ -217,7 +221,7 @@ internal class OnboardingPageContentView(
             context.getString(R.string.onboarding_looping_body), next.loopingEnabled,
             next.controlsEnabled && (!next.loopingEnabled || next.oneShotEnabled), next.interactionEnabled, palette)
         bufferOrder?.animateTextColor(palette.onSurfaceVariant)
-        audioGroup?.setPalette(palette.field, palette.border)
+        audioGroup?.let { groupRecipe.bind(it, palette) }
         compression?.bind(compressionState(next), environment)
         silence?.bind(silenceState(next), environment, silenceCallbacks)
         compressionWarning?.apply {

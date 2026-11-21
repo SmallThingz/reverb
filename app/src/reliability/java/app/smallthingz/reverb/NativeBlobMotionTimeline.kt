@@ -1,15 +1,17 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.components.blob.AudioReactiveBlobView
+import smallthingz.ui.components.blob.NativeAudioBlobAppearance
+import smallthingz.ui.components.blob.NativeAudioBlobReadout
 import android.app.Instrumentation
 import android.os.SystemClock
 import android.view.Choreographer
 import android.view.Gravity
-import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.TextView
 import app.smallthingz.reverb.nativeui.ReverbPalette
 import app.smallthingz.reverb.nativeui.ReverbViewEnvironment
-import app.smallthingz.reverb.nativeui.ReverbHomeBlobState
+import app.smallthingz.reverb.nativeui.createHomeBlobReadout
 import smallthingz.ui.unit.Density
 import smallthingz.ui.text.font.createFontFamilyResolver
 import java.io.File
@@ -20,13 +22,14 @@ import org.json.JSONObject
 /** Continuous production-renderer evidence; synthetic visual input, no PCM or microphone claims. */
 internal fun captureNativeBlobMotionTimeline(
     instrumentation: Instrumentation,
-    blob: AudioBlobView,
-    controller: AudioBlobController,
+    blob: AudioReactiveBlobView,
+    controller: NativeAudioBlobController,
     palette: ReverbPalette,
     name: String,
     directory: File,
     scene: JSONObject,
 ) {
+    val blobStyle = NativeAudioBlobAppearance.Default.resolve(palette)
     val finished = CountDownLatch(1)
     val capacity = 32 * 300 + 32
     val times = LongArray(capacity)
@@ -35,9 +38,9 @@ internal fun captureNativeBlobMotionTimeline(
     val lives = FloatArray(capacity)
     val silences = FloatArray(capacity)
     val presences = FloatArray(capacity)
-    val life = AudioBlobView::class.java.getDeclaredField("currentLife").apply { isAccessible = true }
-    val silence = AudioBlobView::class.java.getDeclaredField("currentSilence").apply { isAccessible = true }
-    val presence = AudioBlobView::class.java.getDeclaredField("currentPresence").apply { isAccessible = true }
+    val life = AudioReactiveBlobView::class.java.getDeclaredField("currentLife").apply { isAccessible = true }
+    val silence = AudioReactiveBlobView::class.java.getDeclaredField("currentSilence").apply { isAccessible = true }
+    val presence = AudioReactiveBlobView::class.java.getDeclaredField("currentPresence").apply { isAccessible = true }
     val zero = FloatArray(8)
     val low = floatArrayOf(.65f,.5f,.3f,.2f,.04f,.03f,.02f,.01f)
     val high = low.reversedArray()
@@ -53,16 +56,8 @@ internal fun captureNativeBlobMotionTimeline(
     var parent: FrameLayout? = null
     var label: TextView? = null
     var choreographer: Choreographer? = null
-    var overlay: ViewGroup? = null
+    var overlay: NativeAudioBlobReadout? = null
     var overlayWrapper: FrameLayout? = null
-    val overlayType = Class.forName("app.smallthingz.reverb.nativeui.BlobOverlay")
-    val bind = overlayType.getDeclaredMethod("bind", ReverbHomeBlobState::class.java, Float::class.javaPrimitiveType)
-        .apply { isAccessible = true }
-    val appearance = overlayType.getDeclaredMethod("setMaterialAppearance", Boolean::class.javaPrimitiveType,
-        Boolean::class.javaPrimitiveType, Boolean::class.javaPrimitiveType)
-        .apply { isAccessible = true }
-    val geometry = overlayType.getDeclaredMethod("updateMaterialGeometry", AudioBlobView::class.java, Int::class.javaPrimitiveType)
-        .apply { isAccessible = true }
     val callback = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
             try {
@@ -86,10 +81,8 @@ internal fun captureNativeBlobMotionTimeline(
                 val bins = when { pulse || phase == 5 || phase == 7 || phase == 9 -> loud
                     phase == 3 -> low; phase == 4 -> high; else -> zero }
                 if (phase != lastPhase) {
-                    blob.updateState(active, true, false, true, palette.primary, palette.tertiary,
-                        if (filled) palette.primaryContainer else palette.surfaceContainerHighest, skipSilenceEnabled = true)
-                    bind.invoke(overlay, ReverbHomeBlobState(controller, active, false, true, true,
-                        filled, false, "15.1 MiB", if (active || filled) "2:58" else null, true, true), 1f)
+                    blob.updateState(active, true, false, true, blobStyle, filled = filled, skipSilenceEnabled = true)
+                    checkNotNull(overlay).bind(active, filled, "15.1 MiB", if (active || filled) "2:58" else null, 1f)
                     lastPhase = phase
                 }
                 controller.submit(ReverbService.VisualizationFrame(activity, bins,
@@ -115,8 +108,7 @@ internal fun captureNativeBlobMotionTimeline(
             parent = blob.parent as FrameLayout
             val environment = ReverbViewEnvironment(Density(blob.resources.displayMetrics.density,
                 blob.resources.configuration.fontScale), createFontFamilyResolver(blob.context), palette)
-            overlay = overlayType.getDeclaredConstructor(android.content.Context::class.java, ReverbViewEnvironment::class.java)
-                .apply { isAccessible = true }.newInstance(blob.context, environment) as ViewGroup
+            overlay = createHomeBlobReadout(blob.context, environment)
             // Match Home's unclipped overlay parent; a tight child under fixtureRoot's default
             // clipChildren would truncate the startup support field into a false rectangle.
             overlayWrapper = FrameLayout(blob.context).apply {
@@ -126,10 +118,10 @@ internal fun captureNativeBlobMotionTimeline(
             }
             parent!!.addView(overlayWrapper, FrameLayout.LayoutParams(blob.width, blob.height, Gravity.CENTER))
             overlay!!.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
-                geometry.invoke(overlay, blob, palette.surface)
+                checkNotNull(overlay).updateMaterialGeometry(blob, palette.surface)
             }
             blob.onReadoutAppearanceChanged = { darkInk, transitioning, supportNeeded ->
-                appearance.invoke(overlay, darkInk, transitioning, supportNeeded); Unit }
+                checkNotNull(overlay).setMaterialAppearance(darkInk, transitioning, supportNeeded) }
             label = TextView(blob.context).apply {
                 setTextColor(palette.onSurface)
                 textSize = 14f

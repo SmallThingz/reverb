@@ -1,5 +1,7 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.components.blob.AudioReactiveBlobView
+import smallthingz.ui.components.blob.NativeAudioBlobAppearance
 import android.app.Instrumentation
 import android.os.SystemClock
 import android.view.Choreographer
@@ -12,12 +14,13 @@ import org.json.JSONObject
 /** Real vsync restart after natural settling; never clears the renderer clock or calls stopFrames. */
 internal fun verifyNativeBlobRestartClock(
     instrumentation: Instrumentation,
-    blob: AudioBlobView,
+    blob: AudioReactiveBlobView,
     palette: ReverbPalette,
     scene: JSONObject,
 ) {
+    val blobStyle = NativeAudioBlobAppearance.Default.resolve(palette)
     fun <T> main(action: () -> T): T = nativeParityOnMain(instrumentation, action)
-    fun field(name: String) = AudioBlobView::class.java.getDeclaredField(name).apply { isAccessible = true }
+    fun field(name: String) = AudioReactiveBlobView::class.java.getDeclaredField(name).apply { isAccessible = true }
     val life = field("currentLife")
     val presence = field("currentPresence")
     val posted = field("framePosted")
@@ -35,8 +38,7 @@ internal fun verifyNativeBlobRestartClock(
         }
     }
     naturallySettled(true)
-    main { blob.updateState(false, true, false, true, palette.primary, palette.tertiary,
-        palette.surfaceContainerHighest, skipSilenceEnabled = true) }
+    main { blob.updateState(false, true, false, true, blobStyle, skipSilenceEnabled = true) }
     naturallySettled(false)
     val stoppedClock = main { clock.getLong(blob) }
     SystemClock.sleep(200L)
@@ -62,8 +64,7 @@ internal fun verifyNativeBlobRestartClock(
             before = shaderTime.getFloat(blob)
             val rate = blob.display?.refreshRate?.takeIf { it.isFinite() && it >= 24f }?.coerceIn(24f, 240f) ?: 60f
             expectedDelta = 1f / rate
-            blob.updateState(true, true, false, true, palette.primary, palette.tertiary,
-                palette.surfaceContainerHighest, skipSilenceEnabled = true)
+            blob.updateState(true, true, false, true, blobStyle, skipSilenceEnabled = true)
             // Both callbacks enter the same Choreographer queue in this one main-thread action;
             // the observer follows the renderer's already-posted first callback.
             choreographer = Choreographer.getInstance()

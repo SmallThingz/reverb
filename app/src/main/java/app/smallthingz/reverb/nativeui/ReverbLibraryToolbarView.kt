@@ -1,17 +1,16 @@
 package app.smallthingz.reverb.nativeui
 
-import smallthingz.ui.components.NativeTopBarLayout
+import smallthingz.ui.components.NativeSelectionTopBarLayout
+import smallthingz.ui.components.NativeToolbarBackground
+import smallthingz.ui.components.NativeToolbarActionTone
 import smallthingz.ui.components.NativeGroupLayout
 import android.content.Context
 import android.os.Build
-import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
 import smallthingz.ui.text.style.TextOverflow
 import app.smallthingz.reverb.R
-import kotlin.math.max
-import kotlin.math.roundToInt
 
 internal data class LibraryToolbarState(
     val selectedCount: Int,
@@ -34,7 +33,7 @@ internal data class LibraryToolbarActions(
 )
 
 /**
- * FilesScreen's 66dp top bar only. No status-bar padding, route ownership, selection state,
+ * FilesScreen's compact top bar only. No status-bar padding, route ownership, selection state,
  * predictive-back registration or Home changes. Host supplies the released predictive frame.
  */
 internal class ReverbLibraryToolbarView(
@@ -47,6 +46,7 @@ internal class ReverbLibraryToolbarView(
     private var actions: LibraryToolbarActions? = null
     private var normal: ReverbAppTopBarView? = null
     private var selection: LibrarySelectionBar? = null
+    val contentHeightPx: Int get() = environment.appearance.toolbars.compactHeightPx(environment.textDensity.density)
 
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -90,15 +90,12 @@ internal class ReverbLibraryToolbarView(
     private fun applyMotion() {
         val child = selection ?: return
         val progress = if (state.predictiveGestureActive) state.predictiveProgress.coerceIn(0f, 1f) else 0f
-        child.translationX = state.predictiveDirection * child.width * progress
-        child.alpha = 1f - .18f * progress
-        child.scaleX = 1f - .015f * progress
-        child.scaleY = 1f - .015f * progress
+        environment.appearance.toolbars.applySelectionBackPreview(child, progress, state.predictiveDirection)
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val width = MeasureSpec.getSize(widthMeasureSpec)
-        val height = (66f * environment.textDensity.density).roundToInt()
+        val height = contentHeightPx
         for (index in 0 until childCount) getChildAt(index).measure(libraryToolbarExact(width), libraryToolbarExact(height))
         setMeasuredDimension(resolveSize(width, widthMeasureSpec), resolveSize(height, heightMeasureSpec))
     }
@@ -109,65 +106,45 @@ internal class ReverbLibraryToolbarView(
     }
 }
 
-private class LibrarySelectionBar(context: Context, private var environment: ReverbViewEnvironment, inputRoot: View) :
-    NativeTopBarLayout(context) {
-    private val close = ReverbTopBarIconAction(context, environment, inputRoot, ReverbIcon.Close, R.string.clear_selection, true)
-    private val share = ReverbTopBarIconAction(context, environment, inputRoot, ReverbIcon.Share,
-        R.string.share_recording, true, sharedSurface = true)
-    private val delete = ReverbTopBarIconAction(context, environment, inputRoot, ReverbIcon.Delete,
-        R.string.delete_recording, true, sharedSurface = true)
-    private val selectionActions = NativeGroupLayout(context, 15f, LinearLayout.HORIZONTAL, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
-    private val title = environment.paragraph(context, "", ReverbTextRole.TITLE_MEDIUM).apply {
+private class LibrarySelectionBar(
+    context: Context,
+    environment: ReverbViewEnvironment,
+    inputRoot: View,
+    private val close: ReverbTopBarIconAction = ReverbTopBarIconAction(context, environment, inputRoot,
+        ReverbIcon.Close, R.string.clear_selection, true),
+    private val share: ReverbTopBarIconAction = ReverbTopBarIconAction(context, environment, inputRoot,
+        ReverbIcon.Share, R.string.share_recording, true, sharedSurface = true),
+    private val delete: ReverbTopBarIconAction = ReverbTopBarIconAction(context, environment, inputRoot,
+        ReverbIcon.Delete, R.string.delete_recording, true, sharedSurface = true),
+    private val selectionActions: NativeGroupLayout = NativeGroupLayout(context, environment.appearance.toolbars.action.radiusDp,
+        LinearLayout.HORIZONTAL, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast),
+    private val title: smallthingz.ui.text.view.ParagraphView = environment.paragraph(context, "",
+        environment.appearance.toolbars.selectionTitleRole, environment.appearance.toolbars.contentColor(environment.palette)).apply {
         setTextLayout(maxLines = 1, overflow = TextOverflow.Ellipsis)
-    }
-    private val noise = ReverbNoiseDrawable(resources, environment.palette.surface, ReverbNoiseDrawable.SEED_TOP_BAR)
-    private val noiseColor = noise.colorTransition(this, environment.palette.surface)
+    },
+) : NativeSelectionTopBarLayout(context, environment.appearance.toolbars, close, title, selectionActions, 2) {
+    private val chrome = NativeToolbarBackground(this, toolbarStyle, toolbarStyle.backgroundColor(environment.palette))
     init {
-        background = noise
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         selectionActions.addRow(share, NativeGroupLayout.LayoutParams(0, LayoutParams.MATCH_PARENT, 1f))
         selectionActions.addRow(delete, NativeGroupLayout.LayoutParams(0, LayoutParams.MATCH_PARENT, 1f).apply {
             dividerStart = true
         })
-        addView(close); addView(title); addView(selectionActions)
     }
     fun bind(value: ReverbViewEnvironment, state: LibraryToolbarState, actions: LibraryToolbarActions) {
-        environment = value
-        noiseColor.retarget(value.palette.surface)
+        bindStyle(value.textDensity.density, 0, value.appearance.toolbars)
+        chrome.bind(toolbarStyle, toolbarStyle.backgroundColor(value.palette))
         title.setText(resources.getQuantityString(R.plurals.recordings_selected, state.selectedCount, state.selectedCount))
-        value.bindParagraphStyle(title, ReverbTextRole.TITLE_MEDIUM)
-        close.bind(value, true, value.palette.ink, value.palette.border, actions.clearSelection)
-        share.bind(value, !state.selectionHasBusyMutation, value.palette.ink, value.palette.border, actions.shareSelection)
+        value.bindParagraphStyle(title, toolbarStyle.selectionTitleRole, toolbarStyle.contentColor(value.palette))
+        close.bind(value, true, NativeToolbarActionTone.NEUTRAL, actions.clearSelection)
+        share.bind(value, !state.selectionHasBusyMutation, NativeToolbarActionTone.NEUTRAL, actions.shareSelection)
         delete.bind(value, state.acceptsDeletions && !state.selectionHasBusyMutation,
-            value.palette.error, value.palette.border, actions.deleteSelection)
-        selectionActions.setPalette(value.palette.field, value.palette.border)
-        touchDensity = value.textDensity.density
-    }
-    override fun onTouchEvent(event: MotionEvent): Boolean = true
-    private fun dp(value: Float) = (value * environment.textDensity.density).roundToInt()
-    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        val width = MeasureSpec.getSize(widthMeasureSpec)
-        val size = dp(48f)
-        val actionSpec = libraryToolbarExact(size)
-        close.measure(actionSpec, actionSpec)
-        selectionActions.measure(libraryToolbarExact(size * 2), actionSpec)
-        val available = max(0, width - dp(16f) - dp(16f) - size * 3 - dp(16f))
-        title.measure(libraryToolbarExact(available), libraryToolbarAtMost(dp(66f)))
-        setMeasuredDimension(width, resolveSize(dp(66f), heightMeasureSpec))
-    }
-    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
-        var x = place(close, dp(16f)) + dp(16f)
-        x = place(title, x)
-        place(selectionActions, x)
-    }
-    private fun place(child: View, x: Int): Int {
-        val px = if (layoutDirection == LAYOUT_DIRECTION_RTL) width - x - child.measuredWidth else x
-        val y = ((height - child.measuredHeight) / 2f).roundToInt()
-        child.layout(px, y, px + child.measuredWidth, y + child.measuredHeight)
-        return x + child.measuredWidth
+            NativeToolbarActionTone.DESTRUCTIVE, actions.deleteSelection)
+        selectionActions.setCornerRadiusDp(toolbarStyle.action.radiusDp)
+        selectionActions.setPalette(toolbarStyle.actionFill(value.palette),
+            toolbarStyle.actionOutline(value.palette, NativeToolbarActionTone.NEUTRAL))
     }
 }
 
 
 private fun libraryToolbarExact(value: Int) = View.MeasureSpec.makeMeasureSpec(value.coerceAtLeast(0), View.MeasureSpec.EXACTLY)
-private fun libraryToolbarAtMost(value: Int) = View.MeasureSpec.makeMeasureSpec(value.coerceAtLeast(0), View.MeasureSpec.AT_MOST)

@@ -166,7 +166,7 @@ internal class ReverbLibraryScreenContent(
             menus.bindPalette(nextEnvironment.palette)
             renameSheet?.sheet?.bindEnvironment(nextEnvironment)
             infoSheet?.sheet?.bindEnvironment(nextEnvironment)
-            refreshIndicator.bindPalette(nextEnvironment.palette)
+            refreshIndicator.bindEnvironment(nextEnvironment)
             toolbar.setEnvironment(nextEnvironment)
             list.setEnvironment(nextEnvironment)
             status?.setEnvironment(nextEnvironment)
@@ -404,7 +404,7 @@ internal class ReverbLibraryScreenContent(
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val width = MeasureSpec.getSize(widthMeasureSpec)
         val height = MeasureSpec.getSize(heightMeasureSpec)
-        toolbar.measure(libraryRootExact(width), libraryRootExact(dp(66f)))
+        toolbar.measure(libraryRootExact(width), libraryRootExact(toolbar.contentHeightPx))
         val insets = input.scaffoldInsets
         body.measure(libraryRootExact(max(0, width - insets.left - insets.right)),
             libraryRootExact(max(0, height - toolbar.measuredHeight - insets.bottom)))

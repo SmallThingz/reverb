@@ -6,7 +6,7 @@ import android.content.res.Configuration
 import android.graphics.RectF
 import android.view.View
 import android.view.ViewGroup
-import app.smallthingz.reverb.AudioBlobController
+import app.smallthingz.reverb.NativeAudioBlobController
 import app.smallthingz.reverb.BufferMetrics
 import app.smallthingz.reverb.CaptureBufferUiState
 import app.smallthingz.reverb.R
@@ -31,8 +31,8 @@ internal data class ReverbHomeBodyState(
     val serviceConnected: Boolean,
     val serviceStateHydrated: Boolean,
     val preparingRange: Boolean,
-    val oneShotController: AudioBlobController,
-    val loopingController: AudioBlobController,
+    val oneShotController: NativeAudioBlobController,
+    val loopingController: NativeAudioBlobController,
     val visualizerVisible: Boolean,
     val skipSilenceEnabled: Boolean = false,
 )
@@ -74,7 +74,8 @@ internal class ReverbHomeBodyView(
     val swipeSurface: ViewGroup = swipeSurfaceFactory(blob)
     val blobInputView: View get() = blob
     private val bodyBounds = RectF()
-    private var geometry = reverbHomeGeometry(0, 0, initialEnvironment.textDensity.density)
+    private var geometry = reverbHomeGeometry(0, 0, initialEnvironment.textDensity.density,
+        initialEnvironment.appearance.captureControls)
 
     init {
         clipChildren = false
@@ -169,7 +170,7 @@ internal class ReverbHomeBodyView(
         val width = MeasureSpec.getSize(w)
         val height = MeasureSpec.getSize(h)
         setMeasuredDimension(width, height)
-        geometry = reverbHomeGeometry(width, height, environment.textDensity.density)
+        geometry = reverbHomeGeometry(width, height, environment.textDensity.density, environment.appearance.captureControls)
         controls.measure(exact(geometry.clusterWidth), exact(geometry.clusterHeight))
         swipeSurface.measure(exact(geometry.bodyWidth), exact(geometry.blobAreaHeight))
         blob.measure(exact(geometry.blobSize), exact(geometry.blobSize))

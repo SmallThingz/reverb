@@ -1,7 +1,6 @@
 package app.smallthingz.reverb
 
 import kotlin.random.Random
-import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
@@ -59,52 +58,6 @@ class RangeMathOptimizationTest {
     }
 
     @Test
-    fun wheelValues_matchLegacySortedDistinctForAllSmallRingsAndBoundedHugeInputs() {
-        for (maximum in -2..80) for (step in 1..20) for (current in -2..100) {
-            for (includeMaximum in booleanArrayOf(false, true)) {
-                assertArrayEquals(legacyWheel(step, maximum, current, includeMaximum),
-                    rangeDurationWheelValues(step, maximum, current, includeMaximum))
-            }
-        }
-        val random = Random(26026)
-        repeat(2_000) {
-            val maximum = random.nextInt(Int.MAX_VALUE)
-            val step = random.nextInt(maxOf(1, maximum / 4096 + 1), Int.MAX_VALUE)
-            val current = random.nextInt()
-            val includeMaximum = random.nextBoolean()
-            assertArrayEquals(legacyWheel(step, maximum, current, includeMaximum),
-                rangeDurationWheelValues(step, maximum, current, includeMaximum))
-        }
-        for (step in intArrayOf(Int.MAX_VALUE / 2, Int.MAX_VALUE - 1, Int.MAX_VALUE)) {
-            for (current in intArrayOf(0, 1, Int.MAX_VALUE - 1, Int.MAX_VALUE)) {
-                assertArrayEquals(legacyWheel(step, Int.MAX_VALUE, current, true),
-                    rangeDurationWheelValues(step, Int.MAX_VALUE, current, true))
-            }
-        }
-    }
-
-    @Test
-    fun wheelOffProfileMaximumAndCurrent_remainOrderedAndUnique() {
-        assertArrayEquals(intArrayOf(0, 1, 2), rangeDurationWheelValues(5, 1, 2))
-        assertArrayEquals(intArrayOf(0, 4, 5), rangeDurationWheelValues(5, 5, 4))
-        assertArrayEquals(intArrayOf(0, 1, 5), rangeDurationWheelValues(1, 1, 5))
-        assertArrayEquals(intArrayOf(0, 5, 7), rangeDurationWheelValues(5, 7, 7))
-        assertArrayEquals(intArrayOf(0, 5, 7), rangeDurationWheelValues(5, 7, 7, false))
-    }
-
-    @Test
-    fun wheelInvalidStepAndOverflowingCapacity_preserveRejectionWithoutLargeAllocation() {
-        for (step in intArrayOf(Int.MIN_VALUE, -1, 0)) {
-            assertThrows(IllegalArgumentException::class.java) { legacyWheel(step, 59, 0, true) }
-            assertThrows(IllegalArgumentException::class.java) { rangeDurationWheelValues(step, 59, 0) }
-        }
-        for (maximum in intArrayOf(Int.MAX_VALUE - 2, Int.MAX_VALUE - 1, Int.MAX_VALUE)) {
-            assertThrows(IllegalArgumentException::class.java) { legacyWheel(1, maximum, 0, true) }
-            assertThrows(IllegalArgumentException::class.java) { rangeDurationWheelValues(1, maximum, 0) }
-        }
-    }
-
-    @Test
     fun quantizerFailure_doesNotCommitRemainderAndSuccessfulCallRunsOnce() {
         val position = FineSeekPosition<String>()
         val failure = IllegalStateException("quantizer failure")
@@ -142,22 +95,5 @@ class RangeMathOptimizationTest {
         val fullRange = RangeEditValues(0f, duration)
         fun bound(requested: Float): Float = editTargetValue(adjustRangeEditTarget(fullRange, target, requested, duration).values, target)
         return bound(0f)..bound(duration)
-    }
-
-    private fun legacyWheel(step: Int, maxInclusive: Int, currentValue: Int, includeMaximum: Boolean): IntArray {
-        require(step > 0)
-        val max = maxInclusive.coerceAtLeast(0)
-        val current = currentValue.coerceAtLeast(0)
-        val values = ArrayList<Int>(max / step + 3)
-        var value = 0
-        while (value <= max) {
-            values += value
-            if (value > Int.MAX_VALUE - step) break
-            value += step
-        }
-        if (includeMaximum && values.lastOrNull() != max) values += max
-        if (current !in values) values += current
-        values.sort()
-        return values.distinct().toIntArray()
     }
 }

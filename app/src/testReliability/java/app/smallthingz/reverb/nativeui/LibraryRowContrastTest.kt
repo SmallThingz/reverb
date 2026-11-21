@@ -12,7 +12,7 @@ class LibraryRowContrastTest {
             val palette = ReverbPalette.fallback(dark)
             val row = LibraryRecordingRow("recording", "Recording", "1:20 - 8.4 MB", "10:30",
                 selected = false, selectionActive = true, interactionsEnabled = true, edges = null)
-            val frame = LibraryRecordingRowFrame.target(row, palette)
+            val frame = reverbAppearance.groupSurfaces.recordingRow.target(palette, selected = row.selected)
             val background = frame.background
             fun channel(color: Int, shift: Int) = ((color ushr shift) and 255).toDouble() / 255
             fun luminance(color: Int, alpha: Float = 1f): Double {

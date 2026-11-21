@@ -34,7 +34,8 @@ internal class SettingsStorageSection(
 ):ViewGroup(context),AutoCloseable {
     private var state=initial
     private val title=settingsSectionTitle(context,R.string.storage_settings_title,environment)
-    private val surface=NativeGroupLayout(context,20f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
+    private val surfaceRecipe = environment.appearance.groupSurfaces.settingsGroup
+    private val surface = surfaceRecipe.create(context, ::invalidateSettingsTextContrast)
     private val path=environment.paragraph(context,initial.pathText,ReverbTextRole.BODY_LARGE,environment.palette.muted)
     private val reset=SettingsStorageActionView(context,environment,ReverbIcon.Reset,
         context.getString(R.string.default_folder),inputRoot,onDefaultFolder)
@@ -59,7 +60,7 @@ internal class SettingsStorageSection(
         state=next;environment=colors
         bindSectionTitle(title,colors)
         path.setText(next.pathText);colors.bindParagraphStyle(path,ReverbTextRole.BODY_LARGE,colors.palette.muted)
-        surface.setPalette(colors.palette.field,colors.palette.border)
+        surfaceRecipe.bind(surface, colors.palette)
         reset.visibility=if(next.hasCustomDirectory)VISIBLE else GONE
         reset.bind(colors,true);choose.bind(colors,!next.settingsPersisting);move.bind(colors,next.canMove&&!next.settingsPersisting)
         val missingAllFiles=next.allFilesAvailable&&!next.allFilesAllowed

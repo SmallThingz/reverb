@@ -1,5 +1,6 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.input.phase.NativeNestedPointerRoot
 import smallthingz.ui.input.phase.NativeClickPhaseHost
 import smallthingz.ui.input.phase.NativeClickPhaseNode
 import smallthingz.ui.input.phase.NativeDragPointerEvent
@@ -71,7 +72,7 @@ internal class NativeHomePointerBinding(
     }
 
     private fun layoutFor(view: View): NativeViewPointerHitLayout = customLayout(view) ?:
-        if (view is NativeHomePointerRoot) view.parentPointerLayout(geometry.windowPositionInScreen)
+        if (view is NativeNestedPointerRoot) view.parentPointerLayout(geometry.windowPositionInScreen)
         else layouts.getOrPut(view) { Layout(view) }
 
     private inner class Layout(private val view: View) : NativeViewPointerHitLayout {

@@ -7,18 +7,19 @@ import android.view.View
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.lifecycle.Lifecycle
 import app.smallthingz.reverb.nativeui.ReverbViewEnvironment
+import smallthingz.ui.components.NativeDurationWheelStyle
+import smallthingz.ui.components.NativeDurationWheelView
 
 /**
- * RangeSelectionDurationWheel's released AndroidView update/onRelease contract. The renderer is
- * the original RangeDurationWheelView. Model changes and interaction generation stay in the
- * shared RangeExportEditorState; this adapter does not create a second draft or duration policy.
+ * Connects the duration wheel to the range editor's current limit and pinned boundary edit.
  */
 internal class NativeRangeSelectionDurationWheel(
     context: Context,
     private val state: RangeExportEditorState,
     private val lifecycle: Lifecycle,
+    style: NativeDurationWheelStyle,
 ) : AutoCloseable {
-    val view = RangeDurationWheelView(context)
+    val view = NativeDurationWheelView(context, style)
     private var alive = true
     private var currentEnabled = false
     private var exportLimit = 0.0
@@ -69,9 +70,7 @@ internal class NativeRangeSelectionDurationWheel(
         exportLimit = maxExportDurationSeconds
         currentEnabled = enabled && inputVisible
         view.isEnabled = enabled
-        with(environment.palette) {
-            view.setPalette(ink = onSurface, muted = onSurfaceVariant, border = outlineVariant, error = error)
-        }
+        view.setAppearance(environment.appearance.durationWheel, environment.palette)
         view.setMaximumDurationSeconds(maximum())
         view.setDurationSeconds(state.selectionDurationExactSeconds)
     }

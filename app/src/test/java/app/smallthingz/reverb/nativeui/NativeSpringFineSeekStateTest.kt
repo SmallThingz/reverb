@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeSpringFineSeekGeometry
+import smallthingz.ui.components.NativeSpringFineSeekStyle
 import smallthingz.ui.geometry.Offset
 import smallthingz.ui.input.pointer.PointerType
 import smallthingz.ui.input.phase.NativeDragPointerChange
@@ -14,7 +16,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class NativeSpringFineSeekStateTest {
-    private val geometry = SpringFineSeekGeometry(300, 120, 1f)
+    private val geometry = NativeSpringFineSeekGeometry(300, 120, 1f)
 
     @Test fun childConsumedOrdinaryTapDoesNotPauseAudio() {
         val h = Harness()
@@ -68,11 +70,11 @@ class NativeSpringFineSeekStateTest {
     @Test fun resizeDuringGestureUsesLiveCenterButRetainsDownTravel() {
         val h = Harness()
         h.send(event(150f, 60f, true, false))
-        val wider = SpringFineSeekGeometry(400, 120, 1f)
+        val wider = NativeSpringFineSeekGeometry(400, 120, 1f)
         h.state.pointer(event(210f, 60f, true, true), NativePointerPass.MAIN, wider)
         assertTrue(h.state.dragging)
         assertEquals(10f / geometry.inputHorizontalTravel, h.state.horizontalPull, 0f)
-        val narrower = SpringFineSeekGeometry(200, 120, 1f)
+        val narrower = NativeSpringFineSeekGeometry(200, 120, 1f)
         h.state.pointer(event(110f, 60f, true, true), NativePointerPass.MAIN, narrower)
         assertEquals(10f / geometry.inputHorizontalTravel, h.state.horizontalPull, 0f)
     }
@@ -203,7 +205,7 @@ class NativeSpringFineSeekStateTest {
         }
         fun checkSample(elapsed: Long) {
             val expected = released(elapsed)
-            val actual = springFineSeekReturnRemaining(elapsed)
+            val actual = NativeSpringFineSeekStyle.Default.returnRemaining(elapsed)
             assertEquals("remaining at $elapsed", expected.toRawBits(), actual.toRawBits())
             // A new return may begin at either sign or an interrupted fractional displacement.
             for (start in floatArrayOf(-1f, -.375f, -0.0f, 0f, .0001f, .625f, 1f)) {
@@ -219,12 +221,12 @@ class NativeSpringFineSeekStateTest {
     }
 
     @Test fun fractionalDensityKeepsOddCenteredPositionAndPhysicalPullDirection() {
-        val g = SpringFineSeekGeometry(421, 316, 421f / 160f)
+        val g = NativeSpringFineSeekGeometry(421, 316, 421f / 160f)
         assertEquals(168, g.hitWidth)
         assertEquals(127, g.puckLeft(0f))
         assertEquals(248, g.puckLeft(1f))
         assertEquals(6, g.puckLeft(-1f))
-        val tiny = SpringFineSeekGeometry(60, 60, 2.5f)
+        val tiny = NativeSpringFineSeekGeometry(60, 60, 2.5f)
         assertEquals(1f, tiny.inputHorizontalTravel, 0f)
         assertEquals(2.5f, tiny.drawHorizontalTravel, 0f)
     }
@@ -232,7 +234,7 @@ class NativeSpringFineSeekStateTest {
     @Test fun puckTracksPhysicalFieldCenterAcrossPullsAndDensities() {
         for (density in listOf(1f, 1.25f, 2.625f)) {
             for (width in listOf(300, 421)) {
-                val g = SpringFineSeekGeometry(width, 316, density)
+                val g = NativeSpringFineSeekGeometry(width, 316, density)
                 for (pull in listOf(-1f, -.4f, 0f, .4f, 1f)) {
                     val fieldCenter = width * .5f + pull * g.drawHorizontalTravel
                     val puckCenter = g.puckLeft(pull) + g.hitWidth * .5f

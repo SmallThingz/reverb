@@ -1,12 +1,10 @@
 package app.smallthingz.reverb.nativeui
 
 import android.content.Context
-import android.graphics.Color
 import android.view.View
 import android.view.ViewGroup
 import smallthingz.ui.components.NativeActionSheetContentContext
 import smallthingz.ui.components.NativeButtonInputPolicy
-import smallthingz.ui.components.NativeMaterialButtonStyle
 import smallthingz.ui.components.NativeMaterialButtonView
 import smallthingz.ui.geometry.Offset
 import smallthingz.ui.input.phase.NativeClickPhaseNode
@@ -64,11 +62,11 @@ internal class NativeMaterialButtonHost(
 internal class LibrarySheetButton(
     context: Context,
     host: NativeMaterialButtonHost,
-    private val filled: Boolean,
+    filled: Boolean,
     text: String,
     onClick: () -> Unit,
     private val leadingIcon: ReverbIcon? = null,
-    private val errorColors: Boolean = false,
+    errorColors: Boolean = false,
 ) : ViewGroup(context), AutoCloseable {
     constructor(context:Context,host:NativeActionSheetContentContext,environment:ReverbViewEnvironment,filled:Boolean,text:String,onClick:()->Unit,
                 leadingIcon:ReverbIcon?=null,errorColors:Boolean=false):
@@ -76,9 +74,16 @@ internal class LibrarySheetButton(
     private var environment=host.environment
     private var labelText = text
     private var action = onClick
-    private val surface = NativeMaterialButtonView(context, filled, reverbButtonTextStyle(),
+    private val buttons = environment.appearance.buttons
+    private val recipe = when {
+        filled && errorColors -> buttons.destructive
+        filled -> buttons.filled
+        errorColors -> buttons.destructiveText
+        else -> buttons.text
+    }
+    private val surface = NativeMaterialButtonView(context, recipe,
         environment.textDensity, environment.sharedFontResolver,
-        NativeMaterialButtonStyle(if (filled) 24 else 12), NativeButtonInputPolicy(inputRoot = { host.inputRoot }), onClick)
+        NativeButtonInputPolicy(inputRoot = { host.inputRoot }), onClick)
     private val accessibility: AutoCloseable
     private val textAccessibility: AutoCloseable
     private val clip: AutoCloseable
@@ -95,7 +100,7 @@ internal class LibrarySheetButton(
     init {
         importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO;clipChildren=false;clipToPadding=false
         addView(surface)
-        val minimumTouch = { 48f * environment.textDensity.density }
+        val minimumTouch = { surface.minimumTouchTargetDp * environment.textDensity.density }
         val present = { host.sourceNode(surface, minimumTouch()).present }
         accessibility = host.sourceProvider?.let { surface.mergedRowAccessibility.bindSourceGeometry(host.textGeometry, it, present) }
             ?: surface.mergedRowAccessibility.bindGeometry(host.textGeometry, { host.sourceNode(surface, minimumTouch()) },
@@ -110,20 +115,7 @@ internal class LibrarySheetButton(
     fun bind(text: String, enabled: Boolean, onClick: () -> Unit) {
         labelText = text
         action = onClick
-        val palette = environment.palette
-        val ink = when {
-            !enabled -> reverbColorWithAlpha(palette.onSurface, .38f)
-            errorColors -> palette.onErrorContainer
-            filled -> palette.onPrimary
-            else -> palette.primary
-        }
-        val container = when {
-            !filled -> Color.TRANSPARENT
-            !enabled -> reverbColorWithAlpha(palette.onSurface, .12f)
-            errorColors -> palette.errorContainer
-            else -> palette.primary
-        }
-        surface.bind(text, enabled, container, ink, onClick)
+        surface.bind(text, enabled, environment.palette.buttonPalette, onClick = onClick)
     }
     private fun bindIcon() {
         surface.setLeadingIcon(leadingIcon?.let { ReverbIconDrawable(it, environment.textDensity.density, environment.palette.onPrimary) })
@@ -134,7 +126,7 @@ internal class LibrarySheetButton(
         if(closed || environment===next)return
         val densityChanged=environment.textDensity!=next.textDensity
         environment = next
-        surface.bindTypography(reverbButtonTextStyle(), next.textDensity, next.sharedFontResolver)
+        surface.bindTypography(next.textDensity, next.sharedFontResolver)
         if (densityChanged) {
             bindIcon()
             requestLayout()
@@ -143,7 +135,7 @@ internal class LibrarySheetButton(
     }
     override fun onMeasure(w:Int,h:Int) {
         surface.measure(w,h)
-        val minimum=(48f*environment.textDensity.density).roundToInt()
+        val minimum=(surface.minimumTouchTargetDp*environment.textDensity.density).roundToInt()
         setMeasuredDimension(resolveSize(max(minimum,surface.measuredWidth),w),
             resolveSize(max(minimum,surface.measuredHeight),h))
     }

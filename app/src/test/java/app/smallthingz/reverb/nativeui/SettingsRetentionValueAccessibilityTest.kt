@@ -12,6 +12,7 @@ import app.smallthingz.reverb.R
 import app.smallthingz.reverb.RetentionMode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -21,6 +22,10 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.annotation.LooperMode
 import org.robolectric.util.ReflectionHelpers
+import smallthingz.ui.components.NativeUiAppearance
+import smallthingz.ui.text.NativeTypography
+import smallthingz.ui.text.NativeTypographyRole
+import smallthingz.ui.text.font.FontFamily
 import smallthingz.ui.text.font.createFontFamilyResolver
 import smallthingz.ui.text.view.ParagraphView
 import smallthingz.ui.unit.Density
@@ -72,6 +77,51 @@ class SettingsRetentionValueAccessibilityTest {
         } finally {
             oneShot.releaseCallbacks()
             looping.releaseCallbacks()
+            owner.pause().stop().destroy()
+        }
+    }
+
+    @Test
+    fun retainedEditorAndReadoutInheritWindowTypographyAndKeepExplicitValueMetrics() {
+        val owner = Robolectric.buildActivity(Activity::class.java).setup().visible()
+        val activity = owner.get()
+        val default = NativeUiAppearance.Default
+        val role = NativeTypographyRole.BODY_LARGE
+        val editorRecipe = default.editorVisuals.copy(largeValueText = default.editorVisuals.largeValueText.copy(fontSizeSp = 42f))
+        val appearance = default.copy(editorVisuals = editorRecipe)
+        val baseline = ReverbViewEnvironment(Density(1f), createFontFamilyResolver(activity),
+            ReverbPalette.fallback(false), appearance = appearance).forSettings()
+        val changedTypography = NativeTypography(mapOf(role to default.typography[role].copy(fontFamily = FontFamily.Monospace)))
+        val changedAppearance = appearance.copy(typography = changedTypography)
+        val next = ReverbViewEnvironment(baseline.textDensity, baseline.sharedFontResolver, baseline.palette,
+            appearance = changedAppearance).forSettings()
+        val editor = SettingsRetentionInputView(activity, baseline)
+        val row = SettingsRetentionValueView(activity, ReverbIcon.OneShot, "iii", editor, baseline)
+        activity.setContentView(row)
+        try {
+            fun bind(environment: ReverbViewEnvironment) {
+                editor.bind("512", RetentionMode.SIZE, "iii", environment, false, { "512" },
+                    { error("A typography bind must not edit the value") })
+                row.bind(RetentionMode.SIZE, 512.0, 600, environment)
+                row.measure(View.MeasureSpec.makeMeasureSpec(400, View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED))
+                row.layout(0, 0, row.measuredWidth, row.measuredHeight)
+            }
+            bind(baseline)
+            val heading = row.getChildAt(1) as ParagraphView
+            val width = heading.measuredWidth
+            val before = editor.paint.measureText("iii")
+
+            bind(next)
+            assertSame(editorRecipe, changedAppearance.editorVisuals)
+            assertSame(heading, row.getChildAt(1))
+            assertTrue(heading.measuredWidth > width)
+            assertTrue(editor.paint.measureText("iii") > before)
+            assertEquals(editor.paint.measureText("WWW"), editor.paint.measureText("iii"), .01f)
+            assertEquals(42f, editor.textSize, .01f)
+            assertLabeledDecimalEditor(row, editor, "iii")
+        } finally {
+            editor.releaseCallbacks()
             owner.pause().stop().destroy()
         }
     }

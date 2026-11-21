@@ -1,278 +1,53 @@
 package app.smallthingz.reverb
 
 import android.content.Context
-import android.graphics.Canvas
-import android.graphics.Paint
-import android.graphics.Path
-import android.graphics.RectF
 import android.os.Bundle
-import android.util.TypedValue
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.ViewConfiguration
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
-import android.view.View
 import kotlin.math.roundToInt
-import smallthingz.ui.animation.view.ViewColorTransition
+import smallthingz.ui.components.NativeCalibrationRecipe
+import smallthingz.ui.components.NativeCurvePlot
+import smallthingz.ui.components.NativeFrequencyCurveView
 
-internal data class SilenceCurveTextLabel(val text: String, val bounds: RectF, val baseline: Float, val textSize: Float)
-internal data class SilenceCurveLabelGeometry(
-    val viewport: RectF,
-    val plot: RectF,
-    val labels: List<SilenceCurveTextLabel>,
-    val tickTextSize: Float,
-    val valueTextSize: Float,
-)
-
-/** Pointer-rate curve editing stays in the View; Compose receives one committed gesture. */
-internal class SilenceCurveView(context: Context) : View(context) {
-    private val density = resources.displayMetrics.density
-    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL)
-    }
-    // TypedValue uses Android's SP conversion, including nonlinear font scaling on Android 14+.
-    private val tickTextSize = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, 11f, resources.displayMetrics)
-    private val valueTextSize = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, 12f, resources.displayMetrics)
-    private val path = Path()
-    private val plot = RectF()
+/** Retains one typed point edit until gesture completion. */
+internal class SilenceCurveView(context: Context, recipe: NativeCalibrationRecipe = NativeCalibrationRecipe.Default) :
+    NativeFrequencyCurveView(context, recipe) {
     private val gesture = SilenceCurveGesture()
     private val points: List<SilencePoint> get() = gesture.points
-    private val selected: Int get() = gesture.selected
+    override val pointCount: Int get() = points.size
+    override val selected: Int get() = gesture.selected
+    override fun frequencyHz(index: Int): Int = points[index].hz
+    override fun cutoffDb(index: Int): Int = points[index].db
+    override fun frequencyFraction(hz: Int): Float = silenceFrequencyFraction(hz.toDouble()).toFloat()
+
     private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
-    private var geometry = SilenceCurvePlot(0f, 0f, 0f, 0f)
     private var activePointer = -1
     private var ownsTouchStream = false
     var onCommit: ((List<SilencePoint>, Int) -> Unit)? = null
     var onSelect: ((Int) -> Unit)? = null
-    private var accent = android.graphics.Color.TRANSPARENT
-    private var ink = android.graphics.Color.TRANSPARENT
-    private var muted = android.graphics.Color.TRANSPARENT
-    private var pointColor = android.graphics.Color.TRANSPARENT
-    private var colorMotion:ViewColorTransition?=null
-    private var sampled: List<Float>? = null
-    private var maximumHz = 20_000
 
-    private companion object {
-        val gridDecibels = intArrayOf(0, -24, -48, -72, -96)
-        val gridFrequencies = intArrayOf(20, 100, 1_000, 10_000, 20_000)
-    }
-
-    init {
-        contentDescription = context.getString(R.string.silence_graph_description)
-        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
-        isFocusable = true
-        isClickable = true
-        paint.typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL)
-    }
+    init { contentDescription = context.getString(R.string.silence_graph_description) }
 
     fun bind(config: SilenceGateConfig, selectedPoint: Int, peaks: List<Float>?, maxHz: Int,
              accentColor: Int, inkColor: Int, mutedColor: Int, editable: Boolean) {
         val wasActive = gesture.active
-        var changed = gesture.bind(config.points, selectedPoint, editable)
+        val changed = gesture.bind(config.points, selectedPoint, editable)
         if (wasActive && !gesture.active) releasePointer()
-        val nextSamples = peaks?.takeIf { it.size >= 2 }
-        if (sampled != nextSamples) {
-            // Keep an owned snapshot so a caller's in-place sample update is observable.
-            sampled = nextSamples?.toList()
-            changed = true
-        }
-        val nextMaximumHz = maxHz.coerceIn(20, 20_000)
-        if (maximumHz != nextMaximumHz) {
-            maximumHz = nextMaximumHz
-            changed = true
-        }
-        if (isEnabled != editable) {
-            isEnabled = editable
-            changed = true
-        }
-        val point=if(editable)accentColor else mutedColor
-        val motion=colorMotion ?: ViewColorTransition(this,intArrayOf(accentColor,inkColor,mutedColor,point),{
-            colorMotion?.let {applyColors(it.color(0),it.color(1),it.color(2),it.color(3))}
-        }).also {colorMotion=it;applyColors(accentColor,inkColor,mutedColor,point)}
-        motion.retarget(accentColor,inkColor,mutedColor,point)
-        if (changed) invalidate()
-    }
-
-    private fun applyColors(accent:Int,ink:Int,muted:Int,point:Int) {
-        this.accent=accent;this.ink=ink;this.muted=muted;pointColor=point;invalidate()
-    }
-
-    private fun x(hz: Int) = plot.left + silenceFrequencyFraction(hz.toDouble()).toFloat() * plot.width()
-    private fun y(db: Float) = plot.top + (-db / 96f).coerceIn(0f, 1f) * plot.height()
-    private fun alpha(color: Int, amount: Int): Int = (color and 0xffffff) or (amount shl 24)
-
-    private fun textWidth(text: String, size: Float): Float {
-        labelPaint.textSize = size
-        return labelPaint.measureText(text)
-    }
-
-    private fun textHeight(size: Float): Float {
-        labelPaint.textSize = size
-        return labelPaint.fontMetrics.let { it.bottom - it.top }
-    }
-
-    private fun headerLines(width: Float): Int =
-        if (textWidth("20000 Hz", valueTextSize) + textWidth("-96 dBFS", valueTextSize) + 12 * density <= width) 1 else 2
-
-    private fun headerHeight(width: Float): Float =
-        headerLines(width) * textHeight(valueTextSize) + (headerLines(width) - 1) * 4 * density
-
-    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        val measuredWidth = resolveSize((280 * density).roundToInt(), widthMeasureSpec)
-        val tickHeight = textHeight(tickTextSize)
-        val plotHeight = maxOf(160 * density, 4 * (tickHeight + 8 * density))
-        val preferred = headerHeight(measuredWidth.toFloat()) + 16 * density + tickHeight * 1.5f + plotHeight
-        setMeasuredDimension(measuredWidth, resolveSize(maxOf(245 * density, preferred).roundToInt(), heightMeasureSpec))
-    }
-
-    private class LabelGeometryCache(
-        val width: Int,
-        val height: Int,
-        val density: Float,
-        val tickSize: Float,
-        val valueSize: Float,
-        val typeface: android.graphics.Typeface?,
-        var point: SilencePoint,
-        var geometry: SilenceCurveLabelGeometry,
-    )
-    private var labelCache: LabelGeometryCache? = null
-
-    private fun drawingLabelGeometry(): SilenceCurveLabelGeometry {
-        val point = points[selected]
-        val cached = labelCache
-        if (cached != null && cached.width == width && cached.height == height &&
-            cached.density == density && cached.tickSize == tickTextSize && cached.valueSize == valueTextSize &&
-            cached.typeface === labelPaint.typeface && cached.geometry.plot == plot) {
-            if (cached.point != point) {
-                // Only the selected values change while dragging; static ticks keep their exact measured bounds.
-                val labels = cached.geometry.labels.toMutableList()
-                labels[0] = frequencyLabel(point)
-                labels[1] = cutoffLabel(point)
-                cached.geometry = cached.geometry.copy(labels = labels)
-                cached.point = point
-            }
-            return cached.geometry
-        }
-        return createLabelGeometry().also {
-            labelCache = LabelGeometryCache(width, height, density, tickTextSize, valueTextSize,
-                labelPaint.typeface, point, it)
-        }
-    }
-
-    private fun label(text: String, left: Float, top: Float, size: Float): SilenceCurveTextLabel {
-        labelPaint.textSize = size
-        val metrics = labelPaint.fontMetrics
-        return SilenceCurveTextLabel(text, RectF(left, top, left + labelPaint.measureText(text),
-            top + metrics.bottom - metrics.top), top - metrics.top, size)
-    }
-
-    private fun frequencyLabel(point: SilencePoint) = label("${point.hz} Hz", 0f, 0f, valueTextSize)
-
-    private fun cutoffLabel(point: SilencePoint): SilenceCurveTextLabel {
-        val cutoff = "${point.db} dBFS"
-        val cutoffTop = if (headerLines(width.toFloat()) == 1) 0f else textHeight(valueTextSize) + 4 * density
-        return label(cutoff, (width - textWidth(cutoff, valueTextSize)).coerceAtLeast(0f), cutoffTop, valueTextSize)
-    }
-
-    /** The renderer and regression fixtures share measured text bounds, not screenshot estimates. */
-    private fun createLabelGeometry(): SilenceCurveLabelGeometry {
-        val labels = mutableListOf<SilenceCurveTextLabel>()
-        val point = points[selected]
-        labels += frequencyLabel(point)
-        labels += cutoffLabel(point)
-        for (db in gridDecibels) {
-            val text = db.toString()
-            labels += label(text, plot.left - 8 * density - textWidth(text, tickTextSize),
-                y(db.toFloat()) - textHeight(tickTextSize) / 2f, tickTextSize)
-        }
-        val bottomTop = plot.bottom + 8 * density
-        val last = label("20k", plot.right - textWidth("20k", tickTextSize), bottomTop, tickTextSize)
-        val first = label("20", plot.left, bottomTop, tickTextSize)
-        labels += first
-        var previousRight = first.bounds.right
-        for ((hz, text) in listOf(100 to "100", 1_000 to "1k", 10_000 to "10k")) {
-            val candidate = label(text, x(hz) - textWidth(text, tickTextSize) / 2, bottomTop, tickTextSize)
-            if (candidate.bounds.left >= previousRight + 6 * density && candidate.bounds.right <= last.bounds.left - 6 * density) {
-                labels += candidate
-                previousRight = candidate.bounds.right
-            }
-        }
-        labels += last
-        return SilenceCurveLabelGeometry(RectF(0f, 0f, width.toFloat(), height.toFloat()),
-            RectF(plot), labels, tickTextSize, valueTextSize)
-    }
-
-    override fun onDraw(canvas: Canvas) {
-        super.onDraw(canvas)
-        if (plot.width() <= 0 || plot.height() <= 0) return
-        paint.style = Paint.Style.FILL
-        paint.textAlign = Paint.Align.LEFT
-        val labels = drawingLabelGeometry().labels
-        for (index in labels.indices) {
-            val label = labels[index]
-            paint.textSize = label.textSize
-            paint.color = if (index < 2) ink else muted
-            canvas.drawText(label.text, label.bounds.left, label.baseline, paint)
-        }
-        for (db in gridDecibels) {
-            paint.color = alpha(muted, 38); paint.strokeWidth = density
-            canvas.drawLine(plot.left, y(db.toFloat()), plot.right, y(db.toFloat()), paint)
-        }
-        for (hz in gridFrequencies) {
-            val xp = x(hz)
-            paint.color = alpha(muted, 32)
-            canvas.drawLine(xp, plot.top, xp, plot.bottom, paint)
-        }
-        canvas.save()
-        canvas.clipRect(plot)
-        path.reset()
-        path.moveTo(plot.left, plot.bottom)
-        sampled?.let { levels ->
-            levels.forEachIndexed { i, db -> path.lineTo(plot.left + i.toFloat() / (levels.size - 1) * plot.width(), y(db)) }
-            path.lineTo(plot.right, plot.bottom); path.close()
-            paint.color = alpha(muted, 66); paint.style = Paint.Style.FILL
-            canvas.drawPath(path, paint)
-        }
-        path.reset()
-        points.forEachIndexed { i, p -> if (i == 0) path.moveTo(x(p.hz), y(p.db.toFloat())) else path.lineTo(x(p.hz), y(p.db.toFloat())) }
-        path.lineTo(plot.right, plot.bottom); path.lineTo(plot.left, plot.bottom); path.close()
-        paint.color = alpha(accent, 24); paint.style = Paint.Style.FILL; canvas.drawPath(path, paint)
-        if (maximumHz < 20_000) {
-            paint.color = alpha(muted, 35)
-            canvas.drawRect(x(maximumHz), plot.top, plot.right, plot.bottom, paint)
-            paint.color = alpha(muted, 100); paint.strokeWidth = density
-            canvas.drawLine(x(maximumHz), plot.top, x(maximumHz), plot.bottom, paint)
-        }
-        canvas.restore()
-        path.reset()
-        points.forEachIndexed { i, p -> if (i == 0) path.moveTo(x(p.hz), y(p.db.toFloat())) else path.lineTo(x(p.hz), y(p.db.toFloat())) }
-        paint.style = Paint.Style.STROKE; paint.strokeWidth = 2 * density; paint.color = accent
-        paint.strokeJoin = Paint.Join.ROUND; canvas.drawPath(path, paint)
-        paint.style = Paint.Style.FILL
-        points.forEachIndexed { i, p ->
-            val px = x(p.hz); val py = y(p.db.toFloat())
-            if (i == selected) { paint.color = alpha(accent, 55); canvas.drawCircle(px, py, 14 * density, paint) }
-            paint.color = pointColor
-            canvas.drawCircle(px, py, (if (i == selected) 7f else 5f) * density, paint)
-        }
+        bindPlot(peaks, maxHz, accentColor, inkColor, mutedColor, editable, changed)
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
-        super.onSizeChanged(w, h, oldw, oldh)
         cancelGesture()
-        val tickHeight = textHeight(tickTextSize)
-        plot.set(textWidth("-96", tickTextSize) + 8 * density,
-            headerHeight(w.toFloat()) + 8 * density + tickHeight / 2,
-            w - 16 * density, h - tickHeight - 8 * density)
-        geometry = SilenceCurvePlot(plot.left, plot.top, plot.right, plot.bottom)
+        super.onSizeChanged(w, h, oldw, oldh)
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (event.actionMasked == MotionEvent.ACTION_DOWN) {
             cancelGesture(clearStream = true)
-            if (!isEnabled || !gesture.begin(event.x, event.y, geometry, 32 * density, touchSlop)) return false
+            if (!isEnabled || !gesture.begin(event.x, event.y, plotGeometry, pointHitRadiusPx, touchSlop)) return false
             activePointer = event.getPointerId(0)
             ownsTouchStream = true
             parent?.requestDisallowInterceptTouchEvent(true)
@@ -421,12 +196,10 @@ internal class SilenceCurveView(context: Context) : View(context) {
     override fun performClick(): Boolean { super.performClick(); return true }
 }
 
-internal data class SilenceCurvePlot(val left: Float, val top: Float, val right: Float, val bottom: Float) {
-    val width: Float get() = right - left
-    val height: Float get() = bottom - top
-    fun x(hz: Int): Float = left + silenceFrequencyFraction(hz.toDouble()).toFloat() * width
-    fun y(db: Int): Float = top + -db / 96f * height
-}
+internal typealias SilenceCurvePlot = NativeCurvePlot
+
+internal fun SilenceCurvePlot.x(hz: Int): Float = x(silenceFrequencyFraction(hz.toDouble()).toFloat())
+internal fun SilenceCurvePlot.y(db: Int): Float = y(-db / 96f)
 
 internal data class SilenceCurveEdit(val points: List<SilencePoint>, val selected: Int, val changed: Boolean)
 

@@ -1,5 +1,6 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeSpringFineSeekGeometry
 import smallthingz.ui.geometry.Offset
 import smallthingz.ui.input.pointer.PointerType
 import smallthingz.ui.input.phase.NativeDragPointerChange
@@ -13,7 +14,7 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class NativeRangeFineSeekStateTest {
-    private val geometry=SpringFineSeekGeometry(300,120,1f)
+    private val geometry=NativeSpringFineSeekGeometry(300,120,1f)
 
     @Test fun initialDownOwnsTapBeforeChildMainAndUpHasOneTerminalOwner() {
         val h=Harness()

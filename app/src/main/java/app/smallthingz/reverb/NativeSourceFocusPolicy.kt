@@ -1,5 +1,7 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.components.NativeDurationWheelView
+import smallthingz.ui.components.blob.AudioReactiveBlobView
 import smallthingz.ui.input.phase.nativeViewMatrixToWindow
 
 import android.graphics.Matrix
@@ -238,7 +240,7 @@ internal class NativeSourceFocusPolicy(
     private fun retainedAndroidView(view: View): View? {
         var current: View? = view
         while (current != null && current !== root) {
-            if (current is RangeDurationWheelView || current is SilenceCurveView || current is AudioBlobView)
+            if (current is NativeDurationWheelView || current is SilenceCurveView || current is AudioReactiveBlobView)
                 return current
             current = current.parent as? View
         }

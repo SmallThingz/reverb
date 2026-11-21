@@ -4,7 +4,6 @@ import smallthingz.ui.text.view.ParagraphView
 import android.app.Application
 import android.app.Instrumentation
 import android.graphics.Rect
-import android.graphics.RectF
 import android.os.SystemClock
 import android.view.InputDevice
 import android.view.MotionEvent
@@ -128,13 +127,12 @@ internal fun verifyNativeSettingsCalibrationCurrent(
             val before = decodeSilenceGate(owner.snapshot.silenceGate)
             val revision = owner.state.editRevision
             check(curve.isEnabled)
-            val field = SilenceCurveView::class.java.getDeclaredField("plot").apply { isAccessible = true }
-            val plot = field.get(curve) as RectF
+            val plot = curve.plotGeometry
             val point = before.points[1]
             val b = bounds(curve)
-            val x = b.left + plot.left + silenceFrequencyFraction(point.hz.toDouble()).toFloat() * plot.width()
-            val y = b.top + plot.top + (-point.db / 96f) * plot.height()
-            val dy = if(point.db < -48) -plot.height() / 5 else plot.height() / 5
+            val x = b.left + plot.left + silenceFrequencyFraction(point.hz.toDouble()).toFloat() * plot.width
+            val y = b.top + plot.top + (-point.db / 96f) * plot.height
+            val dy = if(point.db < -48) -plot.height / 5 else plot.height / 5
             val down = SystemClock.uptimeMillis()
             val scroll = settings.savePosition()
             motion(MotionEvent.ACTION_DOWN, down, x, y, down)

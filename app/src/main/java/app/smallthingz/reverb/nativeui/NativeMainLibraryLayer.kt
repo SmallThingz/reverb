@@ -3,7 +3,6 @@ package app.smallthingz.reverb.nativeui
 import android.content.Context
 import android.view.View
 import android.view.ViewGroup
-import kotlin.math.roundToInt
 import android.graphics.drawable.ColorDrawable
 import smallthingz.ui.animation.view.ViewColorTransition
 
@@ -28,8 +27,8 @@ internal class NativeMainLibraryLayer(
         override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) = Unit
     }
     private val backgroundPanel = View(context)
-    private val noise = ReverbNoiseDrawable(resources, environment.palette.surface)
-    private val scrimPaint = ColorDrawable(reverbColorWithAlpha(environment.palette.scrim, .32f))
+    private val noise = initialEnvironment.appearance.backdrops.pageBackground(initialEnvironment.palette)
+    private val scrimPaint = ColorDrawable(initialEnvironment.appearance.backdrops.panelScrimColor(initialEnvironment.palette))
     private val paletteMotion:ViewColorTransition by lazy {ViewColorTransition(this,
         intArrayOf(initialEnvironment.palette.surface,scrimPaint.color),{
             noise.setBackgroundColor(paletteMotion.color(0));scrimPaint.color=paletteMotion.color(1)
@@ -53,9 +52,11 @@ internal class NativeMainLibraryLayer(
     fun bind(environment: ReverbViewEnvironment, statusTop: Int, progress: Float, visible: Boolean) {
         if (this.environment !== environment) {
             this.environment = environment
-            paletteMotion.retarget(environment.palette.surface,reverbColorWithAlpha(environment.palette.scrim,.32f))
+            val backdrop = environment.appearance.backdrops
+            noise.setGrainSeed(backdrop.pageGrainSeed)
+            paletteMotion.retarget(environment.palette.surface, backdrop.panelScrimColor(environment.palette))
         }
-        val nextContentTop = statusTop + (66f * environment.textDensity.density).roundToInt()
+        val nextContentTop = statusTop + environment.appearance.toolbars.compactHeightPx(environment.textDensity.density)
         if (this.statusTop != statusTop || contentTop != nextContentTop) {
             this.statusTop = statusTop
             contentTop = nextContentTop

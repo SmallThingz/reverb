@@ -1,5 +1,7 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.components.blob.AudioReactiveBlobView
+import smallthingz.ui.components.blob.NativeAudioBlobAppearance
 import android.app.Application
 import android.app.Instrumentation
 import android.os.Build
@@ -27,14 +29,14 @@ internal fun verifyNativeSilenceBlob(instrumentation: Instrumentation, report: S
     val scenes = JSONArray()
     val selector = if (motionOnly) "native_blob_feel_current" else "native_silence_blob_current"
     val result = JSONObject().put("selector", selector).put("passed", false)
-        .put("scope", if (motionOnly) "Real AudioBlobView, controller and Home overlay; synthetic visual timeline; no microphone or PCM claim"
-            else "Real AudioBlobView and controller; actual synthetic-PCM SilenceGateStream decisions; no live Service routing or microphone claim")
+        .put("scope", if (motionOnly) "Real AudioReactiveBlobView, controller and Home overlay; synthetic visual timeline; no microphone or PCM claim"
+            else "Real AudioReactiveBlobView and controller; actual synthetic-PCM SilenceGateStream decisions; no live Service routing or microphone claim")
         .put("scenes", scenes)
-    val rendererField = AudioBlobView::class.java.getDeclaredField("renderer").apply { isAccessible = true }
-    val amountField = AudioBlobView::class.java.getDeclaredField("currentSilence").apply { isAccessible = true }
-    val lifeField = AudioBlobView::class.java.getDeclaredField("currentLife").apply { isAccessible = true }
-    val postedField = AudioBlobView::class.java.getDeclaredField("framePosted").apply { isAccessible = true }
-    val timeField = AudioBlobView::class.java.getDeclaredField("shaderTimeSeconds").apply { isAccessible = true }
+    val rendererField = AudioReactiveBlobView::class.java.getDeclaredField("renderer").apply { isAccessible = true }
+    val amountField = AudioReactiveBlobView::class.java.getDeclaredField("currentSilence").apply { isAccessible = true }
+    val lifeField = AudioReactiveBlobView::class.java.getDeclaredField("currentLife").apply { isAccessible = true }
+    val postedField = AudioReactiveBlobView::class.java.getDeclaredField("framePosted").apply { isAccessible = true }
+    val timeField = AudioReactiveBlobView::class.java.getDeclaredField("shaderTimeSeconds").apply { isAccessible = true }
     fun <T> main(action: () -> T): T = nativeParityOnMain(instrumentation, action)
     var failure: Throwable? = null
     val host = launchCurrentUiSmokeActivity(instrumentation)
@@ -44,16 +46,17 @@ internal fun verifyNativeSilenceBlob(instrumentation: Instrumentation, report: S
             val scene = JSONObject().put("name", name)
             scenes.put(scene)
             val palette = ReverbPalette.resolve(host, dark)
+            val blobStyle = NativeAudioBlobAppearance.Default.resolve(palette)
             scene.put("primary_argb", palette.primary).put("tertiary_argb", palette.tertiary)
-            val controller = AudioBlobController()
-            val blob = main { AudioBlobView(host) }
+            val controller = NativeAudioBlobController()
+            val blob = main { AudioReactiveBlobView(host) }
             var blobFailure: Throwable? = null
             try {
                 main {
                     val view = blob
                     if (fallback) {
                         // QA-only selection of the existing production fallback, before first layout/draw.
-                        val type = AudioBlobView::class.java.declaredClasses.single { it.simpleName == "FallbackRenderer" }
+                        val type = AudioReactiveBlobView::class.java.declaredClasses.single { it.simpleName == "FallbackRenderer" }
                         val replacement = type.getDeclaredConstructor().apply { isAccessible = true }.newInstance()
                         rendererField.set(view, replacement)
                         check(rendererField.get(view) === replacement)
@@ -66,8 +69,7 @@ internal fun verifyNativeSilenceBlob(instrumentation: Instrumentation, report: S
                         host.resources.displayMetrics.heightPixels) * .72f).toInt().coerceAtLeast(1)
                     host.fixtureRoot.addView(view, FrameLayout.LayoutParams(size, size, Gravity.CENTER))
                     controller.attach(view)
-                    view.updateState(!motionOnly, true, false, true, palette.primary, palette.tertiary,
-                        palette.surfaceContainerHighest, skipSilenceEnabled = true)
+                    view.updateState(!motionOnly, true, false, true, blobStyle, skipSilenceEnabled = true)
                 }
                 val readyDeadline = SystemClock.uptimeMillis() + 5000
                 while (!main { blob.isLaidOut && blob.isShown && blob.hasWindowFocus() && blob.isHardwareAccelerated }) {
@@ -191,17 +193,14 @@ internal fun verifyNativeSilenceBlob(instrumentation: Instrumentation, report: S
                         .put("before_shader_time",beforeTime.toDouble()).put("after_shader_time",afterTime.toDouble()))
                 }
                 main {
-                    blob.updateState(true, true, false, false, palette.primary, palette.tertiary,
-                        palette.surfaceContainerHighest, skipSilenceEnabled = true)
+                    blob.updateState(true, true, false, false, blobStyle, skipSilenceEnabled = true)
                     check(!postedField.getBoolean(blob)) { "Hidden audible blob retained a frame callback" }
-                    blob.updateState(true, true, false, true, palette.primary, palette.tertiary,
-                        palette.surfaceContainerHighest, skipSilenceEnabled = true)
+                    blob.updateState(true, true, false, true, blobStyle, skipSilenceEnabled = true)
                 }
                 submit(quiet, true)
                 settled(1f)
                 main {
-                    blob.updateState(true, true, false, false, palette.primary, palette.tertiary,
-                        palette.surfaceContainerHighest, skipSilenceEnabled = true)
+                    blob.updateState(true, true, false, false, blobStyle, skipSilenceEnabled = true)
                     check(!postedField.getBoolean(blob)) { "Hidden blob retained a frame callback" }
                 }
                 scene.put("retained_frames", gate.retainedFrames).put("skipped_frames", gate.skippedFrames)

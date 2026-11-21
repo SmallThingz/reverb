@@ -24,16 +24,17 @@ internal class LibraryPendingSaveRowPresentation(
     inputRoot: View,
 ) : AutoCloseable {
     val row = ReverbLibraryRecordingRow(context, environment, scope, inputRoot)
-    private val progress = ReverbIncidentLoadingView(context, environment.palette.primary,
+    private val progressStyle = environment.appearance.listDecorations.pendingSave
+    private val progress = ReverbIncidentLoadingView(context, progressStyle.spinnerColor(environment.palette),
         checkNotNull(scope.coroutineContext[MonotonicFrameClock]), scope,
-        { readCachedAnimatorDurationScale(context) }, strokeWidthDp = 2.5f)
+        { readCachedAnimatorDurationScale(context) }, strokeWidthDp = progressStyle.spinnerStrokeDp)
     private val noActions = LibraryRecordingRowActions(null, null, null)
     private val fill = smoothProgressSpring()
     private var driver: ViewSpringDriver<Float, AnimationVector1D>? = null
     private var identity: String? = null
     private var target = 0f
     private var active = false
-    private var color = environment.palette.primary
+    private var overlayColor = progressStyle.overlayColor(environment.palette)
 
     init {
         row.onPresentationVisibilityChanged = { updateMotion() }
@@ -47,7 +48,7 @@ internal class LibraryPendingSaveRowPresentation(
         })
     }
 
-    private fun paint() = row.summarySurface.setBackgroundProgress(fill.value, (color and 0x00ffffff) or 0x22000000)
+    private fun paint() = row.summarySurface.setBackgroundProgress(fill.value, overlayColor)
     private fun stopMotion() { driver?.close(); driver = null }
     private fun updateMotion() {
         if (!active || !row.isAttachedToWindow || !row.isShown || row.windowVisibility != View.VISIBLE) {
@@ -62,10 +63,10 @@ internal class LibraryPendingSaveRowPresentation(
 
     fun bind(save: PendingSave, environment: ReverbViewEnvironment, edges: NativeGroupEdges? = null) {
         row.setEnvironment(environment)
-        progress.setColor(environment.palette.primary)
+        progress.setColor(progressStyle.spinnerColor(environment.palette))
         row.setSummarySlots(if (save.phase == SavePhase.FAILED) null else progress, null)
         row.bind(pendingSaveRecordingRow(context, save, edges), noActions)
-        color = environment.palette.primary
+        overlayColor = progressStyle.overlayColor(environment.palette)
         if (identity != save.id) {
             stopMotion()
             identity = save.id

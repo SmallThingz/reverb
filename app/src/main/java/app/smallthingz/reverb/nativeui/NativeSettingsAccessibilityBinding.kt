@@ -1,5 +1,6 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeDeterminateLinearProgress
 import smallthingz.ui.text.view.NativeSourceAccessibilityNode
 import smallthingz.ui.text.view.NativeTextSemanticsClipPolicy
 import android.view.View
@@ -24,7 +25,7 @@ internal class NativeSettingsAccessibilityBinding(
     private var sections:NativePageTextAccessibilityOwner?=null
     private var listViewport:ReverbLibraryRecyclerView?=null
     private var listScroll:NativeLibraryRecyclerAccessibility?=null
-    private val progress=IdentityHashMap<SettingsCalibrationProgressView,AutoCloseable>()
+    private val progress=IdentityHashMap<NativeDeterminateLinearProgress,AutoCloseable>()
     private var closed=false
     fun refresh() {
         if(closed)return
@@ -43,9 +44,9 @@ internal class NativeSettingsAccessibilityBinding(
             listViewport=nextViewport
             listScroll=nextViewport?.let {NativeLibraryRecyclerAccessibility(it,availableNode,scrollEvents,admitChildren)}
         }
-        val present=IdentityHashMap<SettingsCalibrationProgressView,Boolean>()
+        val present=IdentityHashMap<NativeDeterminateLinearProgress,Boolean>()
         fun visit(view:View) {
-            if(view is SettingsCalibrationProgressView)present[view]=true
+            if(view is NativeDeterminateLinearProgress)present[view]=true
             if(view is ViewGroup)for(index in 0 until view.childCount)visit(view.getChildAt(index))
         }
         next?.let(::visit)

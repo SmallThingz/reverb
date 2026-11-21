@@ -12,9 +12,8 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Rect
 import android.view.View
-import android.view.ViewGroup
+import smallthingz.ui.components.NativeHorizontalPagerViewport
 import smallthingz.ui.unit.Density
-import smallthingz.ui.unit.dp
 import app.smallthingz.reverb.nativeui.*
 import smallthingz.ui.runtime.MonotonicFrameClock
 import smallthingz.ui.geometry.Rect as ComposeRect
@@ -63,7 +62,7 @@ internal class NativeOnboardingPlacedPagerViewport(
     private val frames: MonotonicFrameClock,
     private val parentScope: CoroutineScope,
     private val placementChanged: () -> Unit,
-) : ViewGroup(context), NativeBringIntoViewParent {
+) : NativeHorizontalPagerViewport(context, density), NativeBringIntoViewParent {
     override val bringIntoViewView: View get() = this
     private var attachedScope: CoroutineScope? = null
     private var focusedDescendant: View? = null
@@ -80,8 +79,6 @@ internal class NativeOnboardingPlacedPagerViewport(
 
     init {
         require(pages.size == NATIVE_ONBOARDING_PAGE_COUNT)
-        clipChildren = false
-        clipToPadding = false
         isFocusable = false
     }
 
@@ -178,15 +175,6 @@ internal class NativeOnboardingPlacedPagerViewport(
         // AndroidOverscroll.updateSize is a draw-boundary read; not an onLayout callback.
         overscroll.measured(width, height)
         overscroll.draw(canvas) { super.draw(it) }
-    }
-
-    override fun dispatchDraw(canvas: Canvas) {
-        val margin = with(density) { 30.dp.roundToPx() }.toFloat()
-        val checkpoint = canvas.save()
-        try {
-            canvas.clipRect(0f, -margin, width.toFloat(), height + margin)
-            super.dispatchDraw(canvas)
-        } finally { canvas.restoreToCount(checkpoint) }
     }
 
     override fun requestChildRectangleOnScreen(child: View, rectangle: Rect, immediate: Boolean): Boolean {

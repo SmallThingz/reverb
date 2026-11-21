@@ -41,9 +41,10 @@ internal class NativeLibraryPlayerLease(
         clipToPadding = false
     }
     override val view: View get() = container
-    private val fine = ReverbSpringFineSeekView(context, SpringFineSeekEnvironment(
+    private val fine = createReverbSpringFineSeekView(context, SpringFineSeekEnvironment(
         initialEnvironment.palette, initialEnvironment.textDensity,
-        ViewConfiguration.get(context).scaledTouchSlop.toFloat(), frames, scope, inputRoot, { true }))
+        ViewConfiguration.get(context).scaledTouchSlop.toFloat(), frames, scope, inputRoot, { true }),
+        initialEnvironment.appearance.springFineSeek)
     private val player = ReverbLibraryPlayerView(context, initialEnvironment, fine, inputRoot, frames, scope, durationScale)
     private val waveformNodes = listOf(player.waveformInput)
     private val fineSeekNodes = listOf(fine.fineSeekNode)

@@ -1,5 +1,10 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.waveform.ProgressiveWaveformData
+import smallthingz.ui.components.waveform.ProgressiveWaveformFrame
+import smallthingz.ui.components.waveform.ProgressiveWaveformView
+import smallthingz.ui.components.waveform.WaveformMarkerView
+import smallthingz.ui.components.waveform.WaveformPlayheadView
 import smallthingz.ui.text.view.ParagraphView
 import android.content.Context
 import smallthingz.ui.runtime.MonotonicFrameClock
@@ -11,7 +16,6 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
-import smallthingz.ui.text.font.FontFamily
 import androidx.core.view.ViewCompat
 import app.smallthingz.reverb.InlineFineSeekTarget
 import app.smallthingz.reverb.PlaybackPositionAnchor
@@ -111,7 +115,7 @@ internal class ReverbLibraryPlayerView(
         this.state = state
         if (previous?.recordingRevisionKey != state.recordingRevisionKey) content.timeline.setWaveform(null)
         content.bind(environment, state, actions)
-        fineSeekView.setPalette(environment.palette)
+        fineSeekView.setAppearance(environment.appearance.springFineSeek, environment.palette)
         fineSeekView.bind(fineSeek)
         applyTransforms()
         if (previous?.collapseProgress != state.collapseProgress) requestLayout()
@@ -148,6 +152,7 @@ private class PlayerColumn(context: Context, private var environment: ReverbView
                            private val fineSeek: ReverbSpringFineSeekView, private val nativeInputRoot: View,
     private val frames: MonotonicFrameClock, private val scope: CoroutineScope,
     private val durationScale: () -> Float) : ViewGroup(context) {
+    private val layoutStyle = environment.appearance.listDecorations.recordingPlayer
     val timeline = PlayerTimeline(context, environment)
     val times = PlayerTimes(context, environment)
     var error: ParagraphView? = null
@@ -200,43 +205,55 @@ private class PlayerColumn(context: Context, private var environment: ReverbView
     private fun dp(value: Float) = (value * environment.textDensity.density).roundToInt()
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val width = MeasureSpec.getSize(widthMeasureSpec)
-        val availableWidth = max(0, width - dp(14f) - dp(14f))
+        val availableWidth = max(0, width - 2 * dp(layoutStyle.sideInsetDp))
         val bounded = MeasureSpec.getMode(heightMeasureSpec) != MeasureSpec.UNSPECIFIED
         val maxHeight = MeasureSpec.getSize(heightMeasureSpec)
+        val fineSeekStyle = environment.appearance.springFineSeek
         var used = 0
         for (i in 0 until childCount) {
             val child = getChildAt(i)
-            val before = if (child === times || child === buttons) dp(2f) else if (child === error) dp(8f) else 0
-            used += before
+            used += gapBefore(child)
             val remaining = max(0, maxHeight - used)
-            val fixed = when (child) { timeline -> dp(128f); fineSeek -> dp(96f); else -> null }
+            val fixed = when (child) {
+                timeline -> dp(layoutStyle.waveformHeightDp)
+                fineSeek -> dp(fineSeekStyle.libraryHeightDp)
+                else -> null
+            }
             val hs = if (fixed != null) libraryPlayerExact(if (bounded) min(fixed, remaining) else fixed)
                 else if (bounded) libraryPlayerAtMost(remaining) else MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
             if (child === fineSeek) {
-                val originalHeight = dp(if (state?.trimMode == true) 104f else 120f)
+                val originalHeight = dp(if (state?.trimMode == true) fineSeekStyle.trimGestureHeightDp
+                    else fineSeekStyle.playbackGestureHeightDp)
                 fineSeek.setVerticalGestureHeightPixels(if (bounded) min(originalHeight, remaining) else originalHeight)
             }
             child.measure(if (child === error) libraryPlayerAtMost(availableWidth) else libraryPlayerExact(availableWidth), hs)
             used += child.measuredHeight
-            if (child === heading) used += dp(5f)
+            if (child === heading) used += dp(layoutStyle.headingBottomGapDp)
         }
         setMeasuredDimension(width, resolveSize(used, heightMeasureSpec))
     }
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
         var y = 0
         val current = state
+        val sideInset = dp(layoutStyle.sideInsetDp)
         for (i in 0 until childCount) {
             val child = getChildAt(i)
-            y += if (child === times || child === buttons) dp(2f) else if (child === error) dp(8f) else 0
-            val x = if (layoutDirection == LAYOUT_DIRECTION_RTL) width - dp(14f) - child.measuredWidth else dp(14f)
+            y += gapBefore(child)
+            val x = if (layoutDirection == LAYOUT_DIRECTION_RTL) width - sideInset - child.measuredWidth else sideInset
             child.layout(x, y, x + child.measuredWidth, y + child.measuredHeight)
             if (child === heading && current != null) {
                 child.alpha = current.trimVisualAlpha
                 child.translationX = current.backDirection * child.width * .08f * current.trimBackProgress
             }
             y += child.measuredHeight
-            if (child === heading) y += dp(5f)
+            if (child === heading) y += dp(layoutStyle.headingBottomGapDp)
         }
+    }
+
+    private fun gapBefore(child: View): Int = when {
+        child === times || child === buttons -> dp(layoutStyle.controlGapDp)
+        child === error -> dp(layoutStyle.errorGapDp)
+        else -> 0
     }
 }
 
@@ -245,10 +262,10 @@ internal class PlayerTimeline(context: Context, private var environment: ReverbV
     ViewGroup(context), NativeViewPhasePointerNode {
     override val view: View get() = this
     private val waveform = ProgressiveWaveformView(context)
-    private val playhead = PlaybackPlayheadLine(context, environment)
+    private val playhead = WaveformPlayheadView(context, environment.textDensity.density)
     private val playbackClock = PlaybackPositionDisplayClock()
-    private var first = ReverbTimelineMarkerView(context, environment)
-    private var second: ReverbTimelineMarkerView? = null
+    private val first = WaveformMarkerView(context, environment.textDensity.density)
+    private var second: WaveformMarkerView? = null
     private var state: LibraryPlayerUiState? = null
     private var frame: ProgressiveWaveformFrame? = null
     private val input = InlineWaveformPointerOwner()
@@ -269,15 +286,17 @@ internal class PlayerTimeline(context: Context, private var environment: ReverbV
         playbackClock.bind(next.recordingRevisionKey, next.trimMode,
             if (next.prepared) next.playbackAnchor else null)
         playbackClock.setDisplayActive(next.playbackDisplayActive, SystemClock.elapsedRealtime())
-        playhead.bind(value, next.seekReady && next.durationMillis > 0)
+        val style = value.palette.waveformStyle
+        val density = value.textDensity.density
+        playhead.bind(style, density, next.seekReady && next.durationMillis > 0)
         first.visibility = if (next.trimMode) VISIBLE else GONE
-        waveform.setPalette(ProgressiveWaveformPalette(value.palette.primary, value.palette.onSurfaceVariant, value.palette.tertiary))
-        if (next.trimMode && second == null) second = ReverbTimelineMarkerView(context, value).also(::addView)
+        waveform.setStyle(style)
+        if (next.trimMode && second == null) second = WaveformMarkerView(context, density).also(::addView)
         else if (!next.trimMode) { second?.let(::removeView); second = null }
         val startCursor = next.fineSeekTarget == InlineFineSeekTarget.TRIM_START
-        first.bind(value, next.trimMode && startCursor, if (next.trimMode) startCursor else true,
+        first.bind(style, density, next.trimMode && startCursor, if (next.trimMode) startCursor else true,
             if (next.trimMode) next.trimVisualAlpha else .74f)
-        second?.bind(value, next.fineSeekTarget == InlineFineSeekTarget.TRIM_END,
+        second?.bind(style, density, next.fineSeekTarget == InlineFineSeekTarget.TRIM_END,
             next.fineSeekTarget == InlineFineSeekTarget.TRIM_END, next.trimVisualAlpha)
         applyFrame()
         if (geometryChanged) requestLayout()
@@ -350,9 +369,6 @@ internal class PlayerTimeline(context: Context, private var environment: ReverbV
     override fun onDetachedFromWindow() { input.detached(); super.onDetachedFromWindow() }
 }
 
-internal val playerTimeTypography =
-    ReverbParagraphStyles[ReverbTextRole.BODY_SMALL].copy(fontFamily = FontFamily.Monospace)
-
 /** Match the formatter's exact units, including its Double rounding before flooring trim tenths. */
 internal fun libraryPlayerTimeDisplayUnit(millis: Int, trimMode: Boolean): Long =
     if (trimMode) floor((millis / 1000.0).coerceAtLeast(0.0) * 10.0).toLong()
@@ -384,7 +400,8 @@ private class PlayerTimes(context: Context, private var environment: ReverbViewE
                 if (first) lastStartUnit = unit else lastEndUnit = unit
             }
             if (typographyChanged) {
-                label.setTypography(playerTimeTypography, value.textDensity, value.sharedFontResolver)
+                label.setTypography(value.appearance.readoutTypography.playerTimestamp,
+                    value.textDensity, value.sharedFontResolver)
             }
             label.animateTextColor(if (state.trimMode) { if (state.fineSeekTarget == target) value.palette.primary else value.palette.ink }
                 else if (first) value.palette.ink else value.palette.muted)

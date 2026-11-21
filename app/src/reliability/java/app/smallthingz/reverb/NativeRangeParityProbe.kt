@@ -1,5 +1,6 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.components.NativeDurationWheelView
 import android.app.Application
 import android.app.Instrumentation
 import android.content.res.Configuration
@@ -383,6 +384,9 @@ private class RangeParityBoard(
             { error("No Close action") }, { error("No export action") })
     }
     fun content(reference: Boolean): View = if (reference) referenceHost else nativeHost
+    private fun wheels(reference: Boolean): Sequence<View> = rangeDescendants(content(reference)).filter {
+        if (reference) it is RangeDurationWheelView else it is NativeDurationWheelView
+    }
     fun state(reference: Boolean) = if (reference) checkNotNull(referenceState).parityState() else checkNotNull(nativeOwner).state.parityState()
     fun ready(reference: Boolean): Boolean {
         val state = if (reference) referenceState?.parityState() else nativeOwner?.state?.parityState()
@@ -395,7 +399,7 @@ private class RangeParityBoard(
             if (!frame.interactionReady || frame.chromeAlpha != 1f || frame.waveformFrame.morphProgress != 1f ||
                 frame.waveformFrame.visibleCoarseFraction != 1f || frame.waveformFrame.visibleDetailFraction != 1f) return false
         }
-        val wheels = rangeDescendants(content(reference)).filterIsInstance<RangeDurationWheelView>().toList()
+        val wheels = wheels(reference).toList()
         check(wheels.size == if (compact) 0 else 1)
         return wheels.isEmpty() || wheels.single().isEnabled
     }
@@ -414,7 +418,7 @@ private class RangeParityBoard(
     fun geometry(reference: Boolean): JSONObject {
         val content = content(reference)
         val position = IntArray(2).also(content::getLocationInWindow)
-        val wheel = rangeDescendants(content).filterIsInstance<RangeDurationWheelView>().singleOrNull()
+        val wheel = wheels(reference).singleOrNull()
         val wheelBounds = wheel?.let {
             val xy = IntArray(2).also(it::getLocationInWindow)
             JSONArray(listOf(xy[0] - position[0], xy[1] - position[1], it.width, it.height))
@@ -446,7 +450,7 @@ private class RangeParityBoard(
             .put("endpoints_diagnostic", endpoints)
             .put("focus_diagnostic", focusEvidence(content, wheel))
     }
-    private fun focusEvidence(content: View, wheel: RangeDurationWheelView?): JSONObject {
+    private fun focusEvidence(content: View, wheel: View?): JSONObject {
         val focused = host.window.decorView.findFocus()
         return JSONObject().put("in_touch_mode", content.isInTouchMode)
             .put("focused_class", focused?.javaClass?.name ?: JSONObject.NULL)
@@ -459,7 +463,7 @@ private class RangeParityBoard(
     }
     fun resizeWithWheel(reference: Boolean, seconds: Float): JSONObject {
         check(!compact && host.hasWindowFocus() && ready(reference))
-        val wheel = rangeDescendants(content(reference)).filterIsInstance<RangeDurationWheelView>().single()
+        val wheel = wheels(reference).single()
         check(wheel.isShown && wheel.isAttachedToWindow && wheel.hasWindowFocus() && wheel.isEnabled)
         val before = stateEvidence(reference)
         val accepted = wheel.performAccessibilityAction(

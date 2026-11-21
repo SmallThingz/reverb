@@ -1,10 +1,9 @@
 package app.smallthingz.reverb.nativeui
 
 import android.content.Context
-import android.graphics.Canvas
 import android.view.View
-import android.view.ViewGroup
 import android.widget.FrameLayout
+import smallthingz.ui.components.NativeBoundsClipLayout
 import smallthingz.ui.unit.IntSize
 import kotlin.math.roundToInt
 
@@ -17,7 +16,7 @@ internal class LibraryExpansionViewport(
     context: Context,
     private val currentMotion: () -> LibraryExpansionMotion,
     private val needsFrames: () -> Unit,
-) : ViewGroup(context) {
+) : NativeBoundsClipLayout(context) {
     private val layer = FrameLayout(context).apply {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         clipChildren = false
@@ -55,16 +54,5 @@ internal class LibraryExpansionViewport(
         val x = ((width - layer.measuredWidth) / 2f).roundToInt()
         val y = height - layer.measuredHeight
         layer.layout(x, y, x + layer.measuredWidth, y + layer.measuredHeight)
-    }
-    override fun dispatchDraw(canvas: Canvas) {
-        // The full-height layer has a negative top while revealing; child bounds do not clip
-        // that layer to this animated viewport, and zero padding supplies no padding clip.
-        val checkpoint = canvas.save()
-        try {
-            canvas.clipRect(0, 0, width, height)
-            super.dispatchDraw(canvas)
-        } finally {
-            canvas.restoreToCount(checkpoint)
-        }
     }
 }

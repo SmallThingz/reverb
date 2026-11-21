@@ -2,6 +2,9 @@ package app.smallthingz.reverb.nativeui
 
 import smallthingz.ui.input.phase.NativePointerLayerShape
 import smallthingz.ui.components.NativeGroupLayout
+import smallthingz.ui.components.NativeAlertCardStyle
+import smallthingz.ui.components.NativeHorizontalSeparator
+import smallthingz.ui.components.NativeRoundedClipLayout
 import smallthingz.ui.interaction.view.isNativeClickActivationKey
 import smallthingz.ui.geometry.roundedGroupContains
 import smallthingz.ui.geometry.roundedGroupGeometry
@@ -17,19 +20,12 @@ import smallthingz.ui.text.view.NativeMergedRowAccessibilityState
 import smallthingz.ui.text.view.NativeMergedRowRole
 import smallthingz.ui.text.view.ParagraphView
 import android.content.Context
-import android.graphics.Canvas
-import android.graphics.Outline
-import android.graphics.Paint
-import android.graphics.Path
-import android.graphics.RectF
 import android.os.Build
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
-import android.view.ViewOutlineProvider
 import android.view.accessibility.AccessibilityNodeInfo
-import android.widget.FrameLayout
 import smallthingz.ui.text.TextStyle
 import smallthingz.ui.text.font.FontFamily
 import smallthingz.ui.text.font.FontWeight
@@ -51,6 +47,7 @@ internal data class IncidentCardAppearance(
     val bodySmall: TextStyle,
     val density: Density,
     val fontResolver: FontFamily.Resolver,
+    val style: NativeAlertCardStyle,
 )
 
 internal data class IncidentCardActions(
@@ -93,12 +90,13 @@ internal class ReverbIncidentCardView(
     context: Context,
     initialAppearance: IncidentCardAppearance,
     private val menuHost: IncidentCardMenuHost,
-) : FrameLayout(context), NativePointerLayerShape {
+) : NativeRoundedClipLayout(context, initialAppearance.style.radiusDp * context.resources.displayMetrics.density),
+    NativePointerLayerShape {
     private var appearance = initialAppearance
     private var binding: Binding? = null
     private var menuCreated = false
     private var menuLifetime = Any()
-    private val surface = NativeGroupLayout(context, cornerRadiusDp = 18f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
+    private val surface = NativeGroupLayout(context, cornerRadiusDp = initialAppearance.style.radiusDp, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
     private val body = IncidentBody(context, initialAppearance,
         onPrimaryAction = { performPrimaryAction(); true },
         onOpenMenu = { openMenu(); true })
@@ -113,11 +111,9 @@ internal class ReverbIncidentCardView(
     var pointerInputRoot: View? = null
     private val bodyInput = createInput(body, this, bodyIndication, checkbox = false)
     private val checkInput = createInput(body.checkTarget, body.checkTarget, checkIndication, checkbox = true)
-    private val outerClip = Path()
-    private val outerBounds = RectF()
 
     override fun containsPointerLayer(x: Float, y: Float): Boolean = roundedGroupContains(
-        width.toFloat(), height.toFloat(), appearance.density.density, cornerRadiusDp = 18f, x, y)
+        width.toFloat(), height.toFloat(), appearance.density.density, cornerRadiusDp = appearance.style.radiusDp, x, y)
 
     private class Binding(
         val row: IncidentPresentation,
@@ -130,12 +126,6 @@ internal class ReverbIncidentCardView(
         visibility = INVISIBLE
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         descendantFocusability = FOCUS_AFTER_DESCENDANTS
-        clipToOutline = true
-        outlineProvider = object : ViewOutlineProvider() {
-            override fun getOutline(view: View, outline: Outline) {
-                outline.setRoundRect(0, 0, view.width, view.height, outerRadius())
-            }
-        }
         if (Build.VERSION.SDK_INT >= 29) isForceDarkAllowed = false
         surface.addRow(body, NativeGroupLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         addView(surface, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
@@ -173,7 +163,8 @@ internal class ReverbIncidentCardView(
         if (appearance == value) return
         appearance = value
         body.setAppearance(value)
-        rebuildOuterClip()
+        setClipRadiusPx(value.style.radiusDp * resources.displayMetrics.density)
+        surface.setCornerRadiusDp(value.style.radiusDp)
         bodyIndication.updateColor(value.palette.ink)
         checkIndication.updateColor(value.palette.ink)
         bodyIndication.onMeasured(width, height, value.density.density)
@@ -194,12 +185,10 @@ internal class ReverbIncidentCardView(
         val current = binding ?: return
         val colors = appearance.palette
         val unacknowledged = !current.row.incident.acknowledged
-        val border = if (unacknowledged) replaceAlpha(colors.error, 0.45f) else colors.outlineVariant
-        val fill = if (unacknowledged) replaceAlpha(colors.errorContainer, 0.42f) else colors.surfaceContainerHigh
-        surface.setPalette(fill, border)
-        // Source border.copy(alpha = .55f) REPLACES .45; it does not multiply it.
-        body.setColors(colors.ink, colors.muted, replaceAlpha(border, 0.55f),
-            if (unacknowledged) colors.error else colors.muted)
+        val style = appearance.style
+        val border = style.border(colors, unacknowledged)
+        surface.setPalette(style.fill(colors, unacknowledged), border)
+        body.setColors(colors.ink, colors.muted, style.dividerColor(border), style.statusTint(colors, unacknowledged))
     }
 
     private fun performPrimaryAction() {
@@ -263,7 +252,7 @@ internal class ReverbIncidentCardView(
             override fun admitDown(event: MotionEvent): Boolean {
                 if (checkbox) return body.checkTarget.acceptsPointer(event)
                 return roundedGroupGeometry(target.width.toFloat(), target.height.toFloat(),
-                    appearance.density.density, cornerRadiusDp = 18f).acceptsPointer(
+                    appearance.density.density, cornerRadiusDp = appearance.style.radiusDp).acceptsPointer(
                     event.x, event.y, event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER, minimumTouchWidthPx)
             }
             override fun interestedParent(event: MotionEvent) = parentInterestedInDown(event)
@@ -287,29 +276,9 @@ internal class ReverbIncidentCardView(
         })
     }
 
-    private fun outerRadius(): Float =
-        minOf(18f * resources.displayMetrics.density, minOf(width, height) / 2f)
-
     override fun onSizeChanged(width: Int, height: Int, oldWidth: Int, oldHeight: Int) {
-        rebuildOuterClip()
+        super.onSizeChanged(width, height, oldWidth, oldHeight)
         bodyIndication.onMeasured(width, height, appearance.density.density)
-    }
-
-    private fun rebuildOuterClip() {
-        outerBounds.set(0f, 0f, width.toFloat(), height.toFloat())
-        outerClip.rewind()
-        outerClip.addRoundRect(outerBounds, outerRadius(), outerRadius(), Path.Direction.CW)
-        invalidateOutline()
-    }
-
-    override fun draw(canvas: Canvas) {
-        if (canvas.isHardwareAccelerated) {
-            super.draw(canvas)
-        } else {
-            val saved = canvas.save()
-            try { canvas.clipPath(outerClip); super.draw(canvas) }
-            finally { canvas.restoreToCount(saved) }
-        }
     }
 
     override fun onAttachedToWindow() {
@@ -345,7 +314,7 @@ private class IncidentBody(
     private val runtime = label(initial.bodySmall)
     private val age = label(initial.bodySmall)
     private val description = label(initial.bodySmall)
-    private val divider = IncidentDivider(context)
+    private val divider = NativeHorizontalSeparator(context, initial.style.dividerDp)
     val checkTarget = IncidentCheckTarget(context, initial.density.density, onPrimaryAction, onOpenMenu)
     private val details = arrayOf<View>(divider, cause, runtime, age, description)
     private val accessibilityChildren = arrayOf<View>(date, summary, checkTarget, cause, runtime, age, description)
@@ -411,6 +380,7 @@ private class IncidentBody(
         age.setTypography(value.bodySmall, value.density, value.fontResolver)
         description.setTypography(value.bodySmall, value.density, value.fontResolver)
         checkTarget.setDensity(value.density.density)
+        divider.bindThickness(value.style.dividerDp)
         requestLayout()
     }
 
@@ -514,7 +484,7 @@ private class IncidentCheckTarget(
     initialDensity: Float,
     onPrimaryAction: () -> Boolean,
     onOpenMenu: () -> Boolean,
-) : ViewGroup(context), NativeClickPhaseHost, NativePointerLayerShape, NativeMergedRowAccessibilityHost {
+) : NativeRoundedClipLayout(context, softwareClip = false), NativeClickPhaseHost, NativePointerLayerShape, NativeMergedRowAccessibilityHost {
     private var endpoint: NativeClickPhaseEndpoint? = null
     override val nativeClickEndpoint get() = checkNotNull(endpoint)
     var input: ViewClickController? = null
@@ -540,12 +510,6 @@ private class IncidentCheckTarget(
         ViewCompat.setScreenReaderFocusable(this, true)
         accessibilityDelegate = mergedRowAccessibility
         addView(glyph)
-        clipToOutline = true
-        outlineProvider = object : ViewOutlineProvider() {
-            override fun getOutline(view: View, outline: Outline) {
-                outline.setRoundRect(0, 0, view.width, view.height, minOf(view.width, view.height) / 2f)
-            }
-        }
     }
 
     fun bind(value: Boolean, canMutate: Boolean) {
@@ -578,6 +542,7 @@ private class IncidentCheckTarget(
         hitGeometry.acceptsPointer(x, y, event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER, 48f * density)
 
     override fun onSizeChanged(width: Int, height: Int, oldWidth: Int, oldHeight: Int) {
+        super.onSizeChanged(width, height, oldWidth, oldHeight)
         updateGeometry()
         geometryChanged()
     }
@@ -642,21 +607,3 @@ private class IncidentCheckTarget(
     override fun addChildrenForAccessibility(children: ArrayList<View>) =
         mergedRowAccessibility.addChildrenForAccessibility(children)
 }
-
-private class IncidentDivider(context: Context) : View(context) {
-    private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
-    private val colorMotion=colorTransition(paint.color) {paint.color=it;invalidate()}
-    init { importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO }
-    fun setColor(color: Int) {colorMotion.retarget(color)}
-    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        setMeasuredDimension(MeasureSpec.getSize(widthMeasureSpec), resources.displayMetrics.density.roundToInt())
-    }
-    override fun onDraw(canvas: Canvas) {
-        val thickness = resources.displayMetrics.density
-        paint.strokeWidth = thickness
-        canvas.drawLine(0f, thickness / 2f, width.toFloat(), thickness / 2f, paint)
-    }
-}
-
-private fun replaceAlpha(color: Int, alpha: Float): Int =
-    (color and 0x00ffffff) or (((alpha * 255f + 0.5f).toInt().coerceIn(0, 255)) shl 24)

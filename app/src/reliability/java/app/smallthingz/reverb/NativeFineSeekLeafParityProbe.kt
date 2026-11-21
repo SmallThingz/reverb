@@ -56,6 +56,7 @@ import app.smallthingz.reverb.nativeui.ReverbPalette
 import app.smallthingz.reverb.nativeui.ReverbSpringFineSeekView
 import app.smallthingz.reverb.nativeui.SpringFineSeekBinding
 import app.smallthingz.reverb.nativeui.SpringFineSeekEnvironment
+import app.smallthingz.reverb.nativeui.createReverbSpringFineSeekView
 import java.io.File
 import java.util.IdentityHashMap
 import kotlin.math.roundToInt
@@ -439,7 +440,7 @@ private class FineLeafRender(private val host: NativeParityActivity, private val
                 { configuration.scaledMaximumFlingVelocity.toFloat() }, { false })
             vertical = binding
             geometry.vertical = binding
-            val fine = ReverbSpringFineSeekView(host, SpringFineSeekEnvironment(palette, density.nativeParityDensity(),
+            val fine = createReverbSpringFineSeekView(host, SpringFineSeekEnvironment(palette, density.nativeParityDensity(),
                 configuration.scaledTouchSlop.toFloat(), owner.frames, owner.scope, nativeRoot, binding::interested))
             native = fine
             geometry.fine = fine

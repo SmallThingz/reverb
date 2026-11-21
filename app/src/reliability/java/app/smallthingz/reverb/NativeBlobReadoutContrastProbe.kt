@@ -1,13 +1,15 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.components.blob.AudioReactiveBlobView
+import smallthingz.ui.components.blob.NativeAudioBlobAppearance
+import smallthingz.ui.components.blob.NativeAudioBlobReadout
 import android.app.Instrumentation
 import android.graphics.Color
 import android.view.Gravity
 import android.view.View
-import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.core.graphics.ColorUtils
-import app.smallthingz.reverb.nativeui.ReverbHomeBlobState
+import app.smallthingz.reverb.nativeui.createHomeBlobReadout
 import app.smallthingz.reverb.nativeui.ReverbPalette
 import app.smallthingz.reverb.nativeui.ReverbViewEnvironment
 import java.io.File
@@ -17,51 +19,41 @@ import smallthingz.ui.text.font.createFontFamilyResolver
 import smallthingz.ui.unit.Density
 import smallthingz.ui.animation.ColorTransition
 
-/** Actual private Home overlay over the already qualified hardware renderer; no microphone or Service. */
+/** Production Home readout over the hardware renderer with controlled visual inputs. */
 internal fun verifyNativeBlobReadoutContrast(
     instrumentation: Instrumentation,
     host: NativeParityActivity,
-    blob: AudioBlobView,
-    controller: AudioBlobController,
+    blob: AudioReactiveBlobView,
+    controller: NativeAudioBlobController,
     palette: ReverbPalette,
     name: String,
     directory: File,
     scene: JSONObject,
 ) {
+    val blobStyle = NativeAudioBlobAppearance.Default.resolve(palette)
     fun <T> main(action: () -> T): T = nativeParityOnMain(instrumentation, action)
     val evidence = JSONArray()
     scene.put("actual_home_readout", evidence)
     val density = host.resources.displayMetrics.density
-    val overlayType = Class.forName("app.smallthingz.reverb.nativeui.BlobOverlay")
+    val overlayType = NativeAudioBlobReadout::class.java
     val overlay = main {
         val environment = ReverbViewEnvironment(Density(density, host.resources.configuration.fontScale),
             createFontFamilyResolver(host), palette)
-        overlayType.getDeclaredConstructor(android.content.Context::class.java, ReverbViewEnvironment::class.java)
-            .apply { isAccessible = true }.newInstance(host, environment) as ViewGroup
+        createHomeBlobReadout(host, environment)
     }
-    val bind = overlayType.getDeclaredMethod("bind", ReverbHomeBlobState::class.java, Float::class.javaPrimitiveType)
-        .apply { isAccessible = true }
-    val setContentOpacity = overlayType.getDeclaredMethod("setContentOpacity", Float::class.javaPrimitiveType)
-        .apply { isAccessible = true }
-    val amount = AudioBlobView::class.java.getDeclaredField("currentSilence").apply { isAccessible = true }
-    val life = AudioBlobView::class.java.getDeclaredField("currentLife").apply { isAccessible = true }
-    val presence = AudioBlobView::class.java.getDeclaredField("currentPresence").apply { isAccessible = true }
-    val activity = AudioBlobView::class.java.getDeclaredField("currentActivity").apply { isAccessible = true }
-    val advance = AudioBlobView::class.java.getDeclaredMethod("advance", Float::class.javaPrimitiveType)
-        .apply { isAccessible = true }
-    val appearance = overlayType.getDeclaredMethod("setMaterialAppearance", Boolean::class.javaPrimitiveType,
-        Boolean::class.javaPrimitiveType, Boolean::class.javaPrimitiveType)
-        .apply { isAccessible = true }
-    val footprint = overlayType.getDeclaredMethod("readoutFootprintRadius").apply { isAccessible = true }
-    val geometry = overlayType.getDeclaredMethod("updateMaterialGeometry", AudioBlobView::class.java, Int::class.javaPrimitiveType)
+    val amount = AudioReactiveBlobView::class.java.getDeclaredField("currentSilence").apply { isAccessible = true }
+    val life = AudioReactiveBlobView::class.java.getDeclaredField("currentLife").apply { isAccessible = true }
+    val presence = AudioReactiveBlobView::class.java.getDeclaredField("currentPresence").apply { isAccessible = true }
+    val activity = AudioReactiveBlobView::class.java.getDeclaredField("currentActivity").apply { isAccessible = true }
+    val advance = AudioReactiveBlobView::class.java.getDeclaredMethod("advance", Float::class.javaPrimitiveType)
         .apply { isAccessible = true }
     val gradientMin = overlayType.getDeclaredField(if (name.endsWith("fallback")) "fallbackGradientMin" else "agslGradientMin")
         .apply { isAccessible = true }
     val gradientMax = overlayType.getDeclaredField(if (name.endsWith("fallback")) "fallbackGradientMax" else "agslGradientMax")
         .apply { isAccessible = true }
     val supportNeeded = overlayType.getDeclaredField("materialNeedsSupport").apply { isAccessible = true }
-    val posted = AudioBlobView::class.java.getDeclaredField("framePosted").apply { isAccessible = true }
-    val time = AudioBlobView::class.java.getDeclaredField("shaderTimeSeconds").apply { isAccessible = true }
+    val posted = AudioReactiveBlobView::class.java.getDeclaredField("framePosted").apply { isAccessible = true }
+    val time = AudioReactiveBlobView::class.java.getDeclaredField("shaderTimeSeconds").apply { isAccessible = true }
     val childCount = main { overlay.childCount }
     val originalBlobLayout = main { blob.layoutParams }
     val originalWidth = main { blob.width }
@@ -96,8 +88,7 @@ internal fun verifyNativeBlobReadoutContrast(
             main {
                 blob.layoutParams = FrameLayout.LayoutParams(requestedWidth, requestedHeight, Gravity.CENTER)
                 wrapper.layoutParams = FrameLayout.LayoutParams(requestedWidth, requestedHeight, Gravity.CENTER)
-                bind.invoke(overlay, ReverbHomeBlobState(controller, true, false, true, true, false,
-                    false, "123.4 MB", "12:34 / 60:00", true, true), 1f)
+                overlay.bind(true, false, "123.4 MB", "12:34 / 60:00", 1f)
             }
             awaitNativeParityDraw(instrumentation, wrapper)
             verifySharedLayout(requestedWidth, requestedHeight)
@@ -111,7 +102,7 @@ internal fun verifyNativeBlobReadoutContrast(
                     deliveredPolarity = darkInk
                     deliveredTransition = transitioning
                     appearanceCallbacks++
-                    appearance.invoke(overlay, darkInk, transitioning, supportNeeded)
+                    overlay.setMaterialAppearance(darkInk, transitioning, supportNeeded)
                     Unit
                 }
             }
@@ -121,16 +112,14 @@ internal fun verifyNativeBlobReadoutContrast(
                 val filling = destination.startsWith("filled")
                 val quiet = destination.endsWith("quiet")
                 main {
-                    bind.invoke(overlay, ReverbHomeBlobState(controller, starting, false, true, true, filling,
-                        false, "123.4 MB", if (starting || filling) "12:34 / 60:00" else null, true, true), 1f)
+                    overlay.bind(starting, filling, "123.4 MB", if (starting || filling) "12:34 / 60:00" else null, 1f)
                 }
                 awaitNativeParityDraw(instrumentation, wrapper)
                 main {
-                    geometry.invoke(overlay, blob, palette.surface)
+                    overlay.updateMaterialGeometry(blob, palette.surface)
                     val colors = ColorTransition(intArrayOf(palette.surfaceContainerHighest))
                     if (filling) colors.retarget(intArrayOf(palette.primaryContainer), 0L, 1f)
-                    blob.updateState(starting, true, false, false, palette.primary, palette.tertiary,
-                        palette.surfaceContainerHighest, skipSilenceEnabled = true)
+                    blob.updateState(starting, true, false, false, blobStyle, skipSilenceEnabled = true)
                     if (starting) controller.submit(ReverbService.VisualizationFrame(0f, zeroBins, quiet,
                         ReverbService.BufferSlot.ONE_SHOT, 1L, 1L))
                     life.setFloat(blob, if (starting) .38f else 1f)
@@ -144,8 +133,7 @@ internal fun verifyNativeBlobReadoutContrast(
                     var switched = false
                     for (step in 1..120) {
                         colors.frame(step * 1_000_000_000L / 60L, 1f)
-                        blob.updateState(starting, true, false, false, palette.primary, palette.tertiary,
-                            colors.color(0), skipSilenceEnabled = true)
+                        blob.updateState(starting, true, false, false, blobStyle.copy(resting = colors.color(0)), skipSilenceEnabled = true)
                         advance.invoke(blob, 1f / 60f)
                         val next = sample()
                         check(deliveredPolarity == next.resolvedPolarity) { "Renderer failed to deliver its material ink polarity" }
@@ -165,11 +153,10 @@ internal fun verifyNativeBlobReadoutContrast(
             main {
                 // Drive the real retained palette owner independently of the geometry clock.
                 // No system animation-scale setting is changed and no View frame callback is posted.
-                blob.updateState(false, true, false, false, palette.primary, palette.tertiary,
-                    palette.surfaceContainerHighest, skipSilenceEnabled = true)
-                val motion = AudioBlobView::class.java.getDeclaredField("paletteMotion").apply { isAccessible = true }.get(blob)
+                blob.updateState(false, true, false, false, blobStyle, skipSilenceEnabled = true)
+                val motion = AudioReactiveBlobView::class.java.getDeclaredField("paletteMotion").apply { isAccessible = true }.get(blob)
                 val retainedColors = motion.javaClass.getDeclaredField("state").apply { isAccessible = true }.get(motion) as ColorTransition
-                val publishPalette = AudioBlobView::class.java.getDeclaredMethod("publishPalette").apply { isAccessible = true }
+                val publishPalette = AudioReactiveBlobView::class.java.getDeclaredMethod("publishPalette").apply { isAccessible = true }
                 val startNanos = System.nanoTime()
                 life.setFloat(blob, 1f)
                 presence.setFloat(blob, 1f)
@@ -210,8 +197,7 @@ internal fun verifyNativeBlobReadoutContrast(
                 main {
                     // The outer probe has hidden scheduling; exact render inputs stay fixed for paired captures.
                     val sampledPaused = trajectoryFrames[state]?.paused ?: palette.surfaceContainerHighest
-                    blob.updateState(false, true, false, false, palette.primary, palette.tertiary,
-                        sampledPaused, skipSilenceEnabled = true)
+                    blob.updateState(false, true, false, false, blobStyle.copy(resting = sampledPaused), skipSilenceEnabled = true)
                     amount.setFloat(blob, when (state) { "silent" -> 1f; "transition" -> .5f
                         else -> trajectoryFrames[state]?.silence ?: 0f })
                     val frameLife = trajectoryFrames[state]?.life ?: if (state == "startup") .2f else 1f
@@ -219,8 +205,7 @@ internal fun verifyNativeBlobReadoutContrast(
                     life.setFloat(blob, frameLife)
                     presence.setFloat(blob, framePresence)
                     if (state == "high-energy") {
-                        blob.updateState(true, true, false, false, palette.primary, palette.tertiary,
-                            palette.surfaceContainerHighest, skipSilenceEnabled = true)
+                        blob.updateState(true, true, false, false, blobStyle, skipSilenceEnabled = true)
                         controller.submit(ReverbService.VisualizationFrame(.8f,
                             floatArrayOf(.8f, .7f, .6f, .5f, .7f, .8f, .6f, .5f), false,
                             ReverbService.BufferSlot.ONE_SHOT, 1L, 1L))
@@ -231,9 +216,8 @@ internal fun verifyNativeBlobReadoutContrast(
                     }
                     val filled = state.startsWith("filled-")
                     val active = !state.startsWith("stop-") && !filled && state != "idle-theme"
-                    bind.invoke(overlay, ReverbHomeBlobState(controller, active, false, true, true, filled,
-                        false, "123.4 MB", if (active || filled) "12:34 / 60:00" else null, true, true), 1f)
-                    appearance.invoke(overlay, audioBlobUsesDarkInk(audioBlobMaterialColor(palette.primary),
+                    overlay.bind(active, filled, "123.4 MB", if (active || filled) "12:34 / 60:00" else null, 1f)
+                    overlay.setMaterialAppearance(audioBlobUsesDarkInk(audioBlobMaterialColor(palette.primary),
                         audioBlobMaterialColor(palette.tertiary), sampledPaused, frameLife, framePresence,
                         amount.getFloat(blob), name.endsWith("fallback")),
                         state == "startup" || trajectoryFrames[state]?.transitioning == true, true)
@@ -241,12 +225,12 @@ internal fun verifyNativeBlobReadoutContrast(
                 }
                 awaitNativeParityDraw(instrumentation, wrapper)
                 main {
-                    geometry.invoke(overlay, blob, palette.surface)
+                    overlay.updateMaterialGeometry(blob, palette.surface)
                     val darkInk = blob.readoutUsesDarkInk()
                     trajectoryFrames[state]?.resolvedPolarity?.let { expected ->
                         check(darkInk == expected) { "Raster geometry changed the sampled polarity for $layoutName/$state" }
                     }
-                    appearance.invoke(overlay, darkInk, state == "startup" || trajectoryFrames[state]?.transitioning == true,
+                    overlay.setMaterialAppearance(darkInk, state == "startup" || trajectoryFrames[state]?.transitioning == true,
                         blob.readoutNeedsSupport(darkInk))
                 }
                 awaitNativeParityDraw(instrumentation, wrapper)
@@ -270,7 +254,7 @@ internal fun verifyNativeBlobReadoutContrast(
                             .put("silence", amount.getFloat(blob).toDouble())
                             .put("activity", activity.getFloat(blob).toDouble())
                             .put("support_needed", supportNeeded.getBoolean(overlay))
-                            .put("readout_radius_px", (footprint.invoke(overlay) as Float).toDouble())
+                            .put("readout_radius_px", overlay.readoutFootprintRadius().toDouble())
                             .put("gradient_min", gradientMin.getFloat(overlay).toDouble())
                             .put("gradient_max", gradientMax.getFloat(overlay).toDouble())
                             .put("sampled_resolved_polarity", trajectoryFrames[state]?.resolvedPolarity ?: JSONObject.NULL)
@@ -340,21 +324,19 @@ internal fun verifyNativeBlobReadoutContrast(
         main {
             blob.layoutParams = originalBlobLayout
             wrapper.layoutParams = FrameLayout.LayoutParams(originalWidth, originalHeight, Gravity.CENTER)
-            bind.invoke(overlay, ReverbHomeBlobState(controller, true, false, true, true, false,
-                false, "123.4 MB", "12:34 / 60:00", true, true), 1f)
-            blob.updateState(true, true, false, false, palette.primary, palette.tertiary,
-                palette.surfaceContainerHighest, skipSilenceEnabled = true)
+            overlay.bind(true, false, "123.4 MB", "12:34 / 60:00", 1f)
+            blob.updateState(true, true, false, false, blobStyle, skipSilenceEnabled = true)
             amount.setFloat(blob, 0f)
             life.setFloat(blob, 1f)
             presence.setFloat(blob, 1f)
-            appearance.invoke(overlay, false, false, true)
+            overlay.setMaterialAppearance(false, false, true)
             blob.invalidate()
         }
         awaitNativeParityDraw(instrumentation, wrapper)
         verifySharedLayout(originalWidth, originalHeight)
         main {
-            geometry.invoke(overlay, blob, palette.surface)
-            appearance.invoke(overlay, false, false, blob.readoutNeedsSupport(false))
+            overlay.updateMaterialGeometry(blob, palette.surface)
+            overlay.setMaterialAppearance(false, false, blob.readoutNeedsSupport(false))
         }
         awaitNativeParityDraw(instrumentation, wrapper)
         val frozenTime = main { check(!posted.getBoolean(blob)); time.getFloat(blob) }
@@ -375,7 +357,7 @@ internal fun verifyNativeBlobReadoutContrast(
         try {
             for (contentAlpha in listOf(.5f, .999f, 1f)) {
                 main {
-                    setContentOpacity.invoke(overlay, contentAlpha)
+                    overlay.setContentOpacity(contentAlpha)
                     check(overlay.alpha == 1f) { "Content fade isolated the overlay from the blob" }
                 }
                 val bitmap = captureNativeParityContent(instrumentation, host) { wrapper }
@@ -432,7 +414,7 @@ internal fun verifyNativeBlobReadoutContrast(
         } catch (error: Throwable) {
             fadeFailure = error
         } finally {
-            fadeFailure = captureNativeParityCleanup(fadeFailure) { main { setContentOpacity.invoke(overlay, 1f) } }
+            fadeFailure = captureNativeParityCleanup(fadeFailure) { main { overlay.setContentOpacity(1f) } }
         }
         fadeFailure?.let { throw it }
     } catch (error: Throwable) {

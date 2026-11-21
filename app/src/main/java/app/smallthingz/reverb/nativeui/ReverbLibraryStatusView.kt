@@ -206,7 +206,8 @@ private class LibraryStatusColumn(
 }
 
 private class LibraryEmptySymbol(context: Context, private var environment: ReverbViewEnvironment) : ViewGroup(context) {
-    private val surface = NativeGroupLayout(context, 28f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
+    private val surfaceRecipe = environment.appearance.groupSurfaces.emptyLibrary
+    private val surface = surfaceRecipe.create(context, ::invalidateSettingsTextContrast)
     private val glyph = object : View(context) {
         var icon = ReverbIconDrawable(ReverbIcon.Library, environment.textDensity.density,
             reverbColorWithAlpha(environment.palette.muted, .72f))
@@ -239,7 +240,7 @@ private class LibraryEmptySymbol(context: Context, private var environment: Reve
                 reverbColorWithAlpha(value.palette.muted, .72f))
         }
         environment = value
-        surface.setPalette(value.palette.surfaceContainerHigh, android.graphics.Color.TRANSPARENT)
+        surfaceRecipe.bind(surface, value.palette)
         colorMotion.retarget(reverbColorWithAlpha(value.palette.muted, .72f))
         glyph.icon.setTint(colorMotion.color(0))
         glyph.updateBounds(glyph.width, glyph.height)

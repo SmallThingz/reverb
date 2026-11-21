@@ -1,5 +1,6 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeDeterminateLinearProgress
 import smallthingz.ui.components.NativeActionSheetContentContext
 
 import smallthingz.ui.interaction.view.readCachedAnimatorDurationScale
@@ -221,16 +222,17 @@ private class CaptureClearProgressBody(
         val fraction = bufferClearProgressFraction(status)
         val wantDeterminate = fraction != null
         val current = progress
-        if (current == null || (current is SettingsCalibrationProgressView) != wantDeterminate) {
+        if (current == null || (current is NativeDeterminateLinearProgress) != wantDeterminate) {
             progressLease?.close(); progressLease = null
             current?.let(::removeView)
-            val replacement = if (wantDeterminate) SettingsCalibrationProgressView(context, next)
+            val replacement = if (wantDeterminate) NativeDeterminateLinearProgress(context, next.palette.primary,
+                next.palette.secondaryContainer, next.textDensity.density)
                 else ReverbIndeterminateLinearProgressView(context, next, host.runtime.frames,
                     host.runtime.scope, { readCachedAnimatorDurationScale(context) })
             progress = replacement
             addView(replacement, 0)
             progressLease = when (replacement) {
-                is SettingsCalibrationProgressView -> replacement.bindAccessibility(host.accessibility.geometry) {
+                is NativeDeterminateLinearProgress -> replacement.bindAccessibility(host.accessibility.geometry) {
                     host.accessibility.sourceNode(replacement).present
                 }
                 is ReverbIndeterminateLinearProgressView -> replacement.bindAccessibility(host.accessibility.geometry) {
@@ -240,8 +242,8 @@ private class CaptureClearProgressBody(
             }
         }
         when (val value = progress) {
-            is SettingsCalibrationProgressView -> value.bind(checkNotNull(fraction), next,
-                status.operationId, status.phase.isTerminal)
+            is NativeDeterminateLinearProgress -> value.bind(checkNotNull(fraction), next.palette.primary,
+                next.palette.secondaryContainer, next.textDensity.density, status.operationId, status.phase.isTerminal)
             is ReverbIndeterminateLinearProgressView -> value.bindEnvironment(next)
         }
         val message = if (status.totalBytes > 0L) context.getString(R.string.clear_buffer_progress_detail,

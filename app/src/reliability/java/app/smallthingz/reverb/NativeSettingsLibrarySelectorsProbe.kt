@@ -16,7 +16,6 @@ import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
 import kotlin.math.pow
 import app.smallthingz.reverb.nativeui.NativeSettingsScreenContent
-import app.smallthingz.reverb.nativeui.ReverbSegmentedPresentation
 import app.smallthingz.reverb.nativeui.segmentedPalette
 import smallthingz.ui.components.NativeChoice
 import smallthingz.ui.components.NativeSegmentedChoice
@@ -73,8 +72,9 @@ internal fun verifyNativeSettingsLibrarySelectors(instrumentation: Instrumentati
                 .firstOrNull { it.inputAllowed }?.also { settings = it } != null
         }
         main {
-            val palette = segmentedPalette(settings.pointerEnvironment)
-            val tiny = NativeSegmentedControl(context, palette, ReverbSegmentedPresentation(context)).apply {
+            val environment = settings.pointerEnvironment
+            val palette = segmentedPalette(environment)
+            val tiny = environment.appearance.settingsSelectors.createSegmentedControl(context, palette).apply {
                 onSelectionRequest = { error("Geometry fixture must not activate") }
                 bind(listOf(NativeChoice("time", "Time"), NativeChoice("size", "Size")), "time", palette)
             }
@@ -87,7 +87,12 @@ internal fun verifyNativeSettingsLibrarySelectors(instrumentation: Instrumentati
                             View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED))
                         tiny.layout(0, 0, width, tiny.measuredHeight)
                         val choices = selectorViews(tiny).filterIsInstance<NativeSegmentedChoice>().single()
-                        check(choices.width == choices.measuredWidth && choices.width == (width - 2 * inset).coerceAtLeast(0))
+                        val fittedInset = minOf(inset, (width - 1).coerceAtLeast(0) / 2)
+                        check(choices.width == choices.measuredWidth && choices.width == width - 2 * fittedInset)
+                        if (width > 0) {
+                            check(choices.width > 0)
+                            for (index in 0 until choices.childCount) check(choices.getChildAt(index).width > 0)
+                        }
                         for (child in selectorViews(choices)) check(child.right >= child.left && child.bottom >= child.top)
                     }
                 }

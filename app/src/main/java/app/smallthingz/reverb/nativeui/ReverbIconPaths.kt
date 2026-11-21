@@ -19,12 +19,10 @@
 
 package app.smallthingz.reverb.nativeui
 
-import android.graphics.Canvas
-import android.graphics.Color
-import android.graphics.Paint
 import android.graphics.Path
+import smallthingz.ui.components.NativePathIconMask
 
-// GENERATED from AndroidX Material Rounded 1.7.8 and released Reverb AppIcons.
+// Glyph path commands generated from AndroidX Material Rounded 1.7.8 and released Reverb AppIcons.
 // Reverb baseline: 3e16f8ddb78dca15df4b436d34d330801ce83ffd; AppIcons SHA-256: baeb2191e2c0e3c98de368c2ab112044abc719f2888fe5527c23d3fab4643273.
 // Core source jar SHA-256: 14db888d2f698178799a4c18a58bb134b3e98063c6748c443b339044e0145432.
 // Extended source jar SHA-256: 77b7e782a519a3e074fc91e09d59334ac1b815edd87d2e89c0c9ca7c95678e93.
@@ -62,121 +60,48 @@ internal enum class ReverbIcon(val autoMirrored: Boolean = false) {
     BackgroundWarning,
     ArrowDropDown,
     Add,
-    GitHub,
+    GitHub;
+
+    val mask: NativePathIconMask by lazy { ReverbIconPaths.mask(this) }
 }
 
-/** Private, immutable paths are shared; callers own paints, masks, and tint state. */
+/** Shared immutable geometry; each drawable owns its raster cache and tint. */
 internal object ReverbIconPaths {
     /** Private path copies for the retained Library close morph; shared glyph paths stay immutable. */
     fun copyLibraryBackPath(): Path = Path(backPath0)
     fun copyHomeIncidentPath(): Path = Path(incidentsPath0)
 
-    fun drawMask(icon: ReverbIcon, canvas: Canvas, paint: Paint) {
-        paint.color = Color.BLACK
-        paint.shader = null
-        paint.colorFilter = null
-        paint.pathEffect = null
-        paint.strokeMiter = 4f
-        when (icon) {
-            ReverbIcon.OneShot, ReverbIcon.ExportRange -> {
-                paint.style = Paint.Style.STROKE
-                paint.strokeWidth = 2.2f
-                paint.strokeCap = Paint.Cap.ROUND
-                paint.strokeJoin = Paint.Join.ROUND
-            }
-            else -> paint.style = Paint.Style.FILL
-        }
-        when (icon) {
-            ReverbIcon.GitHub -> canvas.drawPath(githubPath, paint)
-            ReverbIcon.Settings -> {
-                canvas.drawPath(settingsPath0, paint)
-            }
-            ReverbIcon.Incidents -> {
-                canvas.drawPath(incidentsPath0, paint)
-            }
-            ReverbIcon.Share -> {
-                canvas.drawPath(sharePath0, paint)
-            }
-            ReverbIcon.Copy -> {
-                canvas.drawPath(copyPath0, paint)
-            }
-            ReverbIcon.Delete -> {
-                canvas.drawPath(deletePath0, paint)
-            }
-            ReverbIcon.Edit -> {
-                canvas.drawPath(editPath0, paint)
-            }
-            ReverbIcon.Info -> {
-                canvas.drawPath(infoPath0, paint)
-            }
-            ReverbIcon.Close -> {
-                canvas.drawPath(closePath0, paint)
-            }
-            ReverbIcon.Trim -> {
-                canvas.drawPath(trimPath0, paint)
-            }
-            ReverbIcon.Back -> {
-                canvas.drawPath(backPath0, paint)
-            }
-            ReverbIcon.Check -> {
-                canvas.drawPath(checkPath0, paint)
-            }
-            ReverbIcon.Checked -> {
-                canvas.drawPath(checkedPath0, paint)
-            }
-            ReverbIcon.Unchecked -> {
-                canvas.drawPath(uncheckedPath0, paint)
-            }
-            ReverbIcon.MultiSelect -> {
-                canvas.drawPath(multiSelectPath0, paint)
-            }
-            ReverbIcon.Play -> {
-                canvas.drawPath(playPath0, paint)
-            }
-            ReverbIcon.Pause -> {
-                canvas.drawPath(pausePath0, paint)
-            }
-            ReverbIcon.Save -> {
-                canvas.drawPath(savePath0, paint)
-            }
-            ReverbIcon.ExportRange -> {
-                canvas.drawPath(exportRangePath0, paint)
-            }
-            ReverbIcon.Library -> {
-                canvas.drawPath(libraryPath0, paint)
-            }
-            ReverbIcon.AudioFile -> {
-                canvas.drawPath(audioFilePath0, paint)
-            }
-            ReverbIcon.Capture -> {
-                canvas.drawPath(capturePath0, paint)
-            }
-            ReverbIcon.OneShot -> {
-                canvas.drawPath(oneShotPath0, paint)
-            }
-            ReverbIcon.Looping -> {
-                canvas.drawPath(loopingPath0, paint)
-            }
-            ReverbIcon.Reset -> {
-                canvas.drawPath(resetPath0, paint)
-                canvas.drawPath(resetPath1, paint)
-            }
-            ReverbIcon.Folder -> {
-                canvas.drawPath(folderPath0, paint)
-            }
-            ReverbIcon.Undo -> {
-                canvas.drawPath(undoPath0, paint)
-            }
-            ReverbIcon.BackgroundWarning -> {
-                canvas.drawPath(backgroundWarningPath0, paint)
-            }
-            ReverbIcon.ArrowDropDown -> {
-                canvas.drawPath(arrowDropDownPath0, paint)
-            }
-            ReverbIcon.Add -> {
-                canvas.drawPath(addPath0, paint)
-            }
-        }
+    fun mask(icon: ReverbIcon): NativePathIconMask = when (icon) {
+        ReverbIcon.GitHub -> NativePathIconMask(githubPath)
+        ReverbIcon.Settings -> NativePathIconMask(settingsPath0)
+        ReverbIcon.Incidents -> NativePathIconMask(incidentsPath0)
+        ReverbIcon.Share -> NativePathIconMask(sharePath0)
+        ReverbIcon.Copy -> NativePathIconMask(copyPath0)
+        ReverbIcon.Delete -> NativePathIconMask(deletePath0)
+        ReverbIcon.Edit -> NativePathIconMask(editPath0)
+        ReverbIcon.Info -> NativePathIconMask(infoPath0)
+        ReverbIcon.Close -> NativePathIconMask(closePath0)
+        ReverbIcon.Trim -> NativePathIconMask(trimPath0)
+        ReverbIcon.Back -> NativePathIconMask(backPath0)
+        ReverbIcon.Check -> NativePathIconMask(checkPath0)
+        ReverbIcon.Checked -> NativePathIconMask(checkedPath0)
+        ReverbIcon.Unchecked -> NativePathIconMask(uncheckedPath0)
+        ReverbIcon.MultiSelect -> NativePathIconMask(multiSelectPath0)
+        ReverbIcon.Play -> NativePathIconMask(playPath0)
+        ReverbIcon.Pause -> NativePathIconMask(pausePath0)
+        ReverbIcon.Save -> NativePathIconMask(savePath0)
+        ReverbIcon.ExportRange -> NativePathIconMask(exportRangePath0, strokeWidth = 2.2f)
+        ReverbIcon.Library -> NativePathIconMask(libraryPath0)
+        ReverbIcon.AudioFile -> NativePathIconMask(audioFilePath0)
+        ReverbIcon.Capture -> NativePathIconMask(capturePath0)
+        ReverbIcon.OneShot -> NativePathIconMask(oneShotPath0, strokeWidth = 2.2f)
+        ReverbIcon.Looping -> NativePathIconMask(loopingPath0)
+        ReverbIcon.Reset -> NativePathIconMask(resetPath0, resetPath1)
+        ReverbIcon.Folder -> NativePathIconMask(folderPath0)
+        ReverbIcon.Undo -> NativePathIconMask(undoPath0)
+        ReverbIcon.BackgroundWarning -> NativePathIconMask(backgroundWarningPath0)
+        ReverbIcon.ArrowDropDown -> NativePathIconMask(arrowDropDownPath0)
+        ReverbIcon.Add -> NativePathIconMask(addPath0)
     }
 
     private val settingsPath0: Path by lazy {

@@ -11,7 +11,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
 import app.smallthingz.reverb.nativeui.LibraryPlayerActions
 import app.smallthingz.reverb.nativeui.LibraryPlayerUiState
-import app.smallthingz.reverb.nativeui.ProgressiveWaveformData
+import smallthingz.ui.components.waveform.ProgressiveWaveformData
 import app.smallthingz.reverb.nativeui.SpringFineSeekBinding
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.properties.ReadWriteProperty
@@ -988,10 +988,13 @@ internal class NativeRecordingInlinePlayerController(
                 currentFineSeekInteractionKey(), fineSeekTogglePlayback, fineSeekInteractionStart,
                 fineSeekBeginAdjust, fineSeekAdjust, fineSeekUpdateShuttle, fineSeekEndAdjust, fineSeekCancelAdjust)
             val previousWaveform = lastWaveform
+            val detailAvailable = waveformPass == RangeWaveformPass.DETAIL
             if (previousWaveform == null || lastCoarse !== coarseWaveform || lastDetail !== detailWaveform ||
                 previousWaveform.coarse.builtCount != coarseBuiltCount ||
-                previousWaveform.detail.builtCount != detailBuiltCount || previousWaveform.pass != waveformPass) {
-                lastWaveform = ProgressiveWaveformData(coarseWaveform, coarseBuiltCount, detailWaveform, detailBuiltCount, waveformPass)
+                previousWaveform.detail.builtCount != detailBuiltCount || previousWaveform.detailAvailable != detailAvailable) {
+                lastWaveform = ProgressiveWaveformData(
+                    coarseWaveform, coarseBuiltCount, detailWaveform, detailBuiltCount, detailAvailable,
+                )
                 lastCoarse = coarseWaveform
                 lastDetail = detailWaveform
             }

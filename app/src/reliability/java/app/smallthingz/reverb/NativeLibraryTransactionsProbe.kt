@@ -873,7 +873,7 @@ private class TransactionBoard(
                         leftMargin = (24 * scale).toInt(); topMargin = (24 * scale).toInt()
                     })
                 }
-                owner = SettingsAudioMenuHost(ReverbParagraphStyles[ReverbTextRole.LABEL_LARGE],
+                owner = SettingsAudioMenuHost(environment.appearance.typography.buttonLabelStyle,
                     environment.textDensity, environment.sharedFontResolver,
                     checkNotNull(ownedScope.coroutineContext[MonotonicFrameClock]), ownedScope,
                     environment.palette, expandedChanged = { kind, expanded ->

@@ -86,17 +86,19 @@ internal class SettingsAudioChoicesView(
     private val selections: SettingsAudioSelections,
     private val inputRoot: () -> View? = { null },
 ) : AutoCloseable {
-    val view = NativeGroupLayout(context, cornerRadiusDp = 16f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
+    private val groupRecipe = initialEnvironment.appearance.groupSurfaces.settingsChoices
+    val view = groupRecipe.create(context, ::invalidateSettingsTextContrast)
     private val initialDropdownColors = initialEnvironment.palette.dropdownColors()
     private fun <T> choice(kind: SettingsAudioChoice, choose: (T) -> Unit,
         environment: ReverbViewEnvironment): NativeDropdown<T> {
         val arrow = OnboardingIconView(context, ReverbIcon.ArrowDropDown, initialDropdownColors.muted).apply {
             contentDescription = context.getString(R.string.open_options)
         }
+        val typography = environment.appearance.typography
         return NativeDropdown(context,
-            ParagraphView(context, ReverbParagraphStyles[ReverbTextRole.BODY_SMALL],
+            ParagraphView(context, typography[ReverbTextRole.BODY_SMALL],
                 environment.textDensity, environment.sharedFontResolver, initialDropdownColors.muted),
-            ParagraphView(context, ReverbParagraphStyles[ReverbTextRole.BODY_LARGE],
+            ParagraphView(context, typography[ReverbTextRole.BODY_LARGE],
                 environment.textDensity, environment.sharedFontResolver, initialDropdownColors.ink),
             NativeDropdownIcon(arrow, arrow::setTintImmediately), initialDropdownColors, inputRoot,
             onBinding = { anchor, content -> popup.update(kind, anchor, content, choose) },
@@ -122,10 +124,11 @@ internal class SettingsAudioChoicesView(
 
     fun bind(state: SettingsAudioChoicesState, environment: ReverbViewEnvironment) {
         val palette = environment.palette
+        val typography = environment.appearance.typography
         val description = context.getString(R.string.open_options)
         for (dropdown in dropdowns) {
-            dropdown.bindTypography(ReverbParagraphStyles[ReverbTextRole.BODY_SMALL],
-                ReverbParagraphStyles[ReverbTextRole.BODY_LARGE], environment.textDensity, environment.sharedFontResolver)
+            dropdown.bindTypography(typography[ReverbTextRole.BODY_SMALL],
+                typography[ReverbTextRole.BODY_LARGE], environment.textDensity, environment.sharedFontResolver)
             dropdown.bindDescription(description)
         }
         val dropdownColors = palette.dropdownColors()
@@ -162,7 +165,7 @@ internal class SettingsAudioChoicesView(
         route.dividerAtStart = source.visibility != View.GONE
         topDivider(samplePair, showChannels)
         topDivider(inputPair, showChannels || showSample)
-        view.setPalette(palette.field, palette.border)
+        groupRecipe.bind(view, palette)
     }
 
     private fun topDivider(row: View, enabled: Boolean) {

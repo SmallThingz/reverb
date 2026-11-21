@@ -1,9 +1,10 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeBufferSegmentInk
+import smallthingz.ui.components.NativeCaptureControlSurface
+import smallthingz.ui.components.NativeRoundedControlSurface
 import smallthingz.ui.interaction.view.isNativeClickActivationKey
 
-import smallthingz.ui.geometry.roundedGroupContains
-import smallthingz.ui.geometry.roundedGroupGeometry
 
 import smallthingz.ui.interaction.view.NativeClickBinding
 import smallthingz.ui.interaction.view.NativeClickEnvironment
@@ -18,14 +19,10 @@ import smallthingz.ui.text.view.NativeMergedRowRole
 import android.content.Context
 import android.content.res.Configuration
 import android.graphics.Canvas
-import android.graphics.Outline
-import android.graphics.Paint
 import android.graphics.Rect
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
-import android.view.ViewGroup
-import android.view.ViewOutlineProvider
 import android.view.accessibility.AccessibilityNodeInfo
 import smallthingz.ui.animation.VectorConverter
 import smallthingz.ui.animation.core.AnimationVector4D
@@ -76,8 +73,7 @@ internal class ReverbHomeControls(
     initialEnvironment: ReverbViewEnvironment,
     nativeInputRoot: () -> View?,
     animationScope: CoroutineScope,
-) : ReverbHomeControlSurface(context) {
-    private var environment = initialEnvironment
+) : NativeCaptureControlSurface(context) {
     private var oneShotLabel = context.getString(R.string.buffer_one_shot)
     private var loopingLabel = context.getString(R.string.buffer_loop)
     private var currentActions: ReverbHomeActions? = null
@@ -106,9 +102,9 @@ internal class ReverbHomeControls(
     override fun childHitLayouts(): List<NativeViewPointerHitLayout> = pointerChildren
 
     init {
-        setSurfaceEnvironment(initialEnvironment)
-        content.addView(oneShot); content.addView(looping)
-        buttons.forEach(content::addView)
+        bindSurface(initialEnvironment.palette, initialEnvironment.textDensity.density,
+            initialEnvironment.appearance.captureControls, initialEnvironment.appearance.bufferSegment)
+        addControlRows(listOf(oneShot, looping), buttons)
     }
 
     fun bind(state: ReverbHomeControlsState, flip: ReverbHomeFlipFrame, actions: ReverbHomeActions) {
@@ -141,10 +137,10 @@ internal class ReverbHomeControls(
     }
 
     fun setEnvironment(value: ReverbViewEnvironment) {
-        environment = value
         oneShotLabel = context.getString(R.string.buffer_one_shot)
         loopingLabel = context.getString(R.string.buffer_loop)
-        setSurfaceEnvironment(value)
+        bindSurface(value.palette, value.textDensity.density,
+            value.appearance.captureControls, value.appearance.bufferSegment)
         oneShot.setEnvironment(value); looping.setEnvironment(value)
         buttons.forEach { it.setEnvironment(value) }
         requestLayout()
@@ -155,75 +151,6 @@ internal class ReverbHomeControls(
         oneShotLabel = context.getString(R.string.buffer_one_shot)
         loopingLabel = context.getString(R.string.buffer_loop)
     }
-
-    private fun dp(value: Int) = (value * environment.textDensity.density).roundToInt()
-    override fun onMeasure(w: Int, h: Int) {
-        val width = resolveSize(dp(256), w)
-        val height = resolveSize(dp(112), h)
-        setMeasuredDimension(width, height)
-        content.measure(MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY),
-            MeasureSpec.makeMeasureSpec(height, MeasureSpec.EXACTLY))
-        val selectorWidth = min(dp(242), width)
-        val selectorHeight = min(dp(54), height)
-        val horizontalPadding = dp(6) * 2
-        val maxSegmentHeight = (selectorHeight - dp(6) * 2).coerceAtLeast(0)
-        var remaining = (selectorWidth - horizontalPadding).coerceAtLeast(0)
-        for (index in 0..1) {
-            val segment = if (index == 0) oneShot else looping
-            val segmentWidth = min(dp(112), remaining)
-            segment.measure(MeasureSpec.makeMeasureSpec(segmentWidth, MeasureSpec.EXACTLY),
-                MeasureSpec.makeMeasureSpec(maxSegmentHeight, MeasureSpec.AT_MOST))
-            remaining = (remaining - segment.measuredWidth - min(dp(6), remaining - segment.measuredWidth))
-                .coerceAtLeast(0)
-        }
-        val actionWidth = min(dp(256), width)
-        val actionHeight = min(dp(70), height)
-        var actionRemaining = (actionWidth - dp(8) * 2).coerceAtLeast(0)
-        val actionMaxHeight = (actionHeight - dp(8) * 2).coerceAtLeast(0)
-        for (index in buttons.indices) {
-            val button = buttons[index]
-            val childWidth = min(dp(54), actionRemaining)
-            val childHeight = min(dp(54), actionMaxHeight)
-            button.measure(MeasureSpec.makeMeasureSpec(childWidth, MeasureSpec.EXACTLY),
-                MeasureSpec.makeMeasureSpec(childHeight, MeasureSpec.EXACTLY))
-            actionRemaining = (actionRemaining - childWidth - min(dp(8), actionRemaining - childWidth))
-                .coerceAtLeast(0)
-        }
-    }
-
-    override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
-        content.layout(0, 0, width, height)
-        val selectorWidth = min(dp(242), width)
-        val selectorHeight = min(dp(54), height)
-        val selectorLeft = ((width - selectorWidth) / 2f).roundToInt()
-        val selectorInnerHeight = (selectorHeight - dp(6) * 2).coerceAtLeast(0)
-        var logicalX = dp(6)
-        for (index in 0..1) {
-            val segment = if (index == 0) oneShot else looping
-            val x = selectorLeft + if (layoutDirection == LAYOUT_DIRECTION_RTL)
-                selectorWidth - logicalX - segment.measuredWidth else logicalX
-            val y = dp(6) + ((selectorInnerHeight - segment.measuredHeight) / 2f).roundToInt()
-            segment.layout(x, y, x + segment.measuredWidth, y + segment.measuredHeight)
-            logicalX += segment.measuredWidth + dp(6)
-        }
-        val actionWidth = min(dp(256), width)
-        val actionHeight = min(dp(70), height)
-        val actionLeft = ((width - actionWidth) / 2f).roundToInt()
-        val actionTop = height - actionHeight
-        val innerHeight = (actionHeight - dp(8) * 2).coerceAtLeast(0)
-        logicalX = dp(8)
-        for (index in buttons.indices) {
-            val button = buttons[index]
-            val x = actionLeft + if (layoutDirection == LAYOUT_DIRECTION_RTL)
-                actionWidth - logicalX - button.measuredWidth else logicalX
-            val y = actionTop + dp(8) + ((innerHeight - button.measuredHeight) / 2f).roundToInt()
-            button.layout(x, y, x + button.measuredWidth, y + button.measuredHeight)
-            logicalX += button.measuredWidth + dp(8)
-        }
-    }
-    override fun onRtlPropertiesChanged(layoutDirection: Int) {
-        super.onRtlPropertiesChanged(layoutDirection); requestLayout()
-    }
 }
 
 /** Shared exact click/ripple ownership on an existing control; no themed platform Button. */
@@ -231,8 +158,10 @@ internal abstract class HomeClickable(
     context: Context,
     protected var currentEnvironment: ReverbViewEnvironment,
     private val nativeRoot: () -> View?,
-    private val radiusDp: Float?,
-) : ViewGroup(context), NativeClickPhaseHost {
+    radiusDp: Float?,
+    drawFill: Boolean = false,
+) : NativeRoundedControlSurface(context, currentEnvironment.textDensity.density, radiusDp, drawFill),
+    NativeClickPhaseHost {
     protected var action: () -> Unit = {}
     protected val indication = RowIndication.install(this, currentEnvironment.palette.ink,
         { readCachedAnimatorDurationScale(context) })
@@ -245,11 +174,8 @@ internal abstract class HomeClickable(
         override val minimumTouchHeightPx get() = minimumTouchWidthPx
         override fun interestedParent(event: MotionEvent) = false // Cluster is outside swipe Box.
         override fun longPressOwnershipChanged(owns: Boolean) = Unit
-        override fun admitDown(event: MotionEvent): Boolean = roundedGroupGeometry(
-            width.toFloat(), height.toFloat(), currentEnvironment.textDensity.density,
-            radiusDp ?: min(width, height) / (2f * currentEnvironment.textDensity.density),
-        ).acceptsPointer(event.x, event.y,
-            event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER, minimumTouchWidthPx)
+        override fun admitDown(event: MotionEvent): Boolean = acceptsRoundedPointer(
+            event.x, event.y, event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER, minimumTouchWidthPx)
     }, RowIndicationSink(indication) { x, y, target -> target.set(x, y) })
     override val nativeClickEndpoint = ViewClickPhaseEndpoint(input)
 
@@ -263,27 +189,14 @@ internal abstract class HomeClickable(
             override val nodes = listOf(node)
             override val childrenInHitOrder = emptyList<NativeViewPointerHitLayout>()
             override fun screenToLocal(screen: Offset) = coordinates.coordinates(this@HomeClickable).local(screen)
-            override fun withinLayerBounds(local: Offset) = roundedGroupContains(
-                width.toFloat(), height.toFloat(), currentEnvironment.textDensity.density,
-                radiusDp ?: min(width, height) / (2f * currentEnvironment.textDensity.density), local.x, local.y)
+            override fun withinLayerBounds(local: Offset) = containsRoundedPoint(local.x, local.y)
         }
     }
 
     init {
-        clipChildren = false
-        clipToPadding = false
         isClickable = true
         isFocusable = true
         setOnClickListener { action() }
-        clipToOutline = true
-        outlineProvider = object : ViewOutlineProvider() {
-            override fun getOutline(view: View, outline: Outline) {
-                val radius = radiusDp?.let { it * currentEnvironment.textDensity.density }
-                    ?: (min(width, height) / 2f)
-                outline.setRoundRect(0, 0, width, height, min(radius, min(width, height) / 2f))
-            }
-        }
-        if (android.os.Build.VERSION.SDK_INT >= 29) isForceDarkAllowed = false
     }
     protected fun bindClick(enabled: Boolean, next: () -> Unit) {
         action = next
@@ -324,15 +237,15 @@ internal abstract class HomeClickable(
 }
 
 internal class HomeBufferSegment(context: Context, currentEnvironment: ReverbViewEnvironment,
-    root: () -> View?, animationScope: CoroutineScope) : HomeClickable(context, currentEnvironment, root, 16f),
-    NativeMergedRowAccessibilityHost {
+    root: () -> View?, animationScope: CoroutineScope) : HomeClickable(context, currentEnvironment, root,
+    currentEnvironment.appearance.bufferSegment.cornerRadiusDp, drawFill = true), NativeMergedRowAccessibilityHost {
+    private var style = currentEnvironment.appearance.bufferSegment
     private val glyph = HomeGlyph(context, currentEnvironment, ReverbIcon.OneShot)
-    private val label = currentEnvironment.paragraph(context, "", ReverbTextRole.LABEL_LARGE)
+    private val label = currentEnvironment.paragraph(context, "", style.labelRole)
     private val accessibilityChildren = listOf(label)
-    private val fill = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val backgroundMotion = colorMotion(Color.Transparent)
     private val foregroundMotion = colorMotion(Color(currentEnvironment.palette.muted))
-    private val transitionInk = HomeBufferInk()
+    private val transitionInk = NativeBufferSegmentInk()
     private var initialized = false
     private var selection = false
     private var recording = false
@@ -347,7 +260,6 @@ internal class HomeBufferSegment(context: Context, currentEnvironment: ReverbVie
         applyColors()
     }
     init {
-        setWillNotDraw(false)
         addView(glyph); addView(label)
         // The shared page owner binds this existing row to Main's minimum-aware source bounds.
         // The role-only child has no drawing/input and keeps the original visual bounds.
@@ -370,26 +282,17 @@ internal class HomeBufferSegment(context: Context, currentEnvironment: ReverbVie
     }
     fun setEnvironment(value: ReverbViewEnvironment) {
         currentEnvironment = value
-        value.bindParagraphStyle(label, ReverbTextRole.LABEL_LARGE)
+        style = value.appearance.bufferSegment
+        setRoundedGeometry(value.textDensity.density, style.cornerRadiusDp)
+        value.bindParagraphStyle(label, style.labelRole)
         glyph.setEnvironment(value)
         updateTargets()
         invalidateOutline(); requestLayout()
     }
     private fun updateTargets() {
         val p = currentEnvironment.palette
-        val background = Color(when {
-            selection && recording -> p.primary
-            filled && selection -> p.tertiary
-            selection -> reverbColorWithAlpha(p.primaryContainer, .74f)
-            else -> android.graphics.Color.TRANSPARENT
-        })
-        val foreground = Color(when {
-            selection && recording -> p.onPrimary
-            filled && selection -> p.onTertiary
-            selection && !bufferEnabled -> reverbColorWithAlpha(p.onPrimaryContainer, .62f)
-            selection -> p.onPrimaryContainer
-            else -> if (bufferEnabled) p.muted else reverbColorWithAlpha(p.muted, .30f)
-        })
+        val background = Color(style.fill(p, selection, recording, filled))
+        val foreground = Color(style.ink(p, selection, recording, bufferEnabled, filled))
         transitionInk.target(p.field, p.ink, background.toArgb(), foreground.toArgb())
         if (!initialized) {
             initialized = true; backgroundMotion.snap(background); foregroundMotion.snap(foreground)
@@ -402,8 +305,9 @@ internal class HomeBufferSegment(context: Context, currentEnvironment: ReverbVie
         applyColors(); requestFrame()
     }
     private fun applyColors() {
-        fill.color = backgroundMotion.value.toArgb()
-        val tint = transitionInk.foreground(fill.color, foregroundMotion.value.toArgb(),
+        val fill = backgroundMotion.value.toArgb()
+        setRoundedFillColor(fill)
+        val tint = transitionInk.foreground(fill, foregroundMotion.value.toArgb(),
             backgroundMotion.running || foregroundMotion.running)
         glyph.setTint(tint); label.setTextColor(tint); invalidate()
     }
@@ -413,32 +317,28 @@ internal class HomeBufferSegment(context: Context, currentEnvironment: ReverbVie
         frames.cancel()
         super.onDetachedFromWindow()
     }
-    override fun onDraw(canvas: Canvas) {
-        val radius = min(16f * currentEnvironment.textDensity.density, min(width, height) / 2f)
-        canvas.drawRoundRect(0f, 0f, width.toFloat(), height.toFloat(), radius, radius, fill)
-    }
     private fun dp(value: Int) = (value * currentEnvironment.textDensity.density).roundToInt()
     override fun onMeasure(w: Int, h: Int) {
         val width = MeasureSpec.getSize(w)
         val maxHeight = MeasureSpec.getSize(h)
-        val innerWidth = (width - dp(12) * 2).coerceAtLeast(0)
-        val innerHeight = (maxHeight - dp(11) * 2).coerceAtLeast(0)
-        glyph.measure(MeasureSpec.makeMeasureSpec(min(dp(18), innerWidth), MeasureSpec.EXACTLY),
-            MeasureSpec.makeMeasureSpec(min(dp(18), innerHeight), MeasureSpec.EXACTLY))
-        val gap = min(dp(7), (innerWidth - glyph.measuredWidth).coerceAtLeast(0))
+        val innerWidth = (width - dp(style.horizontalPaddingDp) * 2).coerceAtLeast(0)
+        val innerHeight = (maxHeight - dp(style.verticalPaddingDp) * 2).coerceAtLeast(0)
+        glyph.measure(MeasureSpec.makeMeasureSpec(min(dp(style.glyphSizeDp), innerWidth), MeasureSpec.EXACTLY),
+            MeasureSpec.makeMeasureSpec(min(dp(style.glyphSizeDp), innerHeight), MeasureSpec.EXACTLY))
+        val gap = min(dp(style.glyphGapDp), (innerWidth - glyph.measuredWidth).coerceAtLeast(0))
         // Preferred vertical padding must yield to enlarged text before its viewport is clipped.
         label.measure(MeasureSpec.makeMeasureSpec((innerWidth - glyph.measuredWidth - gap).coerceAtLeast(0),
             MeasureSpec.AT_MOST), MeasureSpec.makeMeasureSpec(maxHeight, MeasureSpec.AT_MOST))
-        setMeasuredDimension(width, resolveSize(max(glyph.measuredHeight, label.measuredHeight) + dp(11) * 2, h))
+        setMeasuredDimension(width, resolveSize(max(glyph.measuredHeight, label.measuredHeight) + dp(style.verticalPaddingDp) * 2, h))
         mergedRowAccessibility.roleView.measure(MeasureSpec.makeMeasureSpec(measuredWidth, MeasureSpec.EXACTLY),
             MeasureSpec.makeMeasureSpec(measuredHeight, MeasureSpec.EXACTLY))
     }
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
-        val inner = (width - dp(12) * 2).coerceAtLeast(0)
-        val gap = min(dp(7), (inner - glyph.measuredWidth).coerceAtLeast(0))
+        val inner = (width - dp(style.horizontalPaddingDp) * 2).coerceAtLeast(0)
+        val gap = min(dp(style.glyphGapDp), (inner - glyph.measuredWidth).coerceAtLeast(0))
         val used = glyph.measuredWidth + gap + label.measuredWidth
         fun place(child: View, beforeChildSize: Int) {
-            val x = dp(12) + nativeCenteredRowChildOffset(inner, used, beforeChildSize)
+            val x = dp(style.horizontalPaddingDp) + nativeCenteredRowChildOffset(inner, used, beforeChildSize)
             val y = ((height - child.measuredHeight) / 2f).roundToInt()
             child.layout(x, y, x + child.measuredWidth, y + child.measuredHeight)
         }
@@ -481,14 +381,15 @@ private class HomeAction(context: Context, currentEnvironment: ReverbViewEnviron
         applyTransform()
     }
     fun setEnvironment(value: ReverbViewEnvironment) {
-        currentEnvironment = value; glyph.setEnvironment(value); apply(); requestLayout()
+        currentEnvironment = value
+        setRoundedGeometry(value.textDensity.density, cornerRadiusDp = null)
+        glyph.setEnvironment(value); apply(); requestLayout()
     }
     private fun apply() {
-        val p = currentEnvironment.palette
-        colorMotion.retarget(if (!isEnabled) reverbColorWithAlpha(p.muted, .28f)
-            else if (destructive) p.error else p.ink)
-        // IconButton's inherited LocalContentColor controls the ripple, not the explicit glyph tint.
-        indication.updateColor(if (isEnabled) p.ink else reverbColorWithAlpha(p.ink, .38f))
+        val style = currentEnvironment.appearance.captureControls
+        val palette = currentEnvironment.palette
+        colorMotion.retarget(style.actionInk(palette, isEnabled, destructive))
+        indication.updateColor(style.actionRipple(palette, isEnabled))
         applyTransform()
     }
     private fun applyTransform() {
@@ -496,14 +397,15 @@ private class HomeAction(context: Context, currentEnvironment: ReverbViewEnviron
         glyph.pivotX = glyph.width * flip.pivotFractionX
         glyph.pivotY = glyph.height * .5f
         glyph.scaleY = flip.depthScale
-        glyph.cameraDistance = 24f * currentEnvironment.textDensity.density * resources.displayMetrics.densityDpi
+        glyph.cameraDistance = currentEnvironment.appearance.captureControls.actionCameraDepth *
+            currentEnvironment.textDensity.density * resources.displayMetrics.densityDpi
     }
-    private fun dp(value: Int) = (value * currentEnvironment.textDensity.density).roundToInt()
     override fun onMeasure(w: Int, h: Int) {
         val width = MeasureSpec.getSize(w); val height = MeasureSpec.getSize(h)
         setMeasuredDimension(width, height)
-        glyph.measure(MeasureSpec.makeMeasureSpec(min(dp(25), width), MeasureSpec.EXACTLY),
-            MeasureSpec.makeMeasureSpec(min(dp(25), height), MeasureSpec.EXACTLY))
+        val glyphSize = currentEnvironment.appearance.captureControls.actionGlyphSizePx(currentEnvironment.textDensity.density)
+        glyph.measure(MeasureSpec.makeMeasureSpec(min(glyphSize, width), MeasureSpec.EXACTLY),
+            MeasureSpec.makeMeasureSpec(min(glyphSize, height), MeasureSpec.EXACTLY))
     }
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
         val x = ((width - glyph.measuredWidth) / 2f).roundToInt()

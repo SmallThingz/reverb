@@ -2,8 +2,8 @@ package app.smallthingz.reverb.nativeui
 
 import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.components.NativeButtonInputPolicy
-import smallthingz.ui.components.NativeMaterialButtonStyle
 import smallthingz.ui.components.NativeMaterialButtonView
+import smallthingz.ui.components.NativeRectangularViewport
 import smallthingz.ui.util.closePreservingPrimaryFailure
 import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
 import smallthingz.ui.text.view.ParagraphView
@@ -11,12 +11,9 @@ import android.content.Context
 import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.Color
-import android.graphics.Canvas
-import android.graphics.Outline
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
-import android.view.ViewOutlineProvider
 import android.view.accessibility.AccessibilityNodeInfo
 import smallthingz.ui.input.phase.NativeClickPhaseNode
 import smallthingz.ui.input.phase.NativeDragPointerEvent
@@ -79,9 +76,9 @@ internal class NativePermissionRequiredView(
 }
 
 private class PermissionContent(context:Context,private val host:NativeMaterialButtonHost,
-                                review:()->Unit,library:()->Unit):ViewGroup(context),AutoCloseable {
+                                review:()->Unit,library:()->Unit):NativeRectangularViewport(context),AutoCloseable {
     private var environment=host.environment
-    private val message=ParagraphView(context,reverbDefaultTextStyle(),environment.textDensity,
+    private val message=ParagraphView(context,environment.appearance.typography.defaultTextStyle,environment.textDensity,
         environment.sharedFontResolver,environment.palette.onSurfaceVariant).apply {
         isScreenReaderFocusable=true
     }
@@ -101,15 +98,10 @@ private class PermissionContent(context:Context,private val host:NativeMaterialB
     }
     private val hitChildren=java.util.Collections.unmodifiableList(listOf(libraryAction.hitLayout,allow.hitLayout))
     val hitLayout=host.hit(this,listOf(shield),children={hitChildren},
-        clip={it.x>=0f&&it.y>=0f&&it.x<width&&it.y<height})
+        clip={containsViewportPoint(it.x,it.y)})
     val hitLayouts=listOf(hitLayout)
     init {
         importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_YES;isScreenReaderFocusable=false
-        clipChildren=false;clipToPadding=false
-        clipToOutline=true
-        outlineProvider=object:ViewOutlineProvider() {
-            override fun getOutline(view:View,outline:Outline){outline.setRect(0,0,view.width,view.height)}
-        }
         addView(message);addView(allow);addView(libraryAction)
     }
     fun bindPermissions(microphoneAllowed:Boolean,legacyStorageAllowed:Boolean) {
@@ -119,16 +111,10 @@ private class PermissionContent(context:Context,private val host:NativeMaterialB
         if(environment===next)return
         val densityChanged=environment.textDensity!=next.textDensity
         environment=next
-        message.setTypography(reverbDefaultTextStyle(),next.textDensity,next.sharedFontResolver)
+        message.setTypography(next.appearance.typography.defaultTextStyle,next.textDensity,next.sharedFontResolver)
         message.animateTextColor(next.palette.onSurfaceVariant)
         allow.bindEnvironment(next);libraryAction.bindEnvironment(next)
         if(densityChanged)requestLayout()
-    }
-    override fun onSizeChanged(w:Int,h:Int,oldw:Int,oldh:Int){invalidateOutline()}
-    override fun draw(canvas:Canvas) {
-        if(canvas.isHardwareAccelerated)super.draw(canvas)
-        else {val saved=canvas.save();try {canvas.clipRect(0,0,width,height);super.draw(canvas)}
-            finally {canvas.restoreToCount(saved)}}
     }
     override fun onMeasure(w:Int,h:Int) {
         val width=MeasureSpec.getSize(w);val height=MeasureSpec.getSize(h)
@@ -140,7 +126,8 @@ private class PermissionContent(context:Context,private val host:NativeMaterialB
         columnWidth=min(width,max(message.measuredWidth,allow.measuredWidth)+pad+pad)
         columnHeight=min(height,message.measuredHeight+gap+allow.measuredHeight+pad+pad)
         val bottom=dp(22)
-        libraryAction.measure(permissionExact(min(dp(54),width)),permissionExact(min(dp(54),max(0,height-bottom))))
+        libraryAction.measure(permissionExact(min(dp(libraryAction.widthDp),width)),
+            permissionExact(min(dp(libraryAction.heightDp),max(0,height-bottom))))
         libraryOuterHeight=min(height,libraryAction.measuredHeight+bottom)
         setMeasuredDimension(width,height)
     }
@@ -206,16 +193,18 @@ private class PermissionContent(context:Context,private val host:NativeMaterialB
 private class PermissionLibraryAction(context:Context,private val host:NativeMaterialButtonHost,
                                       action:()->Unit):ViewGroup(context),AutoCloseable {
     private var environment=host.environment
-    private val surface=NativeGroupLayout(context,18f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
-    private val glyph = OnboardingIconView(context, ReverbIcon.Library, environment.palette.onSurfaceVariant).apply {
+    private val recipe = environment.appearance.buttons.largeRaisedIcon
+    val widthDp get() = recipe.surface.minimumWidthDp
+    val heightDp get() = recipe.surface.minimumHeightDp
+    private val surface=NativeGroupLayout(context, requireNotNull(recipe.surface.radiusDp),
+        onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
+    private val glyph = OnboardingIconView(context, ReverbIcon.Library, recipe.contentColor(environment.palette.buttonPalette, true)).apply {
         contentDescription = context.getString(R.string.files_tab)
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
         isScreenReaderFocusable = false
     }
-    private val visual = NativeMaterialButtonView(context, false, reverbButtonTextStyle(),
+    private val visual = NativeMaterialButtonView(context, recipe,
         environment.textDensity, environment.sharedFontResolver,
-        NativeMaterialButtonStyle(0, verticalPaddingDp = 0, minimumWidthDp = 54, minimumHeightDp = 54,
-            iconSizeDp = 25, radiusDp = 18f, showLabel = false),
         NativeButtonInputPolicy(inputRoot = { host.inputRoot }), action).apply {
         setLeadingView(glyph, exposeToAccessibility = true)
     }
@@ -226,7 +215,7 @@ private class PermissionLibraryAction(context:Context,private val host:NativeMat
             !host.sourceNode(visual).hidden
         }
     } else visual.mergedRowAccessibility.bindGeometry(host.textGeometry,
-        {host.sourceNode(visual,48f*environment.textDensity.density)},{host.sourceNode(it).present},
+        {host.sourceNode(visual,visual.minimumTouchTargetDp*environment.textDensity.density)},{host.sourceNode(it).present},
         {!host.sourceNode(visual).hidden})
     private val glyphLease=glyph.bindDescriptionAccessibility(host.textWindow,
         {host.sourceNode(glyph)},{!host.sourceNode(glyph).hidden})
@@ -237,20 +226,19 @@ private class PermissionLibraryAction(context:Context,private val host:NativeMat
     }
     init {
         importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO;clipChildren=false;clipToPadding=false
-        surface.setPalette(environment.palette.surfaceContainerHigh,Color.TRANSPARENT)
+        surface.setPalette(recipe.surroundingColor(environment.palette.buttonPalette),Color.TRANSPARENT)
         surface.addRow(visual,NativeGroupLayout.LayoutParams(-1,-1))
         addView(surface)
-        visual.bind("", true, Color.TRANSPARENT, environment.palette.onSurfaceVariant,
-            indicationColor = environment.palette.onSurface)
+        visual.bind("", true, environment.palette.buttonPalette)
     }
     fun bindEnvironment(next:ReverbViewEnvironment) {
         if(environment===next)return
         val densityChanged=environment.textDensity!=next.textDensity
         environment=next
-        surface.setPalette(next.palette.surfaceContainerHigh,Color.TRANSPARENT)
-        glyph.bind(ReverbIcon.Library,next.palette.onSurfaceVariant)
-        visual.bindTypography(reverbButtonTextStyle(), next.textDensity, next.sharedFontResolver)
-        visual.bind("", true, Color.TRANSPARENT, next.palette.onSurfaceVariant, indicationColor = next.palette.onSurface)
+        surface.setPalette(recipe.surroundingColor(next.palette.buttonPalette),Color.TRANSPARENT)
+        glyph.bind(ReverbIcon.Library, recipe.contentColor(next.palette.buttonPalette, true))
+        visual.bindTypography(next.textDensity, next.sharedFontResolver)
+        visual.bind("", true, next.palette.buttonPalette)
         if(densityChanged)requestLayout()
     }
     override fun onMeasure(w:Int,h:Int){surface.measure(w,h);setMeasuredDimension(surface.measuredWidth,surface.measuredHeight)}

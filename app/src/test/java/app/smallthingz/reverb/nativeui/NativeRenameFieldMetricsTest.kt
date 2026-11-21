@@ -5,21 +5,24 @@ import android.view.inputmethod.EditorInfo
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import smallthingz.ui.components.NativeUiAppearance
 
 class NativeRenameFieldMetricsTest {
+    private val recipe = NativeUiAppearance.Default.outlinedField
+
     @Test fun defaultBodyLineFitsReleased56dpContainer() {
-        assertEquals(147,nativeRenameFieldHeight(63,0,2.625f,147,1000))
+        assertEquals(147,recipe.height(63,0,2.625f,147,1000))
     }
     @Test fun floatPaddingSumRoundsOnceUnlikePerEdgeConstraints() {
         // Source calculateHeight32.64px padding, not two individually rounded16px edges.
-        assertEquals(57,nativeRenameFieldHeight(24,0,1.02f,0,1000))
+        assertEquals(57,recipe.height(24,0,1.02f,0,1000))
     }
     @Test fun supportingTextIsOutsideBorderHeightAndIncludedInTotal() {
-        assertEquals(76,nativeRenameFieldHeight(24,20,1f,56,1000))
+        assertEquals(76,recipe.height(24,20,1f,56,1000))
     }
     @Test fun sourceMinAndMaxHeightStillConstrainOversizedContent() {
-        assertEquals(90,nativeRenameFieldHeight(24,0,1f,90,1000))
-        assertEquals(28,nativeRenameFieldHeight(24,20,1f,0,28))
+        assertEquals(90,recipe.height(24,0,1f,90,1000))
+        assertEquals(28,recipe.height(24,20,1f,0,28))
     }
     @Test fun asciiIsOnlyKeyboardHintAndRetainsSourceAutocorrect() {
         val hints=nativeRenameImeContract()

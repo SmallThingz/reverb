@@ -120,20 +120,16 @@ internal class NativeOnboardingScreenView private constructor(
         this::viewport.isInitialized && viewport.isAttachedToWindow
     }
     private val scrollStates = List(3) { NativeVerticalScrollState(restored.verticalPositions[it]) }
-    private val typography = OnboardingPageTypography(
-        ReverbParagraphStyles[ReverbTextRole.HEADLINE_MEDIUM],
-        ReverbParagraphStyles[ReverbTextRole.TITLE_MEDIUM],
-        ReverbParagraphStyles[ReverbTextRole.BODY_LARGE],
-        ReverbParagraphStyles[ReverbTextRole.BODY_MEDIUM],
-        ReverbParagraphStyles[ReverbTextRole.BODY_SMALL],
-    )
+    private val typography = environment.appearance.typography.let {
+        OnboardingPageTypography(it[ReverbTextRole.HEADLINE_MEDIUM], it[ReverbTextRole.TITLE_MEDIUM],
+            it[ReverbTextRole.BODY_LARGE], it[ReverbTextRole.BODY_MEDIUM], it[ReverbTextRole.BODY_SMALL])
+    }
     private val pages: List<OnboardingPageContentView> = List(3) { page -> createPage(page, initialState) }
     private lateinit var viewport: NativeOnboardingPlacedPagerViewport
     private lateinit var horizontal: NativeOnboardingPagerPhaseBinding
     private val vertical = java.util.IdentityHashMap<NativeVerticalViewport, NativeVerticalPhaseBinding>()
     private val verticalAccessibility = java.util.IdentityHashMap<NativeVerticalViewport, NativeVerticalScrollAccessibilityBinding>()
-    private val footer = OnboardingFooterView(context, ReverbParagraphStyles[ReverbTextRole.LABEL_LARGE],
-        density, environment.sharedFontResolver, inputRoot = { this })
+    private val footer = OnboardingFooterView(context, environment, inputRoot = { this })
     private val pageActions = mutableListOf<AutoCloseable>()
     private val pageText = mutableListOf<AutoCloseable>()
     private var preview: OnboardingPageContentView? = null
@@ -292,7 +288,7 @@ internal class NativeOnboardingScreenView private constructor(
     /** Activity palette preview keeps this same pager, drafts, gestures and semantic identities. */
     fun setPalette(palette: ReverbPalette) {
         if (environment.palette === palette) return
-        environment = ReverbViewEnvironment(environment.textDensity, environment.sharedFontResolver, palette)
+        environment = environment.withPalette(palette)
         bind(state)
     }
 
@@ -325,6 +321,7 @@ internal class NativeOnboardingScreenView private constructor(
     private fun createPage(page: Int, value: OnboardingPageContentState): OnboardingPageContentView = OnboardingPageContentView(
         context, page, typography, density, environment.sharedFontResolver, value,
         environment.palette, scrollStates[page], frames, scope, scrolling.pageNestedHost,
+        appearance = environment.appearance,
         inputRoot = { this },
         parentInterested = { change ->
             pages.getOrNull(page)?.sourceVerticalViewport?.let { vertical[it]?.interested(change) } == true ||

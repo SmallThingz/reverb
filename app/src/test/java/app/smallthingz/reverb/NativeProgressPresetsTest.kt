@@ -9,6 +9,9 @@ import android.graphics.Rect
 import android.view.View
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.FrameLayout
+import app.smallthingz.reverb.nativeui.LibraryPendingSaveRowPresentation
+import app.smallthingz.reverb.nativeui.ReverbPalette
+import app.smallthingz.reverb.nativeui.ReverbViewEnvironment
 import androidx.core.view.accessibility.AccessibilityNodeInfoCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -18,21 +21,67 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import smallthingz.ui.components.NativeCircularProgress
 import smallthingz.ui.components.NativeDeterminateLinearProgress
 import smallthingz.ui.components.NativeIndeterminateLinearProgress
 import smallthingz.ui.components.NativeLinearProgressView
+import smallthingz.ui.components.NativeUiAppearance
 import smallthingz.ui.runtime.MonotonicFrameClock
+import smallthingz.ui.text.font.createFontFamilyResolver
 import smallthingz.ui.text.view.NativePlainTextViewGeometry
 import smallthingz.ui.text.view.NativeTextSemanticsClip
 import smallthingz.ui.text.view.NativeTextSemanticsClipPolicy
+import smallthingz.ui.unit.Density
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], application = Application::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class NativeProgressPresetsTest {
+    @Test fun pendingSaveUsesAppearanceOverlayWithoutChangingAcceptedProgress() {
+        val context = RuntimeEnvironment.getApplication()
+        val clock = object : MonotonicFrameClock {
+            override suspend fun <R> withFrameNanos(onFrame: (Long) -> R): R =
+                error("Detached pending rows must not schedule animation frames")
+        }
+        val scope = CoroutineScope(Dispatchers.Unconfined + clock)
+        val palette = ReverbPalette.fallback(false).copy(primary = Color.WHITE, surfaceContainerLow = Color.BLACK)
+        val layout = NativeUiAppearance.Default.listDecorations
+        val alternate = NativeUiAppearance.Default.copy(listDecorations = layout.copy(
+            pendingSave = layout.pendingSave.copy(spinnerStrokeDp = 4f, overlayAlphaByte = 0x80),
+        ))
+        val save = PendingSave("pending", "Local recording", 0L, 20_000L, SavePhase.SAVING, .5f)
+        try {
+            for ((appearance, overlay) in listOf(NativeUiAppearance.Default to 0xff222222.toInt(),
+                alternate to 0xff808080.toInt())) {
+                val environment = ReverbViewEnvironment(Density(1f), createFontFamilyResolver(context), palette,
+                    appearance = appearance)
+                LibraryPendingSaveRowPresentation(context, environment, scope, FrameLayout(context)).use { presentation ->
+                    val row = presentation.row
+                    row.layoutDirection = View.LAYOUT_DIRECTION_LTR
+                    fun colorAt(x: Int): Int {
+                        row.measure(View.MeasureSpec.makeMeasureSpec(360, View.MeasureSpec.EXACTLY),
+                            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED))
+                        row.layout(0, 0, row.measuredWidth, row.measuredHeight)
+                        val image = Bitmap.createBitmap(row.width, row.height, Bitmap.Config.ARGB_8888)
+                        try {
+                            row.draw(Canvas(image))
+                            return image.getPixel(x, 6)
+                        } finally { image.recycle() }
+                    }
+                    presentation.bind(save, environment)
+                    check(colorAt(120) == overlay && colorAt(240) == Color.BLACK)
+                    presentation.bind(save.copy(progress = .25f), environment)
+                    check(colorAt(120) == overlay)
+                    presentation.bind(save.copy(phase = SavePhase.FAILED), environment)
+                    check(colorAt(120) == Color.BLACK)
+                }
+            }
+        } finally { scope.cancel() }
+    }
+
     @Test
     fun mountedPresetsHonorFrameOwnershipAndLinearAccessibilityLeases() {
         val owner = Robolectric.buildActivity(Activity::class.java).setup().visible()

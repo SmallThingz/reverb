@@ -1,5 +1,6 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeDeterminateLinearProgress
 import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
 import smallthingz.ui.text.view.NativePlainTextViewGeometry
@@ -90,7 +91,7 @@ internal class NativeWindowTextAccessibilityOwner(
 
     /** The progress leaf expands its own semantic bounds before this shared ancestor clip policy. */
     fun bindSettingsProgress(
-        progress: SettingsCalibrationProgressView,
+        progress: NativeDeterminateLinearProgress,
         contentRoot: ViewGroup,
         contentClips: NativeTextSemanticsClipPolicy,
         exposed: () -> Boolean,
@@ -173,7 +174,7 @@ internal class NativePageTextAccessibilityOwner internal constructor(
         fun visit(view: View) {
             if (view.importantForAccessibility == View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS) return
             if (view is ParagraphView || view is NativeMergedRowAccessibilityHost ||
-                (page is OnboardingPageContentView && view is SettingsCalibrationProgressView) ||
+                (page is OnboardingPageContentView && view is NativeDeterminateLinearProgress) ||
                 (view is OnboardingIconView && !view.contentDescription.isNullOrEmpty())) present[view] = true
             if (view is ViewGroup) {
                 for (index in 0 until view.childCount) visit(view.getChildAt(index))
@@ -196,7 +197,7 @@ internal class NativePageTextAccessibilityOwner internal constructor(
                 } else view.mergedRowAccessibility.bindGeometry(geometry) { exposed(view) }
                 is OnboardingIconView -> view.bindDescriptionAccessibility(cursor,
                     sourceNode?.let { node -> { node(view) } }) { exposed(view) }
-                is SettingsCalibrationProgressView -> view.bindAccessibility(geometry) { exposed(view) }
+                is NativeDeterminateLinearProgress -> view.bindAccessibility(geometry) { exposed(view) }
                 else -> error("Unexpected page accessibility binding")
             }
         }

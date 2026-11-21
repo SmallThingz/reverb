@@ -4,6 +4,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import smallthingz.ui.animation.AnimatedValue
+import smallthingz.ui.components.NativeBufferSegmentInk
+import smallthingz.ui.components.NativeBufferSegmentStyle
 import smallthingz.ui.animation.VectorConverter
 import smallthingz.ui.animation.core.AnimationVector4D
 import smallthingz.ui.animation.core.tween
@@ -98,9 +100,16 @@ class HomeBufferContrastTest {
     }
 
     @Test fun zeroDurationScaleRestoresExactSemanticColors() {
+        val style = NativeBufferSegmentStyle()
         for (p in palettes()) for (state in State.entries) {
             val motion = Motion(p, colors(p, State.RECORDING))
             val end = colors(p, state)
+            val selected = state != State.DIMMED && state != State.DIMMED_DISABLED
+            val recording = state == State.RECORDING
+            val enabled = state != State.DISABLED && state != State.DIMMED_DISABLED
+            val filled = state == State.FULL
+            assertEquals(end.fill, style.fill(p, selected, recording, filled))
+            assertEquals(end.ink, style.ink(p, selected, recording, enabled, filled))
             motion.target(p, end, 0f)
             motion.frame(0, 0f)
             assertEquals(end.fill, motion.fill)
@@ -111,7 +120,7 @@ class HomeBufferContrastTest {
     private class Motion(var palette: ReverbPalette, initial: Colors) {
         private val fillMotion = colorMotion(initial.fill)
         private val inkMotion = colorMotion(initial.ink)
-        private val policy = HomeBufferInk()
+        private val policy = NativeBufferSegmentInk()
         private var endpointFloor = min(4.5, bound(palette, initial.fill, initial.ink))
         private var targetFloor = endpointFloor
         val fill get() = fillMotion.value.toArgb()

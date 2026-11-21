@@ -4,9 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.content.res.ColorStateList
 import android.content.res.Configuration
-import android.graphics.drawable.ColorDrawable
 import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
@@ -16,20 +14,14 @@ import android.os.SystemClock
 import android.os.UserManager
 import android.provider.Settings
 import android.util.Log
-import android.view.Gravity
-import android.view.View
 import android.view.ViewTreeObserver
-import android.widget.LinearLayout
-import android.widget.ProgressBar
-import android.widget.ScrollView
 import androidx.activity.ComponentActivity
 import androidx.core.content.ContextCompat
-import androidx.core.view.ViewCompat
-import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import app.smallthingz.reverb.nativeui.ReverbPalette
 import app.smallthingz.reverb.nativeui.ReverbBrandMarkView
+import app.smallthingz.reverb.nativeui.reverbAppearance
 import java.io.Closeable
 import java.util.UUID
 import java.util.IdentityHashMap
@@ -38,9 +30,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import smallthingz.ui.components.NativeText
-import smallthingz.ui.components.NativeTextStyle
-import smallthingz.ui.controls.ControlPalette
+import smallthingz.ui.components.NativeCenteredStatusContent
 
 /** An ordinary opaque Activity, admitted only after a real drawn, focused foreground window. */
 class BootResumeActivity : ComponentActivity() {
@@ -88,8 +78,8 @@ class BootResumeActivity : ComponentActivity() {
         admission = BootResumeActivityAdmission(candidate.createdAtMillis, TIMEOUT_MILLIS)
         setShowWhenLocked(true)
         setTurnScreenOn(true)
-        val palette = ReverbPalette.resolve(this, dark)
-        window.setBackgroundDrawable(ColorDrawable(palette.background))
+        val palette = reverbAppearance.resolveColorScheme(this, dark)
+        window.setBackgroundDrawable(reverbAppearance.statusContent.windowBackground(palette))
         root = BootResumeContentView(this, palette)
         setContentView(root)
         root.viewTreeObserver.addOnDrawListener(drawListener)
@@ -315,45 +305,12 @@ internal class StartedMainOwners {
 internal class BootResumeContentView(
     context: Context,
     palette: ReverbPalette,
-) : LinearLayout(context) {
-    private val controls = ControlPalette(palette.surface, palette.surfaceContainer, palette.onBackground,
-        palette.onSurfaceVariant, palette.primary, palette.onPrimary, palette.primaryContainer, palette.outline)
-    private val detail = NativeText(context, controls, NativeTextStyle(20f, lineHeightSp = 28f))
-    private val progress = ProgressBar(context).apply {
-        indeterminateTintList = ColorStateList.valueOf(palette.primary)
-    }
-
-    init {
-        orientation = VERTICAL
-        setBackgroundColor(palette.background)
-        ViewCompat.setOnApplyWindowInsetsListener(this) { view, insets ->
-            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
-            view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
-            insets
-        }
-        val column = LinearLayout(context).apply { orientation = VERTICAL; gravity = Gravity.CENTER }
-        val padding = (32 * resources.displayMetrics.density).toInt()
-        column.setPadding(padding, padding, padding, padding)
-        column.addView(ReverbBrandMarkView(context, context.getString(R.string.app_name)), LayoutParams(padding * 2, padding * 2))
-        column.addView(detail.apply {
-            text = context.getString(R.string.boot_resume_in_progress)
-            gravity = Gravity.CENTER
-            setPadding(0, padding / 2, 0, padding / 2)
-            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
-            isAccessibilityHeading = true
-        })
-        column.addView(progress)
-        addView(ScrollView(context).apply {
-            isFillViewport = true
-            addView(column, android.widget.FrameLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
-        }, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
-    }
-
-    fun showSuccess() {
-        detail.text = context.getString(R.string.boot_resume_success)
-        // Keep the centered logo and message anchored during the success hold.
-        progress.visibility = View.INVISIBLE
-    }
+) : NativeCenteredStatusContent(
+    context, palette, reverbAppearance.statusContent,
+    ReverbBrandMarkView(context, context.getString(R.string.app_name)),
+    context.getString(R.string.boot_resume_in_progress),
+) {
+    fun showSuccess() = showCompleted(context.getString(R.string.boot_resume_success))
 }
 
 internal class BootResumeActivityAdmission(

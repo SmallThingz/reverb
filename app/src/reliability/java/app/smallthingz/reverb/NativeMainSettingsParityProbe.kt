@@ -1,6 +1,7 @@
 package app.smallthingz.reverb
 
 import smallthingz.ui.components.NativeWindowInsetsBinding
+import smallthingz.ui.components.NativeDiscreteSliderView
 
 import smallthingz.ui.components.NativeModalWindowRuntime
 
@@ -571,7 +572,7 @@ private fun verifyMainSettingsPageKeyDispatch(
         settledPosition()
         val focusedSlider = main {
             // The wrapper owns layout; its existing pointerView owns focus, accessibility and keys.
-            mainParityViews(settings).filterIsInstance<CompressionSliderView>().single().pointerView.also {
+            mainParityViews(settings).filterIsInstance<NativeDiscreteSliderView>().single().pointerView.also {
                 slider = it
             }
         }
@@ -631,7 +632,7 @@ private fun verifyMainSettingsPageKeyDispatch(
             focusedSlider.setOnKeyListener { _, code, event ->
                 if (code == KeyEvent.KEYCODE_PAGE_UP || code == KeyEvent.KEYCODE_PAGE_DOWN)
                     sliderEvents += code to event.action
-                false // Observe; the real CompressionSliderView must consume each event.
+                false // Observe; the real slider must consume each event.
             }
         }
         for ((code, expected) in listOf(KeyEvent.KEYCODE_PAGE_UP to 3, KeyEvent.KEYCODE_PAGE_DOWN to 4)) {

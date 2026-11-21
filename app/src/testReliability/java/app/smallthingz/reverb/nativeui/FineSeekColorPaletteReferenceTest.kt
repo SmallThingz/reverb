@@ -1,5 +1,6 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeSpringFineSeekColorPalette
 import smallthingz.ui.graphics.toArgb as nativeArgb
 import androidx.compose.ui.graphics.Color as ReleasedColor
 import androidx.compose.ui.graphics.lerp as releasedLerp
@@ -14,7 +15,7 @@ class FineSeekColorPaletteReferenceTest {
         val random = Random(0x4f4b4c41424cL)
         val fractions = floatArrayOf(-.1f, -0f, 0f, .0001f, .01f, .1f, .3f, .5f, .7f, .99f,
             1f, 1.1f, Float.NEGATIVE_INFINITY, Float.POSITIVE_INFINITY, Float.NaN)
-        val cache = FineSeekColorPalette(0, 0, 0)
+        val cache = NativeSpringFineSeekColorPalette(0, 0, 0)
         repeat(512) { paletteIndex ->
             val primary = random.nextInt()
             val secondary = random.nextInt()

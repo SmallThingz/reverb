@@ -30,7 +30,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.TextView
-import app.smallthingz.reverb.nativeui.ReverbSegmentedPresentation
+import app.smallthingz.reverb.nativeui.reverbAppearance
 import java.io.File
 import kotlin.math.pow
 import org.json.JSONArray
@@ -41,6 +41,7 @@ import smallthingz.ui.components.NativeChip
 import smallthingz.ui.components.NativeChoice
 import smallthingz.ui.components.NativeSegmentedChoice
 import smallthingz.ui.components.NativeSegmentedControl
+import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.components.NativeSegmentedPresentation
 import smallthingz.ui.controls.ControlPalette
 
@@ -204,8 +205,8 @@ private class SegmentedContrastBoard(context: Context) : FrameLayout(context), A
     private val selectedInk = 0xff182950.toInt()
     private val idleInk = 0xffaaaaaa.toInt()
     private val palette = ControlPalette(dark, dark, idleInk, idleInk, selectedFill, selectedInk, selectedFill, 0)
-    private val presentations = List(2) { ReverbSegmentedPresentation(context) }
-    private val controls = presentations.map { NativeSegmentedControl(context, palette, it) }
+    private val controls = List(2) { reverbAppearance.settingsSelectors.createSegmentedControl(context, palette) }
+    private val surfaces = controls.map { it.getChildAt(0) as NativeGroupLayout }
     private val rows = controls.map { field(it, "choices") as NativeSegmentedChoice }
     private val chips get() = rows.flatMap { row -> (0 until row.childCount).map { row.getChildAt(it) as NativeChip } }
     private val rowHeight = (42 * resources.displayMetrics.density).toInt() + 2
@@ -247,7 +248,7 @@ private class SegmentedContrastBoard(context: Context) : FrameLayout(context), A
                 track.frame(pose.millis * 1_000_000L, pose.scale)
             }
             val surface = track.color(0)
-            presentations[rowIndex].surface.setPaletteImmediately(surface, 0)
+            surfaces[rowIndex].setPaletteImmediately(surface, 0)
             val fillState = field(indicatorMotion, "state") as ColorTransition
             fillState.retarget(intArrayOf(selectedFill), 0L, 0f)
             if (rowIndex == 1) {
@@ -514,7 +515,7 @@ private class SegmentedContrastBoard(context: Context) : FrameLayout(context), A
             "selectionIndication", Int::class.javaPrimitiveType, Int::class.javaPrimitiveType,
             Int::class.javaPrimitiveType, Int::class.javaPrimitiveType)
         rows.forEachIndexed { rowIndex, row ->
-            presentations[rowIndex].surface.setPaletteImmediately(track.color(0), 0)
+            surfaces[rowIndex].setPaletteImmediately(track.color(0), 0)
             val indicator = checkNotNull(field(row, "selectionIndicator"))
             val indicatorState = field(field(indicator, "colors") as ViewColorTransition, "state") as ColorTransition
             indicatorState.retarget(intArrayOf(lightAccent), 0L, 0f)
@@ -673,8 +674,8 @@ private class SegmentedContrastBoard(context: Context) : FrameLayout(context), A
                     val under = background.getPixel(x, y)
                     // Exclude antialiased pill edge pixels, not low-contrast foreground pixels.
                     if (overlay) {
-                        if (under != presentations[rowIndex].surface.paintedFillColor && under != sampledPill) overlaySamples[rowIndex]++
-                    } else if (under != presentations[rowIndex].surface.paintedFillColor && under != selectedFill) continue
+                        if (under != surfaces[rowIndex].paintedFillColor && under != sampledPill) overlaySamples[rowIndex]++
+                    } else if (under != surfaces[rowIndex].paintedFillColor && under != selectedFill) continue
                     if (iconRect.contains(x, y)) {
                         samples[rowIndex]++
                         if (contrast(bitmap.getPixel(x, y), under) < 4.49) failures[rowIndex]++

@@ -4,6 +4,8 @@
  */
 package app.smallthingz.reverb
 
+import smallthingz.ui.components.NativeDeterminateLinearProgress
+import smallthingz.ui.components.NativeDiscreteSliderView
 import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.scroll.NativeVerticalViewport
 import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
@@ -77,8 +79,8 @@ internal class NativeOnboardingAccessibility(
     private fun isSemantic(view: View): Boolean = view === pager() ||
         view is NativeVerticalViewport || view is NativeMergedRowAccessibilityHost ||
         view is ParagraphView ||
-        view is SilenceCurveView || view is SettingsCalibrationProgressView ||
-        view.parent is CompressionSliderView ||
+        view is SilenceCurveView || view is NativeDeterminateLinearProgress ||
+        view.parent is NativeDiscreteSliderView ||
         (view is OnboardingIconView && !view.contentDescription.isNullOrEmpty())
 
     /** Existing row returns its exact marker/title/body/status order, excluding its fake role. */
@@ -98,7 +100,7 @@ internal class NativeOnboardingAccessibility(
 
     private fun localBounds(view: View) = when (view) {
         is ParagraphView -> view.originalAccessibilityBoundsInView()
-        is SettingsCalibrationProgressView -> view.semanticsBoundsInView()
+        is NativeDeterminateLinearProgress -> view.semanticsBoundsInView()
         else -> ComposeRect(0f, 0f, view.width.toFloat(), view.height.toFloat())
     }
 

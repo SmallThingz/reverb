@@ -103,8 +103,8 @@ internal class NativeCaptureUiOwner(
     private var selectedBuffer = restoredSelection
     private var visualizerVisible = visualizerVisible
     private var skipSilenceEnabled = false
-    private val oneShotBlobController = AudioBlobController()
-    private val loopingBlobController = AudioBlobController()
+    private val oneShotBlobController = NativeAudioBlobController()
+    private val loopingBlobController = NativeAudioBlobController()
     private val latestBlobActivity = FloatArray(2)
     private var pendingClearBuffer: BufferSlot? = null
     private var activeClearOperationId: Long? = null

@@ -3,16 +3,15 @@ package app.smallthingz.reverb.nativeui
 import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.text.view.ParagraphView
 import android.content.Context
+import android.content.res.Configuration
+import android.os.LocaleList
 import android.view.View
 import android.view.ViewGroup
 import smallthingz.ui.components.NativeChoice
-import smallthingz.ui.components.NativeSegmentedControl
-import smallthingz.ui.text.font.FontWeight
-import smallthingz.ui.unit.sp
+import smallthingz.ui.components.NativeLabeledSegmentedLayout
 import app.smallthingz.reverb.R
 import app.smallthingz.reverb.RetentionMode
-import kotlin.math.max
-import kotlin.math.min
+import smallthingz.ui.R as NativeUiR
 import kotlin.math.roundToInt
 
 /** Released LazyColumn item identities; retained state belongs to the item, never its current index. */
@@ -40,24 +39,26 @@ internal class SettingsRetentionSection(
     oneShotValue:View,
     loopingValue:View,
 ):ViewGroup(context),AutoCloseable {
+    private val sectionLayout = environment.appearance.settingsSelectors.retentionSection
     private val title=settingsSectionTitle(context,R.string.retention_mode_title,environment)
     private val modeValues=mapOf("time" to RetentionMode.TIME,"size" to RetentionMode.SIZE)
-    private val modeOptions=listOf(NativeChoice("time",context.getString(R.string.retention_time_label)),
-        NativeChoice("size",context.getString(R.string.retention_size_mode_label)))
-    private val modes=NativeSegmentedControl(context,segmentedPalette(environment),ReverbSegmentedPresentation(context),
-        environment.textDensity.density,inputAllowed={settingsInputAllowed(inputRoot)}).apply {
+    private var selectedMode=mode
+    private var optionLocales:LocaleList?=null
+    private var modeOptions=emptyList<NativeChoice>()
+    private val modes=environment.appearance.settingsSelectors.createSegmentedControl(
+        context, segmentedPalette(environment), environment.textDensity.density,
+        inputAllowed={settingsInputAllowed(inputRoot)}, onPaintedSurfaceChanged=::invalidateSettingsTextContrast,
+    ).apply {
         onSelectionRequest={id->modeValues[id]?.let {onMode(it);true}?:false}
     }
-    private val surface=NativeGroupLayout(context,23f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
-    private val body=RetentionBody(context,oneShotValue,loopingValue)
-    private val error=environment.paragraph(context,"",ReverbTextRole.BODY_SMALL,environment.palette.error)
-    private var headerHeight=0
+    private val fields = environment.appearance.pairedFields
+    private val error=environment.paragraph(context,"",ReverbTextRole.BODY_SMALL,environment.palette.error).apply { visibility=GONE }
+    private val body=fields.createFields(context,oneShotValue,loopingValue,error,environment.textDensity.density)
+    private val surface=fields.createSurface(context,body,::invalidateSettingsTextContrast)
+    private val header = NativeLabeledSegmentedLayout(title, modes)
     init {
         importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO
-        error.visibility=GONE
-        body.addView(oneShotValue);body.addView(loopingValue);body.addView(error)
-        surface.addRow(body,NativeGroupLayout.LayoutParams(-1,-2))
-        surface.setPalette(environment.palette.field,environment.palette.border)
+        fields.bindSurface(surface,environment.palette)
         addView(title);addView(modes);addView(surface)
         bindMode(mode,environment)
     }
@@ -65,54 +66,43 @@ internal class SettingsRetentionSection(
         environment=next;bindSectionTitle(title,next);bindMode(mode,next)
         error.setText(message.orEmpty());error.visibility=if(message==null)GONE else VISIBLE
         next.bindParagraphStyle(error,ReverbTextRole.BODY_SMALL,next.palette.error)
-        surface.setPalette(next.palette.field,next.palette.border);requestLayout()
+        body.density=next.textDensity.density
+        fields.bindSurface(surface,next.palette);requestLayout()
     }
     override fun onMeasure(w:Int,h:Int) {
         val width=MeasureSpec.getSize(w)
-        val inner=(width-2*dp(16)).coerceAtLeast(0)
-        title.measure(atMost(inner),unspecified())
-        modes.measure(exact(min(dp(126),(inner-title.measuredWidth).coerceAtLeast(0))),unspecified())
-        headerHeight=max(title.measuredHeight,modes.measuredHeight)
+        val inner=(width-2*dp(sectionLayout.sideInsetDp)).coerceAtLeast(0)
+        header.measure(inner, inlineGap = dp(sectionLayout.inlineGapDp), stackedGap = dp(sectionLayout.stackedGapDp),
+            preferredInlineWidth = dp(sectionLayout.preferredInlineWidthDp))
         surface.measure(exact(inner),unspecified())
-        // The trailing12dp Spacer belongs to the same released Lazy item.
-        setMeasuredDimension(resolveSize(width,w),resolveSize(headerHeight+dp(14)+surface.measuredHeight+dp(12),h))
+        // The trailing inset belongs to the same released Lazy item.
+        val height = header.measuredHeight + dp(sectionLayout.bodyGapDp) + surface.measuredHeight +
+            dp(sectionLayout.trailingInsetDp)
+        setMeasuredDimension(resolveSize(width,w),resolveSize(height,h))
     }
     override fun onLayout(changed:Boolean,l:Int,t:Int,r:Int,b:Int) {
-        placeLogical(title,dp(16),((headerHeight-title.measuredHeight)/2f).roundToInt())
-        placeLogical(modes,width-dp(16)-modes.measuredWidth,((headerHeight-modes.measuredHeight)/2f).roundToInt())
-        surface.layout(dp(16),headerHeight+dp(14),width-dp(16),headerHeight+dp(14)+surface.measuredHeight)
+        val inset = dp(sectionLayout.sideInsetDp)
+        header.layout(width, inset, 0, layoutDirection == LAYOUT_DIRECTION_RTL)
+        val top = header.measuredHeight + dp(sectionLayout.bodyGapDp)
+        surface.layout(inset,top,width-inset,top+surface.measuredHeight)
     }
-    private fun bindMode(mode:RetentionMode,next:ReverbViewEnvironment) = modes.bind(modeOptions,
-        modeValues.entries.single {it.value==mode}.key,segmentedPalette(next),next.textDensity.density)
+    override fun onConfigurationChanged(newConfig:Configuration) {
+        super.onConfigurationChanged(newConfig)
+        if(optionLocales!=newConfig.locales)bindMode(selectedMode,environment)
+    }
+    private fun bindMode(mode:RetentionMode,next:ReverbViewEnvironment) {
+        selectedMode=mode
+        val locales=resources.configuration.locales
+        if(optionLocales!=locales) {
+            modeOptions=listOf(NativeChoice("time",context.getString(NativeUiR.string.native_settings_time_option)),
+                NativeChoice("size",context.getString(NativeUiR.string.native_settings_size_option)))
+            title.setText(context.getString(R.string.retention_mode_title))
+            optionLocales=locales
+        }
+        modes.bind(modeOptions,modeValues.entries.single {it.value==mode}.key,segmentedPalette(next),next.textDensity.density)
+    }
     override fun close()=modes.close()
     private fun dp(v:Int)=(v*environment.textDensity.density).roundToInt()
-    private inner class RetentionBody(context:Context,val first:View,val second:View):ViewGroup(context) {
-        private var rowHeight=0
-        private var firstWidth=0
-        private var secondWidth=0
-        private var gap=0
-        init {importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO}
-        override fun onMeasure(w:Int,h:Int) {
-            val width=MeasureSpec.getSize(w)
-            val inner=(width-2*dp(20)).coerceAtLeast(0)
-            gap=min(dp(24),inner)
-            val remaining=inner-gap
-            val unit=(remaining/2f).roundToInt()
-            firstWidth=unit+(remaining-unit*2).coerceIn(-1,1)
-            secondWidth=remaining-firstWidth
-            first.measure(exact(firstWidth),unspecified())
-            second.measure(exact(secondWidth),unspecified())
-            rowHeight=max(first.measuredHeight,second.measuredHeight)
-            if(error.visibility!=GONE)error.measure(atMost(inner),unspecified())
-            setMeasuredDimension(width,2*dp(20)+rowHeight+
-                if(error.visibility!=GONE)dp(12)+error.measuredHeight else 0)
-        }
-        override fun onLayout(changed:Boolean,l:Int,t:Int,r:Int,b:Int) {
-            placeLogical(first,dp(20),dp(20))
-            placeLogical(second,dp(20)+firstWidth+gap,dp(20))
-            if(error.visibility!=GONE)placeLogical(error,dp(20),dp(20)+rowHeight+dp(12))
-        }
-    }
 }
 
 /** The source audio group is shared by all five choices and all three expanding feature rows. */
@@ -125,8 +115,12 @@ internal class SettingsRecordingSection(
     notificationSave:View,
     private var environment:ReverbViewEnvironment,
 ):ViewGroup(context) {
+    private val sectionLayout = environment.appearance.settingsSelectors.recordingSection
     private val title=settingsSectionTitle(context,R.string.recording_settings_title,environment)
-    private val warning=SettingsInsetView(context,flacWarning,14,8,14,8,environment,fillContentWidth=false)
+    private val warning=SettingsInsetView(context,flacWarning,
+        sectionLayout.warningHorizontalInsetDp,sectionLayout.warningVerticalInsetDp,
+        sectionLayout.warningHorizontalInsetDp,sectionLayout.warningVerticalInsetDp,
+        environment,fillContentWidth=false)
     init {
         importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO
         addView(title);addView(choices.view)
@@ -141,47 +135,29 @@ internal class SettingsRecordingSection(
         warning.setEnvironment(next);requestLayout()
     }
     override fun onMeasure(w:Int,h:Int) {
-        val width=MeasureSpec.getSize(w);val inner=(width-2*dp(16)).coerceAtLeast(0)
+        val width=MeasureSpec.getSize(w);val inner=(width-2*dp(sectionLayout.sideInsetDp)).coerceAtLeast(0)
         title.measure(atMost(inner),unspecified());choices.view.measure(exact(inner),unspecified())
-        setMeasuredDimension(resolveSize(width,w),resolveSize(2*dp(12)+title.measuredHeight+choices.view.measuredHeight,h))
+        val height = dp(sectionLayout.titleTopInsetDp) + title.measuredHeight + dp(sectionLayout.bodyGapDp) +
+            choices.view.measuredHeight
+        setMeasuredDimension(resolveSize(width,w),resolveSize(height,h))
     }
     override fun onLayout(changed:Boolean,l:Int,t:Int,r:Int,b:Int) {
-        placeLogical(title,dp(16),dp(12))
-        val y=2*dp(12)+title.measuredHeight
-        choices.view.layout(dp(16),y,width-dp(16),y+choices.view.measuredHeight)
+        val inset = dp(sectionLayout.sideInsetDp)
+        val titleTop = dp(sectionLayout.titleTopInsetDp)
+        placeLogical(title,inset,titleTop)
+        val y = titleTop + title.measuredHeight + dp(sectionLayout.bodyGapDp)
+        choices.view.layout(inset,y,width-inset,y+choices.view.measuredHeight)
     }
     private fun dp(v:Int)=(v*environment.textDensity.density).roundToInt()
 }
 
-/** A concrete padding modifier for a single section leaf; edges round independently as upstream. */
-internal class SettingsInsetView(
-    context:Context,
-    val content:View,
-    private val startDp:Int,
-    private val topDp:Int,
-    private val endDp:Int,
-    private val bottomDp:Int,
-    private var environment:ReverbViewEnvironment,
-    private val fillContentWidth:Boolean=true,
-):ViewGroup(context) {
-    init {importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO;addView(content)}
-    fun setEnvironment(next:ReverbViewEnvironment) {environment=next;requestLayout()}
-    override fun onMeasure(w:Int,h:Int) {
-        val horizontal=dp(startDp)+dp(endDp);val vertical=dp(topDp)+dp(bottomDp)
-        val childW=getChildMeasureSpec(w,horizontal,if(fillContentWidth)LayoutParams.MATCH_PARENT else LayoutParams.WRAP_CONTENT)
-        val childH=getChildMeasureSpec(h,vertical,LayoutParams.WRAP_CONTENT)
-        content.measure(childW,childH)
-        setMeasuredDimension(resolveSize(content.measuredWidth+horizontal,w),resolveSize(content.measuredHeight+vertical,h))
-    }
-    override fun onLayout(changed:Boolean,l:Int,t:Int,r:Int,b:Int) {placeLogical(content,dp(startDp),dp(topDp))}
-    private fun dp(v:Int)=(v*environment.textDensity.density).roundToInt()
-}
+internal typealias SettingsInsetView = smallthingz.ui.components.NativeSingleChildInset
 
 internal fun settingsSectionTitle(context:Context,stringRes:Int,environment:ReverbViewEnvironment):ParagraphView =
     environment.paragraph(context,context.getString(stringRes),ReverbTextRole.BODY_LARGE,environment.palette.onSurface)
         .also { bindSectionTitle(it,environment) }
 internal fun bindSectionTitle(view:ParagraphView,environment:ReverbViewEnvironment) {
-    view.setTypography(settingsSectionTitleStyle,
+    view.setTypography(environment.appearance.settingsSelectors.sectionTitle,
         environment.textDensity,environment.sharedFontResolver)
     view.animateTextColor(environment.palette.onSurface)
 }
@@ -189,6 +165,3 @@ private fun ViewGroup.placeLogical(child:View,start:Int,top:Int) {
     val x=if(layoutDirection==View.LAYOUT_DIRECTION_RTL)width-start-child.measuredWidth else start
     child.layout(x,top,x+child.measuredWidth,top+child.measuredHeight)
 }
-
-private val settingsSectionTitleStyle = reverbDefaultTextStyle().copy(
-    fontSize=19.sp,lineHeight=26.sp,fontWeight=FontWeight.Medium)

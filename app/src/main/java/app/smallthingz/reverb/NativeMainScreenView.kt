@@ -1,6 +1,7 @@
 package app.smallthingz.reverb
 
 import smallthingz.ui.input.phase.NativePointerLayerShape
+import smallthingz.ui.components.NativeCaptureControlSurface
 import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.scroll.NativeVerticalNestedHost
 import smallthingz.ui.scroll.NativeVerticalScrollSource
@@ -529,10 +530,12 @@ internal class NativeMainScreenView private constructor(
 
     private fun bindAbout() {
         if (navigation.showAboutDialog) {
+            val typography = environment.appearance.typography
+            val panel = environment.appearance.modals.floating
             val appearance = AboutContentAppearance(environment.palette,
-                ReverbParagraphStyles[ReverbTextRole.HEADLINE_SMALL], ReverbParagraphStyles[ReverbTextRole.TITLE_SMALL],
-                ReverbParagraphStyles[ReverbTextRole.BODY_MEDIUM], ReverbParagraphStyles[ReverbTextRole.BODY_SMALL],
-                environment.textDensity, environment.sharedFontResolver)
+                typography[panel.headlineRole], typography[panel.titleRole],
+                typography[panel.summaryRole], typography[panel.detailRole],
+                environment.textDensity, environment.sharedFontResolver, environment.appearance)
             val dismiss = { navigate { closeAbout() } }
             val current = about
             if (current == null) {
@@ -733,7 +736,7 @@ internal class NativeMainScreenView private constructor(
         libraryToolbar?.sourceClip(view)?.let { return it }
         if (clipLeases.containsKey(view) ||
             (view.parent is NativeGroupLayout && (view.parent as NativeGroupLayout).pointerContent === view) ||
-            view is ReverbHomeControlSurface) return rectangle(view)
+            view is NativeCaptureControlSurface) return rectangle(view)
         settings?.let { if (belongsTo(view, it)) return it.sourceClip(view) }
         library?.let { if (belongsTo(view, it)) return it.sourceClip(view) }
         return NativeTextSemanticsClip.Unclipped

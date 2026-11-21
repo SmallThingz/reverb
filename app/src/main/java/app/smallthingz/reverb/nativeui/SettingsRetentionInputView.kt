@@ -17,31 +17,19 @@ import smallthingz.ui.components.input.NativeQueuedInputConnection
 import smallthingz.ui.animation.view.ViewColorTransition
 
 import android.content.Context
-import android.graphics.Canvas
-import android.graphics.Paint
 import android.graphics.Typeface
-import android.os.Build
 import android.text.InputType
-import android.text.Spanned
-import android.text.style.LineHeightSpan
-import android.util.TypedValue
+import smallthingz.ui.text.RetentionLineHeightSpan
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
-import smallthingz.ui.graphics.Color
 import smallthingz.ui.text.Paragraph
 import smallthingz.ui.text.TextStyle
-import smallthingz.ui.text.font.FontStyle
-import smallthingz.ui.text.font.FontSynthesis
-import smallthingz.ui.text.font.FontWeight
 import smallthingz.ui.text.resolveDefaults
-import smallthingz.ui.text.style.TextOverflow
-import smallthingz.ui.unit.Constraints
+import smallthingz.ui.text.resolveEditorMetrics
 import smallthingz.ui.unit.LayoutDirection
-import smallthingz.ui.unit.sp
 import androidx.core.view.inputmethod.EditorInfoCompat
 import app.smallthingz.reverb.RetentionMode
-import kotlin.math.ceil
 
 /**
  * ISOLATED CANDIDATE, not a qualified replacement or a production route.
@@ -57,19 +45,15 @@ import kotlin.math.ceil
  * hidden by baseline nudges. If native Editor cannot reproduce that geometry, replace its drawing
  * and selection ownership explicitly before any production integration.
  */
-internal class SettingsRetentionInputView private constructor(
+internal class SettingsRetentionInputView(
     context: Context,
     initialEnvironment: ReverbViewEnvironment,
-    private val legacyCursor: LegacyNativeCursorBinding?,
-) : ReverbEditableInputView(context, legacyCursor) {
-    constructor(context: Context, initialEnvironment: ReverbViewEnvironment) : this(
-        context, initialEnvironment, legacyNativeCursorBinding(context,
-            2f * initialEnvironment.textDensity.density, initialEnvironment.palette.primary))
+) : ReverbEditableInputView(context,
+    initialEnvironment.appearance.editorVisuals.cursorWidthDp * initialEnvironment.textDensity.density,
+    initialEnvironment.palette.primary) {
     private var environment = initialEnvironment
     private val colorMotion:ViewColorTransition by lazy {ViewColorTransition(this,
         intArrayOf(initialEnvironment.palette.ink,initialEnvironment.palette.primary),::applyColors)}
-    protected override val cursorDrawable = legacyCursor?.cursor ?: NativeEditableCursorDrawable(
-        2f * initialEnvironment.textDensity.density, initialEnvironment.palette.primary)
     protected override var initialized = false
         private set
     private var mode = RetentionMode.TIME
@@ -139,10 +123,7 @@ internal class SettingsRetentionInputView private constructor(
         editing.releaseCallbacks()
     }
 
-    override fun onDraw(canvas: Canvas) {
-        publishTextInk()
-        super.onDraw(canvas)
-    }
+    override fun beforeEditorTextDraw() = publishTextInk()
 
     private fun applyImeHints() {
         val hints = retentionImeContract(mode)
@@ -171,13 +152,8 @@ internal class SettingsRetentionInputView private constructor(
         }
     }
 
-    private fun currentStyle(): TextStyle = ReverbParagraphStyles[ReverbTextRole.BODY_LARGE].copy(
-        color = Color(environment.palette.ink),
-        fontSize = 34.sp,
-        lineHeight = 40.sp,
-        fontWeight = FontWeight.Normal,
-        letterSpacing = (-1.1).sp,
-    )
+    private fun currentStyle(): TextStyle = environment.appearance.editorVisuals.largeValueStyle(
+        environment.appearance.typography[ReverbTextRole.BODY_LARGE], environment.palette.ink)
 
     private fun direction(): LayoutDirection =
         if (layoutDirection == LAYOUT_DIRECTION_RTL) LayoutDirection.Rtl else LayoutDirection.Ltr
@@ -189,45 +165,24 @@ internal class SettingsRetentionInputView private constructor(
     private fun applyColors() {
         publishTextInk()
         val primary=colorMotion.color(1)
-        highlightColor=(primary and 0x00ffffff) or (0x66 shl 24)
-        if(Build.VERSION.SDK_INT>=29)cursorDrawable.bind(2f*environment.textDensity.density,primary)
-        else legacyCursor?.bind(2f*environment.textDensity.density,primary)
+        val recipe = environment.appearance.editorVisuals
+        bindCaret(recipe.cursorWidthDp * environment.textDensity.density, primary, recipe.selectionColor(primary))
     }
 
     private fun applyTypography() {
         val style = currentStyle()
         val resolved = resolveDefaults(style, direction())
-        val face = environment.sharedFontResolver.resolve(
-            resolved.fontFamily, resolved.fontWeight ?: FontWeight.Normal,
-            resolved.fontStyle ?: FontStyle.Normal, resolved.fontSynthesis ?: FontSynthesis.All,
-        ).value as Typeface
+        val face = editorTypeface(resolved, environment.sharedFontResolver)
         if (appliedEnvironment === environment && appliedTypeface === face) return
         appliedEnvironment = environment
         appliedTypeface = face
-        val scale = object : ReverbTextScale {
-            override val fontScale = environment.textDensity.fontScale
-            override fun spToPixels(sp: Float) = with(environment.textDensity) { sp.sp.toPx() }
-            override fun pixelsToSp(px: Float) = with(environment.textDensity) { px.toSp().value }
-        }
-        val metrics = ReverbTextStyle(34f, 40f, 400, -1.1f).resolveMetrics(scale)
-        typeface = face
-        setTextSize(TypedValue.COMPLEX_UNIT_PX, metrics.fontSizePx)
-        letterSpacing = metrics.letterSpacingEm
-        setLineSpacing(0f, 1f)
+        val metrics = environment.appearance.editorVisuals.largeValueText.resolveEditorMetrics(environment.textDensity)
+        applyEditorTypography(face, metrics)
         lineHeightSpan = RetentionLineHeightSpan(metrics.lineHeightPx)
-        if (Build.VERSION.SDK_INT >= 29) {
-            textCursorDrawable = cursorDrawable
-        }
+        installCaret()
         colorMotion.retarget(environment.palette.ink,environment.palette.primary)
         applyColors()
-        minimumParagraph = Paragraph(
-            text = "HHHHHHHHHH", style = resolved, spanStyles = emptyList(),
-            maxLines = 1, overflow = TextOverflow.Clip,
-            density = environment.textDensity, fontFamilyResolver = environment.sharedFontResolver,
-            constraints = Constraints(),
-        )
-        minimumWidth = ceil(checkNotNull(minimumParagraph).minIntrinsicWidth).toInt()
-        minimumHeight = ceil(checkNotNull(minimumParagraph).height).toInt()
+        minimumParagraph = applyEditorMinimum(resolved, environment.textDensity, environment.sharedFontResolver)
         installLineHeightSpan()
         requestLayout()
         invalidate()
@@ -235,11 +190,7 @@ internal class SettingsRetentionInputView private constructor(
 
     private fun installLineHeightSpan() {
         val value = editableText ?: return
-        value.getSpans(0, value.length, RetentionLineHeightSpan::class.java).forEach(value::removeSpan)
-        lineHeightSpan?.let { span ->
-            span.reset(value.length, value.endsWith('\n'))
-            value.setSpan(span, 0, value.length, Spanned.SPAN_INCLUSIVE_INCLUSIVE)
-        }
+        lineHeightSpan?.install(value)
     }
 
     override fun onRtlPropertiesChanged(layoutDirection: Int) {
@@ -272,24 +223,4 @@ internal fun retentionImeContract(mode: RetentionMode): RetentionImeContract {
         EditorInfo.IME_ACTION_DONE or EditorInfo.IME_FLAG_NO_FULLSCREEN or
             if (ascii) EditorInfo.IME_FLAG_FORCE_ASCII else 0,
     )
-}
-
-private class RetentionLineHeightSpan(private val heightPx: Float) : LineHeightSpan {
-    private var endIndex = 0
-    private var metrics: ReverbLineHeightMetrics? = null
-    fun reset(length: Int, trailingNewline: Boolean) {
-        endIndex = if (length == 0 || trailingNewline) length + 1 else length
-        metrics = null
-    }
-    override fun chooseHeight(text: CharSequence, start: Int, end: Int,
-                              spanstartv: Int, v: Int, fm: Paint.FontMetricsInt) {
-        if (fm.descent - fm.ascent <= 0) return
-        val first = start == 0
-        val last = end == endIndex
-        if (first && last) return
-        val value = metrics ?: reverbLineHeightMetrics(fm.ascent, fm.descent, heightPx,
-            ReverbLineHeightAlignment.PROPORTIONAL, true).also { metrics = it }
-        fm.ascent = if (first) value.firstAscent else value.ascent
-        fm.descent = if (last) value.lastDescent else value.descent
-    }
 }

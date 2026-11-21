@@ -1,5 +1,6 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.input.phase.NativeNestedPointerRoot
 import smallthingz.ui.input.phase.NativeClickPhaseEndpoint
 import smallthingz.ui.input.phase.NativeClickPhaseNode
 import smallthingz.ui.input.phase.NativeDragPointerEvent
@@ -58,7 +59,7 @@ internal fun nativeHomeSwipeSurface(
         override fun screenToLocal(screen: Offset) = coordinates.coordinates(root).local(screen)
         override fun withinLayerBounds(local: Offset) = true
     }
-    root = object : NativeHomePointerRoot(context, coordinates, hitLayout) {
+    root = object : NativeNestedPointerRoot(context, coordinates, hitLayout) {
         init {
             clipChildren = false
             clipToPadding = false

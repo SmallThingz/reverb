@@ -31,7 +31,7 @@ internal class NativeIncidentMenuHost(
         host.update(request.identity, request.anchor, actions(request), environment.palette.surfaceContainerHigh)
     }
     fun bindPalette(palette: ReverbPalette) {
-        environment = ReverbViewEnvironment(environment.textDensity, environment.sharedFontResolver, palette)
+        environment = environment.withPalette(palette)
         host.bindPalette(palette)
         requests.values.toList().forEach(::update)
     }

@@ -1,6 +1,8 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeDetailCardStyle
 import smallthingz.ui.components.NativeGroupLayout
+import smallthingz.ui.components.NativePermissionRow
 import android.content.Context
 import android.view.View
 import smallthingz.ui.text.font.FontFamily
@@ -51,8 +53,9 @@ internal class OnboardingPermissionGroup(
     private val density: Density,
     private val resolver: FontFamily.Resolver,
     private val inputRoot: () -> View?,
+    private val cardStyle: NativeDetailCardStyle,
 ) {
-    val view = NativeGroupLayout(context, cornerRadiusDp = 20f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
+    val view = cardStyle.createGroup(context, ::invalidateSettingsTextContrast)
     private val rows = linkedMapOf<OnboardingPermission, PermissionRow>()
     private var rowOrder = emptyList<OnboardingPermission>()
     private var owner: ActionOwner? = null
@@ -107,17 +110,21 @@ internal class OnboardingPermissionGroup(
         }
         states.forEach { state ->
             rows.getOrPut(state.kind) {
-                PermissionRow(context, typography, density, resolver, inputRoot, state.marker, state.icon, ::request)
+                PermissionRow(context, typography, density, resolver, inputRoot, cardStyle, state.marker,
+                    state.icon, state.kind, ::request)
             }.bind(state, palette)
         }
         val desiredOrder = states.map { it.kind }
         val membershipChanged = rowOrder != desiredOrder
         if (membershipChanged) {
-            rows.values.forEach(view::removeRow)
+            // Surviving permissions retain their source order, focus and accessibility identity.
             desiredOrder.forEachIndexed { index, kind ->
-                view.addRow(checkNotNull(rows[kind]), NativeGroupLayout.LayoutParams(-1, -2).apply {
-                    dividerTop = index > 0
-                })
+                val row = checkNotNull(rows[kind])
+                if (row.parent == null) {
+                    view.addRow(index, row, NativeGroupLayout.LayoutParams(-1, -2).apply {
+                        dividerTop = index > 0
+                    })
+                }
             }
             rowOrder = desiredOrder
         }
@@ -152,38 +159,34 @@ private class PermissionRow(
     density: Density,
     resolver: FontFamily.Resolver,
     inputRoot: () -> View?,
-    private val markerText: String,
+    cardStyle: NativeDetailCardStyle,
+    markerText: String,
     icon: ReverbIcon?,
+    kind: OnboardingPermission,
     request: (OnboardingPermission) -> Unit,
-) : OnboardingCardView(context, typography, density, resolver,
-    OnboardingMarker(context, typography.titleMedium, density, resolver, icon = icon, marker = markerText),
-    OnboardingIconView(context, ReverbIcon.Unchecked, 0), 24, 24, inputRoot) {
-    private var state: PermissionRowState? = null
-    private val allowLabel = context.getString(R.string.allow)
-    override val accessibilityClickLabel: CharSequence get() =
-        when (state?.kind) {
-            OnboardingPermission.ALL_FILES -> context.getString(R.string.all_files_access_settings)
-            OnboardingPermission.OVERLAY -> context.getString(R.string.settings_restart_access)
-            else -> allowLabel
-        }
-    val canRequestNow: Boolean get() = state?.let { it.canRequest && !it.allowed } == true
-
-    init { onActivate = { state?.takeIf { canRequestNow }?.let { request(it.kind) } } }
+) : NativePermissionRow(context, typography.titleMedium, typography.bodyMedium, density, resolver,
+    createOnboardingMarker(context, typography.titleMedium, density, resolver, cardStyle, icon, markerText),
+    OnboardingIconView(context, ReverbIcon.Unchecked, 0), inputRoot = inputRoot, style = cardStyle,
+    standaloneAccessibility = false) {
+    private val requestClick: () -> Unit = { request(kind) }
 
     fun bind(value: PermissionRowState, palette: ReverbPalette) {
-        state = value
+        val requestLabel = context.getString(when (value.kind) {
+            OnboardingPermission.ALL_FILES -> R.string.all_files_access_settings
+            OnboardingPermission.OVERLAY -> R.string.settings_restart_access
+            else -> R.string.allow
+        })
         (trailing as OnboardingIconView).bind(
             if (value.kind == OnboardingPermission.ALL_FILES || value.kind == OnboardingPermission.OVERLAY && !value.allowed) ReverbIcon.Settings
             else if (value.allowed) ReverbIcon.Checked else ReverbIcon.Unchecked,
             if (value.allowed) palette.primary else palette.onSurfaceVariant,
         )
-        bindCard(value.title, value.body, canRequestNow, palette)
-        trailing.contentDescription = when {
-            value.kind == OnboardingPermission.ALL_FILES -> context.getString(R.string.all_files_access_settings)
-            value.kind == OnboardingPermission.OVERLAY && !value.allowed -> context.getString(R.string.settings_restart_access)
-            else -> context.getString(if (value.allowed) R.string.onboarding_allowed else R.string.allow)
-        }
-        trailing.importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
+        trailing.contentDescription = if (value.allowed) null else requestLabel
+        trailing.importantForAccessibility = if (value.allowed) IMPORTANT_FOR_ACCESSIBILITY_NO
+            else IMPORTANT_FOR_ACCESSIBILITY_YES
         trailing.isScreenReaderFocusable = false
+        bindPermission(value.title, value.body, value.allowed,
+            if (value.allowed) context.getString(R.string.onboarding_allowed) else null, palette,
+            requestEnabled = value.canRequest, requestLabel = requestLabel, onRequest = requestClick)
     }
 }

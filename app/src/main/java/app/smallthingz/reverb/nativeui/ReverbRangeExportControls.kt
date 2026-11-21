@@ -2,14 +2,12 @@ package app.smallthingz.reverb.nativeui
 
 import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.components.NativeButtonInputPolicy
-import smallthingz.ui.components.NativeMaterialButtonStyle
 import smallthingz.ui.components.NativeMaterialButtonView
 import android.content.Context
 import android.view.View
 import android.view.ViewGroup
 import smallthingz.ui.runtime.MonotonicFrameClock
 import smallthingz.ui.MotionDurationScale
-import smallthingz.ui.text.font.FontWeight
 import app.smallthingz.reverb.RangeExportEditorState
 import app.smallthingz.reverb.ReverbService
 import app.smallthingz.reverb.R
@@ -32,12 +30,16 @@ internal class ReverbRangeExportControls(
     scope: CoroutineScope,
 ) : ViewGroup(context) {
     private var environment = initialEnvironment
-    private val surface = NativeGroupLayout(context, 28f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
+    private val surfaceRecipe = initialEnvironment.appearance.groupSurfaces.rangeControls
+    private val surface = surfaceRecipe.create(context, ::invalidateSettingsTextContrast)
     private val row = ControlsRow(context)
     val close = ReverbStandardIconButtonView(context, initialEnvironment, inputRoot, actionSizeDp = 50f)
-    private val pillSurface = NativeGroupLayout(context, 16f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
+    private val pillRecipe = initialEnvironment.appearance.groupSurfaces.rangeBufferPill
+    private val pillSurface = pillRecipe.create(context, ::invalidateSettingsTextContrast)
     private val pill = BufferPill(context, initialEnvironment)
-    private val exportSurface = NativeGroupLayout(context, 20f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
+    private val exportRecipe = initialEnvironment.appearance.buttons.rangeExport
+    private val exportSurface = NativeGroupLayout(context, checkNotNull(exportRecipe.button.surface.radiusDp),
+        onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
     val exportAction = ExportContent(context, initialEnvironment, inputRoot, scope)
     private var onCancel: () -> Unit = {}
     private var onExport: () -> Unit = {}
@@ -75,14 +77,13 @@ internal class ReverbRangeExportControls(
             previous.enabled == enabled && previous.buffer == selectedBuffer && previous.canClose == canClose) return
         // Waveform frames keep live callbacks above without allocating or rebinding visual state.
         visualKey = VisualKey(value, loading, enabled, selectedBuffer, canClose)
-        surface.setPalette(palette.field, palette.border)
+        surfaceRecipe.bind(surface, palette)
         close.bind(value, ReverbIcon.Close, context.getString(R.string.close), canClose,
             palette.ink, palette.onSurface, { this.onCancel() })
-        pillSurface.setPalette(reverbColorWithAlpha(palette.primaryContainer, .32f), 0)
+        pillRecipe.bind(pillSurface, palette)
         pill.bind(value, selectedBuffer)
-        exportSurface.setPalette(if (enabled) palette.primary else palette.raised, 0)
-        exportAction.bind(value, loading, enabled,
-            if (enabled) palette.onPrimary else palette.muted) export@ {
+        exportRecipe.bindSurroundingSurface(exportSurface, palette.buttonPalette, enabled)
+        exportAction.bind(value, loading, enabled) export@ {
             // Released onClick deliberately reads the immediate model again: wheel ownership can
             // begin after the enabled UI frame. Backend/config admission remains with its owner.
             val current = this.state ?: return@export
@@ -115,7 +116,8 @@ internal class ReverbRangeExportControls(
             close.measure(rangeControlExact(min(dp(50), innerW)), rangeControlExact(min(dp(50), innerH)))
             val firstGap = min(dp(4), max(0, innerW - close.measuredWidth))
             val remaining = max(0, innerW - close.measuredWidth - firstGap)
-            exportSurface.measure(rangeControlAtMost(remaining), rangeControlExact(min(dp(50), innerH)))
+            val exportHeight = dp(exportRecipe.surroundingHeightDp ?: exportRecipe.button.surface.minimumHeightDp)
+            exportSurface.measure(rangeControlAtMost(remaining), rangeControlExact(min(exportHeight, innerH)))
             val secondGap = min(dp(4), max(0, remaining - exportSurface.measuredWidth))
             val pillSpace = max(0, remaining - exportSurface.measuredWidth - secondGap)
             pillSurface.measure(rangeControlAtMost(pillSpace), rangeControlAtMost(innerH))
@@ -144,7 +146,10 @@ internal class ReverbRangeExportControls(
 
 private class BufferPill(context: Context, private var environment: ReverbViewEnvironment) : ViewGroup(context) {
     private val glyph = OnboardingIconView(context, ReverbIcon.OneShot, environment.palette.onPrimaryContainer)
-    val label = environment.paragraph(context, "", ReverbTextRole.LABEL_SMALL)
+    val label = environment.paragraph(context, "", ReverbTextRole.LABEL_SMALL).apply {
+        setTypography(environment.appearance.readoutTypography.rangeBufferLabel,
+            environment.textDensity, environment.sharedFontResolver)
+    }
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         addView(glyph); addView(label); label.setTextLayout(maxLines = 1)
@@ -155,7 +160,7 @@ private class BufferPill(context: Context, private var environment: ReverbViewEn
         val color = value.palette.onPrimaryContainer
         glyph.bind(if (oneShot) ReverbIcon.OneShot else ReverbIcon.Looping, color)
         label.setText(context.getString(if (oneShot) R.string.buffer_one_shot else R.string.buffer_loop))
-        label.setTypography(rangeBufferLabelStyle,
+        label.setTypography(value.appearance.readoutTypography.rangeBufferLabel,
             value.textDensity, value.sharedFontResolver)
         label.animateTextColor(color); requestLayout()
     }
@@ -187,42 +192,40 @@ internal class ExportContent(
     initialEnvironment: ReverbViewEnvironment,
     inputRoot: () -> View?,
     private val scope: CoroutineScope,
-) : NativeMaterialButtonView(context, false, ReverbParagraphStyles[ReverbTextRole.LABEL_LARGE],
+) : NativeMaterialButtonView(context, initialEnvironment.appearance.buttons.rangeExport.button,
     initialEnvironment.textDensity, initialEnvironment.sharedFontResolver,
-    NativeMaterialButtonStyle(15, verticalPaddingDp = 0, minimumWidthDp = 48,
-        minimumHeightDp = 48, iconSizeDp = 20, radiusDp = 20f, alignContentStart = true),
     NativeButtonInputPolicy(inputRoot), {}) {
+    private val recipe = initialEnvironment.appearance.buttons.rangeExport
     private var loadingView: ReverbIncidentLoadingView? = null
     private var glyphDensity = Float.NaN
 
-    fun bind(value: ReverbViewEnvironment, loading: Boolean, enabled: Boolean, color: Int, action: () -> Unit) {
-        bindTypography(ReverbParagraphStyles[ReverbTextRole.LABEL_LARGE], value.textDensity, value.sharedFontResolver)
+    fun bind(value: ReverbViewEnvironment, loading: Boolean, enabled: Boolean, action: () -> Unit) {
+        val palette = value.palette.buttonPalette
+        bindTypography(value.textDensity, value.sharedFontResolver)
         if (loading) {
             setLeadingIcon(null)
             glyphDensity = Float.NaN
-            val indicator = loadingView ?: ReverbIncidentLoadingView(context, value.palette.primary,
+            val spinnerColor = recipe.progressColor(palette)
+            val indicator = loadingView ?: ReverbIncidentLoadingView(context, spinnerColor,
                 requireNotNull(scope.coroutineContext[MonotonicFrameClock]), scope,
                 { scope.coroutineContext[MotionDurationScale]?.scaleFactor ?: 1f }).also {
                 it.contentDescription = context.getString(R.string.preparing_audio_selection)
                 loadingView = it
                 setLeadingView(it, exposeToAccessibility = true)
             }
-            indicator.setColor(value.palette.primary)
+            indicator.setColor(spinnerColor)
         } else {
             loadingView = null
             setLeadingView(null)
             val density = value.textDensity.density
             if (glyphDensity != density) {
                 glyphDensity = density
-                setLeadingIcon(ReverbIconDrawable(ReverbIcon.Save, density, color))
+                setLeadingIcon(ReverbIconDrawable(ReverbIcon.Save, density, recipe.button.contentColor(palette, enabled)))
             }
         }
-        bind(context.getString(R.string.export), enabled, android.graphics.Color.TRANSPARENT,
-            color, action, if (enabled) value.palette.onPrimary else value.palette.onSurface)
+        bind(context.getString(R.string.export), enabled, palette, onClick = action)
     }
 }
 
 private fun rangeControlExact(size: Int) = View.MeasureSpec.makeMeasureSpec(size, View.MeasureSpec.EXACTLY)
 private fun rangeControlAtMost(size: Int) = View.MeasureSpec.makeMeasureSpec(size, View.MeasureSpec.AT_MOST)
-
-private val rangeBufferLabelStyle = ReverbParagraphStyles[ReverbTextRole.LABEL_SMALL].copy(fontWeight = FontWeight.SemiBold)

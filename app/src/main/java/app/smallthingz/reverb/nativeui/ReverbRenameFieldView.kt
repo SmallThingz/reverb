@@ -10,8 +10,6 @@ import smallthingz.ui.text.view.ParagraphView
 import android.content.Context
 import android.content.ClipboardManager
 import android.graphics.Canvas
-import android.graphics.Paint
-import android.graphics.RectF
 import android.os.Bundle
 import android.view.MotionEvent
 import android.view.View
@@ -20,32 +18,13 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityEvent
 import android.view.inputmethod.InputMethodManager
 import androidx.core.view.accessibility.AccessibilityNodeInfoCompat
-import smallthingz.ui.animation.core.Animatable as ValueAnimatable
-import smallthingz.ui.animation.core.VectorConverter
-import smallthingz.ui.animation.core.spring
-import smallthingz.ui.text.PlatformTextStyle
-import smallthingz.ui.text.TextStyle
-import smallthingz.ui.text.style.LineHeightStyle
-import smallthingz.ui.unit.dp
 import smallthingz.ui.input.NativeAndroidInteropHost
 import smallthingz.ui.input.phase.NativeAndroidInteropNode
 import smallthingz.ui.input.NativeAndroidInteropRequests
 import smallthingz.ui.input.phase.NativeViewPointerHitLayout
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.launch
-import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
-
-private val renameInheritedBody = TextStyle.Default.copy(
-    platformStyle=PlatformTextStyle(includeFontPadding=false),
-    lineHeightStyle=LineHeightStyle(LineHeightStyle.Alignment.Center,LineHeightStyle.Trim.None),
-).merge(ReverbParagraphStyles[ReverbTextRole.BODY_LARGE])
-
-private val renameSupportingStyle=renameInheritedBody.merge(ReverbParagraphStyles[ReverbTextRole.BODY_SMALL])
 
 /**
  * Concrete released Rename's no-label/single-line outlined field. This is a source candidate:
@@ -63,6 +42,7 @@ internal class ReverbRenameFieldView(
     onDone:()->Unit,
 ):ViewGroup(context),NativeAndroidInteropHost,AutoCloseable {
     private var environment=initialEnvironment
+    private val recipe = initialEnvironment.appearance.outlinedField
     private var error=initialError
     private var readName=readName
     private var onNameChanged=onNameChanged
@@ -73,16 +53,11 @@ internal class ReverbRenameFieldView(
     private var supportBoxHeight=0
     private var textTop=0
     private var supportTop=0
-    private val borderPaint=Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
-    private val borderBounds=RectF()
-    private val color=colorTransition(if(initialError!=null)environment.palette.error else environment.palette.outline) {invalidate()}
-    private val thickness=ValueAnimatable(1.dp,smallthingz.ui.unit.Dp.VectorConverter)
-    private val thicknessTargets=Channel<smallthingz.ui.unit.Dp>(Channel.CONFLATED)
-    private val ownerJob=Job(host.runtime.scope.coroutineContext[Job])
-    private val scope=CoroutineScope(host.runtime.scope.coroutineContext+ownerJob)
+    private val outline = recipe.createOutline(this, host.runtime.scope, environment.textDensity.density,
+        if(initialError!=null) environment.palette.error else environment.palette.outline)
     override val nativeInteropRequests=NativeAndroidInteropRequests()
     val editor=ReverbSingleLineInputView(context,environment,configuration())
-    private val support=ParagraphView(context,renameSupportingStyle,environment.textDensity,
+    private val support=ParagraphView(context,recipe.supportingTextStyle,environment.textDensity,
         environment.sharedFontResolver,environment.palette.error)
     private val interop=NativeAndroidInteropNode(this,nativeInteropRequests)
     val hitLayout:NativeViewPointerHitLayout=host.hit(this,listOf(interop))
@@ -106,13 +81,6 @@ internal class ReverbRenameFieldView(
             retarget()
             bindEditor()
         }
-        // Thickness keeps the source spring; color shares the same timing as the other controls.
-        scope.launch {
-            for(target in thicknessTargets) {
-                val next=thicknessTargets.tryReceive().getOrNull()?:target
-                launch {if(next!=thickness.targetValue)thickness.animateTo(next,spring(dampingRatio=.9f,stiffness=1400f)){invalidate()}}
-            }
-        }
         bind(initialName,initialError,readName,onNameChanged,onDone)
     }
 
@@ -130,7 +98,7 @@ internal class ReverbRenameFieldView(
         if(closed || environment===next)return
         val densityChanged=environment.textDensity!=next.textDensity
         environment=next
-        support.setTypography(renameSupportingStyle,next.textDensity,next.sharedFontResolver)
+        support.setTypography(recipe.supportingTextStyle,next.textDensity,next.sharedFontResolver)
         support.animateTextColor(next.palette.error)
         bindEditor()
         retarget()
@@ -138,41 +106,38 @@ internal class ReverbRenameFieldView(
     }
     private fun bindEditor()=editor.bind(readName(),configuration(),environment,readName,onNameChanged,onDone)
     private fun configuration()=NativeSingleLineInputConfiguration(
-        style=renameInheritedBody,textColor=environment.palette.onSurface,
+        style=recipe.textStyle,textColor=environment.palette.onSurface,
         cursorColor=if(error!=null)environment.palette.error else environment.palette.primary,
-        selectionBackgroundColor=reverbColorWithAlpha(environment.palette.primary,.4f),
+        selectionBackgroundColor=recipe.selectionColor(environment.palette.primary),
         selectionHandleColor=environment.palette.primary,ime=nativeRenameImeContract())
     private fun retarget() {
-        color.retarget(when {
-            error!=null->environment.palette.error
-            editor.isFocused->environment.palette.primary
-            else->environment.palette.outline
-        })
-        thicknessTargets.trySend(if(editor.isFocused)2.dp else 1.dp)
+        val palette = environment.palette
+        outline.bind(environment.textDensity.density, palette.outline, palette.primary, palette.error,
+            editor.isFocused, error!=null)
     }
 
     override fun onMeasure(w:Int,h:Int) {
         val width=MeasureSpec.getSize(w) // Caller is the source fillMaxWidth.
         val bounded=MeasureSpec.getMode(h)!=MeasureSpec.UNSPECIFIED
         val maximum=if(bounded)MeasureSpec.getSize(h)else Int.MAX_VALUE
-        val edge=dp(16f);val textWidth=max(0,width-edge-edge)
-        val supportPadding=dp(4f)
-        val intrinsicSupport=if(error==null)0 else max(dp(16f),
+        val edge=dp(recipe.paddingDp);val textWidth=max(0,width-edge-edge)
+        val supportPadding=dp(recipe.supportingPaddingDp)
+        val intrinsicSupport=if(error==null)0 else max(dp(recipe.minimumSupportingHeightDp),
             support.intrinsicTextHeight(textWidth)+supportPadding)
         val textMaximum=if(bounded)max(0,maximum-edge-edge-intrinsicSupport)else Int.MAX_VALUE
         editor.measure(renameExact(textWidth),if(bounded)renameAtMost(textMaximum)else renameUnspecified())
-        textBoxHeight=max(dp(24f),editor.measuredHeight).coerceAtMost(textMaximum)
+        textBoxHeight=max(dp(recipe.minimumTextHeightDp),editor.measuredHeight).coerceAtMost(textMaximum)
         val occupied=edge+textBoxHeight+edge
         if(error!=null) {
             val supportMaximum=if(bounded)max(0,maximum-occupied)else Int.MAX_VALUE
             support.measure(renameAtMost(textWidth),
                 if(bounded)renameAtMost(max(0,supportMaximum-supportPadding))else renameUnspecified())
-            supportBoxHeight=max(dp(16f),support.measuredHeight+supportPadding).coerceAtMost(supportMaximum)
+            supportBoxHeight=max(dp(recipe.minimumSupportingHeightDp),support.measuredHeight+supportPadding).coerceAtMost(supportMaximum)
         } else {
             support.measure(renameExact(0),renameExact(0));supportBoxHeight=0
         }
-        val minimum=if(MeasureSpec.getMode(h)==MeasureSpec.EXACTLY)maximum else min(dp(56f),maximum)
-        val measured=nativeRenameFieldHeight(textBoxHeight,supportBoxHeight,environment.textDensity.density,minimum,maximum)
+        val minimum=if(MeasureSpec.getMode(h)==MeasureSpec.EXACTLY)maximum else min(dp(recipe.minimumFieldHeightDp),maximum)
+        val measured=recipe.height(textBoxHeight,supportBoxHeight,environment.textDensity.density,minimum,maximum)
         setMeasuredDimension(resolveSize(width,w),resolveSize(measured,h))
         fieldHeight=measuredHeight-supportBoxHeight
         val boxTop=((fieldHeight-textBoxHeight)*.5f).roundToInt().coerceAtLeast(0)
@@ -180,34 +145,14 @@ internal class ReverbRenameFieldView(
         supportTop=fieldHeight+((supportBoxHeight-(support.measuredHeight+supportPadding))*.5f).roundToInt()+supportPadding
     }
     override fun onLayout(changed:Boolean,l:Int,t:Int,r:Int,b:Int) {
-        val edge=dp(16f)
+        val edge=dp(recipe.paddingDp)
         editor.layout(edge,textTop,edge+editor.measuredWidth,textTop+editor.measuredHeight)
         val x=if(layoutDirection==LAYOUT_DIRECTION_RTL)width-edge-support.measuredWidth else edge
         support.layout(x,supportTop,x+support.measuredWidth,supportTop+support.measuredHeight)
     }
     override fun dispatchDraw(canvas:Canvas) {
         super.dispatchDraw(canvas)
-        val minimum=min(width.toFloat(),fieldHeight.toFloat())
-        if(minimum<=0f)return
-        val stroke=min(ceil(thickness.value.value*environment.textDensity.density),ceil(minimum*.5f))
-        val radius=min(4f*environment.textDensity.density,minimum*.5f)
-        borderPaint.color=color.color(0)
-        borderBounds.set(0f,0f,width.toFloat(),fieldHeight.toFloat())
-        if(stroke*2f>minimum) {
-            borderPaint.style=Paint.Style.FILL
-            canvas.drawRoundRect(borderBounds,radius,radius,borderPaint)
-        } else if(radius<stroke*.5f) {
-            val save=canvas.save()
-            try {
-                canvas.clipOutRect(stroke,stroke,width-stroke,fieldHeight-stroke)
-                borderPaint.style=Paint.Style.FILL
-                canvas.drawRoundRect(borderBounds,radius,radius,borderPaint)
-            } finally {canvas.restoreToCount(save)}
-        } else {
-            borderBounds.inset(stroke*.5f,stroke*.5f)
-            borderPaint.style=Paint.Style.STROKE;borderPaint.strokeWidth=stroke
-            canvas.drawRoundRect(borderBounds,radius-stroke*.5f,radius-stroke*.5f,borderPaint)
-        }
+        outline.draw(canvas,width,fieldHeight)
     }
     // BasicTextField admits the decorated field, not only glyph bounds. Map that retained local
     // stream to the actual editor; its precise gesture behavior remains part of native qualification.
@@ -336,7 +281,7 @@ internal class ReverbRenameFieldView(
         fun release(action:()->Unit){try{action()}catch(error:Throwable){if(failure==null)failure=error else if(failure!==error)failure!!.addSuppressed(error)}}
         release(interop::close);release(supportLease::close)
         release(editor::releaseCallbacks)
-        release(color::close);release{thicknessTargets.close()};release{ownerJob.cancel()}
+        release(outline::close)
         failure?.let{throw it}
     }
     private fun dp(value:Float)=(value*environment.textDensity.density).roundToInt()

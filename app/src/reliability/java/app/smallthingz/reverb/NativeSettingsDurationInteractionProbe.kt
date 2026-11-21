@@ -132,7 +132,7 @@ internal fun verifyNativeSettingsDurationInteraction(instrumentation: Instrument
         })
         var tile = mountTile()
         suite.await("inline capacity read and wheel attachment") {
-            val wheels = settingsInteractionViews(tile.board).filterIsInstance<RangeDurationWheelView>().toList()
+            val wheels = tile.wheels().toList()
             wheels.size == 1 && wheels.single().isLaidOut && (reference || inline?.capacityReady == true)
         }
         val originalWheel = nativeParityOnMain(instrumentation) { tile.wheel() }
@@ -177,7 +177,7 @@ internal fun verifyNativeSettingsDurationInteraction(instrumentation: Instrument
         }
         tile = mountTile()
         suite.await("new inline draft capacity") {
-            settingsInteractionViews(tile.board).filterIsInstance<RangeDurationWheelView>().count() == 1 &&
+            tile.wheels().count() == 1 &&
                 (reference || inline?.capacityReady == true)
         }
         tileCheckpoint("tile-new-draft")

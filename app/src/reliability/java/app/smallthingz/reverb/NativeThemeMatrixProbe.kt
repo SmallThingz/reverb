@@ -1,6 +1,8 @@
 package app.smallthingz.reverb
 
 import smallthingz.ui.components.NativeModalWindowRuntime
+import smallthingz.ui.components.waveform.ProgressiveWaveformData
+import smallthingz.ui.components.waveform.ProgressiveWaveformFrame
 
 import smallthingz.ui.text.view.ParagraphView
 import android.app.Application
@@ -56,7 +58,7 @@ internal fun verifyNativeThemeMatrix(instrumentation: Instrumentation, report: S
                     ReverbHomeScreenView(host, environment,
                         ReverbHomeBodyState(null, BufferMetrics(65f, 6000000), BufferMetrics(120f, 11000000),
                             true, false, true, RetentionMode.TIME, false, false, true, true, false,
-                            AudioBlobController(), AudioBlobController(), false),
+                            NativeAudioBlobController(), NativeAudioBlobController(), false),
                         ReverbService.BufferSlot.ONE_SHOT, actions,
                         ReverbAppTopBarActions(forbidden, forbidden, forbidden, null), false,
                         ReverbHomeInsets(0, 0, 0, 0), host.fixtureRoot, runtime.scope, { _, _, _ -> }).also {
@@ -77,7 +79,7 @@ internal fun verifyNativeThemeMatrix(instrumentation: Instrumentation, report: S
                         val timeline = ReverbRangeTimelineView(host, environment) {}
                         timeline.bind(editor, NativeRangeExportPresentation(null, null, true, true, 0f,
                             false, false, 120.0, 1f,
-                            ProgressiveWaveformData(FloatArray(32) { .35f }, 32, FloatArray(64) { .4f }, 64, RangeWaveformPass.COARSE),
+                            ProgressiveWaveformData(FloatArray(32) { .35f }, 32, FloatArray(64) { .4f }, 64, detailAvailable = false),
                             ProgressiveWaveformFrame(1f, 1f, 1f, 0f, 0f, 1f, false)))
                         addView(timeline, android.widget.LinearLayout.LayoutParams(-1, (180 * density).toInt()))
                         val controls = ReverbRangeExportControls(host, environment, { host.fixtureRoot }, runtime.scope)

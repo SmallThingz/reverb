@@ -61,14 +61,6 @@ class NativeLibraryPullRefreshTest {
         assertEquals(80f, drag.verticalOffset, 0f)
     }
 
-    @Test fun arrowDiscardsFirstFortyPercent_andTensionSaturates() {
-        assertEquals(0f, nativePullRefreshArrow(.4f).scale, 0f)
-        val full = nativePullRefreshArrow(1f)
-        assertEquals(1f, full.scale, 0f)
-        assertEquals(288f, full.endAngle - full.startAngle, .0001f)
-        assertEquals(nativePullRefreshArrow(3f), nativePullRefreshArrow(10f))
-    }
-
     @Test fun nestedOrder_parentPreBeforeLocal_andLocalPostBeforeParent() {
         val clock = BroadcastFrameClock()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined + clock)

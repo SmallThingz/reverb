@@ -1,7 +1,9 @@
 package app.smallthingz.reverb.nativeui
 
 import smallthingz.ui.components.NativeGroupLayout
+import smallthingz.ui.components.NativeLeadingDisc
 import smallthingz.ui.components.NativeGroupEdges
+import smallthingz.ui.components.NativeRecordingRowPaint
 import smallthingz.ui.interaction.view.isNativeClickActivationKey
 import smallthingz.ui.geometry.roundedGroupGeometry
 import smallthingz.ui.interaction.view.NativeClickBinding
@@ -16,9 +18,6 @@ import smallthingz.ui.text.view.NativeMergedRowAccessibilityState
 import smallthingz.ui.text.view.NativeMergedRowRole
 import smallthingz.ui.text.view.ParagraphView
 import android.content.Context
-import android.graphics.Canvas
-import android.graphics.Outline
-import android.graphics.Paint
 import android.os.Build
 import kotlinx.coroutines.CoroutineScope
 import smallthingz.ui.input.phase.NativeClickPhaseHost
@@ -29,7 +28,6 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
-import android.view.ViewOutlineProvider
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.FrameLayout
 import smallthingz.ui.text.style.TextOverflow
@@ -61,28 +59,12 @@ internal data class LibraryRecordingRowActions(
  * The native row owns the original Oklab 180ms FastOutSlowIn channels. Packed colors exist only
  * at this paint boundary; channel values retain the original Color throughout interruption.
  */
-internal data class LibraryRecordingRowFrame(
-    val background: Int,
-    val border: Int,
-    val disc: Int,
-    val icon: Int,
-    val contentAlpha: Float,
-) {
-    companion object {
-        fun target(row: LibraryRecordingRow, palette: ReverbPalette) = LibraryRecordingRowFrame(
-            if (row.selected) reverbColorWithAlpha(palette.primaryContainer, 0.56f) else palette.field,
-            if (row.selected) reverbColorWithAlpha(palette.primary, 0.48f) else palette.border,
-            if (row.selected) reverbColorWithAlpha(palette.primary, 0.18f) else palette.raised,
-            if (row.selected) palette.primary else palette.ink,
-            1f,
-        )
-    }
-}
+internal typealias LibraryRecordingRowFrame = NativeRecordingRowPaint
 
 /**
  * RecordingSummaryCard with the source selection, visibility and outer-size motion. The real row is the click host; its 72dp leading child is a
  * separate click host. The parent list supplies current scroll interest and owns row recycling.
- * Group edges/outline use the narrow NativeGroupLayout proposal supplied alongside this file.
+ * The shared surface paints the group edges and receives the sampled selection colors.
  */
 internal class ReverbLibraryRecordingRow(
     context: Context,
@@ -93,7 +75,8 @@ internal class ReverbLibraryRecordingRow(
     private var environment = initialEnvironment
     private var row: LibraryRecordingRow? = null
     private var actions: LibraryRecordingRowActions? = null
-    private val surface = NativeGroupLayout(context, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
+    private val surfaceStyle = initialEnvironment.appearance.groupSurfaces.recordingRow
+    private val surface = surfaceStyle.surface.create(context, ::invalidateSettingsTextContrast)
     private val body = RecordingRowBody(context, initialEnvironment)
     private val column = RecordingCardColumn(context, body)
     private var selectionMotion: LibrarySelectionMotion? = null
@@ -146,6 +129,7 @@ internal class ReverbLibraryRecordingRow(
         visibility = INVISIBLE
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         if (Build.VERSION.SDK_INT >= 29) isForceDarkAllowed = false
+        surface.setJoinedSeparatorColor(surfaceStyle.surface.borderColor(environment.palette))
         surface.addRow(column, NativeGroupLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         addView(surface, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         body.sourceClick = { activate(); true }
@@ -165,12 +149,13 @@ internal class ReverbLibraryRecordingRow(
     }
 
     fun bind(value: LibraryRecordingRow, callbacks: LibraryRecordingRowActions) {
+        val targetPaint = surfaceStyle.target(environment.palette, selected = value.selected)
         if (row?.recordingId != value.recordingId) {
             bodyInput.bind(null)
             leadingInput.bind(null)
             body.replaceTextIdentities()
             cancelFrames()
-            selectionMotion = LibrarySelectionMotion(LibraryRecordingRowFrame.target(value, environment.palette))
+            selectionMotion = LibrarySelectionMotion(targetPaint)
             expansionMotion = LibraryExpansionMotion(value.expanded)
             outerSizeMotion = null
             exitPosted = false
@@ -180,8 +165,7 @@ internal class ReverbLibraryRecordingRow(
         surface.setJoinedEdges(value.edges)
         body.bind(value, callbacks)
         bindInputs()
-        checkNotNull(selectionMotion).target(LibraryRecordingRowFrame.target(value, environment.palette),
-            frames.durationScale)
+        checkNotNull(selectionMotion).target(targetPaint, frames.durationScale)
         expansionMotion.setVisible(value.expanded)
         if (value.expanded) exitPosted = false
         setFrame(checkNotNull(selectionMotion).value)
@@ -194,7 +178,8 @@ internal class ReverbLibraryRecordingRow(
         body.setEnvironment(value)
         bodyIndication.updateColor(value.palette.ink)
         leadingIndication.updateColor(value.palette.ink)
-        row?.let { selectionMotion?.target(LibraryRecordingRowFrame.target(it, value.palette),
+        surface.setJoinedSeparatorColor(surfaceStyle.surface.borderColor(value.palette))
+        row?.let { selectionMotion?.target(surfaceStyle.target(value.palette, selected = it.selected),
             frames.durationScale) }
         selectionMotion?.value?.let(::setFrame)
         scheduleFrame()
@@ -210,7 +195,6 @@ internal class ReverbLibraryRecordingRow(
 
     fun setFrame(frame: LibraryRecordingRowFrame) {
         surface.setPaletteImmediately(frame.background, frame.border)
-        surface.setJoinedSeparatorColor(environment.palette.border)
         column.alpha = frame.contentAlpha
         body.leading.setColors(frame.disc, frame.icon)
     }
@@ -526,7 +510,7 @@ private class RecordingRowBody(context: Context, initial: ReverbViewEnvironment)
         val width = MeasureSpec.getSize(widthMeasureSpec)
         val maxHeight = if (MeasureSpec.getMode(heightMeasureSpec) == MeasureSpec.UNSPECIFIED) Int.MAX_VALUE
             else MeasureSpec.getSize(heightMeasureSpec)
-        val leadingWidth = minOf(dp(72), width)
+        val leadingWidth = minOf(leading.preferredWidthPx, width)
         val leadingHeightSpec = if (maxHeight == Int.MAX_VALUE) MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
             else MeasureSpec.makeMeasureSpec(maxHeight, MeasureSpec.AT_MOST)
         leading.measure(MeasureSpec.makeMeasureSpec(leadingWidth, MeasureSpec.EXACTLY), leadingHeightSpec)
@@ -579,76 +563,38 @@ private class RecordingRowBody(context: Context, initial: ReverbViewEnvironment)
 
 private class RecordingRowLeading(context: Context, initial: ReverbViewEnvironment) : RecordingRowInputTarget(context) {
     private var environment = initial
-    private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
+    private val style get() = environment.appearance.listDecorations.leadingDisc
     private var icon = ReverbIconDrawable(ReverbIcon.AudioFile, initial.textDensity.density, initial.palette.ink)
-    private var discColor = initial.palette.raised
     private var iconColor = initial.palette.ink
-    private var content: View? = null
-    // Source: a separate 44dp Box clipped to RoundedCornerShape(22.dp), then a rectangular
-    // background. Drawing a rounded rect directly uses different translucent edge coverage.
-    private val disc = object : ViewGroup(context) {
-        init {
-            importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
-            setWillNotDraw(false)
-            clipToOutline = true
-            outlineProvider = object : ViewOutlineProvider() {
-                override fun getOutline(view: View, outline: Outline) {
-                    outline.setRoundRect(0, 0, view.width, view.height,
-                        minOf(22f * environment.textDensity.density, minOf(view.width, view.height) / 2f))
-                }
-            }
-        }
-        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-            setMeasuredDimension(MeasureSpec.getSize(widthMeasureSpec), MeasureSpec.getSize(heightMeasureSpec))
-            content?.measure(MeasureSpec.makeMeasureSpec(minOf(dp(22), measuredWidth), MeasureSpec.EXACTLY),
-                MeasureSpec.makeMeasureSpec(minOf(dp(22), measuredHeight), MeasureSpec.EXACTLY))
-        }
-        override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
-            val iconWidth = minOf(dp(24), width)
-            val iconHeight = minOf(dp(24), height)
-            val iconX = ((width - iconWidth) / 2f).roundToInt()
-            val iconY = ((height - iconHeight) / 2f).roundToInt()
-            icon.setBounds(iconX, iconY, iconX + iconWidth, iconY + iconHeight)
-            content?.let { child ->
-                val childX = ((width - child.measuredWidth) / 2f).roundToInt()
-                val childY = ((height - child.measuredHeight) / 2f).roundToInt()
-                child.layout(childX, childY, childX + child.measuredWidth, childY + child.measuredHeight)
-            }
-        }
-        override fun onDraw(canvas: Canvas) {
-            super.onDraw(canvas)
-            paint.color = discColor
-            canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
-            if (content == null) {
-                icon.layoutDirection = layoutDirection
-                icon.draw(canvas)
-            }
-        }
-    }
-    override fun semanticChildren(): List<View> = listOfNotNull(content)
-    fun setContent(view: View?) {
-        if (content === view) return
-        content?.let(disc::removeView)
-        content = view
-        view?.let(disc::addView)
-        disc.requestLayout(); disc.invalidate()
-    }
+    private val disc = NativeLeadingDisc(context, initial.textDensity.density, style, icon, initial.palette.raised)
+
+    val preferredWidthPx: Int get() = dp(style.slotWidthDp)
+
     init { addView(disc) }
+
+    override fun semanticChildren(): List<View> = listOfNotNull(disc.content)
+
+    fun setContent(view: View?) = disc.bindContent(view)
+
     fun setColors(background: Int, tint: Int) {
-        discColor = background; iconColor = tint
-        paint.color = background; icon.setTint(tint); disc.invalidate()
+        iconColor = tint
+        disc.bindColors(background, tint)
     }
+
     fun setEnvironment(value: ReverbViewEnvironment) {
         val densityChanged = environment.textDensity.density != value.textDensity.density
         environment = value
         if (densityChanged) icon = ReverbIconDrawable(ReverbIcon.AudioFile, value.textDensity.density, iconColor)
-        disc.invalidateOutline(); disc.requestLayout(); disc.invalidate()
+        disc.bindStyle(value.textDensity.density, style, icon)
     }
-    private fun dp(value: Int) = (value * environment.textDensity.density).roundToInt()
+
+    private fun dp(value: Float) = (value * environment.textDensity.density).roundToInt()
+
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        setMeasuredDimension(resolveSize(dp(72), widthMeasureSpec), resolveSize(dp(68), heightMeasureSpec))
-        disc.measure(MeasureSpec.makeMeasureSpec(minOf(dp(44), measuredWidth), MeasureSpec.EXACTLY),
-            MeasureSpec.makeMeasureSpec(minOf(dp(44), measuredHeight), MeasureSpec.EXACTLY))
+        setMeasuredDimension(resolveSize(preferredWidthPx, widthMeasureSpec), resolveSize(dp(style.slotHeightDp), heightMeasureSpec))
+        val diameter = dp(style.diameterDp)
+        disc.measure(MeasureSpec.makeMeasureSpec(minOf(diameter, measuredWidth), MeasureSpec.EXACTLY),
+            MeasureSpec.makeMeasureSpec(minOf(diameter, measuredHeight), MeasureSpec.EXACTLY))
         measureRole()
     }
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {

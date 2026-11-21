@@ -4,17 +4,16 @@ import android.content.Context
 import android.os.Bundle
 import android.view.KeyEvent
 import android.view.View
-import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import app.smallthingz.reverb.NotificationDurationBinding
 import app.smallthingz.reverb.NotificationDurationCommit
 import app.smallthingz.reverb.NotificationDurationInteractionState
-import app.smallthingz.reverb.RangeDurationWheelView
 import app.smallthingz.reverb.R
 import app.smallthingz.reverb.notificationDurationStepSeconds
 import kotlin.math.roundToInt
+import smallthingz.ui.components.NativeDurationWheelView
 
 /** Mechanical imperative extraction of the released AndroidView update/onRelease binding. */
 internal class NativeNotificationDurationWheel(
@@ -26,7 +25,7 @@ internal class NativeNotificationDurationWheel(
     private val stepDuration:(Int,Int,Boolean)->Int=::notificationDurationStepSeconds,
     private val interactionChanged:()->Unit={},
 ):AutoCloseable {
-    val view=RangeDurationWheelView(context)
+    val view=NativeDurationWheelView(context)
     private val binding=NotificationDurationBinding(interactionState)
     private var maximum=1
     private var enabled=false
@@ -89,7 +88,7 @@ internal class NativeNotificationDurationWheel(
         if(interactionReady)interactionRetired=false
         binding.update(seconds,maximum,enabled,editRevision)
         view.isEnabled=enabled
-        with(environment.palette) {view.setPalette(ink=onSurface,muted=onSurfaceVariant,border=outlineVariant,error=error)}
+        view.setAppearance(environment.appearance.durationWheel,environment.palette)
         view.setMaximumDurationSeconds(maximum.toDouble())
         view.setDurationSeconds(binding.seconds.toDouble())
     }

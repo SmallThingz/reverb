@@ -1,6 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
 import smallthingz.ui.components.NativeGroupLayout
+import smallthingz.ui.components.NativeFeedbackTone
 import smallthingz.ui.text.view.NativeSourceAccessibilityNode
 import smallthingz.ui.text.view.NativeTextSemanticsClip
 import smallthingz.ui.text.view.NativeTextSemanticsClipPolicy
@@ -15,9 +16,6 @@ import smallthingz.ui.MotionDurationScale
 import smallthingz.ui.geometry.Offset
 import smallthingz.ui.geometry.Rect
 import smallthingz.ui.geometry.Size
-import smallthingz.ui.graphics.Color
-import smallthingz.ui.graphics.compositeOver
-import smallthingz.ui.graphics.toArgb
 import smallthingz.ui.platform.AccessibilityManager
 import androidx.lifecycle.LifecycleOwner
 import app.smallthingz.reverb.FeedbackEvent
@@ -33,7 +31,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -231,7 +228,8 @@ internal class NativeAppFeedbackHostView(
 }
 
 private class PassiveFeedbackCard(context: Context, initial: ReverbViewEnvironment) : ViewGroup(context) {
-    val surface = NativeGroupLayout(context, 18f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
+    private val surfaceStyle = initial.appearance.groupSurfaces.feedback
+    val surface = surfaceStyle.create(context, ::invalidateSettingsTextContrast)
     val pointerNodes = listOf(object : NativeViewPhasePointerNode {
         override val view: View get() = surface
         override fun dispatch(event: NativeDragPointerEvent, pass: NativePointerPass) = Unit
@@ -246,9 +244,13 @@ private class PassiveFeedbackCard(context: Context, initial: ReverbViewEnvironme
         addView(surface)
     }
     fun bind(event: FeedbackEvent, environment: ReverbViewEnvironment) {
-        val colors = passiveFeedbackColors(event.tone, environment.palette)
-        surface.setPalette(colors.first, android.graphics.Color.TRANSPARENT)
-        row.bind(event.message, environment, colors.second)
+        val tone = when (event.tone) {
+            FeedbackTone.INFO -> NativeFeedbackTone.INFO
+            FeedbackTone.SUCCESS -> NativeFeedbackTone.SUCCESS
+            FeedbackTone.ERROR -> NativeFeedbackTone.ERROR
+        }
+        val ink = surfaceStyle.bind(surface, environment.palette, tone)
+        row.bind(event.message, environment, ink)
     }
     override fun onMeasure(w: Int, h: Int) {
         surface.measure(w, h)
@@ -258,6 +260,7 @@ private class PassiveFeedbackCard(context: Context, initial: ReverbViewEnvironme
 }
 
 private class PassiveFeedbackRow(context: Context, private var environment: ReverbViewEnvironment) : ViewGroup(context) {
+    private val layout = environment.appearance.groupSurfaces.feedback
     private val text = environment.paragraph(context, "", ReverbTextRole.BODY_MEDIUM)
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -274,28 +277,19 @@ private class PassiveFeedbackRow(context: Context, private var environment: Reve
     override fun onMeasure(w: Int, h: Int) {
         val width = MeasureSpec.getSize(w)
         val bounded = MeasureSpec.getMode(h) != MeasureSpec.UNSPECIFIED
-        val available = if (bounded) max(0, MeasureSpec.getSize(h) - dp(8f) - dp(8f)) else 0
-        text.measure(MeasureSpec.makeMeasureSpec(max(0, width - dp(16f) - dp(8f)), MeasureSpec.EXACTLY),
+        val vertical = dp(layout.contentVerticalInsetDp)
+        val available = if (bounded) max(0, MeasureSpec.getSize(h) - 2 * vertical) else 0
+        val contentWidth = max(0, width - dp(layout.contentStartDp) - dp(layout.contentEndDp))
+        text.measure(MeasureSpec.makeMeasureSpec(contentWidth, MeasureSpec.EXACTLY),
             MeasureSpec.makeMeasureSpec(available, if (bounded) MeasureSpec.AT_MOST else MeasureSpec.UNSPECIFIED))
-        setMeasuredDimension(width, resolveSize(text.measuredHeight + dp(8f) + dp(8f), h))
+        setMeasuredDimension(width, resolveSize(text.measuredHeight + 2 * vertical, h))
     }
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
-        val logical = dp(16f)
+        val logical = dp(layout.contentStartDp)
         val x = if (layoutDirection == LAYOUT_DIRECTION_RTL) width - logical - text.measuredWidth else logical
-        val available = height - dp(8f) - dp(8f)
-        val y = dp(8f) + ((available - text.measuredHeight) / 2f).roundToInt()
+        val vertical = dp(layout.contentVerticalInsetDp)
+        val available = height - 2 * vertical
+        val y = vertical + ((available - text.measuredHeight) / 2f).roundToInt()
         text.layout(x, y, x + text.measuredWidth, y + text.measuredHeight)
     }
-}
-
-/** Material Surface applies its2dp tonal overlay only when the requested color equals surface. */
-internal fun passiveFeedbackColors(tone: FeedbackTone, palette: ReverbPalette): Pair<Int, Int> {
-    val colors = when (tone) {
-        FeedbackTone.ERROR -> palette.errorContainer to palette.onErrorContainer
-        FeedbackTone.SUCCESS -> palette.primaryContainer to palette.onPrimaryContainer
-        FeedbackTone.INFO -> palette.surfaceContainerHigh to palette.onSurface
-    }
-    if (colors.first != palette.surface) return colors
-    val alpha = ((4.5f * ln(2f + 1f)) + 2f) / 100f
-    return Color(palette.surfaceTint).copy(alpha = alpha).compositeOver(Color(colors.first)).toArgb() to colors.second
 }

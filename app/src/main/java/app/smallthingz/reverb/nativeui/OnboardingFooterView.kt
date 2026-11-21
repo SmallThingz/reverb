@@ -1,23 +1,17 @@
 package app.smallthingz.reverb.nativeui
 
 import smallthingz.ui.components.NativeButtonInputPolicy
-import smallthingz.ui.components.NativeMaterialButtonStyle
 import smallthingz.ui.components.NativeMaterialButtonView
 import smallthingz.ui.text.view.NativePlainTextViewGeometry
 import smallthingz.ui.text.view.NativeSourceAccessibilityNode
 import smallthingz.ui.text.view.PlainTextAccessibilityWindowScope
-import smallthingz.ui.animation.view.ViewColorTransition
 
 import android.content.Context
 import android.content.res.Configuration
 import android.graphics.Canvas
-import android.graphics.Paint
 import android.os.Build
 import android.view.View
 import android.view.ViewGroup
-import smallthingz.ui.text.TextStyle
-import smallthingz.ui.text.font.FontFamily
-import smallthingz.ui.unit.Density
 import app.smallthingz.reverb.R
 import java.io.Closeable
 import kotlin.math.max
@@ -46,13 +40,11 @@ private data class FooterActions(val back: () -> Unit, val continueOrFinish: () 
 /**
  * Excludes the outer screen's safe-area and 24dp horizontal / 20dp vertical padding.
  * Includes the 16dp gap above dots, the 8dp-high dot row, 14dp gap, and normally equal-weight buttons.
- * Requires the qualified released labelLarge TextStyle and an immutable exact Density adapter.
+ * Uses the appearance and exact density of its window.
  */
 internal class OnboardingFooterView(
     context: Context,
-    labelLarge: TextStyle,
-    textDensity: Density,
-    resolver: FontFamily.Resolver,
+    environment: ReverbViewEnvironment,
     inputRoot: () -> View?,
 ) : ViewGroup(context) {
     /** Same native window cursor as page labels; keep the lease until this footer is disposed. */
@@ -76,10 +68,10 @@ internal class OnboardingFooterView(
         return AutoCloseable { closeNativeFooterAccessibility(first, second) }
     }
 
-    private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
+    private val recipe = environment.appearance.onboardingFooter
+    private val indicator = recipe.createIndicator(this, 3)
     private var state = OnboardingFooterState(0, 0, ready = false, finishing = false)
     private var palette: ReverbPalette? = null
-    private var dotColors:ViewColorTransition?=null
     private var boundConfiguration: Configuration? = null
     private var actions: FooterActions? = null
     private var buttonHeight = 0
@@ -87,12 +79,12 @@ internal class OnboardingFooterView(
     private var continueWidth = 0
     private var stackedButtons = false
     private val inputPolicy = NativeButtonInputPolicy(inputRoot)
-    private val back = NativeMaterialButtonView(context, false, reverbButtonTextStyle(labelLarge), textDensity, resolver,
-        NativeMaterialButtonStyle(12, assignedSize = true), inputPolicy) {
+    private val back = NativeMaterialButtonView(context, environment.appearance.buttons.footerBack,
+        environment.textDensity, environment.sharedFontResolver, inputPolicy) {
         actions?.back?.invoke()
     }
-    private val next = NativeMaterialButtonView(context, true, reverbButtonTextStyle(labelLarge), textDensity, resolver,
-        NativeMaterialButtonStyle(24, assignedSize = true), inputPolicy) {
+    private val next = NativeMaterialButtonView(context, environment.appearance.buttons.footerContinue,
+        environment.textDensity, environment.sharedFontResolver, inputPolicy) {
         actions?.continueOrFinish?.invoke()
     }
 
@@ -133,44 +125,24 @@ internal class OnboardingFooterView(
         val old = state
         state = value
         palette = colors
-        val targets=IntArray(3) {if(it==value.page)colors.primary else colors.outlineVariant}
-        val dots=dotColors ?: ViewColorTransition(this,targets,{invalidate()}).also {dotColors=it}
-        dots.retarget(*targets)
+        indicator.bind(value.page, colors)
         back.bind(
             context.getString(R.string.onboarding_back),
             enabled = !value.finishing && value.page > 0,
-            container = android.graphics.Color.TRANSPARENT,
-            contentColor = if (!value.finishing && value.page > 0) colors.primary
-                else reverbColorWithAlpha(colors.onSurfaceVariant, 0.38f),
+            palette = colors.buttonPalette,
         )
-        val enabled = !value.finishing
         next.bind(
             context.getString(when {
                 value.footerPage < 2 -> R.string.onboarding_continue
                 else -> R.string.onboarding_get_started
             }),
-            enabled = enabled,
-            container = when {
-                !enabled -> reverbColorWithAlpha(colors.onSurface, 0.1f)
-                value.ready -> colors.primary
-                else -> colors.field
-            },
-            contentColor = when {
-                !enabled -> reverbColorWithAlpha(colors.onSurfaceVariant, 0.38f)
-                value.ready -> colors.onPrimary
-                else -> colors.ink
-            },
+            enabled = !value.finishing,
+            palette = colors.buttonPalette,
+            emphasized = value.ready,
         )
-        // Release dots and label/colors have no transition or width animation.
+        // The selected indicator width changes immediately.
         if (old.page != value.page) requestLayout()
         invalidate()
-    }
-
-    fun bindTypography(labelLarge: TextStyle, textDensity: Density, resolver: FontFamily.Resolver) {
-        val inherited = reverbButtonTextStyle(labelLarge)
-        back.bindTypography(inherited, textDensity, resolver)
-        next.bindTypography(inherited, textDensity, resolver)
-        requestLayout()
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
@@ -178,7 +150,9 @@ internal class OnboardingFooterView(
             "Released footer is fillMaxWidth; host must supply a bounded width"
         }
         val width = MeasureSpec.getSize(widthMeasureSpec)
-        val remaining = (width - dp(10)).coerceAtLeast(0)
+        val actionGap = dp(recipe.actionGapDp)
+        val actionsTop = recipe.actionsTopPx(resources.displayMetrics.density)
+        val remaining = (width - actionGap).coerceAtLeast(0)
         // Source Row uses rounded weight unit and distributes negative remainder to first child.
         val unit = (remaining / 2f).roundToInt()
         backWidth = unit + (remaining - unit * 2).coerceIn(-1, 1)
@@ -189,8 +163,8 @@ internal class OnboardingFooterView(
         next.compactPadding = compact
         stackedButtons = false
         if (compact) {
-            val backMinimum = max(dp(48), back.preferredWidth(true))
-            val nextMinimum = max(dp(48), next.preferredWidth(true))
+            val backMinimum = max(dp(back.minimumTouchTargetDp), back.preferredWidth(true))
+            val nextMinimum = max(dp(next.minimumTouchTargetDp), next.preferredWidth(true))
             if (backMinimum + nextMinimum <= remaining) {
                 continueWidth = continueWidth.coerceIn(nextMinimum, remaining - backMinimum)
                 backWidth = remaining - continueWidth
@@ -201,31 +175,32 @@ internal class OnboardingFooterView(
             }
         }
         // IntrinsicSize.Min queries weighted children at the rounded common weight allocation.
-        buttonHeight = max(dp(48), max(back.intrinsicHeight(if (compact) backWidth else unit),
+        val minimumButtonHeight = dp(max(back.minimumTouchTargetDp, next.minimumTouchTargetDp))
+        buttonHeight = max(minimumButtonHeight, max(back.intrinsicHeight(if (compact) backWidth else unit),
             next.intrinsicHeight(if (compact) continueWidth else unit)))
         if (stackedButtons && MeasureSpec.getMode(heightMeasureSpec) != MeasureSpec.UNSPECIFIED &&
-            dp(16) + dp(8) + dp(14) + buttonHeight * 2 + dp(10) + dp(48) > MeasureSpec.getSize(heightMeasureSpec)) {
+            actionsTop + buttonHeight * 2 + actionGap + dp(recipe.minimumPageSpaceDp) > MeasureSpec.getSize(heightMeasureSpec)) {
             // The screen supplies its total content budget. A stacked footer must leave at least
             // one minimum interactive row for the scrollable page, not merely fit its own buttons.
             stackedButtons = false
             backWidth = unit + (remaining - unit * 2).coerceIn(-1, 1)
             continueWidth = remaining - backWidth
-            buttonHeight = max(dp(48), max(back.intrinsicHeight(backWidth), next.intrinsicHeight(continueWidth)))
+            buttonHeight = max(minimumButtonHeight, max(back.intrinsicHeight(backWidth), next.intrinsicHeight(continueWidth)))
         }
         back.measure(exact(backWidth), exact(buttonHeight))
         next.measure(exact(continueWidth), exact(buttonHeight))
         setMeasuredDimension(
             resolveSize(width, widthMeasureSpec),
-            resolveSize(dp(16) + dp(8) + dp(14) +
-                (if (stackedButtons) buttonHeight * 2 + dp(10) else buttonHeight), heightMeasureSpec),
+            resolveSize(actionsTop + (if (stackedButtons) buttonHeight * 2 + actionGap else buttonHeight), heightMeasureSpec),
         )
     }
 
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
-        val y = dp(16) + dp(8) + dp(14)
+        val y = recipe.actionsTopPx(resources.displayMetrics.density)
         if (stackedButtons) {
+            val actionGap = dp(recipe.actionGapDp)
             back.layout(0, y, width, y + buttonHeight)
-            next.layout(0, y + buttonHeight + dp(10), width, y + buttonHeight * 2 + dp(10))
+            next.layout(0, y + buttonHeight + actionGap, width, y + buttonHeight * 2 + actionGap)
         } else if (layoutDirection == LAYOUT_DIRECTION_RTL) {
             back.layout(width - backWidth, y, width, y + buttonHeight)
             next.layout(0, y, continueWidth, y + buttonHeight)
@@ -237,24 +212,7 @@ internal class OnboardingFooterView(
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        val colors = dotColors ?: return
-        val activeWidth = dp(18)
-        val idleWidth = dp(6)
-        val gap = dp(8)
-        val dotHeight = dp(6)
-        val total = activeWidth + idleWidth * 2 + gap * 2
-        var x = (width - total) / 2f
-        val y = dp(16) + ((dp(8) - dotHeight) / 2f).roundToInt()
-        val rtl = layoutDirection == LAYOUT_DIRECTION_RTL
-        for (visualIndex in 0..2) {
-            val index = if (rtl) 2 - visualIndex else visualIndex
-            val dotWidth = if (state.page == index) activeWidth else idleWidth
-            val start = x.roundToInt().toFloat()
-            paint.color = colors.color(index)
-            canvas.drawRoundRect(start, y.toFloat(), start + dotWidth, (y + dotHeight).toFloat(),
-                dotHeight / 2f, dotHeight / 2f, paint)
-            x += dotWidth + gap
-        }
+        indicator.draw(canvas)
     }
 
     override fun onDetachedFromWindow() {
@@ -267,7 +225,8 @@ internal class OnboardingFooterView(
         next.cancelPendingInputEvents()
     }
 
-    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).roundToInt()
+    private fun dp(value: Int): Int = dp(value.toFloat())
+    private fun dp(value: Float): Int = (value * resources.displayMetrics.density).roundToInt()
     private fun exact(value: Int) = MeasureSpec.makeMeasureSpec(value.coerceAtLeast(0), MeasureSpec.EXACTLY)
 }
 

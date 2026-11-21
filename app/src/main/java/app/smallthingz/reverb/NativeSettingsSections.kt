@@ -9,10 +9,7 @@ import android.view.ViewGroup
 import smallthingz.ui.runtime.MonotonicFrameClock
 import androidx.lifecycle.Lifecycle
 import app.smallthingz.reverb.nativeui.*
-import smallthingz.ui.components.NativeThemePresentation
-import smallthingz.ui.components.NativeSegmentedPresentation
 import smallthingz.ui.components.NativeThemeSelector
-import smallthingz.ui.controls.ControlPalette
 import kotlinx.coroutines.CoroutineScope
 import kotlin.math.roundToInt
 
@@ -69,21 +66,9 @@ internal class NativeSettingsSections(
     private fun theme(): NativeSettingsSection {
         val initial = owner.state
         var activation = initial.activation
-        var env = environment()
-        fun palette() = segmentedPalette(env)
         lateinit var body: NativeThemeSelector
-        val presentation = object : NativeThemePresentation,
-            NativeSegmentedPresentation by ReverbSegmentedPresentation(context) {
-            override val title = env.paragraph(context, "", ReverbTextRole.BODY_LARGE, env.palette.onSurface)
-            override fun bindTitle(titleText: String, palette: ControlPalette, titleColor: Int) {
-                title.setText(titleText)
-                bindSectionTitle(title, env)
-            }
-        }
-        body = NativeThemeSelector(context, palette(), initial.displayed.snapshot.themeMode.toNativeThemeMode(),
-            env.palette.onSurface, presentation, env.textDensity.density, inputAllowed = {
-                body.settingsInputAllowed(inputRoot)
-            }, onSelectionRequest = {
+        body = createSettingsThemeSelector(context, environment(), initial.displayed.snapshot.themeMode.toNativeThemeMode(),
+            inputAllowed = { body.settingsInputAllowed(inputRoot) }, onSelectionRequest = {
                 owner.themeChanged(activation, it.toAppThemeMode())
                 true
             })
@@ -92,8 +77,9 @@ internal class NativeSettingsSections(
             override fun bind() {
                 val state = owner.state
                 activation = state.activation
-                env = environment()
-                body.bind(state.displayed.snapshot.themeMode.toNativeThemeMode(), palette(), env.palette.onSurface, env.textDensity.density)
+                val env = environment()
+                body.bind(state.displayed.snapshot.themeMode.toNativeThemeMode(), segmentedPalette(env),
+                    env.textDensity, env.sharedFontResolver)
             }
             override fun close() = body.close()
         }
@@ -371,7 +357,8 @@ private class SettingsBackgroundWarningView(
         ReverbIcon.BackgroundWarning, R.string.settings_restart_access_missing, R.string.background_review,
         R.string.settings_restart_access, reviewRestart)
     private val restartLayout = NativeGroupLayout.LayoutParams(-1, -2)
-    private val group = NativeGroupLayout(context, 14f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
+    private val groupRecipe = environment.appearance.groupSurfaces.settingsWarning
+    private val group = groupRecipe.create(context, ::invalidateSettingsTextContrast)
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         group.addRow(battery, NativeGroupLayout.LayoutParams(-1, -2))
@@ -383,7 +370,7 @@ private class SettingsBackgroundWarningView(
     fun bind(next: ReverbViewEnvironment, batteryRestricted: Boolean, notificationBlocked: Boolean,
         restartAccessMissing: Boolean) {
         environment = next
-        group.setPalette(next.palette.field, next.palette.border)
+        groupRecipe.bind(group, next.palette)
         battery.visibility = if (batteryRestricted) VISIBLE else GONE
         notifications.visibility = if (notificationBlocked) VISIBLE else GONE
         restart.visibility = if (restartAccessMissing) VISIBLE else GONE

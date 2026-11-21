@@ -1,5 +1,6 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.components.NativeCaptureControlSurface
 import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.input.phase.NativeViewPointerHitLayout
 import smallthingz.ui.input.phase.NativeWindowPointerCoordinates
@@ -147,7 +148,7 @@ internal class NativeCaptureContentView(
         bodyText?.close()
         bodyText = textWindow.bindContent(body, NativeTextSemanticsClipPolicy { view ->
             if ((view.parent is NativeGroupLayout && (view.parent as NativeGroupLayout).pointerContent === view) ||
-                view is ReverbHomeControlSurface)
+                view is NativeCaptureControlSurface)
                 NativeTextSemanticsClip.Rectangle(Rect(0f, 0f, view.width.toFloat(), view.height.toFloat()))
             else NativeTextSemanticsClip.Unclipped
         }, sourceNode) { sourceNode(it).present }

@@ -8,7 +8,6 @@ import smallthingz.ui.scroll.NativeVerticalViewport
 import smallthingz.ui.text.view.NativeTextSemanticsClip
 import smallthingz.ui.text.view.ParagraphView
 import android.content.Context
-import android.graphics.Color
 import android.view.View
 import android.view.ViewGroup
 import smallthingz.ui.geometry.Rect
@@ -211,26 +210,28 @@ private class InfoRows(context: Context, private var environment: ReverbViewEnvi
     }
 }
 private class InfoRow(context:Context,private var environment:ReverbViewEnvironment,label:String,value:String):ViewGroup(context) {
-    val surface=NativeGroupLayout(context,14f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
+    private val surfaceRecipe = environment.appearance.groupSurfaces.recordingInfoRow
+    private val rowLayout = environment.appearance.groupSurfaces.recordingInfoLayout
+    val surface = surfaceRecipe.create(context, ::invalidateSettingsTextContrast)
     val label=environment.paragraph(context,label.removeSuffix(":"),ReverbTextRole.LABEL_MEDIUM,environment.palette.onSurfaceVariant)
     val value=environment.paragraph(context,value,ReverbTextRole.BODY_MEDIUM,environment.palette.onSurface)
     private val body=object:ViewGroup(context) {
         init {importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO;addView(this@InfoRow.label);addView(this@InfoRow.value)}
         override fun onMeasure(w:Int,h:Int) {
-            val width=MeasureSpec.getSize(w);val x=dp(14f);val y=dp(11f)
+            val width=MeasureSpec.getSize(w);val x=dp(rowLayout.horizontalInsetDp);val y=dp(rowLayout.verticalInsetDp)
             val bounded=MeasureSpec.getMode(h)!=MeasureSpec.UNSPECIFIED
             var remaining=if(bounded)max(0,MeasureSpec.getSize(h)-y-y) else Int.MAX_VALUE
             val textWidth=max(0,width-x-x)
             this@InfoRow.label.measure(infoAtMost(textWidth),if(bounded)infoAtMost(remaining) else h)
             remaining-=this@InfoRow.label.measuredHeight
-            val gap=if(bounded)minOf(dp(2f),remaining.coerceAtLeast(0)) else dp(2f)
+            val gap=dp(rowLayout.labelGapDp).let { if(bounded)minOf(it,remaining.coerceAtLeast(0)) else it }
             remaining-=gap
             this@InfoRow.value.measure(infoAtMost(textWidth),if(bounded)infoAtMost(remaining.coerceAtLeast(0)) else h)
             setMeasuredDimension(resolveSize(width,w),resolveSize(y+y+this@InfoRow.label.measuredHeight+gap+this@InfoRow.value.measuredHeight,h))
         }
         override fun onLayout(changed:Boolean,l:Int,t:Int,r:Int,b:Int) {
-            val x=dp(14f);val y=dp(11f)
-            val valueTop=y+this@InfoRow.label.measuredHeight+dp(2f)
+            val x=dp(rowLayout.horizontalInsetDp);val y=dp(rowLayout.verticalInsetDp)
+            val valueTop=y+this@InfoRow.label.measuredHeight+dp(rowLayout.labelGapDp)
             placeText(this@InfoRow.label,x,y)
             placeText(this@InfoRow.value,x,valueTop)
         }
@@ -241,7 +242,7 @@ private class InfoRow(context:Context,private var environment:ReverbViewEnvironm
     }
     init {
         importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO
-        surface.setPalette(environment.palette.surfaceContainerHighest,Color.TRANSPARENT)
+        surfaceRecipe.bind(surface, environment.palette)
         surface.addRow(body,NativeGroupLayout.LayoutParams(LayoutParams.MATCH_PARENT,LayoutParams.WRAP_CONTENT));addView(surface)
     }
     fun bindEnvironment(next:ReverbViewEnvironment) {
@@ -249,7 +250,7 @@ private class InfoRow(context:Context,private var environment:ReverbViewEnvironm
         environment=next
         next.bindParagraphStyle(label,ReverbTextRole.LABEL_MEDIUM,next.palette.onSurfaceVariant)
         next.bindParagraphStyle(value,ReverbTextRole.BODY_MEDIUM,next.palette.onSurface)
-        surface.setPalette(next.palette.surfaceContainerHighest,Color.TRANSPARENT)
+        surfaceRecipe.bind(surface, next.palette)
         if(densityChanged)requestLayout()
     }
     private fun dp(v:Float)=(v*environment.textDensity.density).roundToInt()

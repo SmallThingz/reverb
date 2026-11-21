@@ -6,7 +6,6 @@ import android.view.View
 import android.view.ViewGroup
 import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.components.NativeButtonInputPolicy
-import smallthingz.ui.components.NativeMaterialButtonStyle
 import smallthingz.ui.components.NativeMaterialButtonView
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -21,15 +20,13 @@ internal class SettingsStorageActionView(
     onClick:()->Unit,
 ):ViewGroup(context),AutoCloseable {
     private var environment = initial
-    private val radius = if (icon == null) 12f else 14f
-    private val surface = NativeGroupLayout(context, radius, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
-    private val content = NativeMaterialButtonView(context, false, reverbButtonTextStyle(),
+    private val recipe = initial.appearance.buttons.let { if (icon == null) it.raisedText else it.raisedIcon }
+    private val surface = NativeGroupLayout(context, requireNotNull(recipe.surface.radiusDp),
+        onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
+    private val content = NativeMaterialButtonView(context, recipe,
         initial.textDensity, initial.sharedFontResolver,
-        if (icon == null) NativeMaterialButtonStyle(12, radiusDp = radius)
-        else NativeMaterialButtonStyle(0, verticalPaddingDp = 0, minimumWidthDp = 48,
-            minimumHeightDp = 48, iconSizeDp = 24, radiusDp = radius, showLabel = false),
         NativeButtonInputPolicy(inputRoot), onClick)
-    private val glyph = icon?.let { OnboardingIconView(context, it, initial.palette.onSurfaceVariant).apply {
+    private val glyph = icon?.let { OnboardingIconView(context, it, recipe.contentColor(initial.palette.buttonPalette, true)).apply {
         contentDescription = description
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
     } }
@@ -45,21 +42,18 @@ internal class SettingsStorageActionView(
     }
     fun bind(next: ReverbViewEnvironment, enabled: Boolean) {
         environment = next
-        val palette = next.palette
-        surface.setPalette(palette.raised, AndroidColor.TRANSPARENT)
-        val textColor = if (enabled) palette.primary else reverbColorWithAlpha(palette.onSurface, .38f)
+        val palette = next.palette.buttonPalette
+        surface.setPalette(recipe.surroundingColor(palette), AndroidColor.TRANSPARENT)
         if (glyph != null) {
-            val iconColor = if (enabled) palette.onSurfaceVariant else reverbColorWithAlpha(palette.onSurfaceVariant, .38f)
-            glyph.bind(requireNotNull(icon), iconColor)
+            glyph.bind(requireNotNull(icon), recipe.contentColor(palette, enabled))
         }
-        content.bindTypography(reverbButtonTextStyle(), next.textDensity, next.sharedFontResolver)
-        content.bind(description, enabled, AndroidColor.TRANSPARENT, textColor,
-            indicationColor = if (icon == null) textColor else palette.onSurface)
+        content.bindTypography(next.textDensity, next.sharedFontResolver)
+        content.bind(description, enabled, palette)
         requestLayout()
     }
     override fun onMeasure(w:Int,h:Int) {
         surface.measure(w,h)
-        val minimum=dp(48)
+        val minimum=dp(content.minimumTouchTargetDp)
         setMeasuredDimension(resolveSize(max(minimum,surface.measuredWidth),w),
             resolveSize(max(minimum,surface.measuredHeight),h))
     }

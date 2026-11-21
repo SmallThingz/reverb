@@ -6,7 +6,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffColorFilter
-import app.smallthingz.reverb.nativeui.NativeEditableCursorDrawable
+import smallthingz.ui.components.NativeEditableCursorDrawable
 
 /** Exercises the platform clone contract with real Android Paint/Drawable/Canvas objects. */
 internal fun verifyNativeEditableCursorClone(context: Context) {

@@ -27,7 +27,7 @@ internal class SettingsAudioChoicesSection(
     private var closed = false
     private lateinit var choices: SettingsAudioChoicesView
     private val menus = SettingsAudioMenuHost(
-        ReverbParagraphStyles[ReverbTextRole.LABEL_LARGE], initialEnvironment.textDensity,
+        initialEnvironment.appearance.typography.buttonLabelStyle, initialEnvironment.textDensity,
         initialEnvironment.sharedFontResolver, frames, scope, initialEnvironment.palette,
         expandedChanged = { kind, value ->
             if (value) expanded.add(kind) else expanded.remove(kind)
@@ -46,7 +46,7 @@ internal class SettingsAudioChoicesSection(
         if (closed) return
         current = next
         this.environment = environment
-        menus.bindConfiguration(ReverbParagraphStyles[ReverbTextRole.LABEL_LARGE], environment.textDensity,
+        menus.bindConfiguration(environment.appearance.typography.buttonLabelStyle, environment.textDensity,
             environment.sharedFontResolver, environment.palette)
         render()
     }

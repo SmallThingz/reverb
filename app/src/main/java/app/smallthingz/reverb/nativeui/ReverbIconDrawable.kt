@@ -4,6 +4,4 @@ import smallthingz.ui.components.CachedPathIconDrawable
 
 /** App glyph ownership; the shared renderer retains the exact mask/cache/tint contract. */
 internal class ReverbIconDrawable(val icon: ReverbIcon, density: Float, tint: Int) :
-    CachedPathIconDrawable(density, tint, icon.autoMirrored, { canvas, paint ->
-        ReverbIconPaths.drawMask(icon, canvas, paint)
-    })
+    CachedPathIconDrawable({ icon.mask }, density, tint, icon.autoMirrored)

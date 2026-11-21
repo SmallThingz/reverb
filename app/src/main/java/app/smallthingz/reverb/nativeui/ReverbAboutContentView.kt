@@ -1,6 +1,9 @@
 package app.smallthingz.reverb.nativeui
 
 import smallthingz.ui.components.NativeModalWindowRuntime
+import smallthingz.ui.components.NativeFloatingPanelSurface
+import smallthingz.ui.components.NativeDecorativeIconView
+import smallthingz.ui.components.NativeUiAppearance
 
 import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.geometry.roundedGroupContains
@@ -27,18 +30,12 @@ import smallthingz.ui.text.view.nativeMergedRoleBoundsInScreen
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.graphics.Canvas
-import android.graphics.Outline
-import android.graphics.Paint
-import android.graphics.Path
 import android.graphics.Rect
-import android.graphics.RectF
 import android.os.Build
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
-import android.view.ViewOutlineProvider
 import android.view.ViewConfiguration
 import android.os.Bundle
 import android.view.accessibility.AccessibilityNodeInfo
@@ -57,9 +54,6 @@ import smallthingz.ui.input.phase.ViewClickPhaseEndpoint
 import smallthingz.ui.scroll.NativeVerticalPhaseBinding
 import smallthingz.ui.input.phase.NativeDragPointerEvent
 import smallthingz.ui.input.phase.NativePointerPass
-import smallthingz.ui.graphics.Color
-import smallthingz.ui.graphics.compositeOver
-import smallthingz.ui.graphics.toArgb
 import smallthingz.ui.text.TextStyle
 import smallthingz.ui.text.font.FontFamily
 import smallthingz.ui.unit.Density
@@ -68,7 +62,6 @@ import androidx.core.net.toUri
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import app.smallthingz.reverb.R
-import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -81,7 +74,10 @@ internal data class AboutContentAppearance(
     val bodySmall: TextStyle,
     val density: Density,
     val fontResolver: FontFamily.Resolver,
-)
+    val uiAppearance: NativeUiAppearance = reverbAppearance,
+) {
+    val panel get() = uiAppearance.modals.floating
+}
 
 /**
  * Concrete released About content only. The native dialog host must keep Gravity.TOP,
@@ -216,14 +212,8 @@ internal fun createReverbAboutContent(
 private const val ABOUT_REPOSITORY_URL = "https://github.com/SmallThingz/reverb"
 private const val ABOUT_REPOSITORY_LABEL = "SmallThingz/reverb"
 
-private class AboutSurface(context: Context, private var appearance: AboutContentAppearance, runtime: NativeModalWindowRuntime, initialScrollPosition: Int) : ViewGroup(context) {
-    private val fill = Paint(ABOUT_PAINT_FLAGS)
-    private val fillMotion=colorTransition(aboutTonalColor(appearance.palette.surfaceContainerHigh,appearance.palette,6f)) {fill.color=it;invalidate()}
-    private val path = Path()
-    private val bounds = RectF()
-    private val radii = FloatArray(8)
-    private val clipped = AboutSurfaceContentClip(context)
-    private val noise = ReverbNoiseDrawable(resources)
+private class AboutSurface(context: Context, appearance: AboutContentAppearance, runtime: NativeModalWindowRuntime, initialScrollPosition: Int) :
+    NativeFloatingPanelSurface(context, appearance.density.density, appearance.panel, appearance.palette) {
     val viewport = NativeVerticalViewport(context, NativeVerticalScrollState(initialScrollPosition), appearance.density,
         runtime.frames, runtime.scope, object : NativeVerticalNestedHost {
             // This dialog's scroll container has no scrollable ancestor; window motion is not nested scroll.
@@ -231,86 +221,13 @@ private class AboutSurface(context: Context, private var appearance: AboutConten
             override fun postScroll(consumedY: Float, availableY: Float, source: NativeVerticalScrollSource) = 0f
             override suspend fun preFling(availableY: Float) = 0f
             override suspend fun postFling(consumedY: Float, availableY: Float) = 0f
-        }).apply { background = noise }
-    val clipHost: View get() = clipped
-    fun containsShape(point: Offset): Boolean {
-        val x = point.x; val y = point.y
-        if (x < 0f || y < 0f || x >= width || y >= height) return false
-        val radius = min(32f * appearance.density.density, min(width / 2f, height.toFloat()))
-        if (y <= height - radius || x in radius..(width - radius)) return true
-        val centerX = if (x < radius) radius else width - radius
-        val dx = x - centerX; val dy = y - (height - radius)
-        return dx * dx + dy * dy <= radius * radius
-    }
-
-    init {
-        setWillNotDraw(false)
-        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
-        clipped.addView(viewport, android.widget.FrameLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
-        addView(clipped)
-        updateColor()
-    }
-    fun setContent(view: View) { viewport.setContent(view) }
-    fun setStatusInsets(value: Insets) { clipped.setPadding(value.left, value.top, value.right, value.bottom); requestLayout() }
-    fun setAppearance(value: AboutContentAppearance) { appearance = value; updateColor(); rebuildShape(); requestLayout() }
-    private fun updateColor() {
-        fillMotion.retarget(aboutTonalColor(appearance.palette.surfaceContainerHigh,appearance.palette,6f))
-        fill.color=fillMotion.color(0);invalidate()
-    }
-
-    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        clipped.measure(widthMeasureSpec, heightMeasureSpec)
-        setMeasuredDimension(clipped.measuredWidth, clipped.measuredHeight)
-    }
-    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) { clipped.layout(0, 0, width, height) }
-    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) { rebuildShape() }
-
-    private fun rebuildShape() {
-        // CornerBasedShape rescales opposing radii if their sum exceeds a side.
-        val radius = min(32f * appearance.density.density, min(width / 2f, height.toFloat()))
-        radii.fill(0f)
-        for (index in 4..7) radii[index] = radius
-        bounds.set(0f, 0f, width.toFloat(), height.toFloat())
-        path.rewind()
-        path.addRoundRect(bounds, radii, Path.Direction.CW)
-        clipped.setShape(path)
-        invalidate()
-    }
-    // Surface's shape fill is outside its child clipping layer; preserve edge coverage once.
-    override fun onDraw(canvas: Canvas) { super.onDraw(canvas); canvas.drawPath(path, fill) }
-    override fun onTouchEvent(event: MotionEvent): Boolean = true
-}
-
-private class AboutSurfaceContentClip(context: Context) : android.widget.FrameLayout(context) {
-    private val shape = Path()
-    private var nativeClip = false
-    init {
-        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
-        clipToPadding = false
-        outlineProvider = object : ViewOutlineProvider() {
-            override fun getOutline(view: View, outline: Outline) { fillOutline(outline) }
-        }
-    }
-    fun setShape(path: Path) {
-        shape.set(path)
-        val outline = Outline()
-        fillOutline(outline)
-        nativeClip = outline.canClip()
-        clipToOutline = nativeClip
-        invalidateOutline()
-        invalidate()
-    }
-    @Suppress("DEPRECATION")
-    private fun fillOutline(outline: Outline) {
-        if (Build.VERSION.SDK_INT >= 30) outline.setPath(shape) else outline.setConvexPath(shape)
-    }
-    override fun dispatchDraw(canvas: Canvas) {
-        if (canvas.isHardwareAccelerated && nativeClip) super.dispatchDraw(canvas) else {
-            val checkpoint = canvas.save()
-            canvas.clipPath(shape)
-            super.dispatchDraw(canvas)
-            canvas.restoreToCount(checkpoint)
-        }
+        })
+    init { setPanelViewport(viewport) }
+    fun setContent(view: View) = viewport.setContent(view)
+    fun setStatusInsets(value: Insets) = setContentInsets(value.left, value.top, value.right, value.bottom)
+    fun setAppearance(value: AboutContentAppearance) {
+        bindSurface(value.density.density, value.panel, value.palette)
+        requestLayout()
     }
 }
 
@@ -361,7 +278,9 @@ private class AboutColumn(
     private fun dp(value: Float) = (value * appearance.density.density).roundToInt()
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val width = MeasureSpec.getSize(widthMeasureSpec)
-        val childWidth = max(0, width - dp(24f) - dp(24f))
+        val panel = appearance.panel
+        val horizontalPadding = dp(panel.horizontalPaddingDp)
+        val childWidth = max(0, width - 2 * horizontalPadding)
         val exactWidth = MeasureSpec.makeMeasureSpec(childWidth, MeasureSpec.EXACTLY)
         val wrapWidth = MeasureSpec.makeMeasureSpec(childWidth, MeasureSpec.AT_MOST)
         val unbounded = MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
@@ -369,23 +288,28 @@ private class AboutColumn(
         name.measure(wrapWidth, unbounded)
         version.measure(wrapWidth, unbounded)
         repository.measure(exactWidth, unbounded)
-        contentHeight = dp(12f) + header.measuredHeight + dp(14f) + name.measuredHeight +
-            dp(2f) + version.measuredHeight + dp(18f) + repository.measuredHeight + dp(26f)
-        if (error.visibility != GONE) { error.measure(exactWidth, unbounded); contentHeight += dp(12f) + error.measuredHeight }
+        contentHeight = dp(panel.topPaddingDp) + header.measuredHeight + dp(panel.headingGapDp) + name.measuredHeight +
+            dp(panel.summaryGapDp) + version.measuredHeight + dp(panel.linkGapDp) + repository.measuredHeight +
+            dp(panel.bottomPaddingDp)
+        if (error.visibility != GONE) {
+            error.measure(exactWidth, unbounded)
+            contentHeight += dp(panel.errorGapDp) + error.measuredHeight
+        }
         setMeasuredDimension(width, contentHeight)
     }
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
-        var y = dp(12f)
+        val panel = appearance.panel
+        var y = dp(panel.topPaddingDp)
         fun place(child: View) {
             val x = ((width - child.measuredWidth) / 2f).roundToInt()
             child.layout(x, y, x + child.measuredWidth, y + child.measuredHeight)
             y += child.measuredHeight
         }
-        place(header); y += dp(14f)
-        place(name); y += dp(2f)
-        place(version); y += dp(18f)
+        place(header); y += dp(panel.headingGapDp)
+        place(name); y += dp(panel.summaryGapDp)
+        place(version); y += dp(panel.linkGapDp)
         place(repository)
-        if (error.visibility != GONE) { y += dp(12f); place(error) }
+        if (error.visibility != GONE) { y += dp(panel.errorGapDp); place(error) }
     }
 }
 
@@ -405,7 +329,7 @@ private class AboutBrandHeader(context: Context, private var appearance: AboutCo
         requestLayout()
     }
     private fun buttonEnvironment(value: AboutContentAppearance) =
-        ReverbViewEnvironment(value.density, value.fontResolver, value.palette)
+        ReverbViewEnvironment(value.density, value.fontResolver, value.palette, appearance = value.uiAppearance)
 
     private fun bindClose(value: AboutContentAppearance, action: () -> Unit) {
         close.bind(buttonEnvironment(value), ReverbIcon.Close, context.getString(R.string.close),
@@ -414,10 +338,12 @@ private class AboutBrandHeader(context: Context, private var appearance: AboutCo
     private fun dp(value: Float) = (value * appearance.density.density).roundToInt()
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val width = MeasureSpec.getSize(widthMeasureSpec)
-        close.measure(MeasureSpec.makeMeasureSpec(min(width, dp(48f)), MeasureSpec.EXACTLY),
-            MeasureSpec.makeMeasureSpec(dp(48f), MeasureSpec.EXACTLY))
-        mark.measure(MeasureSpec.makeMeasureSpec(min(width, dp(104f)), MeasureSpec.EXACTLY),
-            MeasureSpec.makeMeasureSpec(dp(104f), MeasureSpec.EXACTLY))
+        val actionSize = dp(appearance.panel.actionSizeDp)
+        val brandSize = dp(appearance.panel.brandSizeDp)
+        close.measure(MeasureSpec.makeMeasureSpec(min(width, actionSize), MeasureSpec.EXACTLY),
+            MeasureSpec.makeMeasureSpec(actionSize, MeasureSpec.EXACTLY))
+        mark.measure(MeasureSpec.makeMeasureSpec(min(width, brandSize), MeasureSpec.EXACTLY),
+            MeasureSpec.makeMeasureSpec(brandSize, MeasureSpec.EXACTLY))
         setMeasuredDimension(width, max(close.measuredHeight, mark.measuredHeight))
     }
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
@@ -429,7 +355,7 @@ private class AboutBrandHeader(context: Context, private var appearance: AboutCo
 }
 
 private class AboutRepositoryCard(context: Context, appearance: AboutContentAppearance, onClick: () -> Unit) : ViewGroup(context) {
-    private val group = NativeGroupLayout(context, 20f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
+    private val group = NativeGroupLayout(context, appearance.panel.link.radiusDp, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
     val row = AboutRepositoryRow(context, appearance, onClick)
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -437,7 +363,8 @@ private class AboutRepositoryCard(context: Context, appearance: AboutContentAppe
         addView(group); setAppearance(appearance)
     }
     fun setAppearance(value: AboutContentAppearance) {
-        group.setPalette(aboutTonalColor(value.palette.surfaceContainerHighest, value.palette, 6f), 0)
+        group.setCornerRadiusDp(value.panel.link.radiusDp)
+        group.setPalette(value.panel.link.fill(value.palette), 0)
         row.setAppearance(value)
     }
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
@@ -451,17 +378,19 @@ private class AboutRepositoryRow(context: Context, private var appearance: About
     private val key = Any()
     private val sourceClick = onClick
     fun invokeSourceClick(): Boolean { sourceClick(); return true }
-    private val icon = AboutGithubGlyph(context, appearance.palette.ink)
+    private val icon = NativeDecorativeIconView(context,
+        ReverbIconDrawable(ReverbIcon.GitHub, resources.displayMetrics.density, appearance.palette.ink), appearance.palette.ink)
     val title = aboutParagraph(context, appearance, appearance.titleSmall,
-        reverbAboutRepositoryTitleColor(appearance.palette, appearance.titleSmall))
+        appearance.panel.link.titleColor(appearance.palette, appearance.titleSmall))
     val label = aboutParagraph(context, appearance, appearance.bodySmall, appearance.palette.muted)
     private val indication = RowIndication.install(this,
-        reverbAboutRepositoryContentColor(appearance.palette), { readCachedAnimatorDurationScale(context) })
+        appearance.panel.link.content(appearance.palette), { readCachedAnimatorDurationScale(context) })
     private val controller = ViewClickController(this, object : NativeClickEnvironment {
         override val nativeInputRoot: View? get() = this@AboutRepositoryRow.nativeInputRoot
         override val minimumTouchWidthPx get() = 48f * appearance.density.density
         override val minimumTouchHeightPx get() = minimumTouchWidthPx
-        override fun admitDown(event: MotionEvent) = roundedGroupGeometry(width.toFloat(), height.toFloat(), appearance.density.density, 20f)
+        override fun admitDown(event: MotionEvent) = roundedGroupGeometry(width.toFloat(), height.toFloat(),
+            appearance.density.density, appearance.panel.link.radiusDp)
             .acceptsPointer(event.x, event.y, event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER, minimumTouchWidthPx)
         override fun interestedParent(event: MotionEvent) = false // Shared touch phases supply actual vertical interest.
         override fun longPressOwnershipChanged(owns: Boolean) = Unit
@@ -479,28 +408,34 @@ private class AboutRepositoryRow(context: Context, private var appearance: About
         appearance = value
         icon.setColor(value.palette.ink)
         title.setTypography(value.titleSmall, value.density, value.fontResolver)
-        title.animateTextColor(reverbAboutRepositoryTitleColor(value.palette, value.titleSmall))
+        title.animateTextColor(value.panel.link.titleColor(value.palette, value.titleSmall))
         label.setTypography(value.bodySmall, value.density, value.fontResolver); label.animateTextColor(value.palette.muted)
         title.setText(context.resources.getString(R.string.github_repo))
-        indication.updateColor(reverbAboutRepositoryContentColor(value.palette)); requestLayout()
+        indication.updateColor(value.panel.link.content(value.palette)); requestLayout()
     }
     private fun dp(value: Float) = (value * appearance.density.density).roundToInt()
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        val w = MeasureSpec.getSize(widthMeasureSpec); val inner = max(0, w - dp(18f) - dp(18f))
-        val glyph = min(dp(24f), inner)
-        icon.measure(MeasureSpec.makeMeasureSpec(glyph, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(dp(24f), MeasureSpec.EXACTLY))
-        val textWidth = max(0, inner - icon.measuredWidth - dp(14f))
+        val link = appearance.panel.link
+        val w = MeasureSpec.getSize(widthMeasureSpec)
+        val inner = max(0, w - 2 * dp(link.horizontalPaddingDp))
+        val glyphSize = dp(link.glyphSizeDp)
+        icon.measure(MeasureSpec.makeMeasureSpec(min(glyphSize, inner), MeasureSpec.EXACTLY),
+            MeasureSpec.makeMeasureSpec(glyphSize, MeasureSpec.EXACTLY))
+        val textWidth = max(0, inner - icon.measuredWidth - dp(link.textGapDp))
         val textSpec = MeasureSpec.makeMeasureSpec(textWidth, MeasureSpec.AT_MOST)
         title.measure(textSpec, MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED))
         label.measure(textSpec, MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED))
-        setMeasuredDimension(w, max(dp(48f), max(icon.measuredHeight, title.measuredHeight + label.measuredHeight) + dp(15f) + dp(15f)))
+        val contentHeight = max(icon.measuredHeight, title.measuredHeight + label.measuredHeight)
+        setMeasuredDimension(w, max(dp(link.minimumHeightDp), contentHeight + 2 * dp(link.verticalPaddingDp)))
     }
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
         val rtl = layoutDirection == LAYOUT_DIRECTION_RTL
-        val iconX = if (rtl) width - dp(18f) - icon.measuredWidth else dp(18f)
+        val horizontalPadding = dp(appearance.panel.link.horizontalPaddingDp)
+        val iconX = if (rtl) width - horizontalPadding - icon.measuredWidth else horizontalPadding
         val iconY = ((height - icon.measuredHeight) / 2f).roundToInt()
         icon.layout(iconX, iconY, iconX + icon.measuredWidth, iconY + icon.measuredHeight)
-        val textStart = if (rtl) icon.left - dp(14f) else icon.right + dp(14f)
+        val textGap = dp(appearance.panel.link.textGapDp)
+        val textStart = if (rtl) icon.left - textGap else icon.right + textGap
         val titleX = if (rtl) textStart - title.measuredWidth else textStart
         val labelX = if (rtl) textStart - label.measuredWidth else textStart
         val textY = ((height - title.measuredHeight - label.measuredHeight) / 2f).roundToInt()
@@ -508,6 +443,9 @@ private class AboutRepositoryRow(context: Context, private var appearance: About
         label.layout(labelX, title.bottom, labelX + label.measuredWidth, title.bottom + label.measuredHeight)
         indication.onMeasured(width, height, appearance.density.density)
     }
+    fun containsVisualPoint(x: Float, y: Float): Boolean =
+        roundedGroupContains(width.toFloat(), height.toFloat(), appearance.density.density, appearance.panel.link.radiusDp, x, y)
+
     override fun getAccessibilityClassName(): CharSequence = "android.view.View"
 
     override fun onAttachedToWindow() {
@@ -528,32 +466,25 @@ private class AboutRepositoryRow(context: Context, private var appearance: About
     }
 }
 
-private class AboutGithubGlyph(context: Context, color: Int) : View(context) {
-    // Exact released ic_github.xml path, using the shared mask renderer.
-    private val icon = ReverbIconDrawable(ReverbIcon.GitHub, resources.displayMetrics.density, color)
-    private val colorMotion=colorTransition(color) {icon.setTint(it);invalidate()}
-    init { importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO }
-    fun setColor(value: Int) {colorMotion.retarget(value)}
-    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) { icon.setBounds(0, 0, w, h) }
-    override fun onDraw(canvas: Canvas) { icon.draw(canvas) }
-}
-
 private class AboutErrorCard(context: Context, private var appearance: AboutContentAppearance) : ViewGroup(context) {
-    private val group = NativeGroupLayout(context, 18f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
+    private val group = NativeGroupLayout(context, appearance.panel.error.radiusDp, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
     private val text = aboutParagraph(context, appearance, appearance.bodyMedium, appearance.palette.onErrorContainer).apply {
         accessibilityLiveRegion = ACCESSIBILITY_LIVE_REGION_POLITE
     }
     private val body = object : ViewGroup(context) {
         override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            val error = appearance.panel.error
             val w = MeasureSpec.getSize(widthMeasureSpec)
-            val contentWidth = max(0, w - dp(16f) - dp(8f))
+            val contentWidth = max(0, w - dp(error.startPaddingDp) - dp(error.endPaddingDp))
             text.measure(MeasureSpec.makeMeasureSpec(contentWidth, MeasureSpec.EXACTLY),
                 MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED))
-            setMeasuredDimension(w, text.measuredHeight + dp(8f) + dp(8f))
+            setMeasuredDimension(w, text.measuredHeight + 2 * dp(error.verticalPaddingDp))
         }
         override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
-            val x = if (layoutDirection == LAYOUT_DIRECTION_RTL) dp(8f) else dp(16f)
-            text.layout(x, dp(8f), x + text.measuredWidth, dp(8f) + text.measuredHeight)
+            val error = appearance.panel.error
+            val x = dp(if (layoutDirection == LAYOUT_DIRECTION_RTL) error.endPaddingDp else error.startPaddingDp)
+            val y = dp(error.verticalPaddingDp)
+            text.layout(x, y, x + text.measuredWidth, y + text.measuredHeight)
         }
     }
     init {
@@ -567,7 +498,8 @@ private class AboutErrorCard(context: Context, private var appearance: AboutCont
     fun setText(value: String) = text.setText(value)
     fun setAppearance(value: AboutContentAppearance) {
         appearance = value
-        group.setPalette(aboutTonalColor(value.palette.errorContainer, value.palette, 8f), 0)
+        group.setCornerRadiusDp(value.panel.error.radiusDp)
+        group.setPalette(value.panel.error.fill(value.palette), 0)
         text.setTypography(value.bodyMedium, value.density, value.fontResolver)
         text.animateTextColor(value.palette.onErrorContainer); requestLayout()
     }
@@ -577,15 +509,8 @@ private class AboutErrorCard(context: Context, private var appearance: AboutCont
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) { group.layout(0, 0, width, height) }
 }
 
-private const val ABOUT_PAINT_FLAGS = Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG
 private fun aboutParagraph(context: Context, appearance: AboutContentAppearance, style: TextStyle, color: Int) =
     ParagraphView(context, style, appearance.density, appearance.fontResolver, color)
-
-private fun aboutTonalColor(color: Int, palette: ReverbPalette, elevationDp: Float): Int {
-    if (color != palette.surface || elevationDp == 0f) return color
-    val alpha = ((4.5f * ln(elevationDp + 1f)) + 2f) / 100f
-    return Color(palette.surfaceTint).copy(alpha = alpha).compositeOver(Color(palette.surface)).toArgb()
-}
 
 /** A direct geometry owner for existing Views, not an independently measured/rendered layout tree. */
 private class AboutInputGeometry(private val density: Float) : AutoCloseable {
@@ -621,7 +546,7 @@ private class AboutInputGeometry(private val density: Float) : AutoCloseable {
             dx * dx + dy * dy <= radius * radius
         }
         val repositoryHit = Hit(repository, listOf(repositoryNode), emptyList()) { p ->
-            roundedGroupContains(repository.width.toFloat(), repository.height.toFloat(), density, 20f, p.x, p.y)
+            repository.containsVisualPoint(p.x, p.y)
         }
         val viewport = surface.viewport
         val inflation = (30f * density).roundToInt()

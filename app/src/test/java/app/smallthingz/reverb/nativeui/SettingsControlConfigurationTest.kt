@@ -163,7 +163,7 @@ class SettingsControlConfigurationTest {
         val density = Density(1f)
         val resolver = createFontFamilyResolver(activity)
         val palette = ReverbPalette.fallback(false)
-        val style = TextStyle(fontSize = 14.sp)
+        val style = reverbAppearance.typography.buttonLabelStyle(TextStyle(fontSize = 14.sp))
         val expanded = mutableListOf<Boolean>()
         val selected = mutableListOf<Int>()
         val host = SettingsAudioMenuHost(style, density, resolver, frames, scope, palette,

@@ -1,5 +1,6 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.components.blob.AudioReactiveBlobView
 import smallthingz.ui.input.phase.NativeClickPhaseHost
 import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
 import smallthingz.ui.text.view.NativeTextSemanticsClip
@@ -74,7 +75,7 @@ import app.smallthingz.reverb.nativeui.ReverbViewEnvironment
 import app.smallthingz.reverb.nativeui.HomeBufferSegment
 import app.smallthingz.reverb.nativeui.NativeWindowTextAccessibilityOwner
 import smallthingz.ui.components.NativeGroupLayout
-import app.smallthingz.reverb.nativeui.ReverbHomeControlSurface
+import smallthingz.ui.components.NativeCaptureControlSurface
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -242,8 +243,8 @@ private class HomeParityBoard(
     private var nativeSelection = case.selected
     private val referenceOne = AudioBlobController()
     private val referenceLoop = AudioBlobController()
-    private val nativeOne = AudioBlobController()
-    private val nativeLoop = AudioBlobController()
+    private val nativeOne = NativeAudioBlobController()
+    private val nativeLoop = NativeAudioBlobController()
     val referenceEvents = JSONArray()
     val nativeEvents = JSONArray()
     private var completion: CountDownLatch? = null
@@ -368,7 +369,8 @@ private class HomeParityBoard(
         val rootLocation = IntArray(2).also(root::getLocationInWindow)
         val blobs = mutableListOf<View>()
         fun visit(view: View) {
-            if (view is AudioBlobView) blobs += view
+            val isBlob = if (compose) view is AudioBlobView else view is AudioReactiveBlobView
+            if (isBlob) blobs += view
             if (view is ViewGroup) repeat(view.childCount) { visit(view.getChildAt(it)) }
         }
         visit(root)
@@ -995,7 +997,7 @@ private fun bindHomeParityAccessibility(host: NativeParityActivity, home: Reverb
                                        minimum: Float): AutoCloseable {
     fun clip(view: View): NativeTextSemanticsClip = home.topBar.sourceClip(view) ?: when {
         (view.parent is NativeGroupLayout && (view.parent as NativeGroupLayout).pointerContent === view) ||
-            view is ReverbHomeControlSurface -> NativeTextSemanticsClip.Rectangle(
+            view is NativeCaptureControlSurface -> NativeTextSemanticsClip.Rectangle(
                 smallthingz.ui.geometry.Rect(0f, 0f, view.width.toFloat(), view.height.toFloat()))
         else -> NativeTextSemanticsClip.Unclipped
     }

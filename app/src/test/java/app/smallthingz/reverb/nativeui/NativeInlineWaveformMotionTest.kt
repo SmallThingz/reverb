@@ -1,12 +1,13 @@
 package app.smallthingz.reverb.nativeui
 
-import app.smallthingz.reverb.RangeWaveformPass
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.yield
 import org.junit.Assert.*
 import org.junit.Test
+import smallthingz.ui.components.waveform.ProgressiveWaveformData
+import smallthingz.ui.components.waveform.ProgressiveWaveformFrame
 import smallthingz.ui.runtime.MonotonicFrameClock
 
 class NativeInlineWaveformMotionTest {
@@ -99,7 +100,7 @@ class NativeInlineWaveformMotionTest {
     }
 
     private fun data(coarse: Int, detail: Int) = ProgressiveWaveformData(
-        FloatArray(4), coarse, FloatArray(4), detail, RangeWaveformPass.DETAIL)
+        FloatArray(4), coarse, FloatArray(4), detail, detailAvailable = true)
 
     private class ManualFrames : MonotonicFrameClock {
         private class Request(val deliver: (Long) -> Unit)

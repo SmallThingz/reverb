@@ -1,21 +1,26 @@
 package app.smallthingz.reverb.nativeui
 
-import smallthingz.ui.components.NativeGroupLayout
 import android.content.Context
 import android.view.View
-import smallthingz.ui.components.NativeSegmentedPresentation
+import smallthingz.ui.components.NativeThemeMode
+import smallthingz.ui.components.NativeThemeSelector
 import smallthingz.ui.controls.ControlPalette
 
-internal class ReverbSegmentedPresentation(context: Context) : NativeSegmentedPresentation {
-    override val surface = NativeGroupLayout(context, 30f, onPaintedSurfaceChanged = ::invalidateSettingsTextContrast)
-    override fun setContent(content: View) = surface.addRow(content, NativeGroupLayout.LayoutParams(-1, -2))
-    override fun bindSurface(palette: ControlPalette) = surface.setPalette(palette.surface, palette.outline)
-    override val paintedSurfaceColor: Int get() = surface.paintedFillColor
-}
+internal fun createSettingsThemeSelector(
+    context: Context,
+    environment: ReverbViewEnvironment,
+    selected: NativeThemeMode,
+    inputAllowed: () -> Boolean,
+    onSelectionRequest: (NativeThemeMode) -> Boolean,
+): NativeThemeSelector = environment.appearance.settingsSelectors.createThemeSelector(
+    context, segmentedPalette(environment), selected, environment.textDensity, environment.sharedFontResolver,
+    inputAllowed = inputAllowed,
+    onPaintedSurfaceChanged = ::invalidateSettingsTextContrast,
+    titlePaintedSurface = ::settingsTextSurface,
+    onSelectionRequest = onSelectionRequest,
+)
 
-internal fun segmentedPalette(value: ReverbViewEnvironment): ControlPalette = value.palette.let {
-    ControlPalette(it.field, it.field, it.ink, it.muted, it.primary, it.settingsOnSelection, it.settingsSelection, it.border)
-}
+internal fun segmentedPalette(value: ReverbViewEnvironment): ControlPalette = value.palette.settingsControls
 
 internal fun View.settingsInputAllowed(inputRoot: () -> View?): Boolean {
     if (inputRoot() == null) return false

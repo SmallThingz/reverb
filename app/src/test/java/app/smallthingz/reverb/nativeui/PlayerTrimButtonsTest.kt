@@ -8,6 +8,7 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewConfiguration
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.FrameLayout
 import app.smallthingz.reverb.InlineFineSeekTarget
@@ -20,8 +21,10 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import smallthingz.ui.components.NativeMaterialButtonView
+import smallthingz.ui.components.NativeUiAppearance
 import smallthingz.ui.platform.AndroidUiFrameClock
 import smallthingz.ui.text.font.createFontFamilyResolver
 import smallthingz.ui.text.view.NativePlainTextViewGeometry
@@ -35,6 +38,52 @@ class PlayerTrimButtonsTest {
     private fun state(revision: String = "recording-one") = LibraryPlayerUiState(revision, true, false,
         10_000, 1_000, true, false, 0, 8_000, InlineFineSeekTarget.TRIM_START, null,
         true, false, 0f, 1f)
+
+    @Test fun appearanceSuppliesExpandedPlayerWaveformAndHeadingGeometry() {
+        val context = RuntimeEnvironment.getApplication()
+        val root = FrameLayout(context)
+        val frames = AndroidUiFrameClock(Choreographer.getInstance())
+        val scope = CoroutineScope(Dispatchers.Main.immediate + frames)
+        val palette = ReverbPalette.fallback(false)
+        val defaults = NativeUiAppearance.Default
+        val decorations = defaults.listDecorations
+        val alternate = defaults.copy(listDecorations = decorations.copy(recordingPlayer = decorations.recordingPlayer.copy(
+            sideInsetDp = 21f, waveformHeightDp = 96f, controlGapDp = 6f, headingGlyphDp = 22f, headingGlyphGapDp = 10f,
+        )))
+        fun place(view: View) {
+            view.measure(View.MeasureSpec.makeMeasureSpec(360, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED))
+            view.layout(0, 0, view.measuredWidth, view.measuredHeight)
+        }
+        try {
+            for (appearance in listOf(defaults, alternate)) {
+                val changed = appearance === alternate
+                val environment = ReverbViewEnvironment(Density(1f), createFontFamilyResolver(context), palette,
+                    appearance = appearance)
+                val fineSeek = createReverbSpringFineSeekView(context, SpringFineSeekEnvironment(
+                    palette, environment.textDensity, ViewConfiguration.get(context).scaledTouchSlop.toFloat(),
+                    frames, scope, root, { false }), appearance.springFineSeek)
+                val player = ReverbLibraryPlayerView(context, environment, fineSeek, root, frames, scope) { 0f }
+                try {
+                    place(player)
+                    val wave = player.waveformInput.view
+                    val times = player.startLabel.parent as View
+                    val inset = if (changed) 21 else 14
+                    assertEquals(inset, wave.left)
+                    assertEquals(360 - inset, wave.right)
+                    assertEquals(if (changed) 96 else 128, wave.height)
+                    assertEquals(if (changed) 6 else 2, times.top - wave.bottom)
+
+                    val heading = PlayerTrimHeading(context, environment)
+                    heading.bind(environment, state())
+                    place(heading)
+                    val glyph = heading.getChildAt(0)
+                    assertEquals(if (changed) 22 else 17, glyph.width)
+                    assertEquals(if (changed) 10 else 7, heading.title.left - glyph.right)
+                } finally { player.release() }
+            }
+        } finally { scope.cancel() }
+    }
 
     @Test fun narrowLargeTextKeepsBothActionsReadableAndMirrorsTheirPlacement() {
         val owner = Robolectric.buildActivity(Activity::class.java).setup().visible()

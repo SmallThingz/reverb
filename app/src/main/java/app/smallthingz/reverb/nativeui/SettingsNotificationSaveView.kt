@@ -1,39 +1,16 @@
 package app.smallthingz.reverb.nativeui
 
-import android.animation.ValueAnimator
 import android.content.Context
-import android.os.Bundle
-import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
-import android.view.accessibility.AccessibilityNodeInfo
 import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import app.smallthingz.reverb.NotificationDurationBinding
 import app.smallthingz.reverb.NotificationDurationCommit
 import app.smallthingz.reverb.NotificationDurationInteractionState
-import app.smallthingz.reverb.RangeDurationWheelView
 import app.smallthingz.reverb.R
-import app.smallthingz.reverb.notificationDurationStepSeconds
 import kotlin.math.roundToInt
-import smallthingz.ui.interaction.view.readCachedAnimatorDurationScale
+import smallthingz.ui.components.NativeViewAnimatorScale
 
-/** A denied optional cache initialization is retried only for a new animation target. */
-internal class SettingsAnimatorDurationScale(private val context: Context) {
-    private var target: Float? = null
-    private var denied = false
-    fun target(next: Float): Float {
-        if (target != next) { target = next; denied = false }
-        return read()
-    }
-    fun read(): Float {
-        if (!ValueAnimator.areAnimatorsEnabled()) return 0f
-        if (denied) return 1f
-        val scale = try { readCachedAnimatorDurationScale(context) }
-        catch (_: SecurityException) { denied = true; 1f }
-        return if (scale.isFinite() && scale >= 0f) scale else 1f
-    }
-}
+internal typealias SettingsAnimatorDurationScale = NativeViewAnimatorScale
 
 internal data class SettingsNotificationSaveState(
     val enabled:Boolean,
@@ -120,16 +97,21 @@ internal class SettingsNotificationSaveView(
     }
     override fun onMeasure(w:Int,h:Int) {
         val width=MeasureSpec.getSize(w)
+        val wheelStyle=environment.appearance.durationWheel
         row.measure(exact(width),unspecified())
-        wheel?.view?.measure(exact((width-2*dp(14)).coerceAtLeast(0)),exact(dp(160)))
-        val extra=wheel?.let {((2*dp(8)+it.view.measuredHeight)*expansion.value.coerceIn(0f,1f)).roundToInt()}?:0
+        wheel?.view?.measure(exact((width-2*dp(wheelStyle.settingsInsetDp)).coerceAtLeast(0)),
+            exact(dp(wheelStyle.heightDp)))
+        val extra=wheel?.let {((2*dp(wheelStyle.settingsVerticalInsetDp)+it.view.measuredHeight)*
+            expansion.value.coerceIn(0f,1f)).roundToInt()}?:0
         setMeasuredDimension(resolveSize(width,w),resolveSize(row.measuredHeight+extra,h))
     }
     override fun onLayout(changed:Boolean,l:Int,t:Int,r:Int,b:Int) {
         row.layout(0,0,width,row.measuredHeight)
         wheel?.view?.let {view->
-            val y=row.measuredHeight+dp(8)
-            view.layout(dp(14),y,width-dp(14),y+view.measuredHeight)
+            val wheelStyle=environment.appearance.durationWheel
+            val y=row.measuredHeight+dp(wheelStyle.settingsVerticalInsetDp)
+            val inset=dp(wheelStyle.settingsInsetDp)
+            view.layout(inset,y,width-inset,y+view.measuredHeight)
         }
     }
     override fun onDetachedFromWindow() {
@@ -144,6 +126,6 @@ internal class SettingsNotificationSaveView(
         expansionDriver?.close();expansionDriver=null
         retireWheel()
     }
-    private fun dp(v:Int)=(v*environment.textDensity.density).roundToInt()
+    private fun dp(v:Float)=(v*environment.textDensity.density).roundToInt()
 }
 

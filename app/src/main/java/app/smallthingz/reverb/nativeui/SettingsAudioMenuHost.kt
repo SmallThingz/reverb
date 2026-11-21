@@ -87,7 +87,7 @@ internal class SettingsAudioMenuHost(
         val scroll = scrollStates.getOrPut(kind) { NativeVerticalScrollState() }
         lateinit var session: Session
         val window = NativePopupMenu(
-            anchor, density, reverbDefaultTextStyle().merge(style), resolver, palette.menuColors(),
+            anchor, density, style, resolver, palette.menuColors(),
             scroll, frames, scope, ReverbMenuIcons,
             onDismissRequest = { if (sessions[kind] === session) dismiss(kind) },
             onTerminal = {

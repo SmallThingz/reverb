@@ -16,7 +16,8 @@ internal class ReverbAboutDialog(
 
     private lateinit var content: ReverbAboutContentView
     private val dialog = NativeFloatingDialog(anchor, appearance.density.density, onDismiss,
-        statusBarProtection = createReverbStatusBarProtection(anchor.context)) { context, runtime, dismiss ->
+        statusBarProtection = createReverbStatusBarProtection(anchor.context, appearance.uiAppearance),
+        shadowDp = appearance.panel.shadowDp) { context, runtime, dismiss ->
         val body = createReverbAboutContent(context, appearance, dismiss, runtime, restoredScrollPosition)
         content = body
         NativeFloatingDialogContent(body, body.predictiveMotionTarget, body::bindWindowAccessibility, body::dispose)
@@ -25,7 +26,7 @@ internal class ReverbAboutDialog(
     fun scrollPosition(): Int = content.scrollPosition()
     val window get() = dialog.window
     fun updateAppearance(appearance: AboutContentAppearance, onDismiss: () -> Unit) {
-        dialog.bind(onDismiss)
+        dialog.bind(onDismiss, appearance.panel.shadowDp)
         content.setAppearance(appearance, dialog::requestDismiss)
     }
     fun show() = dialog.show()

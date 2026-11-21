@@ -1,6 +1,9 @@
 package app.smallthingz.reverb.nativeui
 
 import smallthingz.ui.input.phase.NativePointerLayerShape
+import smallthingz.ui.components.NativeRoundedClipLayout
+import smallthingz.ui.components.NativeToolbarActionTone
+import smallthingz.ui.components.NativeToolbarStyle
 import smallthingz.ui.geometry.roundedGroupContains
 import smallthingz.ui.geometry.roundedGroupGeometry
 import smallthingz.ui.interaction.view.NativeClickBinding
@@ -14,16 +17,10 @@ import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
 import smallthingz.ui.text.view.NativeMergedRowAccessibilityState
 import smallthingz.ui.text.view.NativeMergedRowRole
 import android.content.Context
-import android.graphics.Canvas
-import android.graphics.Outline
-import android.graphics.Path
 import android.graphics.Rect
-import android.graphics.RectF
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
-import android.view.ViewOutlineProvider
-import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
 import app.smallthingz.reverb.R
 import smallthingz.ui.input.phase.NativeClickPhaseHost
@@ -35,13 +32,13 @@ import kotlin.math.roundToInt
 internal class ReverbIncidentBackView(
     context: Context,
     palette: ReverbPalette,
+    private var toolbarStyle: NativeToolbarStyle,
     private var onBack: () -> Unit,
-) : ViewGroup(context), NativeClickPhaseHost, NativePointerLayerShape, NativeMergedRowAccessibilityHost {
+) : NativeRoundedClipLayout(context), NativeClickPhaseHost, NativePointerLayerShape, NativeMergedRowAccessibilityHost {
     var pointerInputRoot: View? = null
     private val ownerKey = Any()
-    private val clip = Path()
-    private val rect = RectF()
-    private val icon = OnboardingIconView(context, ReverbIcon.Back, palette.muted).apply {
+    private val icon = OnboardingIconView(context, ReverbIcon.Back,
+        toolbarStyle.actionTint(palette, NativeToolbarActionTone.MUTED)).apply {
         contentDescription = context.getString(R.string.back)
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
     }
@@ -51,10 +48,10 @@ internal class ReverbIncidentBackView(
             { NativeMergedRowAccessibilityState(true, null, null, children) },
             invokeSourceClick = { onBack(); true })
     }
-    private val indication = RowIndication.install(this, palette.ink, { readCachedAnimatorDurationScale(context) })
+    private val indication = RowIndication.install(this, toolbarStyle.contentColor(palette), { readCachedAnimatorDurationScale(context) })
     private val controller = ViewClickController(this, object : NativeClickEnvironment {
         override val nativeInputRoot get() = pointerInputRoot
-        override val minimumTouchWidthPx get() = 48f * resources.displayMetrics.density
+        override val minimumTouchWidthPx get() = toolbarStyle.action.minimumTargetDp * resources.displayMetrics.density
         override val minimumTouchHeightPx get() = minimumTouchWidthPx
         override fun admitDown(event: MotionEvent): Boolean = roundedGroupGeometry(
             width.toFloat(), height.toFloat(), resources.displayMetrics.density,
@@ -79,19 +76,15 @@ internal class ReverbIncidentBackView(
         addView(icon)
         addView(mergedRowAccessibility.roleView)
         setOnClickListener { onBack() }
-        clipToOutline = true
-        outlineProvider = object : ViewOutlineProvider() {
-            override fun getOutline(view: View, outline: Outline) {
-                outline.setRoundRect(0, 0, width, height, min(width, height) / 2f)
-            }
-        }
         if (android.os.Build.VERSION.SDK_INT >= 29) isForceDarkAllowed = false
     }
 
-    fun bind(palette: ReverbPalette, onBack: () -> Unit) {
+    fun bind(palette: ReverbPalette, style: NativeToolbarStyle, onBack: () -> Unit) {
         this.onBack = onBack
-        icon.bind(ReverbIcon.Back, palette.muted)
-        indication.updateColor(palette.ink)
+        if (toolbarStyle.leadingTitleGlyphDp != style.leadingTitleGlyphDp) requestLayout()
+        toolbarStyle = style
+        icon.bind(ReverbIcon.Back, style.actionTint(palette, NativeToolbarActionTone.MUTED))
+        indication.updateColor(style.contentColor(palette))
         bindInput()
         invalidate()
     }
@@ -114,16 +107,12 @@ internal class ReverbIncidentBackView(
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         indication.onMeasured(w, h, resources.displayMetrics.density)
-        rect.set(0f, 0f, w.toFloat(), h.toFloat())
-        clip.rewind()
-        clip.addRoundRect(rect, min(w, h) / 2f, min(w, h) / 2f, Path.Direction.CW)
-        invalidateOutline()
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val width = MeasureSpec.getSize(widthMeasureSpec)
         val height = MeasureSpec.getSize(heightMeasureSpec)
-        val glyph = (24f * resources.displayMetrics.density).roundToInt()
+        val glyph = (toolbarStyle.leadingTitleGlyphDp * resources.displayMetrics.density).roundToInt()
         icon.measure(MeasureSpec.makeMeasureSpec(glyph, MeasureSpec.EXACTLY),
             MeasureSpec.makeMeasureSpec(glyph, MeasureSpec.EXACTLY))
         mergedRowAccessibility.roleView.measure(MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY),
@@ -136,15 +125,6 @@ internal class ReverbIncidentBackView(
         val y = ((height - icon.measuredHeight) / 2f).roundToInt()
         icon.layout(x, y, x + icon.measuredWidth, y + icon.measuredHeight)
         mergedRowAccessibility.roleView.layout(0, 0, width, height)
-    }
-
-    override fun draw(canvas: Canvas) {
-        if (canvas.isHardwareAccelerated) super.draw(canvas) else {
-            val checkpoint = canvas.save()
-            canvas.clipPath(clip)
-            super.draw(canvas)
-            canvas.restoreToCount(checkpoint)
-        }
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean = controller.touch(event)

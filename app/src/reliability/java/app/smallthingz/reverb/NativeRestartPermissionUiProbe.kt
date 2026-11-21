@@ -20,6 +20,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.Window
 import android.view.accessibility.AccessibilityNodeInfo
+import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
@@ -82,9 +83,15 @@ internal fun verifyNativeRestartPermissionUi(instrumentation: Instrumentation, r
                         it.text.toString() == context.getString(if (completed) R.string.boot_resume_success else R.string.boot_resume_in_progress)
                     }
                     check(title.isAccessibilityHeading && title.isShown)
+                    check(title.accessibilityLiveRegion == View.ACCESSIBILITY_LIVE_REGION_POLITE)
                     check(restartUiViews(content).none { it.isClickable })
                     val progress = restartUiViews(content).filterIsInstance<ProgressBar>().single()
                     check(progress.visibility == if (completed) View.INVISIBLE else View.VISIBLE)
+                    val scroll = content.getChildAt(0) as ScrollView
+                    check(content.childCount == 1 && scroll.isFillViewport && scroll.childCount == 1)
+                    val column = scroll.getChildAt(0) as LinearLayout
+                    check(column.childCount == 3 && column.getChildAt(0) === brand &&
+                        column.getChildAt(1) === title && column.getChildAt(2) === progress)
                     val progressLocation = IntArray(2).also(progress::getLocationInWindow)
                     val contentLocation = IntArray(2).also(content::getLocationInWindow)
                     val progressLeft = progressLocation[0] - contentLocation[0]
@@ -92,6 +99,7 @@ internal fun verifyNativeRestartPermissionUi(instrumentation: Instrumentation, r
                     val configuredTint = progress.indeterminateTintList?.let {
                         Integer.toUnsignedLong(it.getColorForState(progress.drawableState, it.defaultColor))
                     }
+                    check(configuredTint == Integer.toUnsignedLong(palette.primary))
                     JSONObject().put("name", "boot-$theme-${if (completed) "success" else "pending"}")
                         .put("heading_accessible", true).put("open_action_present", false)
                         .put("reverb_brand_visible", true).put("cancel_action_present", false)

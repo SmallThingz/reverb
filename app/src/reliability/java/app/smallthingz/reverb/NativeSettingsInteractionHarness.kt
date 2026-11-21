@@ -2,6 +2,7 @@ package app.smallthingz.reverb
 
 import smallthingz.ui.input.phase.NativePointerLayerShape
 import smallthingz.ui.components.NativeGroupLayout
+import smallthingz.ui.components.NativeDurationWheelView
 import smallthingz.ui.input.NativeAndroidInteropHost
 import smallthingz.ui.input.phase.NativeAndroidInteropNode
 import smallthingz.ui.input.phase.NativeClickPhaseHost
@@ -416,7 +417,10 @@ internal class SettingsInteractionRender(
         }
     }
     fun refreshAccessibility() { text?.refresh() }
-    fun wheel(): RangeDurationWheelView = settingsInteractionViews(board).filterIsInstance<RangeDurationWheelView>().single()
+    fun wheels(): Sequence<View> = settingsInteractionViews(board).filter {
+        if (reference) it is RangeDurationWheelView else it is NativeDurationWheelView
+    }
+    fun wheel(): View = wheels().single()
     fun click(label: String) {
         requireCurrent()
         refreshAccessibility()
@@ -435,7 +439,7 @@ internal class SettingsInteractionRender(
     }
     fun setProgress(label: String, value: Float): Boolean {
         requireCurrent(); refreshAccessibility()
-        val nativeWheel = settingsInteractionViews(board).filterIsInstance<RangeDurationWheelView>()
+        val nativeWheel = wheels()
             .singleOrNull { it.contentDescription?.toString()?.startsWith(label + ", ") == true }
         if (nativeWheel != null) return nativeWheel.performAccessibilityAction(
             AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS.id,
@@ -458,7 +462,7 @@ internal class SettingsInteractionRender(
     }
     fun target(label: String): Rect {
         requireCurrent(); refreshAccessibility()
-        settingsInteractionViews(board).filterIsInstance<RangeDurationWheelView>()
+        wheels()
             .singleOrNull { it.contentDescription?.toString()?.startsWith(label + ", ") == true }?.let { child ->
                 val origin = IntArray(2).also(child::getLocationOnScreen)
                 return Rect(origin[0], origin[1], origin[0] + child.width, origin[1] + child.height)
@@ -589,7 +593,7 @@ private class SettingsInteractionPointers(
     private fun entry(view: View): Layout = cache.getOrPut(view) { Layout(view) }
     private inner class Layout(private val view: View) : NativeViewPointerHitLayout, AutoCloseable {
         private val click = (view as? NativeClickPhaseHost)?.let { NativeClickPhaseNode(view, it.nativeClickEndpoint) { false } }
-        private val interop = if (view is RangeDurationWheelView || view is SilenceCurveView)
+        private val interop = if (view is NativeDurationWheelView || view is SilenceCurveView)
             NativeAndroidInteropNode(view, (view.parent as NativeAndroidInteropHost).nativeInteropRequests) else null
         override val placed get() = view.isAttachedToWindow && view.isLaidOut && view.visibility == View.VISIBLE
         override val size get() = Size(view.width.toFloat(), view.height.toFloat())

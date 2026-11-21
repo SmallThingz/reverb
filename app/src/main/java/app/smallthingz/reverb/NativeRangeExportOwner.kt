@@ -14,8 +14,8 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
 import app.smallthingz.reverb.nativeui.LibraryTweenValue
 import app.smallthingz.reverb.nativeui.NativeInlineWaveformMotion
-import app.smallthingz.reverb.nativeui.ProgressiveWaveformData
-import app.smallthingz.reverb.nativeui.ProgressiveWaveformFrame
+import smallthingz.ui.components.waveform.ProgressiveWaveformData
+import smallthingz.ui.components.waveform.ProgressiveWaveformFrame
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
@@ -217,15 +217,15 @@ internal class NativeRangeExportOwner(
         val coarseCount = state.coarseWaveformBuiltCount
         val detail = state.detailWaveform
         val detailCount = state.detailWaveformBuiltCount
-        val pass = state.waveformPass
+        val detailAvailable = state.waveformPass == RangeWaveformPass.DETAIL
         val previousWaveform = waveformData
         val waveformChanged = previousWaveform == null ||
             waveformCoarse !== coarse || previousWaveform.coarse.builtCount != coarseCount ||
             waveformDetail !== detail || previousWaveform.detail.builtCount != detailCount ||
-            previousWaveform.pass != pass
+            previousWaveform.detailAvailable != detailAvailable
         if (waveformChanged || waveformLoading != state.waveformLoading) {
             if (waveformChanged) {
-                waveformData = ProgressiveWaveformData(coarse, coarseCount, detail, detailCount, pass)
+                waveformData = ProgressiveWaveformData(coarse, coarseCount, detail, detailCount, detailAvailable)
                 waveformCoarse = coarse
                 waveformDetail = detail
             }

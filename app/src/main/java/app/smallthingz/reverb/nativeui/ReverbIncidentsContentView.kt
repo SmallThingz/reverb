@@ -1,6 +1,9 @@
 package app.smallthingz.reverb.nativeui
 
-import smallthingz.ui.components.nativeMinimumInteractiveVisualOffset
+import smallthingz.ui.components.NativeBackdropStyle
+import smallthingz.ui.components.NativeLeadingTitleTopBarLayout
+import smallthingz.ui.components.NativeToolbarBackground
+import smallthingz.ui.components.NativeToolbarStyle
 import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.text.view.NativeSourceAccessibilityNode
 import smallthingz.ui.text.view.NativeTextSemanticsClip
@@ -35,6 +38,8 @@ internal data class IncidentsContentAppearance(
     val card: IncidentCardAppearance,
     val titleLarge: TextStyle,
     val titleMedium: TextStyle,
+    val toolbar: NativeToolbarStyle,
+    val backdrops: NativeBackdropStyle,
 )
 
 /**
@@ -55,8 +60,7 @@ internal class ReverbIncidentsContentView(
     private val savedPosition: NativeIncidentsSavedPosition = NativeIncidentsSavedPosition(),
 ) : ViewGroup(context) {
     private var appearance = initialAppearance
-    private val backgroundNoise = ReverbNoiseDrawable(resources, initialAppearance.card.palette.surface)
-    private val backgroundColorMotion = backgroundNoise.colorTransition(this, initialAppearance.card.palette.surface)
+    private val backdrop = initialAppearance.backdrops.attachPage(this, initialAppearance.card.palette)
     private val header = IncidentsHeader(context, initialAppearance, onBack, inputRoot)
     private val empty = IncidentsEmptyContent(context, initialAppearance, frames, scope, durationScale)
     private val adapter = IncidentsAdapter(context, initialAppearance.card, menuHost, actions, inputRoot)
@@ -97,7 +101,6 @@ internal class ReverbIncidentsContentView(
     }
 
     init {
-        background = backgroundNoise
         if (android.os.Build.VERSION.SDK_INT >= 29) isForceDarkAllowed = false
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         descendantFocusability = FOCUS_AFTER_DESCENDANTS
@@ -127,7 +130,7 @@ internal class ReverbIncidentsContentView(
         return NativeListSavedPosition(index, (list.paddingTop - manager.getDecoratedTop(item)).coerceAtLeast(0))
     }
 
-    fun setStatusBarInsets(insets: Insets) = header.setStatusBarInsets(insets)
+    fun setStatusBarInsets(insets: Insets) = header.setWindowInsets(insets)
     fun semanticsClip(view: View): NativeTextSemanticsClip = when {
         view === this || view === list ||
             (view.parent is NativeGroupLayout && (view.parent as NativeGroupLayout).getChildAt(0) === view) ->
@@ -163,7 +166,7 @@ internal class ReverbIncidentsContentView(
     fun setAppearance(value: IncidentsContentAppearance, onBack: () -> Unit, actions: IncidentCardActions) {
         appearance = value
         this.actions = actions
-        backgroundColorMotion.retarget(value.card.palette.surface)
+        value.backdrops.bindPage(backdrop, value.card.palette)
         header.bind(value, onBack)
         empty.setAppearance(value)
         adapter.setAppearance(value.card, actions)
@@ -225,19 +228,18 @@ internal fun incidentContentActions(context: Context, controller: IncidentHistor
 
 private class IncidentsHeader(
     context: Context,
-    private var appearance: IncidentsContentAppearance,
+    appearance: IncidentsContentAppearance,
     onBack: () -> Unit,
     inputRoot: View,
-) : ViewGroup(context) {
-    private val back = ReverbIncidentBackView(context, appearance.card.palette, onBack).apply {
-        pointerInputRoot = inputRoot
-    }
-    private val title = paragraph(context, appearance.card, appearance.titleLarge, appearance.card.palette.ink).apply {
+    private val back: ReverbIncidentBackView = ReverbIncidentBackView(context, appearance.card.palette,
+        appearance.toolbar, onBack).apply { pointerInputRoot = inputRoot },
+    private val title: ParagraphView = paragraph(context, appearance.card, appearance.titleLarge,
+        appearance.toolbar.contentColor(appearance.card.palette)).apply {
         setText(context.getString(R.string.incidents_title))
-    }
-    private val noise = ReverbNoiseDrawable(resources, appearance.card.palette.surface, ReverbNoiseDrawable.SEED_TOP_BAR)
-    private val noiseColor = noise.colorTransition(this, appearance.card.palette.surface)
-    private var insets = Insets.NONE
+    },
+) : NativeLeadingTitleTopBarLayout(context, appearance.card.density.density, appearance.toolbar, back, title) {
+    private val chrome = NativeToolbarBackground(this, appearance.toolbar,
+        appearance.toolbar.backgroundColor(appearance.card.palette))
     private var sourceAccessibilityNode: ((View) -> NativeSourceAccessibilityNode)? = null
 
     fun bindSourceAccessibility(sourceNode: ((View) -> NativeSourceAccessibilityNode)?) {
@@ -250,55 +252,15 @@ private class IncidentsHeader(
         children.filterTo(outChildren) { it !== back || sourceAccessibilityNode?.invoke(it)?.present != false }
     }
 
-    init {
-        background = noise
-        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
-        addView(back)
-        addView(title)
-    }
-
-    fun setStatusBarInsets(value: Insets) {
-        if (insets != value) { insets = value; requestLayout() }
-    }
-
     fun bind(value: IncidentsContentAppearance, onBack: () -> Unit) {
-        appearance = value
-        back.bind(value.card.palette, onBack)
+        val palette = value.card.palette
+        bindMetrics(value.card.density.density, value.toolbar)
+        back.bind(palette, value.toolbar, onBack)
         title.setTypography(value.titleLarge, value.card.density, value.card.fontResolver)
-        title.animateTextColor(value.card.palette.ink)
-        noiseColor.retarget(value.card.palette.surface)
+        title.animateTextColor(value.toolbar.contentColor(palette))
+        chrome.bind(value.toolbar, value.toolbar.backgroundColor(palette))
         requestLayout()
     }
-    private fun dp(value: Float) = (value * appearance.card.density.density).roundToInt()
-
-    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        val width = MeasureSpec.getSize(widthMeasureSpec)
-        val contentHeight = dp(66f)
-        val backSize = dp(46f)
-        back.measure(MeasureSpec.makeMeasureSpec(backSize, MeasureSpec.EXACTLY),
-            MeasureSpec.makeMeasureSpec(backSize, MeasureSpec.EXACTLY))
-        val titleWidth = max(0, width - insets.left - insets.right - dp(28f) - backSize - dp(8f))
-        title.measure(MeasureSpec.makeMeasureSpec(titleWidth, MeasureSpec.AT_MOST),
-            MeasureSpec.makeMeasureSpec(contentHeight, MeasureSpec.AT_MOST))
-        setMeasuredDimension(width, resolveSize(contentHeight + insets.top + insets.bottom, heightMeasureSpec))
-    }
-
-    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
-        val rtl = layoutDirection == LAYOUT_DIRECTION_RTL
-        val rowTop = insets.top
-        val contentHeight = dp(66f)
-        val backX = if (rtl) width - insets.right - dp(14f) - back.measuredWidth else insets.left + dp(14f)
-        val backY = rowTop + ((contentHeight - back.measuredHeight) / 2f).roundToInt()
-        // IconButton(size46dp) keeps its outer Row allocation, while M3's minimum48dp
-        // layout + Placeable's apparent-size centering can leave a one-pixel visual residual.
-        val visualX = backX + nativeMinimumInteractiveVisualOffset(back.measuredWidth, dp(48f))
-        val visualY = backY + nativeMinimumInteractiveVisualOffset(back.measuredHeight, dp(48f))
-        back.layout(visualX, visualY, visualX + back.measuredWidth, visualY + back.measuredHeight)
-        val titleX = if (rtl) backX - dp(8f) - title.measuredWidth else backX + back.measuredWidth + dp(8f)
-        val titleY = rowTop + ((contentHeight - title.measuredHeight) / 2f).roundToInt()
-        title.layout(titleX, titleY, titleX + title.measuredWidth, titleY + title.measuredHeight)
-    }
-
 }
 
 private class IncidentsEmptyContent(

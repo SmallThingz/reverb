@@ -1,5 +1,6 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeSpringFineSeekGeometry
 import app.smallthingz.reverb.rangeFineTuneVerticalDragPull
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -14,8 +15,8 @@ class InlineFineSeekCompactGeometryTest {
                     val available = (availableDp * density).roundToInt()
                     val originalHeight = minOf((originalDp * density).roundToInt(), available)
                     val visualHeight = minOf((96f * density).roundToInt(), available)
-                    val original = SpringFineSeekGeometry(300, originalHeight, density)
-                    val compact = SpringFineSeekGeometry(300, visualHeight, density, originalHeight)
+                    val original = NativeSpringFineSeekGeometry(300, originalHeight, density)
+                    val compact = NativeSpringFineSeekGeometry(300, visualHeight, density, originalHeight)
                     assertEquals(original.inputVerticalTravel, compact.verticalGestureTravel, 0f)
                     for (deltaDp in listOf(-120f, -30f, 0f, 45f, 240f)) {
                         val before = rangeFineTuneVerticalDragPull(.2f, deltaDp * density,
@@ -33,15 +34,15 @@ class InlineFineSeekCompactGeometryTest {
 
     @Test fun untouchedCallersKeepTheirOriginalGainAndPuckGeometry() {
         for (height in listOf(32, 64, 104, 120, 132)) {
-            val original = SpringFineSeekGeometry(320, height, 1f)
+            val original = NativeSpringFineSeekGeometry(320, height, 1f)
             assertEquals(original.inputVerticalTravel, original.verticalGestureTravel, 0f)
         }
-        val compact = SpringFineSeekGeometry(320, 96, 1f, 120)
+        val compact = NativeSpringFineSeekGeometry(320, 96, 1f, 120)
         assertEquals(64, compact.hitHeight)
         assertEquals(64, compact.hitWidth)
         assertEquals(14f, compact.drawVerticalTravel, 0f)
         assertEquals(14f, compact.inputVerticalTravel, 0f)
         assertEquals(26f, compact.verticalGestureTravel, 0f)
-        assertEquals(16, compact.puckTop(0f, 0f))
+        assertEquals(16, compact.puckTop(0f))
     }
 }
