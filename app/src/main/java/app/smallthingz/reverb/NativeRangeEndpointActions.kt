@@ -92,7 +92,9 @@ internal class NativeRangeEndpointActions(
         }
 
         override fun performAccessibilityAction(host: View, action: Int, args: Bundle?): Boolean {
-            if (!alive || !view.isAttachedToWindow || !sourceNode().present) return false
+            if (!alive || !view.isAttachedToWindow) return false
+            val node = sourceNode()
+            if (!node.present) return false
             textAccessibility.performAction(action, args)?.let { return it }
             if (action == AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS ||
                 action == AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS)
@@ -119,8 +121,8 @@ internal class NativeRangeEndpointActions(
                         -increment else increment
                     selectOrAdjust(requested.toDouble())
                 }
-                earlierId -> selectOrAdjust(state.targetSeconds(target).toDouble() - 1.0)
-                laterId -> selectOrAdjust(state.targetSeconds(target).toDouble() + 1.0)
+                earlierId -> adjustFromAccessibilityMenu(-1.0, node)
+                laterId -> adjustFromAccessibilityMenu(1.0, node)
                 AccessibilityNodeInfo.ACTION_FOCUS, AccessibilityNodeInfo.ACTION_CLEAR_FOCUS ->
                     super.performAccessibilityAction(host, action, args)
                 else -> false
@@ -145,12 +147,23 @@ internal class NativeRangeEndpointActions(
 
     private fun actionEnabled() = interactionEnabled() && state.durationActionAvailable &&
         rangeEndpointLimits(state.durationSeconds, target) != null
-    private fun actionReady() = alive && interactionEnabled() && sourceWindow.isAttachedToWindow &&
-        sourceWindow.isShown && sourceWindow.hasWindowFocus() &&
+    private fun ownerReady() = alive && interactionEnabled() && sourceWindow.isAttachedToWindow &&
+        sourceWindow.isShown &&
         lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) && state.durationActionAvailable
+    private fun actionReady() = ownerReady() && sourceWindow.hasWindowFocus()
     private fun gesture() = state.inputGesture(interactionAllowed = ::actionReady, onCancel = {})
     private fun selectOrAdjust(requested: Double?, owner: RangeInputGesture = gesture()) =
         state.editEndpointFromAction(target, requested, owner)
+
+    private fun adjustFromAccessibilityMenu(delta: Double, node: NativeSourceAccessibilityNode): Boolean {
+        if (node.hidden || !node.visibleToUser) return false
+        // A service can invoke this action as its menu closes, before input focus returns.
+        val gesture = state.inputGesture(interactionAllowed = {
+            ownerReady() && view.isShown && view.isEnabled && view.windowVisibility == View.VISIBLE &&
+                view.windowToken?.let { it === sourceWindow.windowToken } == true
+        }, onCancel = {})
+        return selectOrAdjust(state.targetSeconds(target).toDouble() + delta, gesture)
+    }
 
     private fun key(code: Int, event: KeyEvent): Boolean {
         val requested = when (code) {
