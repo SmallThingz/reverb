@@ -72,15 +72,18 @@ class ReliabilityInstrumentation : Instrumentation() {
                 "Reliability tests must never run against a user's Reverb installation"
             }
             val currentUiSmoke = targetContext.packageName == "app.smallthingz.reverb.uitheme.reliability"
+            val currentUiBrandGeometry = currentUiSmoke && requestedTest == "brand_geometry"
             if (currentUiSmoke) {
                 check(targetContext.applicationContext.javaClass == android.app.Application::class.java &&
-                    requestedTest in setOf("current_file_staged_recovery", "native_home_label_height", "native_rename_editor_current", "native_click_ripple_current", "native_retention_input_parity", "native_retention_keyboard", "native_icon_parity", "native_settings_library_selectors", "native_theme_matrix", "native_settings_calibration_current", "current_media_delete_consent",
+                    (currentUiBrandGeometry || requestedTest in setOf("current_file_staged_recovery", "native_home_label_height", "native_rename_editor_current", "native_click_ripple_current", "native_retention_input_parity", "native_retention_keyboard", "native_icon_parity", "native_settings_library_selectors", "native_theme_matrix", "native_settings_calibration_current", "current_media_delete_consent",
                         "native_silence_blob_current", "native_silence_diagnostic_current", "native_blob_feel_current", "native_material_progress_current", "native_library_admission", "native_library_expansion_measurement", "native_library_expansion_clipping", "native_segmented_contrast", "native_settings_theme_contrast", "native_restart_permission_ui", "native_settings_ime_bounds",
                         "native_action_sheet_dismissal_current",
-                        "range_preview_short_end", "range_preview_short_controls", "range_preview_short_retirement", "range_preview_normalization_sampling", "native_ui_consistency_current", "native_settings_hydration_current", "native_settings_folder_pointer")) {
+                        "range_preview_short_end", "range_preview_short_controls", "range_preview_short_retirement", "range_preview_normalization_sampling", "native_ui_consistency_current", "native_settings_hydration_current", "native_settings_folder_pointer"))) {
                     "Current UI smoke accepts only explicit current UI selectors with plain Application"
                 }
-                report.appendLine(if (requestedTest == "current_file_staged_recovery")
+                report.appendLine(if (currentUiBrandGeometry)
+                    "MODE current-ui-smoke; isolated drawable brand geometry"
+                else if (requestedTest == "current_file_staged_recovery")
                     "MODE current-QA; isolated private FILE scanner/JNI/catalog, no UI, Service or microphone"
                 else if (requestedTest == "native_icon_parity")
                     "MODE current-ui-smoke; isolated icon-only released-vector oracle, not full screen parity"
@@ -89,7 +92,7 @@ class ReliabilityInstrumentation : Instrumentation() {
                 else "MODE current-ui-smoke; isolated current UI only, not released-renderer parity")
             }
             val parityOnly = targetContext.applicationContext.javaClass == android.app.Application::class.java
-            check(!parityOnly || requestedTest in setOf(
+            check(!parityOnly || currentUiBrandGeometry || requestedTest in setOf(
                 "current_file_staged_recovery",
                 "native_rename_editor_current", "native_click_ripple_current",
                 "native_font_notifications", "native_group_parity", "native_text_parity", "native_icon_parity",
@@ -121,7 +124,11 @@ class ReliabilityInstrumentation : Instrumentation() {
             if (requestedTest == "native_text_backend" || requestedTest == "native_motion_spline") {
                 requireNativeMathProbeHost(targetContext.packageName, parityOnly)
             }
-            if (requestedTest == "current_file_staged_recovery") {
+            if (currentUiBrandGeometry) {
+                executed++
+                verifyBrandGeometry(targetContext)
+                report.appendLine("PASS brand_geometry")
+            } else if (requestedTest == "current_file_staged_recovery") {
                 executed++
                 verifyPrivateFileStagingRecovery(targetContext, report)
                 report.appendLine("PASS current_file_staged_recovery")

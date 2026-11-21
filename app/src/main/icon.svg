@@ -1,14 +1,14 @@
 <svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Reverb app icon">
   <circle cx="256" cy="256" r="256" fill="#0D1324"/>
   <!-- Canonical geometry for launcher, themed, splash, in-app and store marks.
-       Center the primary R, not the bounding box of its faint right-hand echoes. -->
+       Balance the primary R and both echoes within circular and rounded-rectangle masks. -->
   <defs>
     <g id="r" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="26">
       <path id="body" d="M127.686 358 L156.357 154 L222.357 154 C272.357 154 301.859 186 295.676 230 C289.492 274 250.995 306 200.995 306 L134.995 306"/>
       <path id="leg" d="M196.995 306 L281.686 358"/>
     </g>
   </defs>
-  <g id="mark" transform="translate(44.5 0)">
+  <g id="mark" transform="translate(28.5 0)">
     <use id="far" href="#r" x="56" stroke="#2DD4BF" stroke-opacity="0.16"/>
     <use id="near" href="#r" x="28" stroke="#2DD4BF" stroke-opacity="0.34"/>
     <use id="main" href="#r" x="0" stroke="#FFFFFF" stroke-opacity="1"/>

@@ -116,12 +116,12 @@
   mutation to process lifetime before the UI callback returns; Activity/Compose disposal cannot revoke an accepted
   toggle, and storage failure is queued through process feedback.
 - `app/src/main/icon.svg` is the single Reverb brand geometry source. `scripts/generate_brand_assets.py` derives the
-  foreground, monochrome, splash and Fastlane assets; run it with `--check` after changes. Center the primary R optically,
-  not the full bounding box including faint echoes. In-app marks share `ic_launcher_foreground` on `launcher_background`;
-  never apply local logo offsets. Material You palettes remain dynamic. The splash's main R stays at that same center
-  throughout the echo reveal, and its final geometry matches the launcher exactly.
+  foreground, monochrome, splash and Fastlane assets; run it with `--check` after changes. Balance the full mark,
+  including the primary R and both echoes, in circular and rounded-rectangle launcher masks. In-app marks share
+  `ic_launcher_foreground` on `launcher_background`; never apply local logo offsets. Material You palettes remain dynamic.
+  The splash's main R stays at the same anchor throughout the echo reveal, and its final geometry matches the launcher exactly.
 - Startup uses the native/AndroidX splash only: Android 12+ declares the platform starting-window splash attributes
-  directly, and the centered R uses a sub-second late-weighted native AVD split so launcher-to-splash handoff cannot
+  directly, and the mark uses a sub-second late-weighted native AVD split so launcher-to-splash handoff cannot
   consume all visible motion. No keep-on-screen condition, exit listener, timer, delay, or animation completion may
   extend launch time; if the app draws first, the splash animation is cut off. Onboarding retention hydration and its
   final durability transaction run off the main thread; do not instantiate saveable buffer choices from placeholder

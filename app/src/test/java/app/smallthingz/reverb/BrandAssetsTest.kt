@@ -95,25 +95,40 @@ class BrandAssetsTest {
         assertFalse(inApp.contains("translationX"))
     }
 
-    @Test fun storeIconCentersTheBrightRInsteadOfItsFaintEchoes() {
+    @Test fun storeIconBalancesTheCompleteMarkWithCircularClearance() {
         val image = ImageIO.read(file("fastlane/metadata/android/en-US/images/icon.png"))
         assertEquals(512, image.width)
         assertEquals(512, image.height)
+        fun luminance(color: Int): Double = .2126 * ((color ushr 16) and 255) +
+            .7152 * ((color ushr 8) and 255) + .0722 * (color and 255)
+
+        val background = luminance(image.getRGB(256, 80))
         var left = 512; var right = 0; var top = 512; var bottom = 0
-        var count = 0; var xSum = 0.0; var ySum = 0.0
+        var primaryCount = 0
+        var mass = 0.0; var xSum = 0.0; var ySum = 0.0
+        var radiusSquared = 0.0
         for (y in 0 until 512) for (x in 0 until 512) {
             val color = image.getRGB(x, y)
-            if ((color ushr 24) > 128 && ((color ushr 16) and 255) > 200 &&
-                ((color ushr 8) and 255) > 200 && (color and 255) > 200) {
-                left = minOf(left, x); right = maxOf(right, x)
-                top = minOf(top, y); bottom = maxOf(bottom, y)
-                count++; xSum += x + 0.5; ySum += y + 0.5
+            if (color ushr 24 != 255) continue
+            val contrast = abs(luminance(color) - background)
+            if (contrast < 1) continue
+            if (((color ushr 16) and 255) > 200 && ((color ushr 8) and 255) > 200 && (color and 255) > 200) {
+                primaryCount++
             }
+            left = minOf(left, x); right = maxOf(right, x)
+            top = minOf(top, y); bottom = maxOf(bottom, y)
+            mass += contrast; xSum += (x + 0.5) * contrast; ySum += (y + 0.5) * contrast
+            val dx = x + 0.5 - 256; val dy = y + 0.5 - 256
+            radiusSquared = maxOf(radiusSquared, dx * dx + dy * dy)
         }
-        assertTrue(count > 10_000)
-        assertTrue("Primary R bounds are off-center", abs((left + right + 1) * 0.5 - 256) <= 2)
+        assertTrue(primaryCount > 10_000)
+        // Contrast mass leans left while the two echoes still give the full outline a rightward reach.
+        assertTrue("Full-mark visual mass lost its slight left bias", xSum / mass in 243.0..251.0)
+        assertTrue("Full bounds should retain both echoes", abs((left + right + 1) * 0.5 - 268.5) <= 2)
         assertTrue(abs((top + bottom + 1) * 0.5 - 256) <= 2)
-        assertTrue("Primary R visual mass is off-center", abs(xSum / count - 256) <= 4)
-        assertTrue(abs(ySum / count - 256) <= 4)
+        assertTrue(abs(ySum / mass - 256) <= 4)
+        // AdaptiveIconDrawable shows the inner 72 of 108dp in each dimension.
+        val circularMaskRadius = 512.0 / 3
+        assertTrue("A stroke extends beyond the circular adaptive mask", radiusSquared < circularMaskRadius * circularMaskRadius)
     }
 }
