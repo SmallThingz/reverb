@@ -40,6 +40,8 @@ internal class SettingsRetentionValueView(
         importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO
         icon.importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO
         icon.useTextSurfaceContrast=true
+        if (editor.id == View.NO_ID) editor.id = View.generateViewId()
+        heading.labelFor = editor.id
         addView(icon);addView(heading);addView(editor);addView(unit);addView(estimate)
         bindTypography()
     }
