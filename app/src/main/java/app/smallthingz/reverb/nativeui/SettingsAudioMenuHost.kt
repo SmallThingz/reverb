@@ -2,6 +2,7 @@ package app.smallthingz.reverb.nativeui
 
 import smallthingz.ui.util.closePreservingPrimaryFailure
 
+import smallthingz.ui.components.NativeAnchoredMenuRecipe
 import smallthingz.ui.components.NativePopupMenu
 import smallthingz.ui.components.NativeMenuChoices
 import smallthingz.ui.scroll.NativeVerticalScrollState
@@ -29,6 +30,7 @@ internal class SettingsAudioMenuHost(
     initialPalette: ReverbPalette,
     private val expandedChanged: (SettingsAudioChoice, Boolean) -> Unit,
     savedScrollPositions: Map<SettingsAudioChoice, Int> = emptyMap(),
+    private var recipe: NativeAnchoredMenuRecipe = NativeAnchoredMenuRecipe.Default,
 ) : SettingsAudioPopupHost, AutoCloseable {
     private class Session(
         val anchor: View,
@@ -48,13 +50,16 @@ internal class SettingsAudioMenuHost(
         }
     }
 
-    fun bindConfiguration(style: TextStyle, density: Density, resolver: FontFamily.Resolver, palette: ReverbPalette) {
+    fun bindConfiguration(style: TextStyle, density: Density, resolver: FontFamily.Resolver, palette: ReverbPalette,
+        recipe: NativeAnchoredMenuRecipe = this.recipe,
+    ) {
         if (closed) return
         this.palette = palette
-        if (this.style == style && this.density === density && this.resolver === resolver) return
+        if (this.style == style && this.density === density && this.resolver === resolver && this.recipe == recipe) return
         this.style = style
         this.density = density
         this.resolver = resolver
+        this.recipe = recipe
         // Popup geometry is immutable. Retire old windows before typed updates recreate the
         // still-expanded choices; their scroll owners and expansion intent remain unchanged.
         val retiring = sessions.values.toList()
@@ -89,6 +94,7 @@ internal class SettingsAudioMenuHost(
         val window = NativePopupMenu(
             anchor, density, style, resolver, palette.menuColors(),
             scroll, frames, scope, ReverbMenuIcons,
+            recipe = recipe,
             onDismissRequest = { if (sessions[kind] === session) dismiss(kind) },
             onTerminal = {
                 if (sessions[kind] === session) retire(kind, session)

@@ -34,6 +34,7 @@ internal class SettingsAudioChoicesSection(
             if (::choices.isInitialized) render()
         },
         savedScrollPositions = savedMenuScrollPositions,
+        recipe = initialEnvironment.appearance.modals.anchoredPanel,
     )
     val view get() = choices.view
 
@@ -47,7 +48,7 @@ internal class SettingsAudioChoicesSection(
         current = next
         this.environment = environment
         menus.bindConfiguration(environment.appearance.typography.buttonLabelStyle, environment.textDensity,
-            environment.sharedFontResolver, environment.palette)
+            environment.sharedFontResolver, environment.palette, environment.appearance.modals.anchoredPanel)
         render()
     }
 

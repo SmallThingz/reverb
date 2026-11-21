@@ -52,6 +52,7 @@ internal class ReverbActionMenuHost(
         val window = NativePopupMenu(anchor, environment.textDensity,
             environment.appearance.typography.buttonLabelStyle,
             environment.sharedFontResolver, environment.palette.menuColors(), entry.scroll, frames, scope, ReverbMenuIcons,
+            recipe = environment.appearance.modals.anchoredPanel,
             onDismissRequest = {
                 if (entries[identity] === entry && entry.session === session) {
                     session.onDismissRequest()
