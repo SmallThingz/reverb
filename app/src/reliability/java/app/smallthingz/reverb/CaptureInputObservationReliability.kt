@@ -2,6 +2,7 @@ package app.smallthingz.reverb
 
 import android.content.Context
 import android.media.AudioRecord
+import android.os.SystemClock
 import java.io.File
 import java.nio.ByteBuffer
 import java.util.concurrent.CountDownLatch
@@ -50,7 +51,12 @@ internal fun verifyCaptureInputObservations(context: Context, report: StringBuil
             replacement.emit(null, 11_000); replacement.emit(true, 12_000)
             awaitObservationHistoryWork()
             check(observations() == first) { "Unknown/repeated policy state changed observation history" }
-            replacement.emit(false, 13_000); replacement.emit(true, 14_000)
+            replacement.emit(false, 13_000, 100)
+            replacement.emit(true, 14_000, 200)
+            fixture.awaitCondition { observations().any { it.occurredAtMillis == 14_000L && it.ongoingPolicyDuration != null } }
+            val active = observations().single { it.occurredAtMillis == 14_000L }
+            check(active.ongoingPolicyDuration?.startedAtElapsedMillis == 200L)
+            replacement.emit(false, 12_000, 2_150) // Wall clock rolled back while muted.
             awaitObservationHistoryWork()
             val beforeStop = observations()
             check(beforeStop.size == 3 && beforeStop.containsAll(first))
@@ -61,19 +67,40 @@ internal fun verifyCaptureInputObservations(context: Context, report: StringBuil
             check(beforeStop.all { it.observationId > 0L && it.pid > 0 && it.processStartedAtMillis > 0L })
             check(beforeStop.map { it.observationId }.distinct().size == 3)
             check(beforeStop.map { it.pid to it.processStartedAtMillis }.distinct().size == 1)
+            val restored = beforeStop.single { it.observationId == active.observationId }
+            check(restored.ongoingPolicyDuration == null && recordingIncidentDowntimeMillis(restored) == 1_950L)
+            check(recordingIncidentPresentationKey(active) == recordingIncidentPresentationKey(restored))
             check(marker.readBytes().contentEquals(armed))
+
+            // Keep a cached enabled flag and the exact recorder while durable authority is absent.
+            fixture.service.frameSet("durableCaptureIntentAuthorityValid", false)
+            replacement.emitStale(true, 15_001)
+            replacement.emit(true, 15_002)
+            replacement.emit(false, 15_003)
+            fixture.service.frameSet("durableCaptureIntentAuthorityValid", true)
+            awaitObservationHistoryWork()
+            check(observations() == beforeStop)
+
+            val startedAtElapsed = (SystemClock.elapsedRealtime() - 1_000L).coerceAtLeast(0L)
+            replacement.emit(true, 16_000, startedAtElapsed)
+            val beforeStopClock = SystemClock.elapsedRealtime()
             replacement.allowReadReturn.countDown()
             fixture.stopAndDrain()
             check(replacement.closed.await(10, TimeUnit.SECONDS))
+            val afterStopClock = SystemClock.elapsedRealtime()
             // Deliberately deliver a retained callback after unregister/Stop.
-            replacement.emitStale(true, 16_000)
+            replacement.emitStale(true, 17_000)
             awaitObservationHistoryWork()
-            check(observations() == beforeStop) { "Stop/stale callback changed admitted observation records" }
+            val stopped = observations().single { it.occurredAtMillis == 16_000L }
+            val stoppedDuration = requireNotNull(recordingIncidentDowntimeMillis(stopped))
+            check(stoppedDuration in (beforeStopClock - startedAtElapsed)..(afterStopClock - startedAtElapsed))
+            check(observations().filter { it.observationId != stopped.observationId } == beforeStop)
             check(fixture.onAudio { fixture.loop.pipelinePcm() }.contentEquals(originalPcm))
             File(fixture.root, "input-observations.txt").writeText(
-                "pcm=${originalPcm.joinToString()}\nepisodes=2\nrestarts=1\nmarker_unchanged_before_stop=true\n" +
-                    "observations_before_stop=${beforeStop.joinToString()}\nobservations_unchanged_after_stale=true\n")
-            report.append("CAPTURE_INPUT_OBSERVATIONS pcm_bytes=4 policy_episodes=2 restarts=1 stale_after_stop=ignored\n")
+                "pcm=${originalPcm.joinToString()}\nepisodes=3\nrestarts=1\nmarker_unchanged_before_stop=true\n" +
+                    "restored_duration_millis=1950\nstopped_duration_millis=${recordingIncidentDowntimeMillis(stopped)}\n" +
+                    "observations_before_stop=${beforeStop.joinToString()}\ninvalid_intent_and_stale_after_stop=ignored\n")
+            report.append("CAPTURE_INPUT_OBSERVATIONS pcm_bytes=4 policy_episodes=3 restarts=1 restored_duration_millis=1950 invalid_intent_and_stale_after_stop=ignored\n")
         } finally { replacement.allowReadReturn.countDown() }
     }
 }
@@ -88,16 +115,22 @@ private class ObservedSyntheticInput : CaptureAudioInput {
     override val state = AudioRecord.STATE_INITIALIZED
     override val recordingState = AudioRecord.RECORDSTATE_RECORDING
     override fun observeClientSilencing(onState: (Boolean?, Long) -> Unit,
-        onFailure: (Exception) -> Unit): CapturePolicySubscription {
+        onFailure: (Exception) -> Unit, onCallbackStateChanged: () -> Unit,
+        onDropoutsAvailable: () -> Unit): CapturePolicySubscription {
         events += "register"; callback = onState
         witnesses = CapturePolicyWitnesses(execute = { it() }, snapshot = { true to 10_000L },
-            deliver = { onState(true, it) }, failed = onFailure)
+            deliver = { onState(true, it) }, failed = onFailure, callbackStateChanged = onCallbackStateChanged,
+            dropoutsAvailable = onDropoutsAvailable)
         return object : CapturePolicySubscription {
+            override val callbackSilenced: Boolean? get() = witnesses.callbackSilenced
+            override fun pollDropout(): CapturePolicyDropout? = witnesses.pollDropout()
+            override fun sealDropouts(endedAtElapsedMillis: () -> Long) = witnesses.sealDropouts(endedAtElapsedMillis)
             override fun activate() { events += "activate"; witnesses.activate(); activated.countDown() }
             override fun close() { witnesses.close(); closed.countDown() }
         }
     }
-    fun emit(state: Boolean?, observedAtMillis: Long) = witnesses.observe(state, observedAtMillis)
+    fun emit(state: Boolean?, observedAtMillis: Long, elapsedMillis: Long = SystemClock.elapsedRealtime()) =
+        witnesses.observe(state, observedAtMillis, elapsedMillis)
     fun emitStale(state: Boolean?, observedAtMillis: Long) { checkNotNull(callback)(state, observedAtMillis) }
     override fun startRecording() { events += "start" }
     override fun read(buffer: ByteBuffer, sizeInBytes: Int, readMode: Int): Int {
@@ -242,10 +275,12 @@ internal fun verifyBootResumeReminderProof(instrumentation: android.app.Instrume
             policy.get()
         }) { _, _ -> pcm }
         lateinit var witnesses: CapturePolicyWitnesses
-        input.observePolicy = { onState, failed ->
+        input.observePolicy = { onState, failed, onCallbackStateChanged, onDropoutsAvailable ->
             CapturePolicyWitnesses(execute = { it() }, snapshot = { null to 0L },
                 deliver = { onState(true, it) }, failed = failed,
-                deliverUnsilenced = { onState(false, it) }).also { witnesses = it }
+                deliverUnsilenced = { onState(false, it) },
+                callbackStateChanged = onCallbackStateChanged,
+                dropoutsAvailable = onDropoutsAvailable).also { witnesses = it }
         }
         input.beforeReadReturn = { ordinal ->
             if (ordinal == 9) staleReadAdmitted.countDown()
@@ -259,7 +294,7 @@ internal fun verifyBootResumeReminderProof(instrumentation: android.app.Instrume
         fun controller() = BootResumeNoticeController(
             enqueue = { it() }, readEnabled = { true }, deliveryAvailable = { true },
             post = { posted.set(true); true }, cancel = { posted.set(false); cancellations.incrementAndGet() },
-            report = { throw AssertionError(it) }, resume = { canLaunch = it },
+            report = { throw AssertionError(it) }, resume = { allowed, _ -> canLaunch = allowed; null },
         )
         val singleton = BootResumeNotification::class.java.getDeclaredField("controller").apply { isAccessible = true }
         val oldController = singleton.get(BootResumeNotification)

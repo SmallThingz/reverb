@@ -8,7 +8,6 @@ import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.atomic.AtomicReference
 
 class BootResumeActivityTest {
     @Test fun optOutBeforeQueuedBindDispatchPreventsServiceCreation() {
@@ -34,32 +33,33 @@ class BootResumeActivityTest {
         policy.request(false) // Opt-out affects future starts, not this accepted binding.
         assertFalse(noticeAllowsLaunch && policy.currentAdmission(launch))
         assertTrue(admission.current(130L))
-        assertTrue(admission.confirmCapture(140L))
-        assertEquals(500L, admission.successRemainingMillis(140L))
+        assertTrue(admission.confirmCapture(140L) {})
+        assertTrue(admission.captureConfirmed)
     }
 
-    @Test fun successHoldBeginsOnlyAfterAdmittedCaptureAndOutlivesAdmissionDeadline() {
+    @Test fun confirmationRequiresAcceptedBindingAndRemainsSingleUseBeforeDeadline() {
         val admission = BootResumeActivityAdmission(createdAtMillis = 100L)
-        assertFalse(admission.confirmCapture(110L))
-        assertEquals(0L, admission.successRemainingMillis(110L))
+        var finishes = 0
+        val finish = { finishes++; Unit }
+        assertFalse(admission.confirmCapture(110L, finish))
         assertTrue(admission.admit(visible = true, nowMillis = 15_090L))
-        assertTrue(admission.confirmCapture(15_099L))
-        assertFalse(admission.confirmCapture(15_100L))
-        assertEquals(499L, admission.successRemainingMillis(15_100L))
-        assertEquals(1L, admission.successRemainingMillis(15_598L))
-        assertEquals(0L, admission.successRemainingMillis(15_599L))
+        assertFalse(admission.confirmCapture(15_091L, finish))
+        assertTrue(admission.acceptServiceBind(true, true, 15_092L))
+        assertTrue(admission.confirmCapture(15_099L, finish))
+        assertEquals(1, finishes)
+        assertFalse(admission.confirmCapture(15_099L, finish))
+        assertFalse(admission.confirmCapture(15_100L, finish))
+        assertEquals(1, finishes)
     }
 
-    @Test fun departureOrTeardownRetiresSuccessHoldAndLateConfirmation() {
+    @Test fun departureOrTeardownRetiresLateConfirmation() {
         val admission = BootResumeActivityAdmission(createdAtMillis = 100L)
         assertTrue(admission.admit(visible = true, nowMillis = 110L))
-        assertTrue(admission.confirmCapture(120L))
+        assertTrue(admission.acceptServiceBind(true, true, 120L))
         admission.abandon()
-        assertEquals(0L, admission.successRemainingMillis(130L))
-        assertFalse(admission.confirmCapture(130L))
+        assertFalse(admission.confirmCapture(130L) { error("Destroyed helper cannot finish on stale confirmation") })
         val next = BootResumeActivityAdmission(createdAtMillis = 200L)
         assertFalse(next.captureConfirmed)
-        assertEquals(0L, next.successRemainingMillis(210L))
     }
 
     @Test fun initialSleepPauseCanWaitForActualForegroundWithoutBindingWhileHidden() {
@@ -316,15 +316,43 @@ class BootResumeActivityTest {
     }
 
     @Test fun mainBecomingVisibleRetiresAlreadyQueuedOrdinaryBootLaunch() {
-        val boot = BootResumeLaunch("boot", 100L, { true })
-        val pending = AtomicReference<BootResumeLaunch?>(boot)
-        retirePendingBootLaunch(pending, mainVisible = false)
-        assertTrue(pending.get() === boot)
-        retirePendingBootLaunch(pending, mainVisible = true)
-        assertEquals(null, pending.get())
-        // Losing focus to the helper cannot resurrect the retired request.
-        retirePendingBootLaunch(pending, mainVisible = false)
-        assertEquals(null, pending.get())
+        val owner = BootResumeLaunchOwner()
+        val boot = BootResumeLaunch("boot", 100L, { true }, mainVisibilityRevision = 3L)
+        assertTrue(owner.reserve(boot))
+        assertFalse(boot.current(4L))
+        assertEquals(null, owner.claim(boot.id, 110L, 4L))
+        owner.expirePending(boot)
+        assertEquals(null, owner.claim(boot.id, 120L, 4L))
+    }
+
+    @Test fun pendingLaunchTimeoutDoesNotReleaseAClaimedWindow() {
+        val owner = BootResumeLaunchOwner()
+        val first = BootResumeLaunch("first", 100L, { true })
+        val next = BootResumeLaunch("next", 2_200L, { true })
+        assertTrue(owner.reserve(first))
+        assertFalse(owner.reserve(next))
+        assertTrue(owner.claim(first.id, 120L, 0L) === first)
+        assertEquals(null, owner.claim(first.id, 140L, 0L))
+        owner.expirePending(first)
+        assertFalse(owner.reserve(next))
+        owner.release(first)
+        assertTrue(owner.reserve(next))
+        owner.release(first)
+        assertTrue(owner.claim(next.id, 2_210L, 0L) === next)
+    }
+
+    @Test fun delayedActivityAndStaleExpiryCannotClaimOrRetireTheRetryToken() {
+        val owner = BootResumeLaunchOwner()
+        val delayed = BootResumeLaunch("delayed", 100L, { true })
+        assertTrue(owner.reserve(delayed))
+        assertEquals(null, owner.claim(delayed.id, 2_100L, 0L))
+        owner.expirePending(delayed)
+        val next = BootResumeLaunch("next", 2_200L, { true }, timeoutMillis = 600L)
+        assertTrue(owner.reserve(next))
+        assertEquals(null, owner.claim(delayed.id, 2_201L, 0L))
+        owner.expirePending(delayed)
+        assertTrue(owner.ownsPending(next))
+        assertEquals(null, owner.claim(next.id, 2_800L, 0L))
     }
 
 }

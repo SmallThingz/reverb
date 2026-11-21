@@ -5,8 +5,32 @@ import java.io.File
 import kotlinx.coroutines.launch
 
 internal interface CapturePolicySubscription : Closeable {
+    /** Latest explicit callback state for the active subscription, or unknown. */
+    val callbackSilenced: Boolean? get() = null
+    fun pollDropout(): CapturePolicyDropout? = null
+    /** Retire new evidence and end any still-open callback witness at the supplied boundary. */
+    fun sealDropouts(endedAtElapsedMillis: () -> Long) = Unit
     /** Called only after native start and session admission succeed. */
     fun activate()
+}
+
+internal class CapturePolicyDropout(val wallMillis: Long, val elapsedMillis: Long) {
+    // Null is still open. -1 records an unproven boundary, such as a missing configuration.
+    @Volatile var endedAtElapsedMillis: Long? = null
+}
+
+internal class CaptureObservationDuration(val startedAtElapsedMillis: Long) {
+    private val end = kotlinx.coroutines.CompletableDeferred<Long>()
+    val isOngoing: Boolean get() = !end.isCompleted
+    init { require(startedAtElapsedMillis >= 0L) }
+
+    fun finish(endedAtElapsedMillis: Long) { end.complete(endedAtElapsedMillis) }
+
+    suspend fun historyEndAtMillis(startWallMillis: Long): Long {
+        val endedAt = end.await()
+        if (endedAt < startedAtElapsedMillis) return -1L
+        return startWallMillis + minOf(endedAt - startedAtElapsedMillis, Long.MAX_VALUE - startWallMillis)
+    }
 }
 
 /** Unknown is not evidence that Android restored the microphone. */
@@ -47,62 +71,124 @@ internal class CapturePolicyWitnesses(
     private val deliver: (Long) -> Unit,
     private val failed: (Exception) -> Unit,
     private val deliverUnsilenced: (Long) -> Unit = {},
+    private val callbackStateChanged: () -> Unit = {},
+    private val dropoutsAvailable: (() -> Unit)? = null,
 ) : CapturePolicySubscription {
     private val lock = Any()
     private val episode = CapturePolicyEpisode()
-    private val pending = java.util.ArrayDeque<Long>()
+    private val pending = java.util.ArrayDeque<CapturePolicyDropout>()
+    private var callbackDropout: CapturePolicyDropout? = null
     private var sequence = 0L
     private var positiveObserved = false
     private var active = false
     private var closed = false
+    private var dropoutsSealed = false
     private var failure: Exception? = null
     private var failureDelivered = false
+    private var provisionalCallbackSilenced: Boolean? = null
+    @Volatile override var callbackSilenced: Boolean? = null
+        private set
 
-    fun observe(value: Boolean?, observedAtMillis: Long) {
+    fun observe(value: Boolean?, observedAtMillis: Long, elapsedMillis: Long = observedAtMillis) {
         var unsilencedHint = false
-        val admitted = synchronized(lock) {
-            if (closed || failure != null || value == null) return
-            sequence++
-            // Only explicit callback state can cue another reminder probe. The initial
-            // snapshot belongs to incident reporting and has no shared callback order.
-            unsilencedHint = active && value == false
-            accept(value, observedAtMillis)
+        val stateChanged: Boolean
+        val newEvidence = synchronized(lock) {
+            if (closed || dropoutsSealed || failure != null) return
+            stateChanged = if (active) setCallbackSilenced(value) else {
+                provisionalCallbackSilenced = value
+                false
+            }
+            if (value != null) {
+                sequence++
+                // Only an explicit false callback may cue a reminder recheck.
+                unsilencedHint = active && !value
+            }
+            val changed = if (observeEpisode(value)) {
+                if (pending.size == 64) {
+                    failure = IllegalStateException("Microphone policy observation queue exhausted")
+                    setCallbackSilenced(null)
+                } else {
+                    val dropout = CapturePolicyDropout(observedAtMillis, elapsedMillis)
+                    callbackDropout = dropout
+                    pending.addLast(dropout)
+                }
+                true
+            } else if (value != true) {
+                finishDropout(if (value == false) elapsedMillis else -1L)
+            } else {
+                false
+            }
+            active && changed
         }
-        if (admitted) publish(observedAtMillis)
+        if (stateChanged) callbackStateChanged()
+        if (newEvidence) publishDropouts()
+        reportFailure()
         if (unsilencedHint) {
             try { deliverUnsilenced(observedAtMillis) } catch (error: Exception) { report(error) }
         }
     }
 
-    private fun accept(value: Boolean?, time: Long): Boolean {
+    private fun setCallbackSilenced(value: Boolean?): Boolean {
+        if (callbackSilenced == value) return false
+        callbackSilenced = value
+        return true
+    }
+
+    private fun observeEpisode(value: Boolean?): Boolean {
         if (!episode.observe(value)) return false
         positiveObserved = true
-        if (active) return true
-        if (pending.size == 64) failure = IllegalStateException("Microphone policy observation queue exhausted")
-        else pending.addLast(time)
-        return false
+        return true
+    }
+
+    private fun finishDropout(endedAt: Long): Boolean {
+        val dropout = callbackDropout ?: return false
+        dropout.endedAtElapsedMillis = endedAt
+        callbackDropout = null
+        return true
+    }
+
+    override fun pollDropout(): CapturePolicyDropout? = synchronized(lock) {
+        if (active && !closed) pending.pollFirst() else null
+    }
+
+    override fun sealDropouts(endedAtElapsedMillis: () -> Long) {
+        synchronized(lock) {
+            dropoutsSealed = true
+            if (callbackDropout != null) finishDropout(endedAtElapsedMillis())
+            setCallbackSilenced(null)
+        }
+    }
+
+    private fun publishDropouts() {
+        try {
+            if (dropoutsAvailable != null) dropoutsAvailable()
+            else while (true) deliver((pollDropout() ?: return).wallMillis)
+        } catch (error: Exception) { report(error) }
     }
 
     /** Service holds its owner-admission lock while adopting provisional start observations. */
     override fun activate() {
-        val provisional = synchronized(lock) {
+        val stateChanged: Boolean
+        synchronized(lock) {
             if (closed || active) return
             active = true
-            pending.toList().also { pending.clear() }
+            stateChanged = failure == null && setCallbackSilenced(provisionalCallbackSilenced)
+            provisionalCallbackSilenced = null
         }
-        provisional.forEach(::publish)
+        if (stateChanged) callbackStateChanged()
+        publishDropouts()
         reportFailure()
         try { execute(::sampleInitial) } catch (error: Exception) { report(error) }
     }
 
     private fun sampleInitial() {
-        val before = synchronized(lock) { if (closed) return; sequence }
+        val before = synchronized(lock) { if (closed || dropoutsSealed) return; sequence }
         try {
             val (state, time) = snapshot()
             val admitted = synchronized(lock) {
                 when {
-                    closed || failure != null -> false
-                    sequence == before -> accept(state, time)
+                    closed || dropoutsSealed || failure != null -> false
+                    sequence == before -> state == true && observeEpisode(state)
                     state == true && !positiveObserved -> {
                         // Keep callback state: the two APIs expose no shared observation order.
                         positiveObserved = true
@@ -120,7 +206,12 @@ internal class CapturePolicyWitnesses(
     }
 
     fun report(error: Exception) {
-        synchronized(lock) { if (failure == null) failure = error }
+        val stateChanged = synchronized(lock) {
+            if (failure == null) failure = error
+            finishDropout(-1L)
+            setCallbackSilenced(null)
+        }
+        if (stateChanged) callbackStateChanged()
         reportFailure()
     }
 
@@ -132,7 +223,13 @@ internal class CapturePolicyWitnesses(
     }
 
     override fun close() {
-        synchronized(lock) { closed = true; pending.clear() }
+        synchronized(lock) {
+            closed = true
+            pending.clear()
+            finishDropout(-1L)
+            provisionalCallbackSilenced = null
+            callbackSilenced = null
+        }
     }
 }
 
@@ -141,7 +238,7 @@ internal class CaptureObservationAdmission(private val maximumInFlight: Int = 64
     private val lock = Any()
     private var inFlight = 0
     private var overflowReported = false
-    private class Pending(val root: File, val incident: RecordingIncident)
+    private class Pending(val root: File, val incident: RecordingIncident, val duration: CaptureObservationDuration?)
     private val pending = mutableSetOf<Pending>()
     init { require(maximumInFlight > 0) }
 
@@ -150,12 +247,18 @@ internal class CaptureObservationAdmission(private val maximumInFlight: Int = 64
         return synchronized(lock) { pending.mapNotNull { if (it.root == owner) it.incident else null } }
     }
 
+    fun ongoingDuration(root: File, incident: RecordingIncident): CaptureObservationDuration? = synchronized(lock) {
+        pending.firstOrNull { it.root == root && recordingIncidentReferenceMatches(it.incident, incident) }
+            ?.duration?.takeIf { it.isOngoing }
+    }
+
     fun submit(
         scope: kotlinx.coroutines.CoroutineScope,
         root: File,
         create: () -> RecordingIncident,
         persist: suspend (RecordingIncident) -> Unit,
         onFailure: (Exception) -> Unit,
+        duration: CaptureObservationDuration? = null,
     ): kotlinx.coroutines.Job? {
         fun report(error: Exception) { try { onFailure(error) } catch (_: Exception) {} }
         var reportOverflow = false
@@ -180,7 +283,7 @@ internal class CaptureObservationAdmission(private val maximumInFlight: Int = 64
         }
         return try {
             val incident = create()
-            val owner = Pending(root.absoluteFile, incident)
+            val owner = Pending(root.absoluteFile, incident, duration)
             // Register before even an undispatched launch can persist; create never holds this lock.
             synchronized(lock) { registered = owner; pending.add(owner) }
             scope.launch {

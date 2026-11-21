@@ -33,6 +33,8 @@
     <string name="quick_tile_one_shot">One-shot</string>
     <string name="quick_tile_looping">Looping</string>
     <string name="quick_tile_recording">Recording</string>
+    <string name="recording_microphone_unavailable">Microphone unavailable</string>
+    <string name="recording_microphone_status_unavailable">Microphone status unavailable</string>
     <string name="quick_tile_stopped">Stopped</string>
     <string name="quick_tile_full">Full</string>
     <string name="quick_tile_off">Off</string>
@@ -188,6 +190,7 @@
     <string name="incidents_empty_detail">Unexpected shutdowns while recording will appear here.</string>
     <string name="incidents_loading">Loading incidents…</string>
     <string name="incidents_unavailable">Couldn\'t load incidents. Retrying…</string>
+    <string name="incident_policy_ongoing">%1$s · ongoing %2$s</string>
     <string name="incidents_stale">Showing previous incidents. Retrying…</string>
     <string name="incident_mark_checked">Mark incident checked</string>
     <string name="incident_mark_unchecked">Mark incident unchecked</string>

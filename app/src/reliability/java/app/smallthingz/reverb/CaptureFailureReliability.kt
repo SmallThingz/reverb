@@ -2,7 +2,9 @@ package app.smallthingz.reverb
 
 import android.content.Context
 import android.media.AudioRecord
+import java.io.Closeable
 import java.nio.ByteBuffer
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -18,16 +20,61 @@ internal fun verifyFailedCaptureRestartIsNotSilentlyListening(context: Context) 
             fixture.loop.checkpoint()
             fixture.loop.pipelinePcm()
         }
-        fixture.start()
-        check(disconnected.released.await(10, TimeUnit.SECONDS))
-        fixture.awaitCondition {
-            fixture.admission.factoryCalls.get() == 1 && fixture.service.frameField("audioRecord") == null &&
-                fixture.service.frameField("state") != ReverbService.STATE_LISTENING
+        val worker = ConcurrentLinkedQueue<() -> Unit>()
+        fun drainNotices() {
+            while (true) {
+                val work = worker.poll() ?: return
+                work()
+            }
         }
-        fixture.fence {
-            check(disconnected.readCalls.get() == 1 && disconnected.releaseCalls.get() == 1)
-            check(fixture.service.frameField("durableListeningIntentEnabled") == false)
-            check(before.contentEquals(fixture.loop.pipelinePcm())) { "Failed native replacement changed retained audio" }
+        val prefs = getRecorderPreferences(fixture.admission.context)
+        var automatic: BootAutomaticNotice? = null
+        var retired = false
+        lateinit var canLaunch: () -> Boolean
+        val notice = BootResumeNoticeController(
+            enqueue = { worker.add(it) },
+            readEnabled = { readDurableCaptureIntentPreferences(prefs).enabled },
+            deliveryAvailable = { false }, post = { error("The manual channel is blocked in this oracle") }, cancel = {},
+            report = { throw AssertionError(it) }, automaticDeliveryAvailable = { true },
+            postAutomatic = { automatic = it; true }, cancelAutomatic = { automatic = null },
+            resume = { allowed, events ->
+                canLaunch = allowed
+                events.attempting(android.os.SystemClock.elapsedRealtime() + 60_000L)
+                events.captureBindingAccepted()
+                Closeable { retired = true }
+            },
+        )
+        val singleton = BootResumeNotification::class.java.getDeclaredField("controller").apply { isAccessible = true }
+        val previous = singleton.get(BootResumeNotification)
+        singleton.set(BootResumeNotification, notice)
+        try {
+            notice.onBoot {}
+            drainNotices()
+            check(automatic is BootAutomaticNotice.Trying && canLaunch())
+            fixture.start()
+            check(disconnected.released.await(10, TimeUnit.SECONDS))
+            fixture.awaitCondition {
+                fixture.admission.factoryCalls.get() == 1 && fixture.service.frameField("audioRecord") == null &&
+                    fixture.service.frameField("state") != ReverbService.STATE_LISTENING
+            }
+            fixture.fence {
+                check(disconnected.readCalls.get() == 1 && disconnected.releaseCalls.get() == 1)
+                check(fixture.service.frameField("durableListeningIntentEnabled") == false)
+                check(!readDurableCaptureIntentPreferences(prefs).enabled)
+                check(before.contentEquals(fixture.loop.pipelinePcm())) { "Failed native replacement changed retained audio" }
+            }
+            check(!canLaunch()) { "The fatal transition must immediately revoke retry ownership" }
+            drainNotices()
+            val failed = automatic as? BootAutomaticNotice.Failed
+            check(failed?.reason == BootResumeFailure.AUDIO_INPUT && failed.intentCleared && !failed.detail.isNullOrBlank() && retired) {
+                "The exact still-unconfirmed automatic recorder failure did not reach Failed"
+            }
+            check(notice.needsCaptureProof)
+            fixture.stopAndDrain()
+            drainNotices()
+            check(automatic == null && !notice.needsCaptureProof)
+        } finally {
+            singleton.set(BootResumeNotification, previous)
         }
     }
 }

@@ -1,8 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
     <string name="boot_resume_channel">Restart reminders</string>
     <string name="boot_resume_title">Resume recording</string>
     <string name="boot_resume_detail">Open Reverb to resume recording after restart.</string>
     <string name="boot_resume_in_progress">Resuming recording…</string>
     <string name="boot_resume_success">Recording resumed</string>
+    <string name="boot_auto_start_channel" tools:ignore="MissingTranslation">Auto-start</string>
+    <string name="boot_auto_start_channel_description" tools:ignore="MissingTranslation">Progress and failures when automatically resuming recording after restart.</string>
+    <string name="boot_auto_start_trying" tools:ignore="MissingTranslation">Trying to resume recording</string>
+    <string name="boot_auto_start_trying_detail" tools:ignore="MissingTranslation">Open Reverb to resume recording manually.</string>
+    <string name="boot_auto_start_failed" tools:ignore="MissingTranslation">Could not resume recording</string>
+    <string name="boot_auto_start_timeout" tools:ignore="MissingTranslation">Reverb couldn’t confirm recording within 60 seconds. Open Reverb to resume manually.</string>
+    <string name="boot_auto_start_microphone_unavailable" tools:ignore="MissingTranslation">Microphone permission is unavailable. Open Reverb to review access.</string>
+    <string name="boot_auto_start_overlay_unavailable" tools:ignore="MissingTranslation">Permission to display over other apps is unavailable. Open Reverb to review access.</string>
+    <string name="boot_auto_start_error" tools:ignore="MissingTranslation">An error interrupted automatic resume. Open Reverb to try again.</string>
+    <string name="boot_auto_start_capture_error" tools:ignore="MissingTranslation">%1$s Open Reverb to try again.</string>
+    <string name="boot_auto_start_no_writable_buffer" tools:ignore="MissingTranslation">The recording buffers are full or disabled. Open Reverb to review them.</string>
 </resources>

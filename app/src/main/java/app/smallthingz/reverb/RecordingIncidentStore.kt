@@ -131,6 +131,8 @@ internal data class RecordingIncident(
     val captureArmedAtMillis: Long = -1L,
     val description: String? = null,
     val observationId: Long = 0L,
+    /** Live process handle, projected on read and never serialized. */
+    val ongoingPolicyDuration: CaptureObservationDuration? = null,
 ) {
     // Keep an identity tombstone so delayed exit evidence cannot resurrect user-deleted cards.
     // This sentinel uses the existing signed history field and survives format-compatible reads.
@@ -854,20 +856,61 @@ internal object RecordingIncidentStore {
         AppProcessMarker(Process.myPid(), currentProcessStartedAtWallClockMillis())
     }
 
-    fun recordCaptureInputObservation(context: Context, observedAtMillis: Long, reason: CaptureInputObservationReason) {
+    fun recordCaptureInputObservation(
+        context: Context,
+        observedAtMillis: Long,
+        reason: CaptureInputObservationReason,
+        duration: CaptureObservationDuration? = null,
+    ): Boolean {
         val appContext = context.applicationContext
-        observationAdmission.submit(observationMutationScope, incidentRoot(appContext), create = {
+        val reportFailure: (Exception) -> Unit = { reportCaptureObservationWriteFailure(appContext, it) }
+        return observationAdmission.submit(observationMutationScope, incidentRoot(appContext), create = {
             RecordingIncident(occurredAtMillis = observedAtMillis.coerceAtLeast(1L),
+                resumedAtMillis = if (duration == null) -1L else 0L,
                 kind = RecordingIncidentKind.CAPTURE_INPUT_OBSERVATION, pid = Process.myPid(),
                 processStartedAtMillis = currentAppProcess.processStartedAtMillis, description = reason.description,
                 observationId = observationIds.updateAndGet { Math.incrementExact(it) })
         }, persist = { incident ->
+            val first = if (duration == null || duration.isOngoing) incident else {
+                incident.copy(resumedAtMillis = duration.historyEndAtMillis(incident.occurredAtMillis))
+            }
+            var publicationAttempted = false
             persistCaptureInputObservation(
-                persist = { synchronized(this@RecordingIncidentStore) { appendIncident(appContext, incident) } },
+                persist = {
+                    synchronized(this@RecordingIncidentStore) {
+                        appendIncident(appContext, first, existingOnly = publicationAttempted) {
+                            publicationAttempted = true
+                        }
+                    }
+                },
                 waitBeforeRetry = { kotlinx.coroutines.delay(it) },
-                onFailure = { reportCaptureObservationWriteFailure(appContext, it) },
+                onFailure = reportFailure,
             )
-        }, onFailure = { reportCaptureObservationWriteFailure(appContext, it) })
+            if (duration != null && first === incident) {
+                // This is a duration anchor in the v4 field, not the wall clock at restoration.
+                val end = duration.historyEndAtMillis(incident.occurredAtMillis)
+                persistCaptureInputObservation(
+                    persist = { synchronized(this@RecordingIncidentStore) { finishCaptureInputObservation(appContext, incident, end) } },
+                    waitBeforeRetry = { kotlinx.coroutines.delay(it) },
+                    onFailure = reportFailure,
+                )
+            }
+        }, onFailure = reportFailure, duration = duration) != null
+    }
+
+    private fun finishCaptureInputObservation(context: Context, incident: RecordingIncident, end: Long) {
+        val file = historyFile(context)
+        val existing = readHistory(file)
+        val index = existing.indexOfFirst { !it.deleted && recordingIncidentReferenceMatches(it, incident) }
+        if (index < 0) return
+        val row = existing[index]
+        if (row.resumedAtMillis == end) {
+            writeHistory(file, existing) // Re-prove a potentially failed publication barrier.
+            signalHistoryChanged()
+        } else if (row.resumedAtMillis == 0L) {
+            writeHistory(file, existing.toMutableList().apply { this[index] = row.copy(resumedAtMillis = end) })
+            signalHistoryChanged()
+        }
     }
 
     private fun reportCaptureObservationWriteFailure(context: Context, error: Exception) {
@@ -1253,7 +1296,16 @@ internal object RecordingIncidentStore {
         // failure can leave an armed previous-process marker invisible until capture starts again.
         recoverPriorSessionIfNeeded(appContext)
         recoverUnexpectedProcessExitAndMarkCurrent(appContext)
-        val incidents = readHistory(historyFile(appContext)).filterNot { it.deleted }
+        val root = incidentRoot(appContext)
+        val incidents = readHistory(historyFile(appContext)).filterNot { it.deleted }.map { incident ->
+            if (incident.kind != RecordingIncidentKind.CAPTURE_INPUT_OBSERVATION || incident.resumedAtMillis != 0L) {
+                incident
+            } else {
+                val ongoing = observationAdmission.ongoingDuration(root, incident)
+                if (ongoing == null) incident.copy(resumedAtMillis = -1L)
+                else incident.copy(ongoingPolicyDuration = ongoing)
+            }
+        }
         // Only a complete authoritative history read ends the failure episode. A successful
         // internal read/write during still-failing recovery must not reset its wake-up budget.
         if (historyPublication.completeHistoryRead(historyFile(appContext).baseFile)) signalHistoryChanged()
@@ -1644,6 +1696,8 @@ internal object RecordingIncidentStore {
         context: Context,
         incident: RecordingIncident,
         incomingExitObserved: Boolean = false,
+        existingOnly: Boolean = false,
+        onPublicationStarted: () -> Unit = {},
     ) {
         val file = historyFile(context)
         val previous = readHistory(file)
@@ -1655,6 +1709,9 @@ internal object RecordingIncidentStore {
         val index = if (sessionIndex >= 0) sessionIndex else existing.indexOfFirst { candidate ->
             recordingIncidentReferenceMatches(candidate, incident)
         }
+        // An uncertain publication is resolved by readHistory before retry. A record evicted
+        // since that publication is no longer a candidate for reinsertion.
+        if (existingOnly && index < 0) return
         val updated = if (index >= 0) {
             existing.toMutableList().apply {
                 this[index] = mergeRecordingIncidentEvidence(this[index], incident, incomingExitObserved)
@@ -1669,7 +1726,7 @@ internal object RecordingIncidentStore {
             writeHistory(file, previous)
             return
         }
-        writeHistory(file, updated)
+        writeHistory(file, updated, onPublicationStarted)
         signalHistoryChanged()
     }
 
@@ -1941,9 +1998,14 @@ internal object RecordingIncidentStore {
         }
     }
 
-    private fun writeHistory(file: AtomicFile, incidents: List<RecordingIncident>) {
+    private fun writeHistory(file: AtomicFile, incidents: List<RecordingIncident>, onPublicationStarted: () -> Unit = {}) {
         validateRecordingIncidentHistorySize(incidents)
-        historyPublication.write(file.baseFile, incidents, ::publishHistory, ::signalHistoryChanged)
+        historyPublication.write(file.baseFile, incidents, { target, rows, started ->
+            publishHistory(target, rows) {
+                started()
+                onPublicationStarted()
+            }
+        }, ::signalHistoryChanged)
     }
 
     private fun publishHistory(

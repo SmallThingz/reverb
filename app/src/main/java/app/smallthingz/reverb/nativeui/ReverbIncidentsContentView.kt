@@ -14,6 +14,7 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Rect
 import android.os.Bundle
+import android.os.SystemClock
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.View
 import android.view.ViewGroup
@@ -25,12 +26,14 @@ import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import app.smallthingz.reverb.AppFeedbackCenter
+import app.smallthingz.reverb.CaptureObservationDuration
 import app.smallthingz.reverb.FeedbackTone
 import app.smallthingz.reverb.IncidentHistoryController
 import app.smallthingz.reverb.IncidentHistoryLoadStatus
 import app.smallthingz.reverb.IncidentHistoryUiState
 import app.smallthingz.reverb.IncidentPresentation
 import app.smallthingz.reverb.R
+import app.smallthingz.reverb.summaryAt
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -65,6 +68,8 @@ internal class ReverbIncidentsContentView(
     private val empty = IncidentsEmptyContent(context, initialAppearance, frames, scope, durationScale)
     private val adapter = IncidentsAdapter(context, initialAppearance.card, menuHost, actions, inputRoot)
     private var accessibilityMembershipChanged: () -> Unit = {}
+    private var ongoingPolicyDuration: CaptureObservationDuration? = null
+    private val policyDurationTick = Runnable { updatePolicyDuration() }
     private val manager: LinearLayoutManager = object : LinearLayoutManager(context) {
         override fun onLayoutChildren(recycler: RecyclerView.Recycler, state: RecyclerView.State) {
             if (!state.isPreLayout) {
@@ -140,6 +145,9 @@ internal class ReverbIncidentsContentView(
 
     /** Already prepared history only; formatting and storage stay in the existing controller. */
     fun bind(state: IncidentHistoryUiState) {
+        ongoingPolicyDuration = state.history.rows.firstNotNullOfOrNull {
+            it.incident.ongoingPolicyDuration?.takeIf { duration -> duration.isOngoing }
+        }
         val hasRows = state.history.rows.isNotEmpty()
         list.visibility = if (hasRows) VISIBLE else GONE
         empty.visibility = if (hasRows) GONE else VISIBLE
@@ -161,6 +169,28 @@ internal class ReverbIncidentsContentView(
         }
         requestLayout()
         accessibilityMembershipChanged()
+        updatePolicyDuration()
+    }
+
+    private fun updatePolicyDuration() {
+        removeCallbacks(policyDurationTick)
+        val duration = ongoingPolicyDuration ?: return
+        if (!isAttachedToWindow || !isShown || windowVisibility != VISIBLE) return
+        val now = SystemClock.elapsedRealtime()
+        for (index in 0 until list.childCount) {
+            (list.getChildAt(index) as? ReverbIncidentCardView)?.updatePolicyDuration(duration, now)
+        }
+        if (duration.isOngoing) postDelayed(policyDurationTick, 1000)
+    }
+
+    override fun onVisibilityAggregated(isVisible: Boolean) {
+        super.onVisibilityAggregated(isVisible)
+        if (isVisible) updatePolicyDuration() else removeCallbacks(policyDurationTick)
+    }
+
+    override fun onDetachedFromWindow() {
+        removeCallbacks(policyDurationTick)
+        super.onDetachedFromWindow()
     }
 
     fun setAppearance(value: IncidentsContentAppearance, onBack: () -> Unit, actions: IncidentCardActions) {
@@ -202,6 +232,8 @@ internal class ReverbIncidentsContentView(
 
     /** Root owner calls this when the source overlay leaves composition at fully closed progress. */
     fun dispose() {
+        ongoingPolicyDuration = null
+        removeCallbacks(policyDurationTick)
         bindSourceAccessibility(null)
         savedPosition.leaveList()
         list.itemAnimator?.endAnimations()
@@ -215,7 +247,7 @@ internal fun incidentContentActions(context: Context, controller: IncidentHistor
     IncidentCardActions(controller::toggleAcknowledged, controller::delete) { row ->
         val text = buildList {
             add(row.date)
-            add(row.stopSummary)
+            add(row.summaryAt(context, SystemClock.elapsedRealtime()))
             if (row.cause.isNotEmpty()) add(row.cause)
             if (row.runtime.isNotEmpty()) add(row.runtime)
             if (row.age.isNotEmpty()) add(row.age)

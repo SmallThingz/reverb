@@ -21,6 +21,7 @@ import smallthingz.ui.text.view.NativeMergedRowRole
 import smallthingz.ui.text.view.ParagraphView
 import android.content.Context
 import android.os.Build
+import android.os.SystemClock
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
@@ -31,12 +32,14 @@ import smallthingz.ui.text.font.FontFamily
 import smallthingz.ui.text.font.FontWeight
 import smallthingz.ui.unit.Density
 import app.smallthingz.reverb.IncidentPresentation
+import app.smallthingz.reverb.CaptureObservationDuration
 import smallthingz.ui.input.phase.NativeClickPhaseHost
 import smallthingz.ui.input.phase.NativeClickPhaseEndpoint
 import smallthingz.ui.input.phase.ViewClickPhaseEndpoint
 import androidx.core.view.ViewCompat
 import app.smallthingz.reverb.R
 import app.smallthingz.reverb.RecordingIncident
+import app.smallthingz.reverb.summaryAt
 import kotlin.math.roundToInt
 
 /** Exact released typography roles; the host supplies its current immutable font context. */
@@ -156,6 +159,11 @@ internal class ReverbIncidentCardView(
         applyAppearance()
         visibility = VISIBLE
         if (menuCreated) menuHost.update(menuRequest(identity))
+    }
+
+    fun updatePolicyDuration(duration: CaptureObservationDuration, elapsedMillis: Long) {
+        val row = binding?.row ?: return
+        if (row.incident.ongoingPolicyDuration === duration) body.setSummary(row.summaryAt(context, elapsedMillis))
     }
 
     /** Call on theme/configuration/font-resolver updates, not during drawing. */
@@ -346,7 +354,8 @@ private class IncidentBody(
 
     fun bind(row: IncidentPresentation, canMutate: Boolean) {
         date.setText(row.date)
-        summary.setText(row.stopSummary)
+        setSummary(if (row.incident.ongoingPolicyDuration == null) row.stopSummary
+            else row.summaryAt(context, SystemClock.elapsedRealtime()))
         cause.setText(row.cause)
         runtime.setText(row.runtime)
         age.setText(row.age)
@@ -361,6 +370,8 @@ private class IncidentBody(
         checkTarget.bind(row.incident.acknowledged, canMutate)
         requestLayout()
     }
+
+    fun setSummary(text: String) = summary.setText(text)
 
     fun clear() {
         clickLabel = null

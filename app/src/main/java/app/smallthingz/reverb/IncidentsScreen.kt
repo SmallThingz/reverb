@@ -2,6 +2,7 @@ package app.smallthingz.reverb
 
 import android.app.ActivityManager
 import android.app.ApplicationExitInfo
+import android.content.Context
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -70,7 +71,16 @@ internal fun formatIncidentSummary(
     RecordingIncidentKind.UNEXPECTED_SHUTDOWN -> formatIncidentStopSummary(incident, clockFormatter, zone)
     RecordingIncidentKind.CAPTURE_INPUT_OBSERVATION -> {
         val occurredAt = clockFormatter.format(Instant.ofEpochMilli(incident.occurredAtMillis).atZone(zone))
-        "Microphone input issue at $occurredAt"
+        val summary = "Microphone input issue at $occurredAt"
+        when {
+            incident.description != CaptureInputObservationReason.POLICY_SILENCED.description -> summary
+            incident.ongoingPolicyDuration != null -> summary
+            else -> {
+                val duration = recordingIncidentDowntimeMillis(incident)
+                if (duration == null) "$summary · duration unknown"
+                else "$summary for ${formatDurationInput(duration / 1000L + if (duration % 1000L == 0L) 0L else 1L)}"
+            }
+        }
     }
     RecordingIncidentKind.UNEXPECTED_ERROR -> {
         val occurredAt = clockFormatter.format(
@@ -149,6 +159,12 @@ internal data class IncidentPresentation(
 ) {
     val hasDetails: Boolean
         get() = cause.isNotEmpty() || runtime.isNotEmpty() || age.isNotEmpty() || description != null
+}
+
+internal fun IncidentPresentation.summaryAt(context: Context, elapsedMillis: Long): String {
+    val duration = incident.ongoingPolicyDuration?.takeIf { it.isOngoing } ?: return stopSummary
+    val seconds = (elapsedMillis - duration.startedAtElapsedMillis).coerceAtLeast(0L) / 1000L
+    return context.getString(R.string.incident_policy_ongoing, stopSummary, formatDurationInput(seconds))
 }
 
 internal class IncidentHistoryPresentation(val rows: List<IncidentPresentation>) {

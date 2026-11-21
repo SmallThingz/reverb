@@ -6,6 +6,9 @@ import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.IOException
 import java.io.File
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.FutureTask
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Test
@@ -102,6 +105,133 @@ class CaptureInputObservationTest {
         subscription.observe(false, 17)
         assertEquals(listOf(11L, 13L, 16L), wakes)
         assertEquals(listOf(14L), admitted)
+    }
+
+    @Test fun currentSilencingUsesLatestCallbackAndNeverTheInitialSnapshot() {
+        val work = java.util.ArrayDeque<() -> Unit>()
+        val admitted = mutableListOf<Long>()
+        val failures = mutableListOf<Exception>()
+        val liveStates = mutableListOf<Boolean?>()
+        lateinit var subscription: CapturePolicyWitnesses
+        subscription = CapturePolicyWitnesses(work::addLast, {
+            subscription.observe(false, 20)
+            true to 19L
+        }, admitted::add, failures::add, callbackStateChanged = { liveStates += subscription.callbackSilenced })
+
+        subscription.observe(true, 10)
+        subscription.observe(false, 11)
+        assertNull(subscription.callbackSilenced)
+        subscription.activate()
+        assertEquals(false, subscription.callbackSilenced)
+        work.removeFirst()()
+        assertEquals(listOf(10L), admitted)
+        assertEquals(listOf(false), liveStates)
+
+        subscription.observe(true, 21)
+        subscription.observe(true, 22)
+        subscription.observe(null, 23)
+        subscription.observe(true, 24)
+        assertEquals(listOf(10L, 21L), admitted)
+        assertEquals(listOf(false, true, null, true), liveStates)
+
+        val failure = IOException("observer failed")
+        subscription.report(failure)
+        subscription.observe(false, 25)
+        assertNull(subscription.callbackSilenced)
+        assertEquals(listOf(false, true, null, true, null), liveStates)
+        assertEquals(listOf(failure), failures)
+    }
+
+    @Test fun observerCanAcceptARestorationWhileTheMutedWakeIsInFlight() {
+        val work = java.util.ArrayDeque<() -> Unit>()
+        val entered = CountDownLatch(1)
+        val allowReturn = CountDownLatch(1)
+        lateinit var subscription: CapturePolicyWitnesses
+        subscription = CapturePolicyWitnesses(work::addLast, { null to 0L }, {}, { throw AssertionError(it) },
+            callbackStateChanged = {
+                if (subscription.callbackSilenced == true) {
+                    entered.countDown()
+                    check(allowReturn.await(5, TimeUnit.SECONDS))
+                }
+            })
+        subscription.activate()
+        val mute = FutureTask { subscription.observe(true, 10) }
+        Thread(mute, "muted-callback").start()
+        val restore = FutureTask { subscription.observe(false, 11) }
+        try {
+            assertTrue(entered.await(5, TimeUnit.SECONDS))
+            Thread(restore, "restored-callback").start()
+            restore.get(5, TimeUnit.SECONDS)
+            assertEquals(false, subscription.callbackSilenced)
+        } finally {
+            allowReturn.countDown()
+            mute.get(5, TimeUnit.SECONDS)
+            subscription.close()
+        }
+        assertNull(subscription.callbackSilenced)
+        subscription.observe(true, 12)
+        assertNull(subscription.callbackSilenced)
+    }
+
+    @Test fun provisionalDropoutEndsRemainInCallbackOrderAndUnknownIsNeverRestoration() {
+        val work = java.util.ArrayDeque<() -> Unit>()
+        val dropouts = mutableListOf<CapturePolicyDropout>()
+        lateinit var subscription: CapturePolicyWitnesses
+        subscription = CapturePolicyWitnesses(work::addLast, { true to 50L }, {}, { throw AssertionError(it) },
+            dropoutsAvailable = { while (true) dropouts.add(subscription.pollDropout() ?: break) })
+
+        subscription.observe(true, 200, 10)
+        subscription.observe(false, 150, 11)
+        subscription.observe(true, 130, 12)
+        subscription.observe(null, 120, 13)
+        subscription.observe(true, 110, 14)
+        subscription.observe(false, 100, 15)
+        assertTrue(dropouts.isEmpty())
+        subscription.activate()
+        assertEquals(listOf(10L, 12L), dropouts.map { it.elapsedMillis })
+        assertEquals(listOf(11L, -1L), dropouts.map { it.endedAtElapsedMillis })
+
+        subscription.observe(true, 100, 16)
+        assertEquals(16L, dropouts.last().elapsedMillis)
+        assertNull(dropouts.last().endedAtElapsedMillis)
+        work.removeFirst()()
+        assertNull(dropouts.last().endedAtElapsedMillis)
+        subscription.observe(false, 100, 18)
+        assertEquals(18L, dropouts.last().endedAtElapsedMillis)
+    }
+
+    @Test fun dropoutDurationUsesMonotonicEvidenceAndItsFirstEnd() = runBlocking {
+        val duration = CaptureObservationDuration(20L)
+        duration.finish(40L)
+        duration.finish(10_000L)
+        assertFalse(duration.isOngoing)
+        assertEquals(100_020L, duration.historyEndAtMillis(100_000L))
+        assertEquals(Long.MAX_VALUE, duration.historyEndAtMillis(Long.MAX_VALUE - 10L))
+        val unknown = CaptureObservationDuration(50L)
+        unknown.finish(49L)
+        assertEquals(-1L, unknown.historyEndAtMillis(100_000L))
+    }
+
+    @Test fun cutoffKeepsAnAlreadyWitnessedRestorationAndRejectsLaterCallbacks() {
+        fun subscription() = CapturePolicyWitnesses({}, { error("No startup snapshot") }, {}, { throw AssertionError(it) },
+            dropoutsAvailable = {}).apply { activate() }
+
+        val restored = subscription()
+        restored.observe(true, 100, 1)
+        val first = checkNotNull(restored.pollDropout())
+        // The restoration has been observed but its service wake has not been consumed.
+        restored.observe(false, 110, 2)
+        restored.sealDropouts { error("Known restoration must win at owner retirement") }
+        restored.observe(true, 120, 3)
+        assertEquals(2L, first.endedAtElapsedMillis)
+        assertNull(restored.pollDropout())
+
+        val stopped = subscription()
+        stopped.observe(true, 100, 1)
+        val second = checkNotNull(stopped.pollDropout())
+        stopped.sealDropouts { 4L }
+        stopped.observe(false, 120, 5)
+        assertEquals(4L, second.endedAtElapsedMillis)
     }
 
     @Test fun provisionalEpisodesAdoptOnlyAfterSuccessfulActivation() {

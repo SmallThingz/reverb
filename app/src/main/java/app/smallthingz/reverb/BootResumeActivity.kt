@@ -1,6 +1,7 @@
 package app.smallthingz.reverb
 
 import android.Manifest
+import android.app.KeyguardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -16,6 +17,7 @@ import android.provider.Settings
 import android.util.Log
 import android.view.ViewTreeObserver
 import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
@@ -47,7 +49,6 @@ class BootResumeActivity : ComponentActivity() {
     private var closed = false
     private var startedAfterNanos = 0L
     private val timeout = Runnable { closeAttempt() }
-    private val successTimeout = Runnable { closeAttempt() }
     private val drawListener = object : ViewTreeObserver.OnDrawListener {
         override fun onDraw() {
             // A pre-draw callback is too early. This runs after this traversal has drawn.
@@ -65,19 +66,18 @@ class BootResumeActivity : ComponentActivity() {
             resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES)
         setTheme(if (dark) R.style.Theme_Reverb_Dark else R.style.Theme_Reverb_Light)
         super.onCreate(savedInstanceState)
-        retirePendingBootLaunch(pendingLaunch, startedMains.refreshVisibility())
-        val candidate = pendingLaunch.get()
-        if (savedInstanceState != null || candidate == null || candidate.id != intent.getStringExtra(EXTRA_LAUNCH) ||
-            !candidate.current(startedMains.visibilityRevision) ||
-            SystemClock.elapsedRealtime() - candidate.createdAtMillis !in 0L until TIMEOUT_MILLIS ||
-            !pendingLaunch.compareAndSet(candidate, null)) {
+        val candidate = if (savedInstanceState == null && !startedMains.refreshVisibility() && unlockedInteractive(this))
+            launchOwner.claim(intent.getStringExtra(EXTRA_LAUNCH), SystemClock.elapsedRealtime(), startedMains.visibilityRevision)
+        else null
+        if (candidate == null) {
             finish()
             return
         }
         launch = candidate
-        admission = BootResumeActivityAdmission(candidate.createdAtMillis, TIMEOUT_MILLIS)
-        setShowWhenLocked(true)
-        setTurnScreenOn(true)
+        admission = BootResumeActivityAdmission(candidate.createdAtMillis, candidate.timeoutMillis)
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() { finishSession() }
+        })
         val palette = reverbAppearance.resolveColorScheme(this, dark)
         window.setBackgroundDrawable(reverbAppearance.statusContent.windowBackground(palette))
         root = BootResumeContentView(this, palette)
@@ -105,18 +105,23 @@ class BootResumeActivity : ComponentActivity() {
         super.onPause()
     }
 
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        finishSession()
+    }
+
     override fun onDestroy() {
         closed = true
         admission.abandon()
         releaseOwners()
         super.onDestroy()
+        launch?.let(launchOwner::release)
     }
 
     private fun visible(): Boolean = !closed && !isFinishing && !isDestroyed && drawn &&
         lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) &&
         root.isAttachedToWindow && root.isShown && root.hasWindowFocus() &&
-        getSystemService(PowerManager::class.java)?.isInteractive == true &&
-        storageUnlocked(this)
+        unlockedInteractive(this)
 
     private fun maybeBind() {
         if (isFinishing || isDestroyed) { closeAttempt(); return }
@@ -143,6 +148,7 @@ class BootResumeActivity : ComponentActivity() {
             binding = serviceUiOwner.bind(this@BootResumeActivity, this@BootResumeActivity, root,
                 isAlive = { !closed && admission.withinDeadline(SystemClock.elapsedRealtime()) && visible() },
                 callbacks = object : CaptureServiceUiOwner.BindingCallbacks {
+                    override fun bindingAccepted() { launch?.captureBindingAccepted?.invoke() }
                     override fun connected(connectedService: ReverbService) {
                         if (!admission.current(SystemClock.elapsedRealtime()) || !visible() || !admission.bindAccepted) {
                             closeAttempt(); return
@@ -168,13 +174,18 @@ class BootResumeActivity : ComponentActivity() {
 
     private fun confirmCapture(service: ReverbService) {
         confirmation = service.confirmBootResumeCapture(startedAfterNanos) {
-            if (visible() && admission.confirmCapture(SystemClock.elapsedRealtime())) {
-                Log.i("BootResumeActivity", "finish-after-confirmed-pcm elapsedMs=${SystemClock.elapsedRealtime()}")
-                root.removeCallbacks(timeout)
-                root.showSuccess()
-                root.postDelayed(successTimeout, admission.successRemainingMillis(SystemClock.elapsedRealtime()))
+            if (visible()) {
+                admission.confirmCapture(SystemClock.elapsedRealtime()) {
+                    Log.i("BootResumeActivity", "finish-after-confirmed-pcm elapsedMs=${SystemClock.elapsedRealtime()}")
+                    finishSession()
+                }
             }
         }
+    }
+
+    private fun finishSession() {
+        launch?.cancelSession?.invoke()
+        closeAttempt()
     }
 
     private fun closeAttempt() {
@@ -192,7 +203,6 @@ class BootResumeActivity : ComponentActivity() {
         binding?.close(); binding = null
         if (::root.isInitialized) {
             root.removeCallbacks(timeout)
-            root.removeCallbacks(successTimeout)
             if (root.viewTreeObserver.isAlive) root.viewTreeObserver.removeOnDrawListener(drawListener)
         }
     }
@@ -200,23 +210,29 @@ class BootResumeActivity : ComponentActivity() {
     companion object {
         private const val EXTRA_LAUNCH = "boot-resume-launch"
         private const val TIMEOUT_MILLIS = 15_000L
-        private val pendingLaunch = AtomicReference<BootResumeLaunch?>()
+        private val launchOwner = BootResumeLaunchOwner()
         private val launchHandler = Handler(Looper.getMainLooper())
         private val startedMains = StartedMainOwners()
+        internal val mainVisibilityRevision: Long get() = startedMains.visibilityRevision
+
+        internal fun mainTookOver(revision: Long): Boolean =
+            startedMains.anyVisible || startedMains.visibilityRevision != revision
 
         internal fun mainStarted(owner: Any, visible: () -> Boolean) {
             startedMains.start(owner, visible)
         }
 
         internal fun mainVisibilityChanged(owner: Any) {
-            if (startedMains.contains(owner))
-                retirePendingBootLaunch(pendingLaunch, startedMains.refreshVisibility())
+            if (startedMains.contains(owner) && startedMains.refreshVisibility())
+                BootResumeNotification.cancelAutomaticResume()
         }
 
         internal fun mainStopped(owner: Any) { startedMains.stop(owner) }
 
-        private fun storageUnlocked(context: Context): Boolean =
-            context.getSystemService(UserManager::class.java)?.isUserUnlocked == true
+        internal fun unlockedInteractive(context: Context): Boolean =
+            context.getSystemService(UserManager::class.java)?.isUserUnlocked == true &&
+                context.getSystemService(PowerManager::class.java)?.isInteractive == true &&
+                context.getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == false
 
         internal fun overlayAvailable(context: Context): Boolean = runCatching {
             Settings.canDrawOverlays(context)
@@ -225,35 +241,31 @@ class BootResumeActivity : ComponentActivity() {
         internal fun overlayReviewIntent(context: Context): Intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
             Uri.fromParts("package", context.packageName, null))
 
-        private fun permissionsAvailable(context: Context): Boolean = overlayAvailable(context) &&
+        internal fun permissionsAvailable(context: Context): Boolean = overlayAvailable(context) &&
             ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
 
-        internal fun launch(context: Context, allowed: () -> Boolean) {
-            if (!allowed()) return
-            val autoStartRevision = AutoStartAfterRestart.admission(context) ?: return
-            val launchAllowed = { allowed() && AutoStartAfterRestart.policy.currentAdmission(autoStartRevision) }
-            if (!storageUnlocked(context) || !permissionsAvailable(context) ||
-                !readDurableCaptureIntentPreferences(getRecorderPreferences(context)).enabled) {
-                return
-            }
-            if (!launchAllowed()) return
-            val token = BootResumeLaunch(UUID.randomUUID().toString(), SystemClock.elapsedRealtime(), launchAllowed,
-                startedMains.visibilityRevision)
-            if (!pendingLaunch.compareAndSet(null, token)) return
-            launchHandler.postDelayed({ pendingLaunch.compareAndSet(token, null) }, TIMEOUT_MILLIS)
+        internal fun launch(context: Context, deadline: Long, allowed: () -> Boolean,
+            captureBindingAccepted: () -> Unit, cancel: () -> Unit) {
+            val now = SystemClock.elapsedRealtime()
+            if (now >= deadline || !allowed()) return
+            val token = BootResumeLaunch(UUID.randomUUID().toString(), now, allowed, startedMains.visibilityRevision,
+                minOf(TIMEOUT_MILLIS, deadline - now), cancel, captureBindingAccepted)
+            if (!launchOwner.reserve(token)) return
+            launchHandler.postDelayed({ launchOwner.expirePending(token) }, token.pendingTimeoutMillis)
             launchHandler.post {
                 // Recheck live View/lifecycle state on main after the durable read. STARTED alone
                 // is not visible authority: a locked or occluded Main still needs the helper route.
-                retirePendingBootLaunch(pendingLaunch, startedMains.refreshVisibility())
-                if (!launchAllowed() || pendingLaunch.get() !== token) {
-                    pendingLaunch.compareAndSet(token, null)
+                if (!launchOwner.ownsPending(token) || startedMains.refreshVisibility() || !unlockedInteractive(context) ||
+                    !token.current(startedMains.visibilityRevision) || !token.deliverable(SystemClock.elapsedRealtime())) {
+                    launchOwner.expirePending(token)
                     return@post
                 }
                 try {
+                    Log.i("BootResumeActivity", "launch-attempt elapsedMs=${SystemClock.elapsedRealtime()}")
                     context.startActivity(Intent(context, BootResumeActivity::class.java)
                         .putExtra(EXTRA_LAUNCH, token.id).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                 } catch (error: Exception) {
-                    pendingLaunch.compareAndSet(token, null)
+                    launchOwner.expirePending(token)
                     if (error !is SecurityException && error !is android.content.ActivityNotFoundException)
                         RecordingIncidentStore.recordUnexpectedErrorInBackground(context, "Open boot recording window", error)
                 }
@@ -262,15 +274,38 @@ class BootResumeActivity : ComponentActivity() {
     }
 }
 
-internal data class BootResumeLaunch(val id: String, val createdAtMillis: Long, val allowed: () -> Boolean,
-    val mainVisibilityRevision: Long = 0L) {
+internal class BootResumeLaunch(val id: String, val createdAtMillis: Long, val allowed: () -> Boolean,
+    val mainVisibilityRevision: Long = 0L, val timeoutMillis: Long = 15_000L, val cancelSession: () -> Unit = {},
+    val captureBindingAccepted: () -> Unit = {}) {
+    val pendingTimeoutMillis = minOf(2_000L, timeoutMillis)
     fun current(visibleMainRevision: Long): Boolean = allowed() && mainVisibilityRevision == visibleMainRevision
+    fun deliverable(now: Long): Boolean = now - createdAtMillis in 0L until pendingTimeoutMillis
 }
 
-internal fun retirePendingBootLaunch(pending: AtomicReference<BootResumeLaunch?>, mainVisible: Boolean) {
-    if (!mainVisible) return
-    val candidate = pending.get() ?: return
-    pending.compareAndSet(candidate, null)
+/** The worker reserves one token; only main may claim or retire it. */
+internal class BootResumeLaunchOwner {
+    private val owner = AtomicReference<BootResumeLaunch?>()
+    private var claimed: BootResumeLaunch? = null
+
+    fun reserve(launch: BootResumeLaunch): Boolean = owner.compareAndSet(null, launch)
+    fun ownsPending(launch: BootResumeLaunch): Boolean = owner.get() === launch && claimed !== launch
+
+    fun claim(id: String?, now: Long, mainRevision: Long): BootResumeLaunch? {
+        val launch = owner.get() ?: return null
+        if (!ownsPending(launch) || launch.id != id || !launch.current(mainRevision) || !launch.deliverable(now)) return null
+        claimed = launch
+        return launch
+    }
+
+    fun expirePending(launch: BootResumeLaunch) {
+        if (ownsPending(launch)) owner.compareAndSet(launch, null)
+    }
+
+    fun release(launch: BootResumeLaunch) {
+        if (claimed !== launch) return
+        claimed = null
+        owner.compareAndSet(launch, null)
+    }
 }
 
 internal fun mainWindowCanResumeCapture(resumed: Boolean, attached: Boolean, shown: Boolean,
@@ -284,19 +319,20 @@ internal class StartedMainOwners {
         private set
     @Volatile var visibilityRevision = 0L
         private set
-    private var lastVisible = false
+    @Volatile var anyVisible = false
+        private set
     fun start(owner: Any, visible: () -> Boolean = { false }) { owners[owner] = visible; anyStarted = true }
     fun contains(owner: Any): Boolean = owners.containsKey(owner)
     fun refreshVisibility(): Boolean {
         val visible = owners.values.any { it() }
-        if (visible && !lastVisible) visibilityRevision++
-        lastVisible = visible
+        if (visible && !anyVisible) visibilityRevision++
+        anyVisible = visible
         return visible
     }
     fun stop(owner: Any): Boolean {
         val removed = owners.remove(owner) != null
         anyStarted = owners.isNotEmpty()
-        if (!anyStarted) lastVisible = false
+        if (!anyStarted) anyVisible = false
         return removed && !anyStarted
     }
 }
@@ -323,8 +359,8 @@ internal class BootResumeActivityAdmission(
         private set
     private var abandoned = false
     private var foregroundObserved = false
-    private var confirmedAtMillis: Long? = null
-    val captureConfirmed: Boolean get() = confirmedAtMillis != null
+    var captureConfirmed = false
+        private set
     fun withinDeadline(nowMillis: Long): Boolean = nowMillis - createdAtMillis in 0L until timeoutMillis
     fun current(nowMillis: Long, allowed: Boolean = true): Boolean {
         if (!allowed || !withinDeadline(nowMillis)) abandoned = true
@@ -346,19 +382,16 @@ internal class BootResumeActivityAdmission(
         admitted = true
         return true
     }
-    fun confirmCapture(nowMillis: Long): Boolean {
-        if (!admitted || captureConfirmed || !current(nowMillis)) return false
-        confirmedAtMillis = nowMillis
+    fun confirmCapture(nowMillis: Long, finish: () -> Unit): Boolean {
+        if (!bindAccepted || captureConfirmed || !current(nowMillis)) return false
+        captureConfirmed = true
+        finish()
         return true
     }
     fun acceptServiceBind(visible: Boolean, allowed: Boolean, nowMillis: Long): Boolean {
         if (!admitted || bindAccepted || !current(nowMillis, allowed) || !visible) return false
         bindAccepted = true
         return true
-    }
-    fun successRemainingMillis(nowMillis: Long): Long {
-        val confirmedAt = confirmedAtMillis ?: return 0L
-        return if (abandoned) 0L else (500L - (nowMillis - confirmedAt)).coerceIn(0L, 500L)
     }
     fun abandon() { abandoned = true }
 }

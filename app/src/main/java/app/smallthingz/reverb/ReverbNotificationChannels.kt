@@ -23,6 +23,8 @@ internal enum class ReverbNotificationChannel(
         R.string.notification_channel_playback_description, NotificationManager.IMPORTANCE_LOW),
     RESTART_REMINDERS("recording-resume", R.string.boot_resume_channel,
         R.string.notification_channel_restart_description, NotificationManager.IMPORTANCE_LOW),
+    AUTO_START("recording-auto-start", R.string.boot_auto_start_channel,
+        R.string.boot_auto_start_channel_description, NotificationManager.IMPORTANCE_LOW),
 }
 
 internal object ReverbNotificationChannels {

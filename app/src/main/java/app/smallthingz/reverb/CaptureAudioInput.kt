@@ -16,7 +16,12 @@ internal interface CaptureAudioInput {
     val supportsClientSilencing: Boolean get() = false
     /** Android policy for this input. A missing active configuration returns unknown. */
     fun isClientSilenced(): Boolean? = null
-    fun observeClientSilencing(onState: (Boolean?, Long) -> Unit, onFailure: (Exception) -> Unit): CapturePolicySubscription? = null
+    fun observeClientSilencing(
+        onState: (Boolean?, Long) -> Unit,
+        onFailure: (Exception) -> Unit,
+        onCallbackStateChanged: () -> Unit,
+        onDropoutsAvailable: () -> Unit,
+    ): CapturePolicySubscription? = null
     fun stop()
     fun release()
 }
@@ -56,8 +61,10 @@ internal class AndroidCaptureAudioInput(private val record: AudioRecord, private
     override fun observeClientSilencing(
         onState: (Boolean?, Long) -> Unit,
         onFailure: (Exception) -> Unit,
+        onCallbackStateChanged: () -> Unit,
+        onDropoutsAvailable: () -> Unit,
     ): CapturePolicySubscription? = if (android.os.Build.VERSION.SDK_INT >= 29)
-        AndroidCapturePolicySubscription(record, onState, onFailure) else null
+        AndroidCapturePolicySubscription(record, onState, onFailure, onCallbackStateChanged, onDropoutsAvailable) else null
     override fun stop() = record.stop()
     override val supportsClientSilencing: Boolean get() = android.os.Build.VERSION.SDK_INT >= 29
     override fun isClientSilenced(): Boolean? = if (supportsClientSilencing)
@@ -85,6 +92,8 @@ private class AndroidCapturePolicySubscription(
     private val record: AudioRecord,
     onState: (Boolean?, Long) -> Unit,
     onFailure: (Exception) -> Unit,
+    onCallbackStateChanged: () -> Unit,
+    onDropoutsAvailable: () -> Unit,
 ) : CapturePolicySubscription {
     private val retired = java.util.concurrent.atomic.AtomicBoolean()
     private val witnesses = CapturePolicyWitnesses(
@@ -92,16 +101,21 @@ private class AndroidCapturePolicySubscription(
         snapshot = { record.activeRecordingConfiguration?.isClientSilenced to System.currentTimeMillis() },
         deliver = { onState(true, it) }, failed = onFailure,
         deliverUnsilenced = { onState(false, it) },
+        callbackStateChanged = onCallbackStateChanged,
+        dropoutsAvailable = onDropoutsAvailable,
     )
     private val callback = object : android.media.AudioManager.AudioRecordingCallback() {
         override fun onRecordingConfigChanged(configs: MutableList<android.media.AudioRecordingConfiguration>) {
             try {
                 val owned = configs.singleOrNull { it.clientAudioSessionId == record.audioSessionId }
-                witnesses.observe(owned?.isClientSilenced, System.currentTimeMillis())
+                witnesses.observe(owned?.isClientSilenced, System.currentTimeMillis(), android.os.SystemClock.elapsedRealtime())
             } catch (error: Exception) { witnesses.report(error) }
         }
     }
     init { record.registerAudioRecordingCallback(java.util.concurrent.Executor { it.run() }, callback) }
+    override val callbackSilenced: Boolean? get() = witnesses.callbackSilenced
+    override fun pollDropout(): CapturePolicyDropout? = witnesses.pollDropout()
+    override fun sealDropouts(endedAtElapsedMillis: () -> Long) = witnesses.sealDropouts(endedAtElapsedMillis)
     override fun activate() = witnesses.activate()
     override fun close() {
         if (!retired.compareAndSet(false, true)) return

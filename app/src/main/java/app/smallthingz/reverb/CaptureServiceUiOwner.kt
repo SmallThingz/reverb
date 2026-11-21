@@ -36,6 +36,7 @@ internal class CaptureServiceUiOwner {
     private var bindingAttached = false
 
     interface BindingCallbacks {
+        fun bindingAccepted() = Unit
         fun connected(connectedService: ReverbService)
         fun unavailable(markSavingAsCancelRequested: Boolean)
         fun stopped()
@@ -53,6 +54,8 @@ internal class CaptureServiceUiOwner {
         bindingAttached = true
         var closed = false
         var boundConnection: ServiceConnection? = null
+        lateinit var observer: LifecycleEventObserver
+        lateinit var initialBind: Runnable
 
         fun unbindCurrentConnection(): Result<Unit> {
             val current = boundConnection ?: return Result.success(Unit)
@@ -62,6 +65,18 @@ internal class CaptureServiceUiOwner {
             connectionGeneration++
             return runCatching { context.unbindService(current) }.also {
                 lastUnbindResult = it
+            }
+        }
+
+        fun closeBinding() {
+            if (closed) return
+            closed = true
+            try {
+                view.removeCallbacks(initialBind)
+                lifecycleOwner.lifecycle.removeObserver(observer)
+                callbacks.stopped()
+            } finally {
+                try { unbindCurrentConnection() } finally { bindingAttached = false }
             }
         }
 
@@ -107,7 +122,17 @@ internal class CaptureServiceUiOwner {
                     Context.BIND_AUTO_CREATE,
                 )
             }.getOrDefault(false)
-            if (!bound && boundConnection === candidate) {
+            if (bound && boundConnection === candidate) {
+                try {
+                    callbacks.bindingAccepted()
+                } catch (error: Throwable) {
+                    try { closeBinding() } catch (cleanupError: Throwable) {
+                        if (cleanupError !== error) error.addSuppressed(cleanupError)
+                    }
+                    lastUnbindResult?.exceptionOrNull()?.takeUnless { it === error }?.let(error::addSuppressed)
+                    throw error
+                }
+            } else if (!bound && boundConnection === candidate) {
                 boundConnection = null
                 if (connectionGeneration == bindingGeneration[0]) {
                     connectionGeneration++
@@ -120,7 +145,7 @@ internal class CaptureServiceUiOwner {
         // synchronously. Do not let that catch-up ON_START bypass the deliberate first-frame
         // bind below; real later starts occur after addObserver returns.
         var observerInstalled = false
-        val observer = LifecycleEventObserver { _, event ->
+        observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_START -> if (observerInstalled) bindIfNeeded()
 
@@ -134,27 +159,13 @@ internal class CaptureServiceUiOwner {
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         observerInstalled = true
-        val initialBind = Runnable { bindIfNeeded() }
+        initialBind = Runnable { bindIfNeeded() }
         // Keep normal startup frame-first, but keyguard/occlusion can suppress app frames
         // indefinitely. A delayed main-loop fallback restores durable capture intent even when
         // postOnAnimation never fires; bindIfNeeded() makes the duplicate callback harmless.
         view.postOnAnimation(initialBind)
         view.postDelayed(initialBind, CAPTURE_INITIAL_BIND_FALLBACK_MILLIS)
-        return Closeable {
-            if (closed) return@Closeable
-            closed = true
-            try {
-                view.removeCallbacks(initialBind)
-                lifecycleOwner.lifecycle.removeObserver(observer)
-                callbacks.stopped()
-            } finally {
-                try {
-                    unbindCurrentConnection()
-                } finally {
-                    bindingAttached = false
-                }
-            }
-        }
+        return Closeable { closeBinding() }
     }
 
     /** Close any previous lease before reusing [uiForegroundOwner] with the same service. */
