@@ -299,7 +299,8 @@ open class ReverbService : Service() {
     @Volatile
     private var audioRecordGeneration = Long.MIN_VALUE
     @Volatile private var bootCaptureConfirmation: BootCaptureConfirmation? = null
-    private var bootResumeNoticeConfirmed = false
+    @Volatile private var bootNoticeConfirmation: BootCaptureConfirmation? = null
+    private var bootNoticeInputEpoch = Long.MIN_VALUE
     // A vacant input slot still has an owner during synchronous recovery. Every release,
     // including a vacant one, invalidates older operations so null cannot alias a successor.
     private val audioRecordReleaseGeneration = AtomicLong()
@@ -472,6 +473,7 @@ open class ReverbService : Service() {
             onMaintenanceNeeded = { mainHandler.post { scheduleRetentionMaintenanceIfNeeded() } },
         )
         createNotificationChannel()
+        BootResumeNotification.discoverExistingNotice(this)
         audioThread = HandlerThread(THREAD_NAME_AUDIO, Process.THREAD_PRIORITY_AUDIO)
             .also { it.start() }
         audioHandler = Handler(audioThread.looper)
@@ -583,6 +585,7 @@ open class ReverbService : Service() {
     }
 
     override fun onDestroy() {
+        bootNoticeConfirmation?.close()
         bootCaptureConfirmation?.close()
         bootCaptureConfirmation = null
         // Accepted Settings posts precede the terminal audio close; later callers cannot enqueue.
@@ -1962,9 +1965,16 @@ open class ReverbService : Service() {
         val subscription = try {
             record.observeClientSilencing({ silenced, observedAt ->
                 synchronized(listeningIntentLock) {
-                    if (continuingCaptureGeneration(owner) != null && silenced == true) {
+                    val generation = continuingCaptureGeneration(owner) ?: return@synchronized
+                    if (silenced == true) {
                         RecordingIncidentStore.recordCaptureInputObservation(this, observedAt,
                             CaptureInputObservationReason.POLICY_SILENCED)
+                    } else if (silenced == false && BootResumeNotification.needsCaptureProof) {
+                        audioHandler.post {
+                            if (continuingCaptureGeneration(owner) == generation && bootNoticeInputEpoch == owner.releaseGeneration) {
+                                bootNoticeConfirmation?.requestPolicyRecheck()
+                            }
+                        }
                     }
                 }
             }, { error ->
@@ -3849,25 +3859,7 @@ open class ReverbService : Service() {
             id.frameBytes, id.sampleRate)
         processCapturedAudio(bytes, 0, packet.byteCount, slot, id.continuityGeneration,
             packet.endedAtNanos, packet.captureStartedAtNanos, owner, startedMillis)
-        if ((!bootResumeNoticeConfirmed || bootCaptureConfirmation != null) && packet.byteCount > 0 &&
-            bootCaptureIsCurrent(id.commandGeneration, id.continuityGeneration, input)) {
-            if (!bootResumeNoticeConfirmed) {
-                bootResumeNoticeConfirmed = true
-                BootResumeNotification.dismiss(this)
-            }
-            val confirmation = bootCaptureConfirmation
-            if (confirmation != null && confirmation.accepts(id.commandGeneration, id.continuityGeneration,
-                    packet.endedAtNanos, packet.byteCount)) {
-                bootCaptureConfirmation = null
-                if (!mainHandler.post {
-                    val current = appUiForeground && bootCaptureIsCurrent(
-                        id.commandGeneration, id.continuityGeneration, input)
-                    if (current && confirmation.active) Log.i("BootResumeActivity",
-                        "pcm-confirmed generation=${id.commandGeneration} continuity=${id.continuityGeneration}")
-                    confirmation.deliver(current)
-                }) confirmation.close()
-            }
-        }
+        if (bootCaptureConfirmation != null || BootResumeNotification.needsCaptureProof) confirmBootCaptureFromPacket(input, packet)
         if (!serviceDestroying && state == STATE_LISTENING &&
             id.continuityGeneration == captureContinuityGeneration.get()) {
             publishVisualization(bytes, 0, packet.byteCount, slot,
@@ -4292,6 +4284,82 @@ open class ReverbService : Service() {
         )
     }
 
+    private fun confirmBootCaptureFromPacket(input: CaptureIoCoordinator.Input, packet: CapturePcmRing.Packet) {
+        val id = packet.lease.identity
+        if (packet.byteCount <= 0 || !bootCaptureIsCurrent(id.commandGeneration, id.continuityGeneration, input)) return
+        val helper = bootCaptureConfirmation?.takeIf { it.active }
+        val reminderOnly = helper == null
+        val confirmation = helper ?: noticeConfirmationFor(id, packet.endedAtNanos) ?: return
+        if (!confirmation.accepts(id.commandGeneration, id.continuityGeneration, packet.endedAtNanos, packet.byteCount) ||
+            !bootProofOwnerIsCurrent(confirmation, reminderOnly)) return
+
+        if (input.record.supportsClientSilencing) {
+            confirmation.checkMicrophonePolicy(
+                inputEpoch = id.inputEpoch,
+                readStartedAtNanos = id.startedAtNanos,
+                postToWriter = { audioHandler.post(it) },
+                sample = {
+                    if (!bootProofOwnerIsCurrent(confirmation, reminderOnly) ||
+                        !bootCaptureIsCurrent(id.commandGeneration, id.continuityGeneration, input)) null
+                    else try { input.record.isClientSilenced() }
+                    catch (error: Exception) {
+                        Log.w(TAG, "Unable to query microphone policy for boot confirmation", error)
+                        null
+                    }
+                },
+                confirmed = { finishBootCaptureConfirmation(confirmation, reminderOnly, input, id) },
+            )
+        } else finishBootCaptureConfirmation(confirmation, reminderOnly, input, id)
+    }
+
+    private fun noticeConfirmationFor(id: CaptureReadIdentity, readEndedAtNanos: Long): BootCaptureConfirmation? {
+        if (!BootResumeNotification.needsCaptureProof) return null
+        val current = bootNoticeConfirmation
+        if (current != null && bootNoticeInputEpoch == id.inputEpoch &&
+            current.commandGeneration == id.commandGeneration && current.continuityGeneration == id.continuityGeneration) return current
+        retireBootNoticeConfirmation()
+        // The reminder has no UI deadline. Use a bounded attempt until another exact
+        // capture owner or an ordered restoration callback provides new evidence.
+        return BootCaptureConfirmation(readEndedAtNanos, remainingPolicyOpenings = 4) {}.also {
+            it.arm(id.commandGeneration, id.continuityGeneration)
+            bootNoticeInputEpoch = id.inputEpoch
+            bootNoticeConfirmation = it
+        }
+    }
+
+    private fun retireBootNoticeConfirmation() {
+        bootNoticeConfirmation?.close()
+        bootNoticeConfirmation = null
+    }
+
+    private fun bootProofOwnerIsCurrent(confirmation: BootCaptureConfirmation, reminderOnly: Boolean): Boolean =
+        confirmation.active && if (reminderOnly) {
+            bootNoticeConfirmation === confirmation && bootCaptureConfirmation?.active != true &&
+                BootResumeNotification.needsCaptureProof
+        } else bootCaptureConfirmation === confirmation && appUiForeground
+
+    private fun finishBootCaptureConfirmation(
+        confirmation: BootCaptureConfirmation,
+        reminderOnly: Boolean,
+        input: CaptureIoCoordinator.Input,
+        id: CaptureReadIdentity,
+    ) {
+        if (!bootCaptureIsCurrent(id.commandGeneration, id.continuityGeneration, input) ||
+            !bootProofOwnerIsCurrent(confirmation, reminderOnly)) return
+        BootResumeNotification.dismiss(this)
+        if (reminderOnly) {
+            retireBootNoticeConfirmation()
+            return
+        }
+        bootCaptureConfirmation = null
+        if (!mainHandler.post {
+            val current = appUiForeground && bootCaptureIsCurrent(id.commandGeneration, id.continuityGeneration, input)
+            if (current && confirmation.active) Log.i("BootResumeActivity",
+                "pcm-confirmed generation=${id.commandGeneration} continuity=${id.continuityGeneration}")
+            confirmation.deliver(current)
+        }) confirmation.close()
+    }
+
     private fun bootCaptureIsCurrent(command: Long, continuity: Long, input: CaptureIoCoordinator.Input): Boolean =
         // Main-thread acknowledgement must never wait for a recorder preference commit/rollback.
         // These runtime fields are volatile; monotonic generations reject a superseded snapshot.
@@ -4319,6 +4387,7 @@ open class ReverbService : Service() {
                 confirmation.close()
                 return@post
             }
+            retireBootNoticeConfirmation()
             bootCaptureConfirmation?.close()
             bootCaptureConfirmation = confirmation
         }) confirmation.close()
@@ -5177,6 +5246,7 @@ open class ReverbService : Service() {
         flags: Int,
         startId: Int,
     ): Int {
+        BootResumeNotification.discoverExistingNotice(this)
         if (intent?.action == ACTION_QUICK_SAVE) {
             // Custom Quick Settings tiles carry their own buffer and remain independent of
             // the notification switch, including notification intents issued before an edit.

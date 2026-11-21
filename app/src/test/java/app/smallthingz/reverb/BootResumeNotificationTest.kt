@@ -114,6 +114,51 @@ class BootResumeNotificationTest {
         assertEquals(0, fixture.posts)
         assertEquals(1, fixture.resumes)
         assertTrue(fixture.resumeAllowed!!.invoke())
+        assertFalse(fixture.controller.needsCaptureProof)
+    }
+
+    @Test fun failedPlatformPublicationDoesNotManufactureReminderOwnershipOrPreventHelperLaunch() {
+        val fixture = Fixture()
+        fixture.publishSucceeds = false
+        fixture.boot()
+        fixture.drain()
+        assertFalse(fixture.visible)
+        assertFalse(fixture.controller.needsCaptureProof)
+        assertTrue(fixture.resumeAllowed!!.invoke())
+    }
+
+    @Test fun aNewControllerDiscoversOnlyTheExistingNoticeAndStopRevokesItsProof() {
+        val fixture = Fixture()
+        fixture.visible = true
+        fixture.controller.discoverExistingNotice()
+        fixture.controller.discoverExistingNotice()
+        assertFalse(fixture.controller.needsCaptureProof)
+        fixture.drain()
+        assertTrue(fixture.controller.needsCaptureProof)
+        assertEquals(1, fixture.registryReads)
+        assertEquals(0, fixture.posts)
+        assertEquals(0, fixture.resumes)
+        fixture.controller.dismiss()
+        assertFalse(fixture.controller.needsCaptureProof)
+        fixture.drain()
+        assertFalse(fixture.visible)
+        assertEquals(listOf("cancel"), fixture.events)
+    }
+
+    @Test fun failedRegistryDiscoveryCanRetryOnAFutureServiceStart() {
+        val fixture = Fixture()
+        fixture.visible = true
+        fixture.registryFailures = 2
+        fixture.controller.discoverExistingNotice()
+        fixture.drain()
+        assertFalse(fixture.controller.needsCaptureProof)
+        assertEquals(2, fixture.registryReads)
+        fixture.controller.discoverExistingNotice()
+        fixture.drain()
+        assertTrue(fixture.controller.needsCaptureProof)
+        assertEquals(3, fixture.registryReads)
+        assertEquals(1, fixture.errors.size)
+        assertEquals(0, fixture.posts)
     }
 
     @Test fun notificationPostFailureDoesNotRevokeVisibleActivityAttempt() {
@@ -185,7 +230,10 @@ class BootResumeNotificationTest {
                 readDurableCaptureIntentPreferences(prefs).enabled
             },
             deliveryAvailable = { true },
-            post = { posted.set(true) },
+            post = {
+                posted.set(true)
+                true
+            },
             cancel = { posted.set(false) },
             report = { failure.set(it) },
         )
@@ -267,6 +315,9 @@ class BootResumeNotificationTest {
         var finished = 0
         var visible = false
         var available = true
+        var publishSucceeds = true
+        var registryReads = 0
+        var registryFailures = 0
         var resumes = 0
         var resumeAllowed: (() -> Boolean)? = null
         var afterRead: () -> Unit = {}
@@ -284,9 +335,15 @@ class BootResumeNotificationTest {
                 events.add("post")
                 posts++
                 duringPost()
-                visible = true
+                visible = publishSucceeds
+                visible
             },
             cancel = { events.add("cancel"); visible = false },
+            isNoticeActive = {
+                registryReads++
+                check(registryReads > registryFailures) { "Active notification registry temporarily unavailable" }
+                visible
+            },
             report = { errors.add(it) },
             resume = { allowed -> resumes++; resumeAllowed = allowed; duringResume() },
         )

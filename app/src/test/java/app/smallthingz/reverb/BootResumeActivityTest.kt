@@ -4,6 +4,10 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
 class BootResumeActivityTest {
@@ -213,6 +217,66 @@ class BootResumeActivityTest {
         confirmation.deliver(current = true)
         assertEquals(1, callbacks)
         assertFalse(confirmation.active)
+    }
+
+    @Test fun policyQueryDoesNotMultiplyWhileInFlightOrConfirmAClosedHelper() {
+        val queryEntered = CountDownLatch(1)
+        val releaseQuery = CountDownLatch(1)
+        val writer = ArrayBlockingQueue<() -> Unit>(8)
+        val samples = AtomicInteger()
+        var confirmed = 0
+        val original = BootCaptureConfirmation(0L) {}.apply { arm(3L, 4L) }
+        val replacement = BootCaptureConfirmation(0L) {}.apply { arm(3L, 4L) }
+
+        fun packet(helper: BootCaptureConfirmation, sample: () -> Boolean?) {
+            helper.checkMicrophonePolicy(
+                inputEpoch = 5L,
+                readStartedAtNanos = System.nanoTime(),
+                postToWriter = writer::offer,
+                sample = {
+                    samples.incrementAndGet()
+                    sample()
+                },
+                confirmed = { confirmed++ },
+            )
+        }
+        fun drainPolicyQueries() {
+            val drained = CountDownLatch(1)
+            executeCaptureInputPolicyQuery(drained::countDown)
+            assertTrue(drained.await(5, TimeUnit.SECONDS))
+        }
+        fun nextWriterResult(): () -> Unit = checkNotNull(writer.poll(5, TimeUnit.SECONDS))
+
+        try {
+            packet(original) {
+                queryEntered.countDown()
+                if (releaseQuery.await(5, TimeUnit.SECONDS)) false else null
+            }
+            assertTrue(queryEntered.await(5, TimeUnit.SECONDS))
+            // Exceed the retry delay while the original query is still outstanding.
+            Thread.sleep(300L)
+            repeat(10) { packet(original) { false } }
+            releaseQuery.countDown()
+            drainPolicyQueries()
+            assertEquals(1, samples.get())
+            nextWriterResult()()
+            assertTrue(writer.isEmpty())
+
+            packet(original) { false }
+            val lateResult = nextWriterResult()
+            assertEquals(2, samples.get())
+            original.close()
+            packet(replacement) { false }
+            lateResult()
+            nextWriterResult()()
+            assertEquals(3, samples.get())
+            assertEquals(0, confirmed)
+            assertTrue(replacement.active)
+        } finally {
+            original.close()
+            replacement.close()
+            releaseQuery.countDown()
+        }
     }
 
     @Test fun stoppingOneMainDoesNotPretendAnotherVisibleMainIsBackground() {

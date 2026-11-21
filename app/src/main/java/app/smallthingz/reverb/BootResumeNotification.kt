@@ -22,7 +22,13 @@ internal object BootResumeNotification {
     private val worker = ThreadPoolExecutor(0, 1, 10L, TimeUnit.SECONDS, LinkedBlockingQueue<Runnable>()) {
         runnable -> Thread(runnable, "reverb-boot-notice").apply { isDaemon = true }
     }
-    private var controller: BootResumeNoticeController? = null
+    @Volatile private var controller: BootResumeNoticeController? = null
+
+    val needsCaptureProof: Boolean get() = controller?.needsCaptureProof == true
+
+    fun discoverExistingNotice(context: Context) {
+        controller(context).discoverExistingNotice()
+    }
 
     fun onBoot(context: Context, finished: () -> Unit) {
         controller(context).onBoot(finished)
@@ -81,6 +87,11 @@ internal object BootResumeNotification {
             deliveryAvailable = { deliveryAvailable(app) },
             post = { post(app) },
             cancel = { app.getSystemService(NotificationManager::class.java)?.cancel(NOTIFICATION_ID) },
+            isNoticeActive = {
+                checkNotNull(app.getSystemService(NotificationManager::class.java)).activeNotifications.any {
+                    it.id == NOTIFICATION_ID && it.tag == null
+                }
+            },
             report = { error -> report(app, error) },
             resume = { allowed -> BootResumeActivity.launch(app, allowed) },
         ).also { controller = it }
@@ -92,10 +103,10 @@ internal object BootResumeNotification {
             context, "Recording resume notification", error)
     }
 
-    private fun post(context: Context) {
-        val manager = context.getSystemService(NotificationManager::class.java) ?: return
+    private fun post(context: Context): Boolean {
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return false
         ReverbNotificationChannels.ensure(context, ReverbNotificationChannel.RESTART_REMINDERS)
-        if (!deliveryAvailable(context)) return
+        if (!deliveryAvailable(context)) return false
         // Opening the ordinary app re-reads current capture intent. This token never carries Start authority.
         val intent = Intent(context, MainActivity::class.java).apply {
             action = "${context.packageName}.REVIEW_RECORDING_AFTER_BOOT"
@@ -115,6 +126,7 @@ internal object BootResumeNotification {
             .setOnlyAlertOnce(true)
             .setAutoCancel(true)
             .build())
+        return true
     }
 }
 
@@ -127,26 +139,54 @@ internal class BootResumeNoticeController(
     private val enqueue: (() -> Unit) -> Unit,
     private val readEnabled: () -> Boolean,
     private val deliveryAvailable: () -> Boolean,
-    private val post: () -> Unit,
+    private val post: () -> Boolean,
     private val cancel: () -> Unit,
     private val report: (Exception) -> Unit,
+    private val isNoticeActive: () -> Boolean = { false },
     private val resume: (() -> Boolean) -> Unit = {},
 ) {
     private val dismissed = AtomicBoolean(false)
+    private val discoveryQueued = AtomicBoolean(false)
+    @Volatile private var awaitingCaptureProof = false
     private var posted = false // Worker-owned; duplicate broadcasts must not redisplay a dismissed notice.
     private var resumeAttempted = false
+
+    val needsCaptureProof: Boolean get() = awaitingCaptureProof && !dismissed.get()
+
+    fun discoverExistingNotice() {
+        if (!discoveryQueued.compareAndSet(false, true)) return
+        enqueue {
+            for (attempt in 0..1) {
+                if (dismissed.get() || awaitingCaptureProof) return@enqueue
+                try {
+                    if (isNoticeActive()) {
+                        posted = true
+                        awaitingCaptureProof = true
+                    }
+                } catch (error: Exception) {
+                    if (attempt == 0) continue
+                    discoveryQueued.set(false)
+                    report(error)
+                }
+                return@enqueue
+            }
+        }
+    }
 
     fun onBoot(finished: () -> Unit) {
         enqueue {
             try {
                 if (dismissed.get() || !readEnabled()) {
+                    awaitingCaptureProof = false
                     cancel()
                     return@enqueue
                 }
                 try {
-                    if (!deliveryAvailable()) cancel()
-                    else if (!posted && !dismissed.get()) {
-                        post()
+                    if (!deliveryAvailable()) {
+                        awaitingCaptureProof = false
+                        cancel()
+                    } else if (!posted && !dismissed.get()) {
+                        awaitingCaptureProof = post()
                         posted = true
                     }
                 } catch (error: Exception) { report(error) }
@@ -156,6 +196,7 @@ internal class BootResumeNoticeController(
                     try { resume { !dismissed.get() } } catch (error: Exception) { report(error) }
                 }
             } catch (error: Exception) {
+                awaitingCaptureProof = false
                 try { cancel() } catch (cancelError: Exception) { error.addSuppressed(cancelError) }
                 report(error)
             } finally {

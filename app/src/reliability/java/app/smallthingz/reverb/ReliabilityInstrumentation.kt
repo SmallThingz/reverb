@@ -290,6 +290,12 @@ class ReliabilityInstrumentation : Instrumentation() {
             } else if (requestedTest == "capture_frame_identity") {
                 executed++
                 verifyCaptureFrameIdentity(targetContext, report)
+            } else if (requestedTest == "boot_resume_policy_confirmation") {
+                executed++
+                verifyBootResumeMicrophonePolicy(this, report)
+            } else if (requestedTest == "boot_resume_reminder_proof") {
+                executed++
+                verifyBootResumeReminderProof(this, report)
             } else if (requestedTest == "capture_teardown_identity") {
                 executed++
                 verifyCaptureTeardownFrameIdentity(targetContext, report)

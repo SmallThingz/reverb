@@ -83,6 +83,27 @@ class CaptureInputObservationTest {
         assertEquals(listOf(10L, 12L), admitted)
     }
 
+    @Test fun onlyExplicitCallbackStatesCanHintReminderRecheck() {
+        val work = java.util.ArrayDeque<() -> Unit>()
+        val admitted = mutableListOf<Long>()
+        val wakes = mutableListOf<Long>()
+        val subscription = CapturePolicyWitnesses(work::addLast, { false to 10L }, admitted::add,
+            { throw AssertionError(it) }, deliverUnsilenced = wakes::add)
+        subscription.activate()
+        work.removeFirst()()
+        assertTrue(wakes.isEmpty())
+        subscription.observe(false, 11)
+        subscription.observe(null, 12)
+        subscription.observe(false, 13)
+        subscription.observe(true, 14)
+        subscription.observe(null, 15)
+        subscription.observe(false, 16)
+        subscription.close()
+        subscription.observe(false, 17)
+        assertEquals(listOf(11L, 13L, 16L), wakes)
+        assertEquals(listOf(14L), admitted)
+    }
+
     @Test fun provisionalEpisodesAdoptOnlyAfterSuccessfulActivation() {
         val work = java.util.ArrayDeque<() -> Unit>()
         val admitted = mutableListOf<Long>()

@@ -46,6 +46,7 @@ internal class CapturePolicyWitnesses(
     private val snapshot: () -> Pair<Boolean?, Long>,
     private val deliver: (Long) -> Unit,
     private val failed: (Exception) -> Unit,
+    private val deliverUnsilenced: (Long) -> Unit = {},
 ) : CapturePolicySubscription {
     private val lock = Any()
     private val episode = CapturePolicyEpisode()
@@ -58,12 +59,19 @@ internal class CapturePolicyWitnesses(
     private var failureDelivered = false
 
     fun observe(value: Boolean?, observedAtMillis: Long) {
+        var unsilencedHint = false
         val admitted = synchronized(lock) {
             if (closed || failure != null || value == null) return
             sequence++
+            // Only explicit callback state can cue another reminder probe. The initial
+            // snapshot belongs to incident reporting and has no shared callback order.
+            unsilencedHint = active && value == false
             accept(value, observedAtMillis)
         }
         if (admitted) publish(observedAtMillis)
+        if (unsilencedHint) {
+            try { deliverUnsilenced(observedAtMillis) } catch (error: Exception) { report(error) }
+        }
     }
 
     private fun accept(value: Boolean?, time: Long): Boolean {
