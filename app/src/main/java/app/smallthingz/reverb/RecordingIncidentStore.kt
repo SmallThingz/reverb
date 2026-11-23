@@ -344,6 +344,26 @@ internal fun recordingIncidentReferenceMatches(
     return candidate.occurredAtMillis == reference.occurredAtMillis
 }
 
+/** Targets are captured before background admission. New arrivals, including those with the
+ * same message, keep their own identity and survive deletion of this snapshot. */
+internal fun markRecordingIncidentsDeleted(
+    existing: List<RecordingIncident>,
+    targets: List<RecordingIncident>,
+): List<RecordingIncident>? {
+    val indices = targets.mapNotNullTo(mutableSetOf()) { target ->
+        val matches = existing.indices.filter { recordingIncidentReferenceMatches(existing[it], target) }
+        matches.singleOrNull() ?: matches.singleOrNull { index ->
+            val candidate = existing[index]
+            candidate.pid == target.pid && candidate.processStartedAtMillis == target.processStartedAtMillis &&
+                candidate.captureArmedAtMillis == target.captureArmedAtMillis && candidate.occurredAtMillis == target.occurredAtMillis
+        }
+    }
+    if (indices.isEmpty()) return null
+    return existing.mapIndexed { index, incident ->
+        if (index in indices) incident.copy(acknowledgedAtMillis = Long.MIN_VALUE) else incident
+    }
+}
+
 internal fun exitTimestampBelongsToPriorProcess(
     exitTimestampMillis: Long,
     captureArmedAtMillis: Long,
@@ -1312,11 +1332,16 @@ internal object RecordingIncidentStore {
         return incidents
     }
 
-    fun deleteIncidentInBackground(context: Context, incident: RecordingIncident) {
+    fun deleteIncidentInBackground(context: Context, incident: RecordingIncident) =
+        deleteIncidentsInBackground(context, listOf(incident))
+
+    fun deleteIncidentsInBackground(context: Context, incidents: List<RecordingIncident>) {
+        if (incidents.isEmpty()) return
         val appContext = context.applicationContext
+        val targets = incidents.toList()
         historyMutationScope.launch {
             runIncidentHistoryMutation(
-                mutation = { deleteIncident(appContext, incident) },
+                mutation = { deleteIncidents(appContext, targets) },
                 onFailure = {
                     AppFeedbackCenter.post(
                         actionableErrorMessage(appContext, appContext.getString(R.string.incident_update_failed), it),
@@ -1328,21 +1353,11 @@ internal object RecordingIncidentStore {
     }
 
     @Synchronized
-    private fun deleteIncident(context: Context, incident: RecordingIncident) {
+    private fun deleteIncidents(context: Context, targets: List<RecordingIncident>) {
         val file = historyFile(context)
         val existing = readHistory(file)
-        val index = existing.indexOfFirst { recordingIncidentReferenceMatches(it, incident) }
-        if (index < 0) return
-        if (existing[index].deleted) {
-            // A previous publication can be visible without its directory barrier succeeding.
-            // Explicit retry confirms the tombstone and refreshes the still-visible UI row.
-            writeHistory(file, existing)
-            signalHistoryChanged()
-            return
-        }
-        val updated = existing.toMutableList().apply {
-            this[index] = this[index].copy(acknowledgedAtMillis = Long.MIN_VALUE)
-        }
+        val updated = markRecordingIncidentsDeleted(existing, targets) ?: return
+        // Rewriting existing tombstones also confirms a possibly failed prior directory barrier.
         writeHistory(file, updated)
         signalHistoryChanged()
     }

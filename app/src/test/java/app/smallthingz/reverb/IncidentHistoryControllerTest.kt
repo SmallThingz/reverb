@@ -190,9 +190,9 @@ class IncidentHistoryControllerTest {
             onToggle(incident)
         }
 
-        override fun deleteInBackground(incident: RecordingIncident) {
+        override fun deleteInBackground(incidents: List<RecordingIncident>) {
             acceptedMutations++
-            onDelete(incident)
+            incidents.forEach(onDelete)
         }
     }
 

@@ -39,6 +39,7 @@ internal data class ReverbHomeBlobState(
     val secondaryText: String?,
     val visualizerVisible: Boolean,
     val skipSilenceEnabled: Boolean = false,
+    val captureStateKnown: Boolean = true,
 )
 
 /** Source flip animation is owned by the containing Home state owner, not by each drawable. */
@@ -158,6 +159,8 @@ internal class ReverbHomeBlobControl(
     private fun renderState() {
         val value = current ?: return
         updateRendererState(value)
+        // Keep the renderer and its bounds live while the recorder is resolving its first state.
+        overlay.visibility = if (value.captureStateKnown) VISIBLE else INVISIBLE
         overlay.bind(value.active, value.filled, value.primaryText, value.secondaryText, flip.contentAlpha)
         applyTransform()
     }

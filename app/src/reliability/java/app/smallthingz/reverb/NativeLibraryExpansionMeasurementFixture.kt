@@ -29,7 +29,7 @@ internal fun verifyNativeLibraryExpansionMeasurement(instrumentation: Instrument
             runtime.close()
         }
     }
-    report.appendLine("PASS native_library_expansion_measurement: actual row/surface/sibling enter, exit, reversal, zero scale, removal, recycle, intrinsic resize, parent constraints")
+    report.appendLine("PASS native_library_expansion_measurement: actual row/surface/sibling enter, exit, reversal, zero scale, removal, recycle, intrinsic resize, parent constraints, selection bind invalidation")
 }
 
 /** Real Android measurement/layout regression; inert Views never acquire a player or repository. */
@@ -92,6 +92,13 @@ internal fun verifyNativeLibraryExpansionMeasurement(
     try {
         layout()
         val collapsed = row.height
+        row.setEnvironment(environment)
+        row.bind(model.copy(selectionActive = true, selected = true), callbacks)
+        check(!row.isLayoutRequested) { "Selection-only bind invalidated settled row layout" }
+        row.bind(model.copy(timestamp = "12:34"), callbacks)
+        check(row.isLayoutRequested) { "Timestamp appearance did not invalidate row layout" }
+        row.bind(model, callbacks)
+        layout()
         row.setExpansionView(fixed(dp(240)))
         visible(true)
         repeat(24) { frame("enter-$it") }

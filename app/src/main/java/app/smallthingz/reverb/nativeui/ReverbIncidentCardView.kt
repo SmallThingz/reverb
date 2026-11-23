@@ -3,7 +3,6 @@ package app.smallthingz.reverb.nativeui
 import smallthingz.ui.input.phase.NativePointerLayerShape
 import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.components.NativeAlertCardStyle
-import smallthingz.ui.components.NativeHorizontalSeparator
 import smallthingz.ui.components.NativeRoundedClipLayout
 import smallthingz.ui.interaction.view.isNativeClickActivationKey
 import smallthingz.ui.geometry.roundedGroupContains
@@ -32,14 +31,13 @@ import smallthingz.ui.text.font.FontFamily
 import smallthingz.ui.text.font.FontWeight
 import smallthingz.ui.unit.Density
 import app.smallthingz.reverb.IncidentPresentation
-import app.smallthingz.reverb.CaptureObservationDuration
 import smallthingz.ui.input.phase.NativeClickPhaseHost
 import smallthingz.ui.input.phase.NativeClickPhaseEndpoint
 import smallthingz.ui.input.phase.ViewClickPhaseEndpoint
 import androidx.core.view.ViewCompat
 import app.smallthingz.reverb.R
 import app.smallthingz.reverb.RecordingIncident
-import app.smallthingz.reverb.summaryAt
+import app.smallthingz.reverb.RecordingIncidentKind
 import kotlin.math.roundToInt
 
 /** Exact released typography roles; the host supplies its current immutable font context. */
@@ -56,6 +54,8 @@ internal data class IncidentCardAppearance(
 internal data class IncidentCardActions(
     val toggleAcknowledged: (RecordingIncident) -> Unit,
     val delete: (RecordingIncident) -> Unit,
+    val deleteMany: (List<RecordingIncident>) -> Unit,
+    val toggleSelection: (IncidentPresentation) -> Unit,
     val copy: (IncidentPresentation) -> Unit,
 )
 
@@ -87,7 +87,7 @@ internal interface IncidentCardMenuHost {
 /**
  * Native binding for the released IncidentCard only. No history loading, formatting,
  * storage, acknowledgement mutation, popup implementation, or list animation lives here.
- * Each incident remains a separate card; this must not join neighboring incident rows.
+ * Occurrences are kept individually actionable below their shared message heading.
  */
 internal class ReverbIncidentCardView(
     context: Context,
@@ -121,6 +121,7 @@ internal class ReverbIncidentCardView(
     private class Binding(
         val row: IncidentPresentation,
         val canMutate: Boolean,
+        val selected: Boolean?,
         val actions: IncidentCardActions,
         val menuIdentity: IncidentCardMenuIdentity,
     )
@@ -144,26 +145,31 @@ internal class ReverbIncidentCardView(
     }
 
     /** Main-thread binding of an already-prepared revision. No timestamps are formatted here. */
-    fun bind(row: IncidentPresentation, canMutate: Boolean, actions: IncidentCardActions) {
+    fun bind(row: IncidentPresentation, canMutate: Boolean, selected: Boolean?, actions: IncidentCardActions) {
         val previous = binding
-        val identity = if (previous?.row?.key == row.key) {
+        val sameOccurrence = previous?.row?.key == row.key
+        val identity = if (sameOccurrence && previous != null) {
             previous.menuIdentity
         } else {
             if (previous != null) cancelInputOwnership()
             releaseMenu()
             IncidentCardMenuIdentity(row.key)
         }
-        binding = Binding(row, canMutate, actions, identity)
+        if ((previous?.selected == null) != (selected == null)) {
+            cancelInputOwnership()
+            releaseMenu()
+        }
+        binding = Binding(row, canMutate, selected, actions, identity)
         bindInputs()
-        body.bind(row, canMutate)
-        applyAppearance()
+        body.bind(row, canMutate, selected)
+        applyAppearance(immediately = !sameOccurrence)
         visibility = VISIBLE
         if (menuCreated) menuHost.update(menuRequest(identity))
     }
 
-    fun updatePolicyDuration(duration: CaptureObservationDuration, elapsedMillis: Long) {
+    fun updatePolicyDuration(elapsedMillis: Long) {
         val row = binding?.row ?: return
-        if (row.incident.ongoingPolicyDuration === duration) body.setSummary(row.summaryAt(context, elapsedMillis))
+        if (row.incident.ongoingPolicyDuration?.isOngoing == true) body.setObservationEnd(row, elapsedMillis)
     }
 
     /** Call on theme/configuration/font-resolver updates, not during drawing. */
@@ -189,23 +195,32 @@ internal class ReverbIncidentCardView(
         visibility = INVISIBLE
     }
 
-    private fun applyAppearance() {
+    private fun applyAppearance(immediately: Boolean = false) {
         val current = binding ?: return
         val colors = appearance.palette
         val unacknowledged = !current.row.incident.acknowledged
         val style = appearance.style
-        val border = style.border(colors, unacknowledged)
-        surface.setPalette(style.fill(colors, unacknowledged), border)
-        body.setColors(colors.ink, colors.muted, style.dividerColor(border), style.statusTint(colors, unacknowledged))
+        val selected = current.selected == true
+        val fill = if (selected) colors.primaryContainer else android.graphics.Color.TRANSPARENT
+        val border = android.graphics.Color.TRANSPARENT
+        if (immediately) surface.setPaletteImmediately(fill, border) else surface.setPalette(fill, border)
+        body.setColors(if (selected) colors.onPrimaryContainer else colors.ink,
+            if (selected) colors.onPrimaryContainer else colors.muted,
+            if (selected) colors.onPrimaryContainer else style.statusTint(colors, unacknowledged), immediately)
     }
 
     private fun performPrimaryAction() {
         val current = binding ?: return
-        if (current.canMutate) current.actions.toggleAcknowledged(current.row.incident) else openMenu()
+        when {
+            current.selected != null -> if (current.canMutate) current.actions.toggleSelection(current.row)
+            current.canMutate -> current.actions.toggleAcknowledged(current.row.incident)
+            else -> openMenu()
+        }
     }
 
     private fun openMenu() {
         val current = binding ?: return
+        if (current.selected != null) return
         menuCreated = true
         menuHost.show(menuRequest(current.menuIdentity))
     }
@@ -243,10 +258,12 @@ internal class ReverbIncidentCardView(
 
     private fun bindInputs() {
         val current = binding ?: return
-        bodyInput.bind(NativeClickBinding(current.row.key, true,
-            onClick = { body.performClick() }, onLongClick = ::openMenu))
-        checkInput.bind(NativeClickBinding(current.row.key, true,
-            onClick = { body.checkTarget.performClick() }, onLongClick = ::openMenu))
+        val enabled = current.selected == null || current.canMutate
+        val longClick = if (current.selected == null) ::openMenu else null
+        bodyInput.bind(NativeClickBinding(current.row.key, enabled,
+            onClick = { body.performClick() }, onLongClick = longClick))
+        checkInput.bind(NativeClickBinding(current.row.key, enabled,
+            onClick = { body.checkTarget.performClick() }, onLongClick = longClick))
         bodyInput.focusChanged(body.isFocused)
         checkInput.focusChanged(body.checkTarget.isFocused)
     }
@@ -316,21 +333,20 @@ private class IncidentBody(
         set(value) { field = value; endpoint = value?.let(::ViewClickPhaseEndpoint) }
     private var appearance = initial
     private var clickLabel: String? = null
-    private val date = label(initial.bodyLarge.copy(fontWeight = FontWeight.SemiBold))
+    private var selected: Boolean? = null
+    private var canMutate = false
+    private val date = label(initial.bodyMedium.copy(fontWeight = FontWeight.SemiBold))
     private val summary = label(initial.bodyMedium)
-    private val cause = label(initial.bodyMedium)
-    private val runtime = label(initial.bodySmall)
-    private val age = label(initial.bodySmall)
-    private val description = label(initial.bodySmall)
-    private val divider = NativeHorizontalSeparator(context, initial.style.dividerDp)
+    private val cause = label(initial.bodySmall)
+    private val diagnostics = label(initial.bodySmall)
     val checkTarget = IncidentCheckTarget(context, initial.density.density, onPrimaryAction, onOpenMenu)
-    private val details = arrayOf<View>(divider, cause, runtime, age, description)
-    private val accessibilityChildren = arrayOf<View>(date, summary, checkTarget, cause, runtime, age, description)
+    private val details = arrayOf<View>(cause, diagnostics)
+    private val accessibilityChildren = arrayOf<View>(date, summary, checkTarget, cause, diagnostics)
     override val mergedRowAccessibility = MergedRowAccessibility(this, NativeMergedRowRole.BUTTON, {
         val visible = ArrayList<View>(accessibilityChildren.size)
         for (child in accessibilityChildren) if (child.visibility == VISIBLE) visible.add(child)
-        NativeMergedRowAccessibilityState(true, null, clickLabel, visible,
-            longClickable = true, rolePresent = false)
+        NativeMergedRowAccessibilityState(selected == null || canMutate, null, clickLabel, visible,
+            selected = selected, longClickable = selected == null, rolePresent = false)
     }, onPrimaryAction, onOpenMenu)
 
     init {
@@ -340,8 +356,7 @@ private class IncidentBody(
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
         ViewCompat.setScreenReaderFocusable(this, true)
         accessibilityDelegate = mergedRowAccessibility
-        addView(date); addView(summary); addView(cause); addView(runtime)
-        addView(age); addView(description); addView(divider); addView(checkTarget)
+        addView(date); addView(summary); addView(cause); addView(diagnostics); addView(checkTarget)
         clear()
     }
 
@@ -352,64 +367,75 @@ private class IncidentBody(
         ViewCompat.setScreenReaderFocusable(this, false)
     }
 
-    fun bind(row: IncidentPresentation, canMutate: Boolean) {
-        date.setText(row.date)
-        setSummary(if (row.incident.ongoingPolicyDuration == null) row.stopSummary
-            else row.summaryAt(context, SystemClock.elapsedRealtime()))
-        cause.setText(row.cause)
-        runtime.setText(row.runtime)
-        age.setText(row.age)
-        description.setText(row.description ?: "")
-        divider.visibility = if (row.hasDetails) VISIBLE else GONE
-        cause.visibility = if (row.cause.isNotEmpty()) VISIBLE else GONE
-        runtime.visibility = if (row.runtime.isNotEmpty()) VISIBLE else GONE
-        age.visibility = if (row.age.isNotEmpty()) VISIBLE else GONE
-        // Empty but non-null descriptions still consume the source Text's line height.
-        description.visibility = if (row.description != null) VISIBLE else GONE
-        clickLabel = if (canMutate) null else context.getString(R.string.open_options)
-        checkTarget.bind(row.incident.acknowledged, canMutate)
+    fun bind(row: IncidentPresentation, canMutate: Boolean, selected: Boolean?) {
+        this.selected = selected
+        this.canMutate = canMutate
+        date.setText(context.getString(R.string.incident_occurrence_start, row.started))
+        setObservationEnd(row, SystemClock.elapsedRealtime())
+        val causeText = when {
+            row.incident.pid > 0 -> row.cause
+            row.cause.isEmpty() -> context.getString(R.string.incident_pid_unknown)
+            else -> context.getString(R.string.incident_cause_without_pid, row.cause)
+        }
+        cause.setText(causeText)
+        diagnostics.setText(row.diagnostics)
+        diagnostics.visibility = if (row.diagnostics.isNotEmpty()) VISIBLE else GONE
+        clickLabel = when (selected) {
+            true -> context.getString(R.string.incident_deselect)
+            false -> context.getString(R.string.incident_select)
+            null -> if (canMutate) null else context.getString(R.string.open_options)
+        }
+        checkTarget.bind(selected ?: row.incident.acknowledged, canMutate, selected != null)
         requestLayout()
     }
 
-    fun setSummary(text: String) = summary.setText(text)
+    fun setObservationEnd(row: IncidentPresentation, elapsedMillis: Long) {
+        val duration = row.incident.ongoingPolicyDuration?.takeIf { it.isOngoing }
+        summary.setText(when {
+            row.ended != null -> context.getString(R.string.incident_occurrence_end, row.ended)
+            duration != null -> context.getString(R.string.incident_occurrence_ongoing,
+                app.smallthingz.reverb.formatDurationInput((elapsedMillis - duration.startedAtElapsedMillis).coerceAtLeast(0L) / 1000L))
+            row.incident.kind == RecordingIncidentKind.UNEXPECTED_ERROR -> context.getString(R.string.incident_occurrence_instant)
+            else -> context.getString(R.string.incident_occurrence_unknown_end)
+        })
+    }
 
     fun clear() {
         clickLabel = null
-        date.setText(""); summary.setText(""); cause.setText("")
-        runtime.setText(""); age.setText(""); description.setText("")
-        details.forEach { it.visibility = GONE }
         checkTarget.clear()
-        requestLayout()
     }
 
     fun setAppearance(value: IncidentCardAppearance) {
         appearance = value
-        date.setTypography(value.bodyLarge.copy(fontWeight = FontWeight.SemiBold), value.density, value.fontResolver)
+        date.setTypography(value.bodyMedium.copy(fontWeight = FontWeight.SemiBold), value.density, value.fontResolver)
         summary.setTypography(value.bodyMedium, value.density, value.fontResolver)
-        cause.setTypography(value.bodyMedium, value.density, value.fontResolver)
-        runtime.setTypography(value.bodySmall, value.density, value.fontResolver)
-        age.setTypography(value.bodySmall, value.density, value.fontResolver)
-        description.setTypography(value.bodySmall, value.density, value.fontResolver)
+        cause.setTypography(value.bodySmall, value.density, value.fontResolver)
+        diagnostics.setTypography(value.bodySmall, value.density, value.fontResolver)
         checkTarget.setDensity(value.density.density)
-        divider.bindThickness(value.style.dividerDp)
         requestLayout()
     }
 
-    fun setColors(ink: Int, muted: Int, line: Int, icon: Int) {
-        date.animateTextColor(ink)
-        summary.animateTextColor(muted)
-        cause.animateTextColor(ink)
-        runtime.animateTextColor(muted); age.animateTextColor(muted); description.animateTextColor(muted)
-        divider.setColor(line)
-        checkTarget.setTint(icon)
+    fun setColors(ink: Int, muted: Int, icon: Int, immediately: Boolean) {
+        if (immediately) {
+            date.setTextColor(ink)
+            summary.setTextColor(muted)
+            cause.setTextColor(muted)
+            diagnostics.setTextColor(muted)
+        } else {
+            date.animateTextColor(ink)
+            summary.animateTextColor(muted)
+            cause.animateTextColor(muted)
+            diagnostics.animateTextColor(muted)
+        }
+        checkTarget.setTint(icon, immediately)
     }
 
     private fun dp(value: Int): Int = (value * appearance.density.density).roundToInt()
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val width = MeasureSpec.getSize(widthMeasureSpec)
-        val paddingX = dp(16)
-        val paddingY = dp(14)
+        val paddingX = dp(8)
+        val paddingY = dp(4)
         val innerWidth = (width - paddingX * 2).coerceAtLeast(0)
         val checkWidth = minOf(dp(46), innerWidth)
         checkTarget.measure(MeasureSpec.makeMeasureSpec(checkWidth, MeasureSpec.EXACTLY),
@@ -421,16 +447,15 @@ private class IncidentBody(
         var height = maxOf(date.measuredHeight + summary.measuredHeight, checkTarget.measuredHeight)
         details.forEach {
             if (it.visibility == GONE) return@forEach
-            val childWidth = if (it === divider) MeasureSpec.EXACTLY else MeasureSpec.AT_MOST
-            it.measure(MeasureSpec.makeMeasureSpec(innerWidth, childWidth), unbounded)
-            height += dp(7) + it.measuredHeight
+            it.measure(MeasureSpec.makeMeasureSpec(innerWidth, MeasureSpec.AT_MOST), unbounded)
+            height += it.measuredHeight
         }
         setMeasuredDimension(resolveSize(width, widthMeasureSpec), resolveSize(height + paddingY * 2, heightMeasureSpec))
     }
 
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
-        val paddingX = dp(16)
-        var y = dp(14)
+        val paddingX = dp(8)
+        var y = dp(4)
         val rtl = layoutDirection == LAYOUT_DIRECTION_RTL
         val checkX = if (rtl) paddingX else width - paddingX - checkTarget.measuredWidth
         checkTarget.layout(checkX, y, checkX + checkTarget.measuredWidth, y + checkTarget.measuredHeight)
@@ -443,7 +468,6 @@ private class IncidentBody(
         y += maxOf(date.measuredHeight + summary.measuredHeight, checkTarget.measuredHeight)
         details.forEach {
             if (it.visibility == GONE) return@forEach
-            y += dp(7)
             layoutText(it, y)
             y += it.measuredHeight
         }
@@ -503,14 +527,15 @@ private class IncidentCheckTarget(
     var geometryChanged: () -> Unit = {}
     private var density = initialDensity
     private var checked = false
-    private var tint = 0
-    private val glyph = OnboardingIconView(context, ReverbIcon.Unchecked, tint)
+    private var selecting = false
+    private var canMutate = false
+    private val glyph = OnboardingIconView(context, ReverbIcon.Unchecked, android.graphics.Color.TRANSPARENT)
     private var clickLabel: String? = null
     private var hitGeometry = roundedGroupGeometry(0f, 0f, density, cornerRadiusDp = 23f)
     override val mergedRowAccessibility = MergedRowAccessibility(this, NativeMergedRowRole.BUTTON, {
-        NativeMergedRowAccessibilityState(true, null, clickLabel,
+        NativeMergedRowAccessibilityState(!selecting || canMutate, null, clickLabel,
             if (glyph.contentDescription != null) listOf(glyph) else emptyList(),
-            longClickable = true, rolePresent = false)
+            selected = checked.takeIf { selecting }, longClickable = !selecting, rolePresent = false)
     }, onPrimaryAction, onOpenMenu)
 
     override fun containsPointerLayer(x: Float, y: Float): Boolean = hitGeometry.contains(x, y)
@@ -523,11 +548,17 @@ private class IncidentCheckTarget(
         addView(glyph)
     }
 
-    fun bind(value: Boolean, canMutate: Boolean) {
+    fun bind(value: Boolean, canMutate: Boolean, selecting: Boolean) {
         checked = value
+        this.selecting = selecting
+        this.canMutate = canMutate
         glyph.contentDescription = if (canMutate) context.getString(
-            if (checked) R.string.incident_mark_unchecked else R.string.incident_mark_checked) else null
-        glyph.bind(if (checked) ReverbIcon.Checked else ReverbIcon.Unchecked, tint)
+            when {
+                selecting && checked -> R.string.incident_deselect
+                selecting -> R.string.incident_select
+                checked -> R.string.incident_mark_unchecked
+                else -> R.string.incident_mark_checked
+            }) else null
         glyph.importantForAccessibility = if (canMutate) IMPORTANT_FOR_ACCESSIBILITY_YES else IMPORTANT_FOR_ACCESSIBILITY_NO
         ViewCompat.setScreenReaderFocusable(glyph, false)
         clickLabel = if (canMutate) null else context.getString(R.string.open_options)
@@ -543,9 +574,9 @@ private class IncidentCheckTarget(
         invalidate()
     }
 
-    fun setTint(value: Int) {
-        tint = value
-        glyph.bind(if (checked) ReverbIcon.Checked else ReverbIcon.Unchecked, value)
+    fun setTint(value: Int, immediately: Boolean) {
+        val icon = if (checked) ReverbIcon.Checked else ReverbIcon.Unchecked
+        if (immediately) glyph.bindImmediately(icon, value) else glyph.bind(icon, value)
         invalidate()
     }
 

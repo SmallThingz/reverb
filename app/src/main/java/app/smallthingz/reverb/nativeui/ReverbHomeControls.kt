@@ -55,6 +55,7 @@ internal data class ReverbHomeControlsState(
     val saving: Boolean,
     val hasHistory: Boolean,
     val selectedRecording: Boolean,
+    val captureStateKnown: Boolean = true,
 )
 
 internal data class ReverbHomeActions(
@@ -112,15 +113,17 @@ internal class ReverbHomeControls(
         currentActions = actions
         val slot = state.selectedBuffer
         selectedBuffer = slot
+        val stateKnown = state.captureStateKnown
+        val oneShotFull = stateKnown && state.oneShotFull
         oneShot.bind(oneShotLabel,
-            if (state.oneShotFull) ReverbIcon.Check else ReverbIcon.OneShot,
+            if (oneShotFull) ReverbIcon.Check else ReverbIcon.OneShot,
             slot == BufferSlot.ONE_SHOT,
-            isBufferActivelyRecording(BufferSlot.ONE_SHOT, state.listening, state.activeBuffer),
-            state.oneShotEnabled && !state.oneShotFull, state.oneShotFull, next = selectOneShot)
+            stateKnown && isBufferActivelyRecording(BufferSlot.ONE_SHOT, state.listening, state.activeBuffer),
+            state.oneShotEnabled && !oneShotFull, oneShotFull, stateKnown = stateKnown, next = selectOneShot)
         looping.bind(loopingLabel, ReverbIcon.Looping,
             slot == BufferSlot.LOOPING,
-            isBufferActivelyRecording(BufferSlot.LOOPING, state.listening, state.activeBuffer),
-            state.loopingEnabled, false, next = selectLooping)
+            stateKnown && isBufferActivelyRecording(BufferSlot.LOOPING, state.listening, state.activeBuffer),
+            state.loopingEnabled, false, stateKnown = stateKnown, next = selectLooping)
         val canExport = state.serviceReady && !state.saving && state.hasHistory
         buttons[0].bind(canExport, false, flip, exportFull)
         buttons[1].bind(canExport, false, flip, exportCustom)
@@ -250,6 +253,7 @@ internal class HomeBufferSegment(context: Context, currentEnvironment: ReverbVie
     private var selection = false
     private var recording = false
     private var bufferEnabled = true
+    private var stateKnown = true
     private var filled = false
     override val mergedRowAccessibility = MergedRowAccessibility(this, NativeMergedRowRole.TAB,
         { NativeMergedRowAccessibilityState(isEnabled, null, null, accessibilityChildren, selected = selection) },
@@ -270,10 +274,12 @@ internal class HomeBufferSegment(context: Context, currentEnvironment: ReverbVie
         label.setTextLayout(maxLines = 1)
     }
     fun bind(text: String, icon: ReverbIcon, selected: Boolean, recording: Boolean,
-        enabled: Boolean, filled: Boolean, interactionEnabled: Boolean = true, next: () -> Unit) {
+        enabled: Boolean, filled: Boolean, interactionEnabled: Boolean = true, stateKnown: Boolean = true,
+        next: () -> Unit) {
         val appearanceChanged = !initialized || selection != selected || this.recording != recording ||
-            bufferEnabled != enabled || this.filled != filled
+            bufferEnabled != enabled || this.filled != filled || this.stateKnown != stateKnown
         selection = selected; this.recording = recording; bufferEnabled = enabled; this.filled = filled
+        this.stateKnown = stateKnown
         isSelected = selected
         glyph.setIcon(icon)
         label.setText(text)
@@ -292,7 +298,7 @@ internal class HomeBufferSegment(context: Context, currentEnvironment: ReverbVie
     private fun updateTargets() {
         val p = currentEnvironment.palette
         val background = Color(style.fill(p, selection, recording, filled))
-        val foreground = Color(style.ink(p, selection, recording, bufferEnabled, filled))
+        val foreground = Color(if (stateKnown) style.ink(p, selection, recording, bufferEnabled, filled) else p.ink)
         transitionInk.target(p.field, p.ink, background.toArgb(), foreground.toArgb())
         if (!initialized) {
             initialized = true; backgroundMotion.snap(background); foregroundMotion.snap(foreground)

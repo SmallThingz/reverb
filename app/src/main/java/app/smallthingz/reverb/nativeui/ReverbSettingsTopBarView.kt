@@ -40,17 +40,7 @@ internal data class SettingsTopBarBinding(
         !quickTileEditorOpen && !notificationDurationPending
 }
 
-/**
- * Settings CenterAlignedTopAppBar geometry with the shared app toolbar action surfaces.
- *
- * The root supplies the remaining systemBars.union(displayCutout) horizontal/top insets after
- * ancestor consumption. It also owns Settings' existing Initial-pass/focus/hide gate; do not
- * replace that gate with disabled navigation styling. No IME inset,66dp custom AppTopBar, stock
- * toolbar, elevation, title ellipsis, title maxLines or new text is introduced.
- *
- * Parent inserts [touchShieldNode] on this outer box and the two visual NativeClickPhaseHosts
- * into its existing source hit path. Shared rounded actions retain 48dp near hits and wrappers.
- */
+/** Centered Settings title with the compact Reverb action slots and the existing input gate. */
 internal class ReverbSettingsTopBarView(
     context: Context,
     initialEnvironment: ReverbViewEnvironment,
@@ -151,12 +141,13 @@ internal class ReverbSettingsTopBarView(
         environment: ReverbViewEnvironment,
         inputRoot: () -> View?,
         val navigation: ReverbTopBarIconAction = ReverbTopBarIconAction(context, environment, inputRoot,
-            ReverbIcon.Back, R.string.onboarding_back, selectionWrapper = true, rolePresent = true),
+            ReverbIcon.Back, R.string.onboarding_back, selectionWrapper = false, rolePresent = true),
         val title: ParagraphView = environment.paragraph(context, context.getString(R.string.settings_title),
             environment.appearance.toolbars.centeredTitleRole, environment.appearance.toolbars.contentColor(environment.palette)),
         val done: ReverbTopBarIconAction = ReverbTopBarIconAction(context, environment, inputRoot,
-            ReverbIcon.Check, R.string.done, selectionWrapper = true, rolePresent = true),
-    ) : NativeCenteredTopBarLayout(context, environment.textDensity.density, navigation, title, done, environment.appearance.toolbars) {
+            ReverbIcon.Check, R.string.done, selectionWrapper = false, rolePresent = true),
+    ) : NativeCenteredTopBarLayout(context, environment.textDensity.density, navigation, title, done,
+        environment.appearance.toolbars, useCompactActions = true) {
         fun bind(value: ReverbViewEnvironment, state: SettingsTopBarBinding) {
             val style = value.appearance.toolbars
             bindStyle(value.textDensity.density, style)

@@ -190,6 +190,27 @@
     <string name="incidents_empty_detail">Unexpected shutdowns while recording will appear here.</string>
     <string name="incidents_loading">Loading incidents…</string>
     <string name="incidents_unavailable">Couldn\'t load incidents. Retrying…</string>
+    <string name="incident_input_heading">Microphone input issue</string>
+    <string name="incident_error_heading">Unexpected app error</string>
+    <string name="incident_shutdown_heading">Recording interrupted</string>
+    <string name="incident_occurrence_start">Start · %1$s</string>
+    <string name="incident_occurrence_end">End · %1$s</string>
+    <string name="incident_occurrence_ongoing">Ongoing · %1$s</string>
+    <string name="incident_occurrence_instant">Instantaneous</string>
+    <string name="incident_occurrence_unknown_end">End time unknown</string>
+    <string name="incident_pid_unknown">PID unknown</string>
+    <string name="incident_cause_without_pid">%1$s · PID unknown</string>
+    <string name="incident_select">Select incident</string>
+    <string name="incident_deselect">Deselect incident</string>
+    <string name="incidents_select_all">Select all incidents</string>
+    <string name="incidents_deselect_all">Deselect all incidents</string>
+    <string name="incidents_delete_selected">Delete selected incidents</string>
+    <string name="incidents_clear_all">Clear all incidents</string>
+    <string name="incidents_clear_all_detail">Delete the incidents currently in your history?</string>
+    <plurals name="incidents_selected">
+        <item quantity="one">%d selected</item>
+        <item quantity="other">%d selected</item>
+    </plurals>
     <string name="incident_policy_ongoing">%1$s · ongoing %2$s</string>
     <string name="incidents_stale">Showing previous incidents. Retrying…</string>
     <string name="incident_mark_checked">Mark incident checked</string>

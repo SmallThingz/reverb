@@ -1,11 +1,11 @@
 package app.smallthingz.reverb.nativeui
 
 import android.content.Context
-import smallthingz.ui.runtime.MonotonicFrameClock
-import kotlinx.coroutines.CoroutineScope
+import android.view.View
+import android.widget.FrameLayout
 
 /**
- * The released audio-choice presentation and its per-choice menu state. Option resolution and
+ * The audio-choice presentation and its anchored dropdown. Option resolution and
  * durable Settings draft mutation remain the existing caller's typed callbacks.
  */
 internal class SettingsAudioChoicesSection(
@@ -14,10 +14,8 @@ internal class SettingsAudioChoicesSection(
     initial: SettingsAudioChoicesState,
     sampleRateLabel: (Int) -> String,
     selections: SettingsAudioSelections,
-    frames: MonotonicFrameClock,
-    scope: CoroutineScope,
-    savedMenuScrollPositions: Map<SettingsAudioChoice, Int> = emptyMap(),
-    inputRoot: () -> android.view.View? = { null },
+    inputRoot: () -> View?,
+    inputAllowed: () -> Boolean,
 ) : AutoCloseable {
     private var current = initial
     private var environment = initialEnvironment
@@ -27,14 +25,13 @@ internal class SettingsAudioChoicesSection(
     private var closed = false
     private lateinit var choices: SettingsAudioChoicesView
     private val menus = SettingsAudioMenuHost(
-        initialEnvironment.appearance.typography.buttonLabelStyle, initialEnvironment.textDensity,
-        initialEnvironment.sharedFontResolver, frames, scope, initialEnvironment.palette,
+        initialEnvironment,
+        overlayHost = { inputRoot()?.rootView?.findViewById<View>(android.R.id.content) as? FrameLayout },
+        inputAllowed = inputAllowed,
         expandedChanged = { kind, value ->
             if (value) expanded.add(kind) else expanded.remove(kind)
             if (::choices.isInitialized) render()
         },
-        savedScrollPositions = savedMenuScrollPositions,
-        recipe = initialEnvironment.appearance.modals.anchoredPanel,
     )
     val view get() = choices.view
 
@@ -47,8 +44,7 @@ internal class SettingsAudioChoicesSection(
         if (closed) return
         current = next
         this.environment = environment
-        menus.bindConfiguration(environment.appearance.typography.buttonLabelStyle, environment.textDensity,
-            environment.sharedFontResolver, environment.palette, environment.appearance.modals.anchoredPanel)
+        menus.bindConfiguration(environment)
         render()
     }
 
@@ -63,9 +59,7 @@ internal class SettingsAudioChoicesSection(
         } while (needsBinding)
     }
 
-    fun active(active: Boolean) {
-        if (!active && !closed) menus.dismissAll()
-    }
+    fun dismissDropdown() = menus.dismissAll()
 
     override fun close() {
         if (closed) return

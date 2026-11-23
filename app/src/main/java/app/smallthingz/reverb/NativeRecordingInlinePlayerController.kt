@@ -115,6 +115,12 @@ internal class NativeRecordingInlinePlayerController(
         main.post(delivery)
     }
 
+    /** The lease installs its controller and Back owner before exposing the initial pixels. */
+    fun publishInitialPresentation() {
+        if (!closed) publish(session.presentation())
+        // The already-posted delivery retains ownership of playback, trim and lifecycle effects.
+    }
+
     fun bind(next: NativeInlinePlayerInput) {
         check(!closed) { "An inline player row has been disposed" }
         require(next.recording.id == recordingId) { "A player row cannot adopt another recording" }

@@ -46,6 +46,8 @@ internal class ReverbLibraryToolbarView(
     private var actions: LibraryToolbarActions? = null
     private var normal: ReverbAppTopBarView? = null
     private var selection: LibrarySelectionBar? = null
+    private var leftInset = 0
+    private var rightInset = 0
     val contentHeightPx: Int get() = environment.appearance.toolbars.compactHeightPx(environment.textDensity.density)
 
     init {
@@ -73,12 +75,19 @@ internal class ReverbLibraryToolbarView(
             selection?.let(::removeView)
             selection = null
         }
+        normal?.setActionInsets(leftInset, rightInset)
         normal?.bind(environment, value.hasIncidents,
             ReverbAppTopBarActions(callbacks.brand, callbacks.incidents, callbacks.settings, callbacks.back),
             applyStatusBarPadding = false)
         selection?.bind(environment, value, callbacks)
         applyMotion()
         requestLayout()
+    }
+
+    fun setActionInsets(left: Int, right: Int) {
+        leftInset = left
+        rightInset = right
+        normal?.setActionInsets(left, right)
     }
 
     fun setEnvironment(value: ReverbViewEnvironment) {

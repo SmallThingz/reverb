@@ -1,11 +1,20 @@
 package app.smallthingz.reverb.nativeui
 
 import smallthingz.ui.components.NativeGroupEdges
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.res.Configuration
+import android.database.ContentObserver
+import android.os.Handler
+import android.os.Looper
+import android.provider.Settings
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import kotlinx.coroutines.CoroutineScope
+import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -93,6 +102,14 @@ internal class ReverbLibraryListView(
         }
     }
     private var environment = initialEnvironment
+    private var formattingLocales = resources.configuration.locales
+    private var formattingRevision = 0L
+    private val timeFormatObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
+        override fun onChange(selfChange: Boolean) = invalidateRecordingFormatting()
+    }
+    private val timeZoneReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) = invalidateRecordingFormatting()
+    }
     private val currentActions = actions
     private val rowUpdates = NativeLibraryListUpdates<InlinePlaybackRowOwner>()
     private var blockedRecordingIds = emptySet<String>()
@@ -149,9 +166,24 @@ internal class ReverbLibraryListView(
     }
 
     fun setEnvironment(value: ReverbViewEnvironment) {
+        if (environment === value) return
         environment = value
         updateInsets()
+        invalidateRecordingFormatting()
+    }
+
+    private fun invalidateRecordingFormatting() {
+        if (disposed) return
+        formattingRevision++
         rowAdapter.rebindAll()
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        if (formattingLocales != newConfig.locales) {
+            formattingLocales = newConfig.locales
+            invalidateRecordingFormatting()
+        }
     }
 
     /** One main-thread immutable presentation update; no operation, playback or Undo side effects. */
@@ -253,10 +285,18 @@ internal class ReverbLibraryListView(
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
+        context.contentResolver.registerContentObserver(
+            Settings.System.getUriFor(Settings.System.TIME_12_24), false, timeFormatObserver,
+        )
+        ContextCompat.registerReceiver(context, timeZoneReceiver, IntentFilter(Intent.ACTION_TIMEZONE_CHANGED),
+            ContextCompat.RECEIVER_NOT_EXPORTED)
         rowNodesChanged()
     }
 
     override fun onDetachedFromWindow() {
+        context.contentResolver.unregisterContentObserver(timeFormatObserver)
+        context.unregisterReceiver(timeZoneReceiver)
+        formattingRevision++
         removeCallbacks(publishRowNodes)
         rowNodesPosted = false
         super.onDetachedFromWindow()
@@ -355,16 +395,16 @@ internal class ReverbLibraryListView(
             diff.dispatchUpdatesTo(this)
         }
 
-        private fun presentation(entry: Entry): Entry {
+        private fun presentation(entry: Entry, previous: LibraryRecordingRow? = null): Entry {
             val recording = checkNotNull(entry.recording)
             val state = checkNotNull(rowUpdates.current)
             val expanded = state.expandedRecordingId == recording.id
             return entry.copy(row = LibraryRecordingRow(
                 recordingId = recording.id,
                 title = recording.displayName,
-                subtitle = formatSavedRecordingDuration(context, recording.durationMillis) +
-                    " \u2022 " + formatShortFileSize(recording.sizeBytes),
-                timestamp = formatRecordingStartTimestamp(context, recording.startedAtMillis),
+                subtitle = previous?.subtitle ?: (formatSavedRecordingDuration(context, recording.durationMillis) +
+                    " \u2022 " + formatShortFileSize(recording.sizeBytes)),
+                timestamp = previous?.timestamp ?: formatRecordingStartTimestamp(context, recording.startedAtMillis),
                 selected = recording.id in state.selectedIds,
                 selectionActive = state.selectionActive,
                 interactionsEnabled = recording.id !in state.blockedIds,
@@ -379,7 +419,14 @@ internal class ReverbLibraryListView(
             val id = holder.binding?.recording?.id ?: return
             val entry = recordingsById[id]
             if (entry == null) holder.retire()
-            else if (holder.boundRevision != rowUpdates.revision) holder.bind(presentation(entry))
+            else if (holder.boundRevision != rowUpdates.revision || holder.boundFormattingRevision != formattingRevision) {
+                // Transient updates can reuse the text already owned by this holder. Full catalog
+                // binds and changes to Android's formatting inputs sample fresh text.
+                val previous = holder.binding?.takeIf {
+                    holder.boundFormattingRevision == formattingRevision && it.recording === entry.recording
+                }?.row
+                holder.bind(presentation(entry, previous))
+            }
         }
 
         fun rebindAll() { notifyItemRangeChanged(0, itemCount) }
@@ -463,6 +510,8 @@ internal class ReverbLibraryListView(
             private set
         var boundRevision = -1L
             private set
+        var boundFormattingRevision = -1L
+            private set
         private var expansion: LibraryInlineExpansionLease? = null
         private var expansionToken: Any? = null
         private var attached = false
@@ -472,6 +521,7 @@ internal class ReverbLibraryListView(
             if (binding?.key != entry.key) retire()
             binding = entry
             boundRevision = rowUpdates.revision
+            boundFormattingRevision = formattingRevision
             row.setEnvironment(environment)
             val model = checkNotNull(entry.row)
             row.bind(model, guardedActions.copy(
@@ -519,6 +569,7 @@ internal class ReverbLibraryListView(
             releaseExpansion()
             binding = null
             boundRevision = -1L
+            boundFormattingRevision = -1L
             row.unbind()
         }
     }

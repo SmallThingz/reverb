@@ -194,6 +194,7 @@ internal class NativeActivityContentView(
             ).also {
                 main = it // Install callback/result destination before source effects may run.
                 remainingMainState = null
+                it.setWindowInsets(windowInsets)
                 addView(it)
                 it.start()
             }

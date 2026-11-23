@@ -184,6 +184,13 @@ internal class NativeLibraryController(
         main.post(delivery)
     }
 
+    /** Publish retained rows or the actual loading state before the first attached draw. */
+    fun publishInitialPresentation() {
+        if (closed || lastVisible != null || !deliveryPosted) return
+        main.removeCallbacks(delivery)
+        delivery.run()
+    }
+
     fun bind(next: NativeLibraryInput) {
         check(!closed)
         val previous = input

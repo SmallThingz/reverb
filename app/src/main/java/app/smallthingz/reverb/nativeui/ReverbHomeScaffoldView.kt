@@ -30,6 +30,7 @@ internal open class ReverbHomeScaffoldView(
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         if (Build.VERSION.SDK_INT >= 29) isForceDarkAllowed = false
         addView(header)
+        header.setActionInsets(insets.contentLeft, insets.contentRight)
         header.bind(environment, initialHasIncidents, initialNavigation,
             statusInsetPx = insets.statusTop)
     }
@@ -47,7 +48,11 @@ internal open class ReverbHomeScaffoldView(
         getChildAt(if (body != null && childCount > 1 && index < 2) 1 - index else index)
 
     fun bindShell(navigation: ReverbAppTopBarActions, hasIncidents: Boolean, nextInsets: ReverbHomeInsets) {
-        if (insets != nextInsets) { insets = nextInsets; requestLayout() }
+        if (insets != nextInsets) {
+            insets = nextInsets
+            header.setActionInsets(insets.contentLeft, insets.contentRight)
+            requestLayout()
+        }
         this.navigation = navigation
         this.hasIncidents = hasIncidents
         header.bind(environment, hasIncidents, navigation, statusInsetPx = insets.statusTop)

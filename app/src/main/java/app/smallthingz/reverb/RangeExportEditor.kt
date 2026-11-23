@@ -668,7 +668,6 @@ internal class RangeExportEditorState(
     private var resumeAfterScrub = false
     private var fineAdjustShuttleActive = false
     private val fineSeekPosition = FineSeekPosition<RangeEditTarget>()
-    private var lastAuditionAtMillis = 0L
 
     val selectionDurationExactSeconds: Double
         get() = snapshot?.let {
@@ -846,14 +845,14 @@ internal class RangeExportEditorState(
     fun beginBoundaryEdit(target: RangeEditTarget) {
         selectTarget(target)
         pausePreview()
-        auditionSelectedBoundary(force = true)
+        auditionSelectedBoundary()
     }
 
-    private fun beginScrubPlaybackHandoff() {
+    private fun beginScrubPlaybackHandoff(silent: Boolean = false) {
         previewClockEpoch++
         playbackAnchor = null
         resumeAfterScrub = isPlaying || previewStarting
-        if (isPlaying || previewStarting) {
+        if (resumeAfterScrub || silent) {
             previewStarting = false
             previewController.stop()
             isPlaying = false
@@ -863,18 +862,15 @@ internal class RangeExportEditorState(
 
     fun beginBoundaryScrub(target: RangeEditTarget) {
         selectTarget(target)
-        beginScrubPlaybackHandoff()
-        auditionSelectedBoundary(force = true)
+        beginScrubPlaybackHandoff(silent = true)
     }
 
     fun updateBoundaryScrub(target: RangeEditTarget, requestedSeconds: Float) {
         setTarget(target, requestedSeconds)
-        auditionSelectedBoundary()
     }
 
     fun endBoundaryScrub() {
         isScrubbing = false
-        previewController.stop()
         if (resumeAfterScrub) {
             resumeAfterScrub = false
             startPreview()
@@ -1024,12 +1020,9 @@ internal class RangeExportEditorState(
         )
     }
 
-    private fun auditionSelectedBoundary(force: Boolean = false) {
+    private fun auditionSelectedBoundary() {
         if (!playbackAllowed || fineAdjustShuttleActive) return
         val readySnapshot = snapshot ?: return
-        val now = SystemClock.elapsedRealtime()
-        if (!force && now - lastAuditionAtMillis < 55L) return
-        lastAuditionAtMillis = now
         RecordingPlayback.pauseCurrent()
         previewController.audition(readySnapshot, targetValue(lastTarget).toDouble(),
             startSeconds.toDouble(), endSeconds.toDouble())

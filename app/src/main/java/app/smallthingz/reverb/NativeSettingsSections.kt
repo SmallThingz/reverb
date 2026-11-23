@@ -6,7 +6,6 @@ import smallthingz.ui.input.phase.NativeViewPhasePointerNode
 import android.content.Context
 import android.view.View
 import android.view.ViewGroup
-import smallthingz.ui.runtime.MonotonicFrameClock
 import androidx.lifecycle.Lifecycle
 import app.smallthingz.reverb.nativeui.*
 import smallthingz.ui.components.NativeThemeSelector
@@ -20,7 +19,6 @@ internal class NativeSettingsSections(
     private val environment: () -> ReverbViewEnvironment,
     private val lifecycle: Lifecycle,
     private val inputRoot: () -> View?,
-    private val frames: MonotonicFrameClock,
     private val animationScope: CoroutineScope,
     private val parentInterested: (NativeDragPointerChange) -> Boolean,
     private val focusRetention: () -> ReverbService.BufferSlot?,
@@ -28,6 +26,7 @@ internal class NativeSettingsSections(
     private val structureChanged: () -> Unit,
 ) : SettingsSectionFactory {
     private val recordings = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<Recording, Boolean>())
+    fun dismissAudioChoices() = recordings.forEach { it.dismissAudioChoice() }
     fun refreshCalibration() { recordings.filter { it.view.isAttachedToWindow }.forEach { it.refreshCalibration() } }
     fun pointerNodes(view: View): List<NativeViewPhasePointerNode> {
         for (recording in recordings) {
@@ -157,7 +156,8 @@ internal class NativeSettingsSections(
                 { owner.sampleRateChanged(activation, it) },
                 { owner.sourceChanged(activation, it) },
                 { owner.routeChanged(activation, it) },
-            ), frames, animationScope, inputRoot = inputRoot,
+            ), inputRoot,
+            inputAllowed = { owner.acceptsInput(activation) && lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) },
         )
         private val compression = SettingsOutputCompressionView(
             context, compressionState(), environment(), inputRoot, animationScope, parentInterested,
@@ -178,7 +178,6 @@ internal class NativeSettingsSections(
             val state = owner.state
             activation = state.activation
             val env = environment()
-            choices.active(state.active)
             choices.bind(audioState(), env)
             compression.bind(compressionState(), env)
             env.bindParagraphStyle(warning, ReverbTextRole.BODY_SMALL, env.palette.error)
@@ -191,6 +190,7 @@ internal class NativeSettingsSections(
             structureChanged()
         }
 
+        fun dismissAudioChoice() = choices.dismissDropdown()
         fun refreshCalibration() { skip.bind(silenceState(), environment(), silenceActions()) }
         fun pointerNodes(view: View): List<NativeViewPhasePointerNode> {
             compression.currentSlider?.let { if (it.pointerView === view) return it.pointerNodes }

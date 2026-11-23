@@ -1,200 +1,116 @@
 package app.smallthingz.reverb.nativeui
 
+import android.view.View
+import android.widget.FrameLayout
+import smallthingz.ui.components.NativeAnchoredDropdown
 import smallthingz.ui.util.closePreservingPrimaryFailure
 
-import smallthingz.ui.components.NativeAnchoredMenuRecipe
-import smallthingz.ui.components.NativePopupMenu
-import smallthingz.ui.components.NativeMenuChoices
-import smallthingz.ui.scroll.NativeVerticalScrollState
-
-
-import android.view.View
-import smallthingz.ui.runtime.MonotonicFrameClock
-import smallthingz.ui.text.TextStyle
-import smallthingz.ui.text.font.FontFamily
-import smallthingz.ui.unit.Density
-import kotlinx.coroutines.CoroutineScope
-import java.util.EnumMap
-
-/**
- * Per-Settings activation owner for the five released DropdownMenu calls. Their scroll positions
- * survive close/reopen, but disappear with a conditionally removed choice or the screen owner.
- * Selection invokes the current typed callback before dismissing, as in SettingsDropdown.
- */
+/** Owns the one expanded audio choice and forwards wheel selections to the Settings draft. */
 internal class SettingsAudioMenuHost(
-    private var style: TextStyle,
-    private var density: Density,
-    private var resolver: FontFamily.Resolver,
-    private val frames: MonotonicFrameClock,
-    private val scope: CoroutineScope,
-    initialPalette: ReverbPalette,
+    initialEnvironment: ReverbViewEnvironment,
+    private val overlayHost: () -> FrameLayout?,
+    private val inputAllowed: () -> Boolean,
     private val expandedChanged: (SettingsAudioChoice, Boolean) -> Unit,
-    savedScrollPositions: Map<SettingsAudioChoice, Int> = emptyMap(),
-    private var recipe: NativeAnchoredMenuRecipe = NativeAnchoredMenuRecipe.Default,
 ) : SettingsAudioPopupHost, AutoCloseable {
     private class Session(
+        val kind: SettingsAudioChoice,
         val anchor: View,
-        val window: NativePopupMenu<ReverbIcon>,
-    ) : AutoCloseable {
-        override fun close() = window.close()
+        val dropdown: NativeAnchoredDropdown,
+        val label: String,
+        val options: List<*>,
+        val optionLabels: List<String>,
+        var selected: Any?,
+        var selectAt: (Int) -> Unit,
+    ) {
+        val layoutDirection = anchor.layoutDirection
+        var expectedSelection: Any? = selected
+        var expanded = false
     }
-    private val sessions = EnumMap<SettingsAudioChoice, Session>(SettingsAudioChoice::class.java)
-    private val scrollStates = EnumMap<SettingsAudioChoice, NativeVerticalScrollState>(SettingsAudioChoice::class.java)
-    private val expanded = mutableSetOf<SettingsAudioChoice>()
-    private var palette = initialPalette
+
+    private var environment = initialEnvironment
+    private var current: Session? = null
     private var closed = false
 
-    init {
-        savedScrollPositions.forEach { (kind, position) ->
-            scrollStates[kind] = NativeVerticalScrollState(position)
-        }
-    }
-
-    fun bindConfiguration(style: TextStyle, density: Density, resolver: FontFamily.Resolver, palette: ReverbPalette,
-        recipe: NativeAnchoredMenuRecipe = this.recipe,
-    ) {
+    fun bindConfiguration(next: ReverbViewEnvironment) {
         if (closed) return
-        this.palette = palette
-        if (this.style == style && this.density === density && this.resolver === resolver && this.recipe == recipe) return
-        this.style = style
-        this.density = density
-        this.resolver = resolver
-        this.recipe = recipe
-        // Popup geometry is immutable. Retire old windows before typed updates recreate the
-        // still-expanded choices; their scroll owners and expansion intent remain unchanged.
-        val retiring = sessions.values.toList()
-        sessions.clear()
-        var failure: Throwable? = null
-        for (session in retiring) failure = closePreservingPrimaryFailure(failure, session::close)
-        failure?.let { throw it }
+        val previous = environment
+        environment = next
+        if (previous.appearance !== next.appearance || previous.palette != next.palette ||
+            previous.textDensity !== next.textDensity || previous.sharedFontResolver !== next.sharedFontResolver) {
+            dismissAll()
+        }
     }
 
-    override fun <T> open(
-        kind: SettingsAudioChoice,
-        anchor: View,
-        content: SettingsDropdownContent<T>,
-        onSelected: (T) -> Unit,
-    ) {
-        check(!closed)
-        val previous = sessions[kind]
-        if (previous != null && previous.anchor === anchor && previous.window.layoutDirection == anchor.layoutDirection) {
-            bindSession(kind, previous, content, onSelected)
-            previous.window.expanded(true)
-            publishExpanded(kind, true)
-            return
-        }
-        if (previous != null) {
-            if (previous.anchor === anchor) {
-                sessions.remove(kind)
-                previous.close()
-            } else retire(kind, previous)
-        }
-        val scroll = scrollStates.getOrPut(kind) { NativeVerticalScrollState() }
-        lateinit var session: Session
-        val window = NativePopupMenu(
-            anchor, density, style, resolver, palette.menuColors(),
-            scroll, frames, scope, ReverbMenuIcons,
-            recipe = recipe,
-            onDismissRequest = { if (sessions[kind] === session) dismiss(kind) },
-            onTerminal = {
-                if (sessions[kind] === session) retire(kind, session)
-            },
-        )
-        session = Session(anchor, window)
-        sessions[kind] = session
+    override fun <T> open(kind: SettingsAudioChoice, anchor: View, content: SettingsDropdownContent<T>,
+        onSelected: (T) -> Unit) {
+        if (closed || !inputAllowed()) return
+        val host = overlayHost() ?: return
+        if (!host.isAttachedToWindow || host.windowToken != anchor.windowToken) return
+        if (content.options.size <= 1 || content.selected !in content.options) return
+        dismissAll()
+        if (closed || current != null || !inputAllowed()) return
+
+        val options = content.options.toList()
+        val labels = options.map(content.optionLabel)
+        val config = environment
+        val dropdown = NativeAnchoredDropdown(anchor.context, host, config.appearance, config.palette,
+            config.textDensity, config.sharedFontResolver, palette = config.palette.dropdownColors())
+        val session = Session(kind, anchor, dropdown, content.label, options, labels, content.selected,
+            selectAt = { onSelected(options[it]) })
+        current = session
         try {
-            bindSession(kind, session, content, onSelected)
-            window.show()
-            publishExpanded(kind, true)
+            val mounted = dropdown.open(anchor, content.copy(options = options), { terminal(session) }) select@{ value ->
+                if (current !== session) return@select
+                if (!inputAllowed()) {
+                    dismissAll()
+                    return@select
+                }
+                session.expectedSelection = value
+                session.selectAt(options.indexOf(value))
+            }
+            if (mounted && current === session) {
+                session.expanded = true
+                expandedChanged(kind, true)
+            } else terminal(session)
         } catch (failure: Throwable) {
-            if (sessions[kind] === session) sessions.remove(kind)
-            try { session.close() } catch (cleanup: Throwable) { failure.addSuppressed(cleanup) }
+            if (current === session) closePreservingPrimaryFailure(failure, ::dismissAll)
             throw failure
         }
     }
 
-    /** Called with the same resolved options used to bind the visible choice row. */
-    override fun <T> update(
-        kind: SettingsAudioChoice,
-        anchor: View,
-        content: SettingsDropdownContent<T>,
-        onSelected: (T) -> Unit,
-    ) {
-        if (closed) return
-        if (content.options.size <= 1) {
-            sessions[kind]?.let { retire(kind, it) } ?: publishExpanded(kind, false)
-            scrollStates.remove(kind)
+    override fun <T> update(kind: SettingsAudioChoice, anchor: View, content: SettingsDropdownContent<T>,
+        onSelected: (T) -> Unit) {
+        val session = current?.takeIf { it.kind == kind } ?: return
+        if (!inputAllowed() || session.anchor !== anchor || session.layoutDirection != anchor.layoutDirection ||
+            session.label != content.label || session.options != content.options ||
+            session.optionLabels != content.options.map(content.optionLabel) ||
+            (session.selected != content.selected && session.expectedSelection != content.selected)) {
+            dismissAll()
             return
         }
-        var session = sessions[kind]
-        if (session != null && session.anchor === anchor && session.window.layoutDirection != anchor.layoutDirection) {
-            sessions.remove(kind)
-            session.close()
-            session = null
-        }
-        if (session == null && kind in expanded) {
-            open(kind, anchor, content, onSelected)
-        } else session?.let {
-            if (it.anchor !== anchor) retire(kind, it)
-            else bindSession(kind,it,content,onSelected)
-        }
+        // A wheel edit is echoed by the Settings draft while the gesture still owns the slot.
+        // Rebind the typed callback through the unchanged option order.
+        session.selected = content.selected
+        val options = content.options.toList()
+        session.selectAt = { onSelected(options[it]) }
     }
 
-    private fun <T> bindSession(
-        kind: SettingsAudioChoice,
-        session: Session,
-        content: SettingsDropdownContent<T>,
-        select: (T) -> Unit,
-    ) {
-        session.window.bindChoices(NativeMenuChoices(content.selected, content.options, content.optionLabel), palette.menuColors()) { value ->
-            if (sessions[kind] !== session) return@bindChoices
-            select(value)
-            // A callback that throws deliberately does not run the following source statement.
-            if (sessions[kind] === session) dismiss(kind)
-        }
-    }
-
-    /** The panel's released active=false effect closes menus, preserving each retained scroll. */
     fun dismissAll() {
-        var failure: Throwable? = null
-        for (kind in expanded.toList()) {
-            failure = closePreservingPrimaryFailure(failure) { dismiss(kind) }
-        }
+        val session = current ?: return
+        var failure = closePreservingPrimaryFailure(null, session.dropdown::close)
+        failure = closePreservingPrimaryFailure(failure) { terminal(session) }
         failure?.let { throw it }
     }
 
-    private fun dismiss(kind: SettingsAudioChoice) {
-        val session = sessions[kind]
-        var failure = closePreservingPrimaryFailure(null) { publishExpanded(kind,false) }
-        failure = closePreservingPrimaryFailure(failure) { session?.window?.expanded(false) }
-        failure?.let { throw it }
-    }
-
-    private fun retire(kind: SettingsAudioChoice, session: Session) {
-        if (sessions[kind] === session) sessions.remove(kind)
-        var failure = closePreservingPrimaryFailure(null) { publishExpanded(kind,false) }
-        failure = closePreservingPrimaryFailure(failure) { session.close() }
-        failure?.let { throw it }
-    }
-
-    private fun publishExpanded(kind: SettingsAudioChoice, value: Boolean) {
-        val changed = if (value) expanded.add(kind) else expanded.remove(kind)
-        if (changed) expandedChanged(kind,value)
+    private fun terminal(session: Session) {
+        if (current !== session) return
+        current = null
+        if (session.expanded) expandedChanged(session.kind, false)
     }
 
     override fun close() {
         if (closed) return
         closed = true
-        val retiring = sessions.values.toList()
-        sessions.clear()
-        scrollStates.clear()
-        expanded.clear()
-        var failure: Throwable? = null
-        for (session in retiring) {
-            try { session.close() } catch (problem: Throwable) {
-                if (failure == null) failure=problem else failure.addSuppressed(problem)
-            }
-        }
-        failure?.let { throw it }
+        dismissAll()
     }
 }

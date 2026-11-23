@@ -125,7 +125,6 @@ internal class NativeRangeExportOwner(
                 if (!closed && playback.wantsPlayback) state.pausePreview()
             }
         }
-        invalidation?.request()
     }
 
     /** Current callbacks and display inputs; input admission continues to read the live model. */
@@ -151,7 +150,8 @@ internal class NativeRangeExportOwner(
         }
         if (currentSnapshot !== snapshot) replaceSnapshot(snapshot)
         startOpeningWhenMeasured()
-        invalidation?.request()
+        // Seed the entering controls in this bind, before the View can draw its first frame.
+        if (waveformData == null) refreshAndRender() else invalidation?.request()
     }
 
     fun waveformMeasured(boundsInRoot: Rect) {
@@ -164,10 +164,14 @@ internal class NativeRangeExportOwner(
     private fun replaceSnapshot(snapshot: ReverbService.TimelineSnapshot?) {
         currentSnapshot = snapshot
         waveformJob?.cancel()
-        if (snapshot == null) state.detachSnapshotPresentation()
-        waveformJob = if (snapshot == null) null else scope.launch {
-            state.attachSnapshot(snapshot)
-            state.resetWaveformConstruction()
+        waveformJob = null
+        if (snapshot == null) {
+            state.detachSnapshotPresentation()
+            return
+        }
+        state.attachSnapshot(snapshot)
+        state.resetWaveformConstruction()
+        waveformJob = scope.launch {
             // Source starts disk sampling only after its760ms opening reaches .96.
             openingProgress.first { it >= .96f }
             constructRangeWaveform(

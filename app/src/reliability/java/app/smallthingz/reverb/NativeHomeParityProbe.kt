@@ -74,6 +74,14 @@ import app.smallthingz.reverb.nativeui.ReverbPalette
 import app.smallthingz.reverb.nativeui.ReverbViewEnvironment
 import app.smallthingz.reverb.nativeui.HomeBufferSegment
 import app.smallthingz.reverb.nativeui.NativeWindowTextAccessibilityOwner
+import smallthingz.ui.components.blob.NativeAudioBlobReadout
+import app.smallthingz.reverb.nativeui.ReverbAppTopBarView
+import app.smallthingz.reverb.nativeui.ReverbSettingsTopBarView
+import app.smallthingz.reverb.nativeui.ReverbTopBarIconAction
+import app.smallthingz.reverb.nativeui.SettingsTopBarBinding
+import smallthingz.ui.components.NativeModalWindowRuntime
+import smallthingz.ui.components.NativeTopBarInsets
+import smallthingz.ui.components.NativeTopBarLayout
 import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.components.NativeCaptureControlSurface
 import java.io.File
@@ -108,6 +116,120 @@ private fun homeCases() = listOf(
     HomeCase("filled", oneShot = BufferMetrics(300f, 28800000), full = true, hasIncidents = true),
     HomeCase("disabled", oneShotEnabled = false),
 )
+
+/** Checks current production rendering on a native fixture with a synthetic recorder snapshot. */
+internal fun verifyNativeHomeHydrationCurrent(instrumentation: Instrumentation, report: StringBuilder) {
+    val context = instrumentation.targetContext
+    check(context.packageName == "app.smallthingz.reverb.uitheme.reliability")
+    check(context.applicationContext.javaClass == Application::class.java)
+    val host = launchCurrentUiSmokeActivity(instrumentation)
+    val directory = File(context.filesDir, "native-home-hydration-current-${System.currentTimeMillis()}")
+    check(directory.mkdir())
+    val result = JSONObject().put("selector", "native_home_hydration_current").put("passed", false)
+    val runtime = NativeModalWindowRuntime(host).apply { setStarted(true) }
+    var screen: ReverbHomeScreenView? = null
+    var failure: Throwable? = null
+    try {
+        val environment = ReverbViewEnvironment(host, false)
+        val metrics = BufferMetrics(0f, 0)
+        val selected = BufferSlot.ONE_SHOT
+        val initial = ReverbHomeBodyState(null, metrics, metrics, true, false, true, null,
+            false, false, true, false, false, NativeAudioBlobController(), NativeAudioBlobController(), true)
+        val forbidden = { error("Synthetic Home fixture invoked a recording action") }
+        val actions = ReverbHomeActions({ forbidden() }, { forbidden() }, { forbidden() },
+            { forbidden() }, { forbidden() }, { forbidden() }, forbidden)
+        val navigation = ReverbAppTopBarActions(forbidden, forbidden, forbidden)
+        val insets = ReverbHomeInsets(25, 17, 9, 0)
+        val mounted = nativeParityOnMain(instrumentation) {
+            ReverbHomeScreenView(host, environment, initial, selected, actions, navigation, false,
+                insets, host.fixtureRoot, runtime.scope, { _, _, _ -> }).also {
+                screen = it
+                host.fixtureRoot.addView(it, FrameLayout.LayoutParams(-1, -1))
+            }
+        }
+        awaitNativeParityDraw(instrumentation, mounted)
+        nativeParityOnMain(instrumentation) {
+            checkCaptureHydration(mounted, initial, selected, actions, navigation, false, insets)
+            checkReverbToolbarSlots(host, environment, runtime, navigation, insets)
+        }
+        result.put("capture_hydration_presentation", true).put("shared_toolbar_slots", true).put("passed", true)
+    } catch (error: Throwable) {
+        failure = error
+        throw error
+    } finally {
+        val cleanup = captureNativeParityCleanup(null) {
+            nativeParityOnMain(instrumentation) {
+                try { screen?.close() } finally { try { runtime.close() } finally { host.finish() } }
+            }
+        }
+        writeHomeEvidence(directory, result, failure ?: cleanup)
+        if (failure == null) cleanup?.let { throw it }
+    }
+    report.appendLine("native_home_hydration_current passed; evidence ${directory.name}")
+}
+
+private fun checkCaptureHydration(screen: ReverbHomeScreenView, initial: ReverbHomeBodyState, selected: BufferSlot,
+    actions: ReverbHomeActions, navigation: ReverbAppTopBarActions, hasIncidents: Boolean, insets: ReverbHomeInsets) {
+    val resolved = initial.copy(activeBuffer = selected, listening = true, serviceStateHydrated = true)
+    fun bind(state: ReverbHomeBodyState) {
+        screen.bind(state, selected, actions, navigation, hasIncidents, insets)
+    }
+    val views = homeViewDescendants(screen)
+    val renderer = views.filterIsInstance<AudioReactiveBlobView>().single()
+    val readout = views.filterIsInstance<NativeAudioBlobReadout>().single()
+    val control = views.filterIsInstance<ReverbHomeBlobControl>().single()
+    bind(resolved.copy(serviceStateHydrated = false))
+    check(renderer.visibility == View.VISIBLE)
+    check(readout.visibility == View.INVISIBLE)
+    check(!control.isEnabled)
+    bind(resolved)
+    check(renderer === homeViewDescendants(screen).filterIsInstance<AudioReactiveBlobView>().single())
+    check(readout.visibility == View.VISIBLE)
+    check(control.isEnabled)
+}
+
+private fun checkReverbToolbarSlots(host: NativeParityActivity, environment: ReverbViewEnvironment,
+    runtime: NativeModalWindowRuntime, navigation: ReverbAppTopBarActions, insets: ReverbHomeInsets) {
+    val width = 451
+    val widthSpec = View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY)
+    val heightSpec = View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+    val settings = ReverbSettingsTopBarView(host, environment, runtime.scope) { host.fixtureRoot }
+    try {
+        settings.bind(environment, SettingsTopBarBinding(false, false, false, false, false,
+            navigation.settings, navigation.settings))
+        settings.setRemainingWindowInsets(NativeTopBarInsets(insets.contentLeft, insets.statusTop, insets.contentRight))
+        for (direction in listOf(View.LAYOUT_DIRECTION_LTR, View.LAYOUT_DIRECTION_RTL)) {
+            fun place(view: View) {
+                view.layoutDirection = direction
+                view.measure(widthSpec, heightSpec)
+                view.layout(0, 0, width, view.measuredHeight)
+            }
+            fun compact(withBack: Boolean) = ReverbAppTopBarView(host, environment, host.fixtureRoot).apply {
+                setActionInsets(insets.contentLeft, insets.contentRight)
+                bind(environment, false, if (withBack) navigation.copy(back = navigation.incidents) else navigation,
+                    insets.statusTop)
+                place(this)
+            }
+            fun bounds(root: ViewGroup, action: ReverbTopBarIconAction) =
+                Rect(0, 0, action.visual.width, action.visual.height).also { root.offsetDescendantRectToMyCoords(action.visual, it) }
+            fun slot(bar: ReverbAppTopBarView, slot: NativeTopBarLayout.Slot) =
+                (0 until bar.childCount).map(bar::getChildAt).filterIsInstance<ReverbTopBarIconAction>().single {
+                    it.visibility == View.VISIBLE && (it.layoutParams as NativeTopBarLayout.ActionLayoutParams).slot == slot
+                }
+            val home = compact(false)
+            val library = compact(true)
+            place(settings)
+            val back = bounds(settings, settings.navigation)
+            val done = bounds(settings, settings.done)
+            check(back == bounds(home, slot(home, NativeTopBarLayout.Slot.START)))
+            check(back == bounds(library, slot(library, NativeTopBarLayout.Slot.START)))
+            check(done == bounds(home, slot(home, NativeTopBarLayout.Slot.END)))
+            check(done == bounds(library, slot(library, NativeTopBarLayout.Slot.END)))
+        }
+    } finally {
+        settings.close()
+    }
+}
 
 /** Full normal Home only; synthetic recorder state never owns a service, capture or durable write. */
 internal fun verifyNativeHomeParity(instrumentation: Instrumentation, report: StringBuilder) {
@@ -398,6 +520,13 @@ private class HomeParityBoard(
         val description = context.getString(R.string.record_all_memory)
         val glyph = views.single { it.contentDescription == description }
         return checkNotNull(glyph.parent as? HomeClickable)
+    }
+
+    fun checkCaptureHydrationPresentation() {
+        val screen = checkNotNull(native)
+        checkCaptureHydration(screen, nativeState(), nativeSelection, nativeActions,
+            navigation(nativeEvents), case.hasIncidents, insets)
+        screen.bind(nativeState(), nativeSelection, nativeActions, navigation(nativeEvents), case.hasIncidents, insets)
     }
 
     fun bindNativeLeaves(label: String, enabled: Boolean = true, slot: BufferSlot = BufferSlot.ONE_SHOT) {
@@ -710,6 +839,8 @@ private fun verifyNativeHomeLeafBindings(
         // Reuse the existing board's real window/frame scope and native mounting seam.
         captureNativeParityContent(instrumentation, activity) { current.show(true) }.recycle()
         captureNativeParityContent(instrumentation, activity) { current.show(false) }.recycle()
+        nativeParityOnMain(instrumentation) { current.checkCaptureHydrationPresentation() }
+        result.put("capture_hydration_presentation", true)
         for (blob in listOf(false, true)) for (keyboard in listOf(false, true)) {
             for (scenario in listOf("replace", "disable", "reattach", "current-slot")) {
                 val name = (if (blob) "blob" else "export") + "-" +

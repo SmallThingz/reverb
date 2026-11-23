@@ -11,7 +11,9 @@ import smallthingz.ui.text.font.createFontFamilyResolver
 import smallthingz.ui.unit.Density
 
 /** The appearance used by each Reverb window. */
-internal val reverbAppearance = NativeUiAppearance.Default
+internal val reverbAppearance = NativeUiAppearance.Default.copy(
+    toolbars = NativeUiAppearance.Default.toolbars.copy(compactHeightDp = 58f),
+)
 
 /**
  * Immutable bindings for one native host window and one configuration/theme generation.

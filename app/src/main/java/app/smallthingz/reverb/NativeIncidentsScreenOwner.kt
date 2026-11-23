@@ -114,16 +114,28 @@ internal class NativeIncidentsScreenOwner(
     /** Header Back changes the same parent navigation flag; it does not skip the close animation. */
     fun requestBack() { if (!closed) onBackRequested() }
 
-    fun registerBack(dispatcher: OnBackPressedDispatcher, lifecycleOwner: LifecycleOwner): AutoCloseable {
+    fun registerBack(
+        dispatcher: OnBackPressedDispatcher,
+        lifecycleOwner: LifecycleOwner,
+        selectionActive: () -> Boolean = { false },
+        consumeSelectionBack: () -> Boolean = { false },
+    ): AutoCloseable {
         check(!closed && backRegistration == null)
         val callback = object : OnBackPressedCallback(allowBack) {
-            override fun handleOnBackStarted(backEvent: BackEventCompat) { startGesture() }
+            override fun handleOnBackStarted(backEvent: BackEventCompat) {
+                if (!selectionActive()) startGesture()
+            }
             override fun handleOnBackProgressed(backEvent: BackEventCompat) {
+                if (selectionActive()) return
                 if (events == null) startGesture()
                 events?.trySend(backEvent)
             }
             override fun handleOnBackCancelled() = retireGesture()
             override fun handleOnBackPressed() {
+                if (consumeSelectionBack()) {
+                    retireGesture()
+                    return
+                }
                 if (events == null) startGesture()
                 events?.close()
                 events = null

@@ -5,18 +5,16 @@ import android.app.Application
 import android.content.res.Configuration
 import android.graphics.Color
 import android.os.Looper
-import android.view.Choreographer
+import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.FrameLayout
 import app.smallthingz.reverb.R
 import app.smallthingz.reverb.AudioSourceMode
 import app.smallthingz.reverb.ChannelMode
 import app.smallthingz.reverb.InputRouteMode
 import app.smallthingz.reverb.PcmSampleFormat
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.cancel
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -26,15 +24,11 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.annotation.LooperMode
-import org.robolectric.shadows.ShadowChoreographer
+import smallthingz.ui.components.NativeDropdown
 import smallthingz.ui.components.NativeDropdownContent
-import smallthingz.ui.platform.AndroidUiFrameClock
-import smallthingz.ui.scroll.NativeVerticalScrollState
-import smallthingz.ui.text.TextStyle
 import smallthingz.ui.text.font.createFontFamilyResolver
 import smallthingz.ui.text.view.ParagraphView
 import smallthingz.ui.unit.Density
-import smallthingz.ui.unit.sp
 import java.util.Locale
 import java.time.Duration
 
@@ -150,120 +144,97 @@ class SettingsControlConfigurationTest {
         }
     }
 
-    @Test fun changedPopupConfigurationKeepsExpansionAndScrollButRejectsRetiredCallbacks() {
-        val owner = Robolectric.buildActivity(Activity::class.java).setup().visible()
-        val activity = owner.get()
+    @Test fun audioDropdownAcceptsSelectionEchoAndRetiresOnExternalBindings() {
+        val activityOwner = Robolectric.buildActivity(Activity::class.java).setup().visible()
+        val activity = activityOwner.get()
         val root = FrameLayout(activity)
         val anchor = View(activity)
         activity.setContentView(root)
-        root.addView(anchor, FrameLayout.LayoutParams(200, 60))
-        root.measure(exact(360), exact(800)); root.layout(0, 0, 360, 800)
-        val frames = AndroidUiFrameClock(Choreographer.getInstance())
-        val scope = CoroutineScope(Dispatchers.Main.immediate + frames)
-        val density = Density(1f)
+        root.addView(anchor, FrameLayout.LayoutParams(240, 96, Gravity.CENTER))
+        val appearance = reverbAppearance.copy(anchoredDropdown = reverbAppearance.anchoredDropdown.copy(
+            expandMillis = 0, settleMillis = 0, collapseMillis = 0,
+        ))
         val resolver = createFontFamilyResolver(activity)
         val palette = ReverbPalette.fallback(false)
-        val style = reverbAppearance.typography.buttonLabelStyle(TextStyle(fontSize = 14.sp))
+        val environment = ReverbViewEnvironment(Density(1f), resolver, palette, appearance = appearance)
+        var admitted = true
         val expanded = mutableListOf<Boolean>()
         val selected = mutableListOf<Int>()
-        val host = SettingsAudioMenuHost(style, density, resolver, frames, scope, palette,
-            { _, value -> expanded += value })
+        val host = SettingsAudioMenuHost(environment, { root }, { admitted }) { _, value -> expanded += value }
         val kind = SettingsAudioChoice.SAMPLE_RATE
-        val first = NativeDropdownContent("Sample rate", 1, (1..40).toList()) { value: Int -> "Rate $value" }
-        val previousFrameDelay = ShadowChoreographer.getFrameDelay()
-        val previousChoreographerPaused = ShadowChoreographer.isPaused()
+        val first = NativeDropdownContent("Sample rate", 2, (1..3).toList()) { value: Int -> "Rate $value" }
+        fun overlay() = root.getChildAt(1) as ViewGroup
+        fun wheel() = overlay().getChildAt(1) as ViewGroup
+        fun row(index: Int) = wheel().getChildAt(index) as NativeDropdown<*>
+        fun drawn() = shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(32))
+        val select: (Int) -> Unit = { value ->
+            selected += value
+            host.update(kind, anchor, first.copy(selected = value)) { selected += it }
+        }
+        fun open(content: NativeDropdownContent<Int> = first) {
+            host.open(kind, anchor, content, select)
+            drawn()
+            assertEquals(2, root.childCount)
+        }
+        fun assertRetired() {
+            assertEquals(1, root.childCount)
+            assertEquals(false, expanded.last())
+        }
         try {
-            assertTrue(anchor.isAttachedToWindow)
-            // Keep Activity's ordinary initial attachment, then manually advance the
-            // popup's perpetual frame owner without Choreographer advancing time itself.
-            ShadowChoreographer.setPaused(true)
-            ShadowChoreographer.setFrameDelay(Duration.ofMillis(16))
-            host.open(kind, anchor, first) { selected += it }
-            traversePopupWindow()
-            val oldWindow = window(host, kind)
-            assertTrue(oldWindow.isAttachedToWindow)
-            oldWindow.measure(exact(360), View.MeasureSpec.makeMeasureSpec(600, View.MeasureSpec.AT_MOST))
-            oldWindow.layout(0, 0, oldWindow.measuredWidth, oldWindow.measuredHeight)
-            val oldRow = firstRow(oldWindow)
-            oldRow.measure(exact(260), unspecified())
-            val oldHeight = (field(oldRow, "text") as ParagraphView).measuredHeight
-            @Suppress("UNCHECKED_CAST")
-            val oldSelect = field(oldRow, "action") as () -> Unit
-            @Suppress("UNCHECKED_CAST")
-            val oldDismiss = field(oldWindow, "onDismissRequest") as () -> Unit
-            val scroll = (field(host, "scrollStates") as Map<*, *>)[kind] as NativeVerticalScrollState
-            assertTrue("positive scroll before replacement", scroll.scrollBy(37f) > 0f)
-            val scrollValue = scroll.value
-            host.bindConfiguration(style, density, resolver, palette)
-            host.update(kind, anchor, first) { selected += it }
-            assertSame("unchanged config retains popup", oldWindow, window(host, kind))
+            drawn()
+            assertTrue(anchor.isAttachedToWindow && anchor.isLaidOut)
+            host.open(kind, anchor, first) { fail("Retired callback received a selection") }
+            drawn()
+            val original = overlay()
+            val oldRow = row(0)
+            val oldTextHeight = (oldRow.getChildAt(1) as ParagraphView).measuredHeight
+            assertTrue(oldTextHeight > 0)
+            host.bindConfiguration(environment)
+            host.update(kind, anchor, first, select)
+            assertSame(original, overlay())
+            assertTrue(wheel().performAccessibilityAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD, null))
+            drawn()
+            assertSame("the Settings draft echoes the in-flight wheel choice", original, overlay())
+            assertEquals(listOf(3), selected)
+            assertEquals(listOf(true), expanded)
+            host.update(kind, anchor, first.copy(selected = 1), select)
+            assertRetired()
+            assertFalse(oldRow.performClick())
+
+            open()
+            host.update(kind, anchor, first.copy(options = listOf(2, 3)), select)
+            assertRetired()
+            open()
+            val next = first.copy(optionLabel = { "Frequence $it" })
+            host.update(kind, anchor, next, select)
+            assertRetired()
+            open()
             anchor.layoutDirection = View.LAYOUT_DIRECTION_RTL
-            host.update(kind, anchor, first) { selected += it }
-            val rtlWindow = window(host, kind)
-            traversePopupWindow()
-            assertNotSame(oldWindow, rtlWindow)
-            assertFalse(oldWindow.isAttachedToWindow)
-            assertTrue(rtlWindow.isAttachedToWindow)
-            assertEquals(View.LAYOUT_DIRECTION_RTL, rtlWindow.layoutDirection)
-            assertEquals(listOf(true), expanded)
-            host.bindConfiguration(TextStyle(fontSize = 30.sp), Density(1f, 1.5f),
-                createFontFamilyResolver(activity), palette)
-            assertFalse(rtlWindow.isAttachedToWindow)
-            val next = first.copy(selected = 2, optionLabel = { "Frequence $it" })
-            host.update(kind, anchor, next) { selected += it }
-            traversePopupWindow()
-            val replacement = window(host, kind)
-            assertNotSame(oldWindow, replacement)
-            assertTrue(replacement.isAttachedToWindow)
-            assertSame(scroll, (field(host, "scrollStates") as Map<*, *>)[kind])
-            assertEquals(scrollValue, scroll.value)
-            assertEquals(listOf(true), expanded)
-            oldDismiss(); oldSelect()
-            assertSame(replacement, window(host, kind))
-            assertTrue(selected.isEmpty())
-            assertEquals(listOf(true), expanded)
-            val newRow = firstRow(replacement)
-            newRow.measure(exact(260), unspecified())
-            val text = field(newRow, "text") as ParagraphView
-            assertEquals("Frequence 1", text.getText())
-            assertTrue(text.measuredHeight > oldHeight)
-            assertTrue(newRow.performClick())
-            assertEquals(listOf(1), selected)
-            assertEquals(listOf(true, false), expanded)
-            host.open(kind, anchor, next) { selected += it }
-            host.bindConfiguration(TextStyle(fontSize = 32.sp), Density(1f), resolver, palette)
+            host.update(kind, anchor, first, select)
+            assertRetired()
+            open()
+            host.bindConfiguration(ReverbViewEnvironment(Density(1f, 1.5f), resolver, palette, appearance = appearance))
+            assertRetired()
+            host.update(kind, anchor, next, select)
+            assertRetired()
+            open(next)
+            assertEquals(View.LAYOUT_DIRECTION_RTL, overlay().layoutDirection)
+            val currentText = row(0).getChildAt(1) as ParagraphView
+            assertEquals("Frequence 1", currentText.getText())
+            assertTrue(currentText.measuredHeight > oldTextHeight)
+
+            admitted = false
             host.dismissAll()
-            host.update(kind, anchor, next) { selected += it }
-            assertTrue("inactive config boundary must not reopen", (field(host, "sessions") as Map<*, *>).isEmpty())
-            assertEquals(listOf(true, false, true, false), expanded)
+            host.update(kind, anchor, next, select)
+            host.open(kind, anchor, next, select)
+            assertRetired()
+            assertEquals(listOf(3), selected)
         } finally {
-            try {
-                try {
-                    host.close()
-                } finally {
-                    try { scope.cancel() }
-                    finally { owner.pause().stop().destroy() }
-                }
-            } finally {
-                ShadowChoreographer.setFrameDelay(previousFrameDelay)
-                ShadowChoreographer.setPaused(previousChoreographerPaused)
-            }
+            try { host.close() }
+            finally { activityOwner.pause().stop().destroy() }
         }
     }
 
-    private fun window(host: SettingsAudioMenuHost, kind: SettingsAudioChoice): ViewGroup {
-        val session = requireNotNull((field(host, "sessions") as Map<*, *>)[kind])
-        return field(session, "window") as ViewGroup
-    }
-    private fun traversePopupWindow() {
-        // WindowManager attachment/traversal is queued in PAUSED mode. Do not drain the
-        // perpetual popup animation owner; advance only enough for two display frames.
-        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(34))
-    }
-    private fun firstRow(window: ViewGroup): View =
-        (field(requireNotNull(field(window, "menu")), "column") as ViewGroup).getChildAt(0)
-    private fun field(owner: Any, name: String): Any? = owner.javaClass.getDeclaredField(name)
-        .apply { isAccessible = true }.get(owner)
     private fun exact(size: Int) = View.MeasureSpec.makeMeasureSpec(size, View.MeasureSpec.EXACTLY)
     private fun unspecified() = View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
 }

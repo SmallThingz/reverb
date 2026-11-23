@@ -33,7 +33,8 @@ internal class ReverbRangeExportControls(
     private val surfaceRecipe = initialEnvironment.appearance.groupSurfaces.rangeControls
     private val surface = surfaceRecipe.create(context, ::invalidateSettingsTextContrast)
     private val row = ControlsRow(context)
-    val close = ReverbStandardIconButtonView(context, initialEnvironment, inputRoot, actionSizeDp = 50f)
+    val close = ReverbStandardIconButtonView(context, initialEnvironment, inputRoot, actionSizeDp = 50f,
+        glyph = OnboardingIconView(context, ReverbIcon.Close, initialEnvironment.palette.ink))
     private val pillRecipe = initialEnvironment.appearance.groupSurfaces.rangeBufferPill
     private val pillSurface = pillRecipe.create(context, ::invalidateSettingsTextContrast)
     private val pill = BufferPill(context, initialEnvironment)
@@ -45,7 +46,8 @@ internal class ReverbRangeExportControls(
     private var onExport: () -> Unit = {}
     private var state: RangeExportEditorState? = null
     private data class VisualKey(val environment: ReverbViewEnvironment, val loading: Boolean,
-        val enabled: Boolean, val buffer: ReverbService.BufferSlot, val canClose: Boolean)
+        val available: Boolean, val wheelEditing: Boolean, val buffer: ReverbService.BufferSlot,
+        val canClose: Boolean)
     private var visualKey: VisualKey? = null
 
     init {
@@ -71,19 +73,20 @@ internal class ReverbRangeExportControls(
     ) {
         environment = value; this.state = state; this.onCancel = onCancel; this.onExport = onExport
         val palette = value.palette
-        val enabled = !loading && state.snapshotReady && !state.selectionDurationEditing && canExport
+        val available = !loading && state.snapshotReady && canExport
+        val wheelEditing = state.selectionDurationEditing
         val previous = visualKey
         if (previous != null && previous.environment === value && previous.loading == loading &&
-            previous.enabled == enabled && previous.buffer == selectedBuffer && previous.canClose == canClose) return
-        // Waveform frames keep live callbacks above without allocating or rebinding visual state.
-        visualKey = VisualKey(value, loading, enabled, selectedBuffer, canClose)
+            previous.available == available && previous.wheelEditing == wheelEditing &&
+            previous.buffer == selectedBuffer && previous.canClose == canClose) return
+        visualKey = VisualKey(value, loading, available, wheelEditing, selectedBuffer, canClose)
         surfaceRecipe.bind(surface, palette)
         close.bind(value, ReverbIcon.Close, context.getString(R.string.close), canClose,
             palette.ink, palette.onSurface, { this.onCancel() })
         pillRecipe.bind(pillSurface, palette)
         pill.bind(value, selectedBuffer)
-        exportRecipe.bindSurroundingSurface(exportSurface, palette.buttonPalette, enabled)
-        exportAction.bind(value, loading, enabled) export@ {
+        exportRecipe.bindSurroundingSurface(exportSurface, palette.buttonPalette, available)
+        exportAction.bind(value, loading, available, wheelEditing) export@ {
             // Released onClick deliberately reads the immediate model again: wheel ownership can
             // begin after the enabled UI frame. Backend/config admission remains with its owner.
             val current = this.state ?: return@export
@@ -192,14 +195,17 @@ internal class ExportContent(
     initialEnvironment: ReverbViewEnvironment,
     inputRoot: () -> View?,
     private val scope: CoroutineScope,
-) : NativeMaterialButtonView(context, initialEnvironment.appearance.buttons.rangeExport.button,
+) : NativeMaterialButtonView(context, initialEnvironment.appearance.buttons.rangeExport.button.let {
+    it.copy(busyPaint = it.enabledPaint)
+},
     initialEnvironment.textDensity, initialEnvironment.sharedFontResolver,
     NativeButtonInputPolicy(inputRoot), {}) {
     private val recipe = initialEnvironment.appearance.buttons.rangeExport
     private var loadingView: ReverbIncidentLoadingView? = null
     private var glyphDensity = Float.NaN
 
-    fun bind(value: ReverbViewEnvironment, loading: Boolean, enabled: Boolean, action: () -> Unit) {
+    fun bind(value: ReverbViewEnvironment, loading: Boolean, available: Boolean, wheelEditing: Boolean,
+        action: () -> Unit) {
         val palette = value.palette.buttonPalette
         bindTypography(value.textDensity, value.sharedFontResolver)
         if (loading) {
@@ -220,10 +226,11 @@ internal class ExportContent(
             val density = value.textDensity.density
             if (glyphDensity != density) {
                 glyphDensity = density
-                setLeadingIcon(ReverbIconDrawable(ReverbIcon.Save, density, recipe.button.contentColor(palette, enabled)))
+                setLeadingIcon(ReverbIconDrawable(ReverbIcon.Save, density, recipe.button.contentColor(palette, available)))
             }
         }
-        bind(context.getString(R.string.export), enabled, palette, onClick = action)
+        bind(context.getString(R.string.export), available && !wheelEditing, palette,
+            busy = available && wheelEditing, onClick = action)
     }
 }
 

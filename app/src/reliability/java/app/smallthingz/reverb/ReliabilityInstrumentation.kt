@@ -79,7 +79,8 @@ class ReliabilityInstrumentation : Instrumentation() {
                 check(targetContext.applicationContext.javaClass == android.app.Application::class.java &&
                     (currentUiBrandGeometry || requestedTest in setOf("current_file_staged_recovery", "native_home_label_height", "native_rename_editor_current", "native_click_ripple_current", "native_retention_input_parity", "native_retention_keyboard", "native_icon_parity", "native_settings_library_selectors", "native_theme_matrix", "native_settings_calibration_current", "current_media_delete_consent",
                         "native_silence_blob_current", "native_silence_diagnostic_current", "native_blob_feel_current", "native_material_progress_current", "native_library_admission", "native_library_expansion_measurement", "native_library_expansion_clipping", "native_segmented_contrast", "native_settings_theme_contrast", "native_restart_permission_ui", "native_settings_ime_bounds",
-                        "native_action_sheet_dismissal_current", "native_incidents_observation",
+                        "native_action_sheet_dismissal_current", "native_incidents_observation", "native_incidents_store",
+                        "native_range_interaction_current", "native_home_hydration_current", "native_library_menu_current",
                         "range_preview_short_end", "range_preview_short_controls", "range_preview_short_retirement", "range_preview_normalization_sampling", "native_ui_consistency_current", "native_settings_hydration_current", "native_settings_folder_pointer"))) {
                     "Current UI smoke accepts only explicit current UI selectors with plain Application"
                 }
@@ -87,6 +88,8 @@ class ReliabilityInstrumentation : Instrumentation() {
                     "MODE current-ui-smoke; isolated drawable brand geometry"
                 else if (requestedTest == "current_file_staged_recovery")
                     "MODE current-QA; isolated private FILE scanner/JNI/catalog, no UI, Service or microphone"
+                else if (requestedTest == "native_incidents_store")
+                    "MODE current-QA; isolated incident store, no UI, Service or microphone"
                 else if (requestedTest == "native_icon_parity")
                     "MODE current-ui-smoke; isolated icon-only released-vector oracle, not full screen parity"
                 else if (requestedTest?.startsWith("range_preview_short_") == true || requestedTest == "range_preview_normalization_sampling")
@@ -112,14 +115,14 @@ class ReliabilityInstrumentation : Instrumentation() {
                 "native_silence_blob_current", "native_silence_diagnostic_current", "native_blob_feel_current", "native_material_progress_current",
                 "native_onboarding_controls_current", "native_onboarding_permission_entry", "native_onboarding_responsive",
                 "native_library_parity", "native_library_playback", "native_library_transactions", "native_library_menu", "native_library_menu_common_grain", "native_range_parity", "native_content_restoration", "native_legacy_state_parity", "native_icon_clip_parity", "native_retention_keyboard",
-                "native_activity_lifecycle", "native_incidents_parity", "native_onboarding_input_parity", "native_incidents_interaction", "native_incidents_observation",
+                "native_activity_lifecycle", "native_incidents_parity", "native_onboarding_input_parity", "native_incidents_interaction", "native_incidents_observation", "native_incidents_store",
                 "native_settings_compression", "native_settings_duration", "native_settings_calibration", "native_fine_seek_leaf",
                 "native_library_fixture_observation",
                 "native_library_fixture_cleanup",
                 "native_transaction_fixture_recovery",
                 "range_preview_short_end", "range_preview_short_controls", "range_preview_short_retirement", "range_preview_normalization_sampling",
                 "native_ui_consistency_current", "native_settings_hydration_current", "native_settings_folder_pointer",
-                "native_action_sheet_dismissal_current",
+                "native_action_sheet_dismissal_current", "native_range_interaction_current", "native_home_hydration_current", "native_library_menu_current",
             )) {
                 "The native-parity APK requires an explicit isolated fixture"
             }
@@ -130,6 +133,18 @@ class ReliabilityInstrumentation : Instrumentation() {
                 executed++
                 verifyBrandGeometry(targetContext)
                 report.appendLine("PASS brand_geometry")
+            } else if (requestedTest == "native_incidents_store") {
+                executed++
+                verifyGroupedIncidentDeletion(targetContext, report)
+            } else if (requestedTest == "native_range_interaction_current") {
+                executed++
+                verifyNativeRangeInteractionCurrent(this, report)
+            } else if (requestedTest == "native_home_hydration_current") {
+                executed++
+                verifyNativeHomeHydrationCurrent(this, report)
+            } else if (requestedTest == "native_library_menu_current") {
+                executed++
+                verifyNativeLibraryMenuCurrent(this, report)
             } else if (requestedTest == "current_file_staged_recovery") {
                 executed++
                 verifyPrivateFileStagingRecovery(targetContext, report)

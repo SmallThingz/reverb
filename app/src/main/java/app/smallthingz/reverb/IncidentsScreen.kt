@@ -156,6 +156,9 @@ internal data class IncidentPresentation(
     val runtime: String,
     val age: String,
     val description: String?,
+    val started: String = date,
+    val ended: String? = null,
+    val diagnostics: String = listOf(runtime, age).filter(String::isNotEmpty).joinToString(" · "),
 ) {
     val hasDetails: Boolean
         get() = cause.isNotEmpty() || runtime.isNotEmpty() || age.isNotEmpty() || description != null
@@ -167,8 +170,19 @@ internal fun IncidentPresentation.summaryAt(context: Context, elapsedMillis: Lon
     return context.getString(R.string.incident_policy_ongoing, stopSummary, formatDurationInput(seconds))
 }
 
+internal data class IncidentMessage(val description: String?, val fallbackKind: RecordingIncidentKind?) {
+    fun displayText(context: Context): String = description ?: context.getString(when (fallbackKind) {
+        RecordingIncidentKind.CAPTURE_INPUT_OBSERVATION -> R.string.incident_input_heading
+        RecordingIncidentKind.UNEXPECTED_ERROR -> R.string.incident_error_heading
+        else -> R.string.incident_shutdown_heading
+    })
+}
+
 internal class IncidentHistoryPresentation(val rows: List<IncidentPresentation>) {
     val hasAlert: Boolean = rows.any { !it.incident.acknowledged }
+    val groups: Map<IncidentMessage, List<IncidentPresentation>> = rows.groupBy { row ->
+        IncidentMessage(row.description, row.incident.kind.takeIf { row.description == null })
+    }
 }
 
 internal enum class IncidentHistoryLoadStatus { LOADING, READY, UNAVAILABLE }
@@ -211,7 +225,13 @@ internal fun prepareIncidentHistory(
 ): IncidentHistoryPresentation {
     val dateFormatter = incidentDateFormatter(locale)
     val clockFormatter = incidentClockFormatter(locale)
-    return IncidentHistoryPresentation(incidents.asReversed().map { incident ->
+    fun formatDateTime(millis: Long): String {
+        val instant = Instant.ofEpochMilli(millis).atZone(zone)
+        return "${dateFormatter.format(instant)} · ${clockFormatter.format(instant)}"
+    }
+    val newestFirst = incidents.sortedWith(compareByDescending<RecordingIncident> { it.occurredAtMillis }
+        .thenBy(::recordingIncidentPresentationKey))
+    return IncidentHistoryPresentation(newestFirst.map { incident ->
         IncidentPresentation(
             incident = incident,
             key = recordingIncidentPresentationKey(incident),
@@ -221,6 +241,8 @@ internal fun prepareIncidentHistory(
             runtime = incidentRuntimeLine(incident),
             age = incidentAgeLine(incident),
             description = incident.description?.takeIf { it.isNotBlank() },
+            started = formatDateTime(incident.occurredAtMillis),
+            ended = incident.resumedAtMillis.takeIf { it > 0L }?.let(::formatDateTime),
         )
     })
 }

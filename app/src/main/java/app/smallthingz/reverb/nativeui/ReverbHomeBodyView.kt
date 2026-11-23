@@ -106,10 +106,11 @@ internal class ReverbHomeBodyView(
         val metrics = if (renderedBuffer == BufferSlot.ONE_SHOT) value.oneShotMetrics else value.loopingMetrics
         val enabled = if (renderedBuffer == BufferSlot.ONE_SHOT) value.oneShotEnabled else value.loopingEnabled
         val ui = captureBufferUiState(renderedBuffer, enabled, value.oneShotFull, value.listening, value.activeBuffer)
-        val recording = ui == CaptureBufferUiState.RECORDING
-        val disabled = ui == CaptureBufferUiState.DISABLED
+        val captureStateKnown = value.serviceStateHydrated
+        val recording = captureStateKnown && ui == CaptureBufferUiState.RECORDING
+        val disabled = captureStateKnown && ui == CaptureBufferUiState.DISABLED
         renderedDisabled = disabled
-        val full = ui == CaptureBufferUiState.FILLED
+        val full = captureStateKnown && ui == CaptureBufferUiState.FILLED
         val serviceReady = captureServiceInteractionReady(value.serviceConnected, value.serviceStateHydrated) &&
             !value.preparingRange
         val captureEnabled = serviceReady && value.serviceConnected &&
@@ -122,10 +123,11 @@ internal class ReverbHomeBodyView(
             recording, value.saving, captureEnabled, clickable, full,
             disabled || isCaptureBlockedByOtherBuffer(renderedBuffer, value.listening, value.activeBuffer),
             readout.primary, readout.secondary, value.visualizerVisible, value.skipSilenceEnabled,
+            captureStateKnown = captureStateKnown,
         ), frame, activateRenderedBuffer)
         controls.bind(ReverbHomeControlsState(renderedBuffer, value.activeBuffer, value.listening,
             value.oneShotEnabled, value.oneShotFull, value.loopingEnabled, serviceReady, value.saving,
-            metrics.seconds > 0f, recording), frame, actions)
+            metrics.seconds > 0f, recording, captureStateKnown), frame, actions)
         val showProgress = value.visualizerVisible && (!value.serviceStateHydrated || value.preparingRange)
         if (showProgress) {
             val indicator = progress ?: ReverbIncidentLoadingView(

@@ -93,15 +93,15 @@
   write fails, `failWrite()` rollback failure is suppressed onto that original write error rather than replacing it;
   once `finishWrite()` committed, later directory-sync failure must never invoke rollback against the published file. An
   `AtomicFile.openRead()` `FileNotFoundException` is authoritative absence only after the base/backup/new tri-state
-  probe is positively `MISSING`; otherwise propagate the read failure and preserve every backing artifact. Cards
-  prioritize incident-specific data instead of repeated boilerplate. Incident cards are checked-state history: tapping
-  anywhere on a card (or its state icon) toggles checked/unchecked, long-pressing either opens an on-demand Copy/Delete
-  menu; explicit deletion hides the card durably and preserves an identity tombstone so delayed exit evidence cannot
-  resurrect it, and checked history never deletes the incident or keeps the top-bar incident icon red. Durable
-  incident-history revision owns all incident-history UI convergence; individual toggle coroutine return values and
-  panel-open actions must not launch/apply parallel history snapshots that can overwrite newer state, and the revision
-  collector is latest-only so a superseded read/retry cannot transiently repaint older history. Cards show `Stopped at
-  <time> for <duration>` only; restart time is not rendered because it is inferable. The incident kind persists as an
+  probe is positively `MISSING`; otherwise propagate the read failure and preserve every backing artifact. Incidents group
+  identical messages once and present newest-first occurrence rows with start, end or ongoing status, PID, and
+  available diagnostic evidence. Tapping an occurrence toggles checked/unchecked outside selection mode, and
+  long-pressing offers Copy/Delete. Selection mode targets occurrences individually and can select every current row.
+  Delete selected and confirmed Clear all persist one history transaction for the exact accepted occurrence snapshot,
+  preserving concurrent arrivals even when their message matches. Deleted occurrences retain identity tombstones while
+  evidence can replay. Checked occurrences remain visible and no longer contribute to the alert. Durable history
+  revisions own UI convergence. Individual mutations and panel opens must not apply parallel snapshots, and the
+  revision collector delivers only the latest result. The incident kind persists as an
   explicit byte code. If provisional same-process Service-stop history publication fails, keep one process-local retry
   per exact process/armed-session boundary (preserving the first outage boundary rather than appending duplicate
   retries), signal the history retry stream, and retry before either history delivery or a fresh capture can replace the

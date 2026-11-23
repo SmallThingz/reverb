@@ -174,6 +174,7 @@ internal class ReverbLibraryRecordingRow(
     }
 
     fun setEnvironment(value: ReverbViewEnvironment) {
+        if (environment === value) return
         environment = value
         body.setEnvironment(value)
         bodyIndication.updateColor(value.palette.ink)
@@ -483,7 +484,6 @@ private class RecordingRowBody(context: Context, initial: ReverbViewEnvironment)
         leading.clickLabel = clickLabel
         leading.longClickLabel = if (actions.leadingLongClick != null) selectedLabel else longClickLabel
         leading.selectedSemantic = selectedSemantic
-        requestLayout()
     }
     fun clear() {
         for (index in paragraphLeaves.indices) paragraphLeaves[index].setText("")

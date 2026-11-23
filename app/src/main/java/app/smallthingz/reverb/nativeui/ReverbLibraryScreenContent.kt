@@ -149,6 +149,9 @@ internal class ReverbLibraryScreenContent(
         }
     }
 
+    /** Main calls after installing this screen's input and accessibility bindings. */
+    fun publishInitialPresentation() = owner.publishInitialPresentation()
+
     fun bind(next: NativeLibraryScreenInput, nextEnvironment: ReverbViewEnvironment = environment) {
         if (closed) return
         val environmentChanged = environment !== nextEnvironment
@@ -229,6 +232,7 @@ internal class ReverbLibraryScreenContent(
         pull.bind(value.isRefreshing) { owner.refresh(showSpinner = true, userInitiated = true) }
         fallbackBack.isEnabled = input.owner.active && value.list.expandedOwner != null && value.selectedCount == 0
         selectionBack.bind(input.owner.active && value.selectedCount > 0, owner::clearSelection)
+        toolbar.setActionInsets(input.scaffoldInsets.left, input.scaffoldInsets.right)
         toolbar.bind(toolbarState(value), toolbarActions())
         val mode = when {
             value.list.items.isEmpty() && value.loadFailed -> LibraryBodyMode.FAILED

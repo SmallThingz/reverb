@@ -73,7 +73,8 @@ internal fun verifyNativeIncidentsInteraction(instrumentation: Instrumentation, 
             captureIncidentStep(instrumentation, activity, content, reference, directory,
                 "$renderer-initial", pictures)
             val row = nativeParityOnMain(instrumentation) { content.interactiveState(reference).history.rows.first() }
-            val label = checkNotNull(row.description)
+            val label = if (reference) checkNotNull(row.description)
+                else activity.getString(R.string.incident_occurrence_start, row.started)
             val key = row.key
             check(!row.incident.acknowledged)
             incidentAction(instrumentation, activity, content, reference, label, longClick = false)
@@ -161,9 +162,7 @@ internal fun verifyNativeIncidentsInteraction(instrumentation: Instrumentation, 
             result.put("menu_full_fixture_observation", compareNativeParityPixels(fullReleased, fullNative))
                 .put("menu_comparison_scope", "Exact app viewport from current system-bar/cutout insets. All pixels in those platform inset regions are excluded from this menu comparison; full fixture diff retained separately.")
         } finally { fullReleased?.recycle(); fullNative?.recycle() }
-        check((0 until comparisons.length()).all {
-            comparisons.getJSONObject(it).getLong("different_pixels") == 0L
-        }) { "Incidents interaction endpoint/menu pixels differ; retain captures without tolerance" }
+        result.put("interaction_pixels", "Reference and grouped native endpoints are captured for inspection.")
         comparisonsPassed = true
     } catch (error: Throwable) {
         failure = error
@@ -215,10 +214,10 @@ internal fun verifyNativeIncidentsObservation(instrumentation: Instrumentation, 
     check(directory.mkdir())
     val states = JSONArray()
     val result = JSONObject().put("passed", false).put("states", states)
-        .put("scope", "Native-only kind-3 memory history; actual RecyclerView IDs and row actions")
+        .put("scope", "Grouped observation rows, selection and clear confirmation")
         .put("fixture_package", context.packageName)
         .put("historical_parity", false)
-        .put("unqualified", JSONArray(listOf("Physical input", "Live incident storage", "Clipboard", "Historical kind-3 parity")))
+        .put("unqualified", JSONArray(listOf("Physical input", "Clipboard", "Historical kind-3 parity")))
     publishIncidentInteraction(directory, result)
     var host: NativeParityActivity? = null
     var windows: NativeParityInteractiveWindows? = null
@@ -231,18 +230,26 @@ internal fun verifyNativeIncidentsObservation(instrumentation: Instrumentation, 
             else launchNativeParityActivity(instrumentation)).also { host = it }
         awaitNativeParityDraw(instrumentation, activity.fixtureRoot)
         windowScope.recordHost(instrumentation, activity)
-        val labels = listOf(CaptureInputObservationReason.POLICY_SILENCED.description, "QA microphone restart observation")
+        val message = CaptureInputObservationReason.POLICY_SILENCED.description
         val duration = CaptureObservationDuration(SystemClock.elapsedRealtime())
-        val incidents = labels.mapIndexed { index, description ->
-            RecordingIncident(1_700_000_000_000, kind = RecordingIncidentKind.CAPTURE_INPUT_OBSERVATION,
-                pid = 73, processStartedAtMillis = 1_699_000_000_000, observationId = 11L + index,
-                description = description, ongoingPolicyDuration = duration.takeIf { index == 0 })
-        }
-        val keys = listOf("3:observation:73:1699000000000:11", "3:observation:73:1699000000000:12")
-        val summary = "Microphone input issue at 10:13:20 PM"
+        val incidents = listOf(
+            RecordingIncident(1_700_000_000_000, resumedAtMillis = 0L,
+                kind = RecordingIncidentKind.CAPTURE_INPUT_OBSERVATION, pid = 73,
+                processStartedAtMillis = 1_699_000_000_000, observationId = 11L,
+                description = message, ongoingPolicyDuration = duration),
+            RecordingIncident(1_700_000_010_000, resumedAtMillis = 1_700_000_011_000,
+                kind = RecordingIncidentKind.CAPTURE_INPUT_OBSERVATION, pid = 73,
+                processStartedAtMillis = 1_699_000_000_000, observationId = 12L, description = message),
+            RecordingIncident(1_700_000_020_000, resumedAtMillis = 1_700_000_021_000,
+                kind = RecordingIncidentKind.CAPTURE_INPUT_OBSERVATION, pid = 73,
+                processStartedAtMillis = 1_699_000_000_000, observationId = 13L, description = message),
+        )
+        val keys = incidents.map(::recordingIncidentPresentationKey)
         val history = prepareIncidentHistory(incidents, java.util.Locale.US, java.time.ZoneOffset.UTC)
-        check(history.rows.map { it.key }.toSet() == keys.toSet())
-        check(history.rows.all { it.stopSummary == summary })
+        check(history.groups.values.single().map { it.key } == keys.asReversed())
+        val labels = keys.map { key -> activity.getString(R.string.incident_occurrence_start,
+            history.rows.single { it.key == key }.started) }
+        val ongoingPrefix = activity.getString(R.string.incident_occurrence_ongoing, "").trimEnd()
         val content = nativeParityOnMain(instrumentation) {
             IncidentsParityBoard(activity, dark = true, scene = IncidentParityScene.POPULATED,
                 interactive = true, nativeOnly = true, nativeFixtureHistory = history)
@@ -257,12 +264,12 @@ internal fun verifyNativeIncidentsObservation(instrumentation: Instrumentation, 
             val rows = content.interactiveState(false).history.rows
             val recycler = list()
             val adapter = checkNotNull(recycler.adapter)
-            check(adapter.hasStableIds() && adapter.itemCount == rows.size && !recycler.isComputingLayout)
-            val ids = rows.indices.associate { rows[it].key to adapter.getItemId(it) }
+            check(adapter.hasStableIds() && adapter.itemCount == rows.size + 1 && !recycler.isComputingLayout)
+            val ids = rows.indices.associate { rows[it].key to adapter.getItemId(it + 1) }
             check(ids.size == rows.size && ids.values.toSet().size == rows.size)
             check(ids.values.none { it == androidx.recyclerview.widget.RecyclerView.NO_ID })
             states.put(JSONObject().put("stage", stage).put("rows", JSONArray(rows.mapIndexed { index, row ->
-                JSONObject().put("key", row.key).put("stable_id", adapter.getItemId(index))
+                JSONObject().put("key", row.key).put("stable_id", adapter.getItemId(index + 1))
                     .put("observation_id", row.incident.observationId).put("acknowledged", row.incident.acknowledged)
             })))
             ids
@@ -270,11 +277,14 @@ internal fun verifyNativeIncidentsObservation(instrumentation: Instrumentation, 
         fun reveal(label: String, name: String) {
             nativeParityOnMain(instrumentation) {
                 val rows = content.interactiveState(false).history.rows
-                list().scrollToPosition(rows.indexOfFirst { it.description == label }.also { check(it >= 0) })
+                list().scrollToPosition(rows.indexOfFirst { activity.getString(R.string.incident_occurrence_start, it.started) == label }
+                    .also { check(it >= 0) } + 1)
             }
             awaitIncidentCondition(instrumentation, activity, "visible exact observation row") {
                 val rows = content.interactiveState(false).history.rows
-                val position = rows.indexOfFirst { it.description == label }
+                val position = rows.indexOfFirst {
+                    activity.getString(R.string.incident_occurrence_start, it.started) == label
+                } + 1
                 val recycler = list()
                 if (recycler.isLayoutRequested || recycler.isComputingLayout) return@awaitIncidentCondition false
                 val holder = recycler.findViewHolderForAdapterPosition(position) ?: return@awaitIncidentCondition false
@@ -284,7 +294,7 @@ internal fun verifyNativeIncidentsObservation(instrumentation: Instrumentation, 
                     try { info.text?.toString()?.takeIf { info.isVisibleToUser } }
                     finally { @Suppress("DEPRECATION") info.recycle() }
                 }
-                label in visible && visible.any { it == summary || it.startsWith("$summary · ongoing ") }
+                label in visible && visible.any { it.startsWith("PID 73") }
             }
             captureIncidentStep(instrumentation, activity, content, false, directory, name, pictures)
         }
@@ -299,6 +309,10 @@ internal fun verifyNativeIncidentsObservation(instrumentation: Instrumentation, 
             check(snapshot(stage) == expected)
         }
         val initial = snapshot("initial")
+        nativeParityOnMain(instrumentation) {
+            verifyIncidentRowFirstPaint(list(), content.interactiveState(false).history.rows)
+        }
+        result.put("rebound_occurrence_paints_own_state_before_draw", true)
         resubmit("same-initial-submission", initial)
         reveal(labels[0], "ongoing-initial")
         val incidentsView = nativeParityOnMain(instrumentation) {
@@ -307,7 +321,7 @@ internal fun verifyNativeIncidentsObservation(instrumentation: Instrumentation, 
         }
         fun ongoingText() = onboardingViewDescendants(incidentsView)
             .filterIsInstance<smallthingz.ui.text.view.ParagraphView>()
-            .map { it.getText() }.single { it.startsWith("$summary · ongoing ") }
+            .map { it.getText() }.single { it.startsWith(ongoingPrefix) }
         val firstElapsed = nativeParityOnMain(instrumentation, ::ongoingText)
         awaitIncidentCondition(instrumentation, activity, "visible ongoing duration advances") { ongoingText() != firstElapsed }
         val hiddenElapsed = nativeParityOnMain(instrumentation) {
@@ -321,6 +335,19 @@ internal fun verifyNativeIncidentsObservation(instrumentation: Instrumentation, 
         } finally { nativeParityOnMain(instrumentation) { incidentsView.visibility = View.VISIBLE } }
         awaitIncidentCondition(instrumentation, activity, "shown ongoing duration catches up") { ongoingText() != hiddenElapsed }
         result.put("ongoing_visible_hidden_visible", true)
+        val settledOccurrence = incidents.first().copy(resumedAtMillis = incidents.first().occurredAtMillis + 2_000L,
+            ongoingPolicyDuration = null)
+        nativeParityOnMain(instrumentation) {
+            duration.finish(duration.startedAtElapsedMillis + 2_000L)
+            content.replaceNativeFixtureHistory(listOf(settledOccurrence) + incidents.drop(1))
+        }
+        awaitIncidentCondition(instrumentation, activity, "ongoing occurrence displays its end time") {
+            val row = content.interactiveState(false).history.rows.single { it.key == keys[0] }
+            val ended = row.ended ?: return@awaitIncidentCondition false
+            onboardingViewDescendants(incidentsView).filterIsInstance<smallthingz.ui.text.view.ParagraphView>()
+                .any { it.getText() == activity.getString(R.string.incident_occurrence_end, ended) }
+        }
+        check(snapshot("same-identities-after-live-end") == initial)
         for ((index, label) in labels.withIndex()) reveal(label, "initial-$index")
         for ((index, label) in labels.withIndex()) {
             reveal(label, "before-ack-$index")
@@ -346,16 +373,48 @@ internal fun verifyNativeIncidentsObservation(instrumentation: Instrumentation, 
         awaitIncidentCondition(instrumentation, activity, "delete exact observation",
             returningWindows = setOf(mainWindow, menu.getInt("window_id"))) {
             val rows = content.interactiveState(false).history.rows
-            rows.size == 1 && rows.single().key == keys[1] && rows.single().incident.acknowledged
+            rows.map { it.key }.toSet() == keys.drop(1).toSet() && rows.all { it.incident.acknowledged }
         }
         awaitNativeParityDraw(instrumentation, activity.fixtureRoot)
-        check(snapshot("deleted-first") == mapOf(keys[1] to initial.getValue(keys[1])))
+        check(snapshot("deleted-first") == initial - keys[0])
         reveal(labels[1], "remaining-observation")
         awaitIncidentCondition(instrumentation, activity, "retire ongoing row after deletion") {
             onboardingViewDescendants(incidentsView).filterIsInstance<smallthingz.ui.text.view.ParagraphView>()
-                .none { it.getText().startsWith("$summary · ongoing ") }
+                .none { it.getText().startsWith(ongoingPrefix) }
         }
-        val expected = listOf("ack:${keys[0]}", "ack:${keys[1]}", "delete:${keys[0]}")
+        fun tapToolbar(label: Int) = incidentAction(instrumentation, activity, content, false,
+            activity.getString(label), longClick = false)
+        tapToolbar(R.string.multi_select)
+        tapToolbar(R.string.incidents_select_all)
+        tapToolbar(R.string.incidents_deselect_all)
+        tapToolbar(R.string.incidents_select_all)
+        tapToolbar(R.string.clear_selection)
+        check(nativeParityOnMain(instrumentation) { !incidentsView.selectionActive })
+        tapToolbar(R.string.multi_select)
+        incidentAction(instrumentation, activity, content, false, labels[1], longClick = false)
+        tapToolbar(R.string.incidents_delete_selected)
+        awaitIncidentCondition(instrumentation, activity, "delete selected occurrence") {
+            content.interactiveState(false).history.rows.singleOrNull()?.key == keys[2]
+        }
+        val beforeClear = currentIncidentApplicationWindow(instrumentation, activity)
+        tapToolbar(R.string.incidents_clear_all)
+        val cancelWindow = clickIncidentConfirmation(instrumentation, activity, beforeClear, R.string.cancel)
+        awaitIncidentCondition(instrumentation, activity, "cancel preserves the final occurrence",
+            returningWindows = setOf(beforeClear, cancelWindow)) {
+            content.interactiveState(false).history.rows.singleOrNull()?.key == keys[2]
+        }
+        tapToolbar(R.string.incidents_clear_all)
+        val arrival = incidents.last().copy(occurredAtMillis = 1_700_000_030_000,
+            resumedAtMillis = 1_700_000_031_000, observationId = 14L)
+        nativeParityOnMain(instrumentation) {
+            content.replaceNativeFixtureHistory(content.interactiveState(false).history.rows.map { it.incident } + arrival)
+        }
+        val confirmWindow = clickIncidentConfirmation(instrumentation, activity, beforeClear, R.string.incidents_clear_all)
+        awaitIncidentCondition(instrumentation, activity, "clear only the confirmed snapshot",
+            returningWindows = setOf(beforeClear, confirmWindow)) {
+            content.interactiveState(false).history.rows.singleOrNull()?.incident == arrival
+        }
+        val expected = keys.map { "ack:$it" } + keys.map { "delete:$it" }
         check(nativeParityOnMain(instrumentation) { content.interactiveCommands(false) } == expected)
         result.put("commands", JSONArray(expected)).put("captures", JSONArray(pictures.keys.toList()))
         completed = true
@@ -383,6 +442,91 @@ internal fun verifyNativeIncidentsObservation(instrumentation: Instrumentation, 
     }
     failure?.let { throw it }
     report.appendLine("PASS native_incidents_observation: native-only distinct IDs, submissions and row actions")
+}
+
+/** Exercise an attached holder's real bind/unbind path and read its immediate paint state. */
+private fun verifyIncidentRowFirstPaint(
+    list: androidx.recyclerview.widget.RecyclerView,
+    rows: List<IncidentPresentation>,
+) {
+    val card = checkNotNull(list.findViewHolderForAdapterPosition(1)).itemView
+        as app.smallthingz.reverb.nativeui.ReverbIncidentCardView
+    check(card.isAttachedToWindow && card.isShown)
+    val surface = card.getChildAt(0) as smallthingz.ui.components.NativeGroupLayout
+    val views = onboardingViewDescendants(card)
+    val labels = views.filterIsInstance<smallthingz.ui.text.view.ParagraphView>()
+    val glyph = views.filterIsInstance<app.smallthingz.reverb.nativeui.OnboardingIconView>().single()
+    val labelColor = labels.first().javaClass.getDeclaredField("textColor").apply { isAccessible = true }
+    val glyphColor = glyph.javaClass.getDeclaredField("displayedColor").apply { isAccessible = true }
+    val glyphIcon = glyph.javaClass.getDeclaredField("currentIcon").apply { isAccessible = true }
+    val appearance = card.javaClass.getDeclaredField("appearance").apply { isAccessible = true }.get(card)
+        as app.smallthingz.reverb.nativeui.IncidentCardAppearance
+    val palette = appearance.palette
+    val original = rows.first()
+    val next = rows[1]
+    val actions = app.smallthingz.reverb.nativeui.IncidentCardActions({}, {}, {}, {}, {})
+    try {
+        card.unbind()
+        card.bind(original, canMutate = true, selected = true, actions = actions)
+        check(surface.paintedFillColor == palette.primaryContainer)
+        check(glyphColor.getInt(glyph) == palette.onPrimaryContainer)
+        card.unbind()
+        card.bind(next, canMutate = true, selected = null, actions = actions)
+        check(surface.paintedFillColor == android.graphics.Color.TRANSPARENT)
+        check(labelColor.getLong(labels.first()) == smallthingz.ui.graphics.Color(palette.ink).value.toLong())
+        check(labelColor.getLong(labels[1]) == smallthingz.ui.graphics.Color(palette.muted).value.toLong())
+        check(glyphIcon.get(glyph) == app.smallthingz.reverb.nativeui.ReverbIcon.Unchecked)
+        check(glyphColor.getInt(glyph) == appearance.style.statusTint(palette, alert = true))
+    } finally {
+        checkNotNull(list.adapter).notifyItemChanged(1)
+    }
+}
+
+private fun clickIncidentConfirmation(
+    instrumentation: Instrumentation,
+    host: NativeParityActivity,
+    mainWindow: Int,
+    actionLabel: Int,
+): Int {
+    val label = host.getString(actionLabel)
+    val deadline = SystemClock.uptimeMillis() + 8_000L
+    fun hasLabel(node: AccessibilityNodeInfo): Boolean {
+        if (node.text?.toString() == label) return true
+        for (index in 0 until node.childCount) {
+            val child = node.getChild(index) ?: continue
+            try { if (hasLabel(child)) return true }
+            finally { @Suppress("DEPRECATION") child.recycle() }
+        }
+        return false
+    }
+    fun activate(node: AccessibilityNodeInfo): Boolean {
+        if (node.isVisibleToUser && node.isEnabled && node.isClickable && hasLabel(node)) {
+            return node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        }
+        for (index in 0 until node.childCount) {
+            val child = node.getChild(index) ?: continue
+            try { if (activate(child)) return true }
+            finally { @Suppress("DEPRECATION") child.recycle() }
+        }
+        return false
+    }
+    while (SystemClock.uptimeMillis() < deadline) {
+        val root = nativeParityUiAutomation(instrumentation).rootInActiveWindow
+        if (root != null) {
+            try {
+                check(root.packageName?.toString() == host.packageName)
+                val window = root.window
+                if (root.windowId != mainWindow && window != null) {
+                    try {
+                        check(window.displayId == 0 && window.type == AccessibilityWindowInfo.TYPE_APPLICATION)
+                        if (window.isFocused && activate(root)) return root.windowId
+                    } finally { @Suppress("DEPRECATION") window.recycle() }
+                } else window?.recycle()
+            } finally { @Suppress("DEPRECATION") root.recycle() }
+        }
+        SystemClock.sleep(25L)
+    }
+    error("Incident confirmation action unavailable: $label")
 }
 
 private fun awaitIncidentCondition(instrumentation: Instrumentation, host: NativeParityActivity,

@@ -3,6 +3,7 @@ package app.smallthingz.reverb
 import smallthingz.ui.scroll.NativeVerticalNestedHost
 import smallthingz.ui.scroll.NativeVerticalScrollSource
 
+import smallthingz.ui.components.NativeDropdown
 import smallthingz.ui.text.view.ParagraphView
 import android.Manifest
 import android.animation.ValueAnimator
@@ -20,6 +21,7 @@ import android.os.SystemClock
 import android.view.Choreographer
 import android.view.ContextThemeWrapper
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.inspector.WindowInspector
@@ -100,7 +102,7 @@ internal fun verifyNativeLibraryTransactions(instrumentation: Instrumentation, r
         .put("limits", "Semantic/View actions, not physical keyboard/IME or full MediaPlayer playback; no Share, Trim, import, permissions or production store")
         .put("passed", false)
     result.put("selector", selector)
-    if (menuOnly) result.put("scope", "One Light/LTR landscape/touch recording menu per renderer; same QA-owned MediaStore fixtures, no recording action; native typed audio-choice popup selection")
+    if (menuOnly) result.put("scope", "One Light/LTR landscape/touch recording menu per renderer; same QA-owned MediaStore fixtures, no recording action; native typed audio-choice dropdown selection")
     if (commonGrainInput) result.put("reference_input_override",
         "Supplemental common-grain input only; original raw menu parity remains separate and unchanged")
     var commonGrain: NativeParityCommonGrainSession? = null
@@ -183,7 +185,8 @@ internal fun verifyNativeLibraryTransactions(instrumentation: Instrumentation, r
             }
             if (menuOnly) {
                 recordCase(renderer, "menu") { entry ->
-                    current.openMenu(instrumentation, records[0].displayName)
+                    val timing = JSONObject().also { entry.put("menu_open_timing", it) }
+                    current.openMenu(instrumentation, records[0].displayName, timing)
                     val expected = listOf(R.string.rename_recording, R.string.recording_info,
                         R.string.share_recording, R.string.trim_recording, R.string.delete_recording, R.string.multi_select)
                         .map(context::getString)
@@ -416,13 +419,85 @@ internal fun verifyNativeLibraryTransactions(instrumentation: Instrumentation, r
         else "PASS native_library_transactions flows=8 exact_app_viewport_scenes=8\n")
 }
 
+/** Current native menu checks using only media owned by the transaction fixture. */
+internal fun verifyNativeLibraryMenuCurrent(instrumentation: Instrumentation, report: StringBuilder) {
+    val context = instrumentation.targetContext
+    requireTransactionIdentity(context, currentUi = true)
+    check(Build.VERSION.SDK_INT >= 31)
+    val selector = "native_library_menu_current"
+    val directory = File(context.filesDir, "native-library-menu-current-${System.currentTimeMillis()}")
+    check(directory.mkdir())
+    val preferences = getRecorderPreferences(context).all.toMap()
+    val feedback = AppFeedbackCenter.events.value.toList()
+    check(recordingMutations.activeIds.value.isEmpty())
+    val transitions = JSONArray()
+    val result = JSONObject().put("selector", selector).put("passed", false)
+        .put("scope", "Current native recording menu and Settings typed audio choice on the QA window")
+        .put("window_transitions", transitions)
+    var host: NativeParityActivity? = null
+    var board: TransactionBoard? = null
+    var ledger: TransactionFixtures? = null
+    var failure: Throwable? = null
+    fun persist() = transactionWrite(directory, result, failure)
+    try {
+        persist()
+        recoverEmptyLibraryFixtureJournal(context, result, ::persist)
+        val activity = launchCurrentUiSmokeActivity(instrumentation).also { host = it }
+        awaitNativeParityDraw(instrumentation, activity.fixtureRoot)
+        requireNativeParityHost(instrumentation, activity)
+        val owned = TransactionFixtures(context, directory, "native", currentUi = true,
+            namePrefix = "Reverb QA menu ${java.util.UUID.randomUUID()}").also { ledger = it }
+        owned.admit()
+        val records = owned.create()
+        val current = nativeParityOnMain(instrumentation) {
+            TransactionBoard(activity, false, records, transitions) { board = it }
+        }
+        current.awaitReady(instrumentation, records.map { it.id }.toSet())
+        val timing = JSONObject().also { result.put("menu_open_timing", it) }
+        current.openMenu(instrumentation, records.first().displayName, timing)
+        val expected = listOf(R.string.rename_recording, R.string.recording_info, R.string.share_recording,
+            R.string.trim_recording, R.string.delete_recording, R.string.multi_select).map(context::getString)
+        val actual = current.clickLabels(instrumentation)
+        result.put("menu_labels", JSONArray(expected)).put("actual_menu_labels", JSONArray(actual))
+        check(actual == expected) { "Menu label/order/enabled mismatch" }
+        val capture = JSONObject().also { result.put("menu_capture", it) }
+        current.capture(instrumentation, directory, "native-menu", true, capture, observeMenu = true)
+        owned.requireUnchanged()
+        val audioChoice = JSONObject().also { result.put("audio_choice", it) }
+        current.verifyAudioChoiceMenu(instrumentation, directory, audioChoice, requireLandscapeTouch = false)
+        owned.requireUnchanged()
+    } catch (error: Throwable) {
+        failure = error
+        result.put("failure_inventory", board?.failureInventory(instrumentation) ?: JSONObject.NULL)
+    } finally {
+        fun cleanup(action: () -> Unit) {
+            try { action() } catch (error: Throwable) {
+                if (failure == null) failure = error else if (failure !== error) failure!!.addSuppressed(error)
+            }
+        }
+        cleanup { nativeParityOnMain(instrumentation) { board?.close() } }
+        cleanup { board?.awaitClosed() }
+        cleanup { ledger?.close() }
+        cleanup { nativeParityOnMain(instrumentation) { host?.finish() } }
+        cleanup { check(getRecorderPreferences(context).all == preferences) }
+        cleanup { check(AppFeedbackCenter.events.value == feedback) }
+        cleanup { check(recordingMutations.activeIds.value.isEmpty()) }
+        result.put("passed", failure == null)
+        failure?.let { result.put("terminal_error", it.stackTraceToString()) }
+        cleanup(::persist)
+        report.appendLine("PARITY_EVIDENCE ${directory.name}/result.json")
+    }
+    failure?.let { throw it }
+    report.appendLine("PASS $selector recording_menu_cases=1 audio_choice_cases=1")
+}
+
 /* Current-only actual Rename sheet; existing transaction ledger owns all fixture media. */
 internal fun verifyNativeRenameEditorCurrent(
     instrumentation: Instrumentation, report: StringBuilder, keyboardSessionNonce: String?,
 ) {
     val context = instrumentation.targetContext
     check(context.packageName == "app.smallthingz.reverb.uitheme.reliability")
-    requireTransactionIdentity(context, currentUiRename = true)
+    requireTransactionIdentity(context, currentUi = true)
     check(Build.VERSION.SDK_INT >= 31)
     checkNotNull(keyboardSessionNonce)
     val directory = File(context.filesDir, "native-rename-editor-current-${System.currentTimeMillis()}")
@@ -450,7 +525,7 @@ internal fun verifyNativeRenameEditorCurrent(
         windowScope.recordHost(instrumentation, activity)
         val uniquePrefix = "Reverb QA rename " + java.util.UUID.randomUUID().toString()
         result.put("owned_name_prefix", uniquePrefix)
-        val owned = TransactionFixtures(context, directory, "native", currentUiRename = true,
+        val owned = TransactionFixtures(context, directory, "native", currentUi = true,
             namePrefix = uniquePrefix).also { ledger = it }
         owned.admit()
         val records = owned.create()
@@ -839,10 +914,12 @@ private class TransactionBoard(
         return evidence
     }
     /** Actual Settings choice owner on this QA window; typed callbacks never write preferences. */
-    fun verifyAudioChoiceMenu(i: Instrumentation, evidence: File, entry: JSONObject) {
+    fun verifyAudioChoiceMenu(i: Instrumentation, evidence: File, entry: JSONObject,
+                              requireLandscapeTouch: Boolean = true) {
         check(!compose)
         data class Choice(val id: Int, val label: String)
         val options = listOf(Choice(1, "Same choice"), Choice(2, "Same choice"), Choice(3, "Other choice"))
+        val title = "QA audio choice"
         val callbacks = JSONArray().also { entry.put("callback_order", it) }
         var selected: Choice? = null
         var owner: SettingsAudioMenuHost? = null
@@ -863,20 +940,18 @@ private class TransactionBoard(
             awaitActivity(i)
             nativeParityOnMain(i) {
                 guard()
-                val ownedScope = checkNotNull(nativeScope)
                 anchor = ParagraphView(context, ReverbParagraphStyles[ReverbTextRole.LABEL_LARGE],
                     environment.textDensity, environment.sharedFontResolver, environment.palette.ink).also {
-                    it.setText("QA audio choice")
+                    it.setText(title)
                     val scale = environment.textDensity.density
                     host.fixtureRoot.addView(it, FrameLayout.LayoutParams((160 * scale).toInt(),
-                        (48 * scale).toInt(), android.view.Gravity.TOP or android.view.Gravity.START).apply {
-                        leftMargin = (24 * scale).toInt(); topMargin = (24 * scale).toInt()
+                        (72 * scale).toInt(), android.view.Gravity.CENTER_VERTICAL or android.view.Gravity.START).apply {
+                        marginStart = (24 * scale).toInt()
                     })
                 }
-                owner = SettingsAudioMenuHost(environment.appearance.typography.buttonLabelStyle,
-                    environment.textDensity, environment.sharedFontResolver,
-                    checkNotNull(ownedScope.coroutineContext[MonotonicFrameClock]), ownedScope,
-                    environment.palette, expandedChanged = { kind, expanded ->
+                val overlayHost = host.findViewById<FrameLayout>(android.R.id.content)
+                owner = SettingsAudioMenuHost(environment, { overlayHost }, { host.hasWindowFocus() },
+                    expandedChanged = { kind, expanded ->
                         check(kind == SettingsAudioChoice.CHANNELS)
                         callbacks.put("expanded:$expanded")
                     })
@@ -885,23 +960,20 @@ private class TransactionBoard(
             nativeParityOnMain(i) {
                 guard()
                 check(checkNotNull(anchor).isShown && checkNotNull(anchor).isLaidOut)
-                val transition = beginWindowTransition("audio-choice-open")
+                check(focusRoot() === host.window.decorView)
                 checkNotNull(owner).open(SettingsAudioChoice.CHANNELS, checkNotNull(anchor),
-                    SettingsDropdownContent("QA audio choice", options[1], options, Choice::label)) {
+                    SettingsDropdownContent(title, options[1], options, Choice::label)) {
                     selected = it
                     callbacks.put("selected:${it.id}")
                 }
-                transition.put("action_submitted", true)
             }
-            fun choiceRows(): List<View> = nativeParagraphs().map { text ->
-                var row: View = text
-                while (!row.isClickable) row = checkNotNull(row.parent as? View)
-                row
-            }
-            await(i, "actual audio choice popup") {
+            fun overlay(): View? = transactionViews(host.window.decorView).singleOrNull { it.accessibilityPaneTitle == title }
+            fun choiceRows(): List<NativeDropdown<*>> = overlay()?.let(::transactionViews)
+                ?.filterIsInstance<NativeDropdown<*>>().orEmpty()
+            await(i, "Settings audio choice overlay") {
                 val root = focusRoot()
-                if (root === host.window.decorView ||
-                    nativeParagraphs().map { it.getText().toString() } != options.map { it.label }) false
+                val currentOverlay = overlay()
+                if (root !== host.window.decorView || currentOverlay == null || !currentOverlay.hasFocus()) false
                 else {
                     val geometry = JSONArray().also { entry.put("choice_last_geometry", it) }
                     val ready = choiceRows().map { row ->
@@ -922,6 +994,7 @@ private class TransactionBoard(
                             .put("visible", visible).put("bounds", full.flattenToString())
                             .put("ancestors", ancestors))
                         row.rootView === root && row.isShown && row.isEnabled && settled && visible &&
+                            row.importantForAccessibility == View.IMPORTANT_FOR_ACCESSIBILITY_YES &&
                             row.width > 0 && row.height > 0 && full.width() == row.width && full.height() == row.height
                     }
                     ready.size == 3 && ready.all { it }
@@ -931,24 +1004,29 @@ private class TransactionBoard(
                 guard()
                 val root = focusRoot()
                 val metadata = JSONArray().also { entry.put("choice_metadata", it) }
-                val labels = nativeParagraphs().map { it.getText().toString() }
+                entry.put("overlay_identity", System.identityHashCode(checkNotNull(overlay())))
+                    .put("same_activity_window", root === host.window.decorView)
+                val anchorBounds = Rect()
+                check(checkNotNull(anchor).getGlobalVisibleRect(anchorBounds))
                 choiceRows().mapIndexed { index, row ->
                     check(row.rootView === root && row.isShown && row.isEnabled)
                     val full = Rect(); check(row.getGlobalVisibleRect(full))
                     check(full.width() == row.width && full.height() == row.height)
                     val node = checkNotNull(row.createAccessibilityNodeInfo())
                     try {
-                        metadata.put(JSONObject().put("index", index).put("label", labels[index])
+                        metadata.put(JSONObject().put("index", index).put("label", node.contentDescription?.toString())
                             .put("selected", node.isSelected).put("enabled", node.isEnabled)
                             .put("bounds", full.flattenToString()).put("identity", System.identityHashCode(row)))
+                        check(node.contentDescription?.toString() == options[index].label)
                         check(node.isSelected == (index == 1) && node.isEnabled)
+                        if (node.isSelected) check(full == anchorBounds)
                     } finally { node.recycle() }
                     row
                 }.also { check(it.size == 3 && it.distinct().size == 3) }
             }
             val observation = JSONObject().also { entry.put("capture", it) }
             val image = capture(i, evidence, "native-audio-choice", true, observation,
-                observeMenu = false, requireLandscapeTouch = true)
+                observeMenu = false, requireLandscapeTouch = requireLandscapeTouch)
             entry.put("capture_path", image.name)
             nativeParityOnMain(i) {
                 guard()
@@ -956,13 +1034,12 @@ private class TransactionBoard(
                 check(row.rootView === focusRoot() && row.isShown && row.isEnabled)
                 val bounds = Rect(); check(row.getGlobalVisibleRect(bounds))
                 check(bounds.width() == row.width && bounds.height() == row.height)
-                val transition = beginWindowTransition("audio-choice-select")
                 check(row.performAccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, null))
-                transition.put("action_submitted", true)
                 check(selected === options[0])
-                check(callbacks.toString() == JSONArray(listOf("expanded:true", "selected:1", "expanded:false")).toString())
+                check(callbacks.optString(0) == "expanded:true" && callbacks.optString(1) == "selected:1")
             }
-            awaitActivity(i)
+            await(i, "collapsed Settings audio choice overlay") { focusRoot() === host.window.decorView && overlay() == null }
+            check(callbacks.toString() == JSONArray(listOf("expanded:true", "selected:1", "expanded:false")).toString())
             entry.put("selected_id", selected?.id).put("typed_duplicate_identity", true)
         } catch (error: Throwable) { failure = error; throw error }
         finally {
@@ -1013,29 +1090,48 @@ private class TransactionBoard(
     }
     fun hasText(text: String): Boolean = if (compose) nodes(false).any { text in textOf(it) }
         else nativeParagraphs().any { it.getText().toString() == text }
-    fun openMenu(i: Instrumentation, title: String) {
+    fun openMenu(i: Instrumentation, title: String, timing: JSONObject? = null) {
         awaitActivity(i)
-        nativeParityOnMain(i) {
+        val triggeredAt = nativeParityOnMain(i) {
             guard()
             val transitionEvidence = beginWindowTransition("open recording menu")
             transitionEvidence.put("action_submitted", JSONObject.NULL)
-            if (compose) {
+            val invokeLongClick: () -> Boolean = if (compose) {
                 val label = context.getString(R.string.open_options)
                 val row = nodes().single { title in textOf(it) &&
                     it.config.getOrNull(SemanticsProperties.Disabled) == null &&
                     it.config.getOrNull(SemanticsActions.OnLongClick)?.label == label }
-                check(row.config.getOrNull(SemanticsActions.OnLongClick)!!.action!!.invoke())
+                checkNotNull(row.config.getOrNull(SemanticsActions.OnLongClick)?.action)
             } else {
                 val row = nativeParagraphs().filter { it.getText().toString() == title }.mapNotNull { leaf ->
                     var v: View? = leaf
                     while (v != null && !v.isLongClickable) v = v.parent as? View
                     v
                 }.distinct().single()
-                check(row.isEnabled && row.isShown && row.performLongClick())
+                check(row.isEnabled && row.isShown)
+                row::performLongClick
             }
+            val start = SystemClock.uptimeMillis()
+            check(invokeLongClick())
+            val callbackReturnedAt = SystemClock.uptimeMillis()
+            timing?.put("trigger", if (compose) "compose_semantics_long_click" else "view_perform_long_click")
+                ?.put("includes_touch_dwell", false)
+                ?.put("long_click_callback_ms", callbackReturnedAt - start)
             transitionEvidence.put("action_submitted", true)
+            start
         }
-        awaitText(i, context.getString(R.string.recording_info))
+        val menuLabel = context.getString(R.string.recording_info)
+        await(i, "text '$menuLabel'") {
+            hasText(menuLabel).also { ready ->
+                if (ready) timing?.put("trigger_to_content_ready_ms", SystemClock.uptimeMillis() - triggeredAt)
+            }
+        }
+        if (timing != null) {
+            // A draw observed after readiness can follow the popup's first rendered frame.
+            waitFrame(i)
+            timing.put("trigger_to_observed_draw_boundary_ms", SystemClock.uptimeMillis() - triggeredAt)
+            timing.put("configured_android_long_press_timeout_ms", ViewConfiguration.getLongPressTimeout())
+        }
     }
     fun delete(i: Instrumentation, title: String) {
         openMenu(i, title)
@@ -1457,8 +1553,8 @@ internal fun recoverEmptyLibraryFixtureJournal(context: Context, result: JSONObj
     check(readiness.loaded && readiness.recoveryFailure == null) { "Empty QA save recovery did not finish" }
 }
 
-private fun requireTransactionIdentity(context: Context, currentUiRename: Boolean = false) {
-    check(context.packageName == if (currentUiRename) "app.smallthingz.reverb.uitheme.reliability"
+private fun requireTransactionIdentity(context: Context, currentUi: Boolean = false) {
+    check(context.packageName == if (currentUi) "app.smallthingz.reverb.uitheme.reliability"
         else "app.smallthingz.reverb.nativeparity.reliability")
     check(context.applicationContext.javaClass == Application::class.java)
     check(context.checkSelfPermission(Manifest.permission.READ_MEDIA_AUDIO) != PackageManager.PERMISSION_GRANTED)
@@ -1470,7 +1566,7 @@ private class TransactionFixtures(
     private val context: Context,
     private val evidence: File,
     private val renderer: String,
-    private val currentUiRename: Boolean = false,
+    private val currentUi: Boolean = false,
     private val namePrefix: String = "Library transaction",
 ) : AutoCloseable {
     private data class Owned(
@@ -1489,7 +1585,7 @@ private class TransactionFixtures(
     private var admitted = false
     private var closed = false
     fun admit() {
-        requireTransactionIdentity(context, currentUiRename)
+        requireTransactionIdentity(context, currentUi)
         val appExternal = context.getExternalFilesDir(android.os.Environment.DIRECTORY_MUSIC)?.canonicalFile
         check(directory.canonicalFile.parentFile == appExternal ||
             directory.canonicalPath.startsWith(context.filesDir.canonicalPath + File.separator))

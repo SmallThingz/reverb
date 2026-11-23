@@ -14,7 +14,7 @@ internal interface IncidentHistoryAccess {
     val revisions: StateFlow<Long>
     suspend fun readHistory(): IncidentHistoryPresentation
     fun toggleAcknowledgedInBackground(incident: RecordingIncident)
-    fun deleteInBackground(incident: RecordingIncident)
+    fun deleteInBackground(incidents: List<RecordingIncident>)
 }
 
 /**
@@ -62,8 +62,12 @@ internal class IncidentHistoryController(
     }
 
     fun delete(incident: RecordingIncident) {
-        if (!state.canMutate) return
-        access.deleteInBackground(incident)
+        deleteOccurrences(listOf(incident))
+    }
+
+    fun deleteOccurrences(incidents: List<RecordingIncident>) {
+        if (!state.canMutate || incidents.isEmpty()) return
+        access.deleteInBackground(incidents)
     }
 
     private suspend fun loadIncidents(onStateChanged: (IncidentHistoryUiState) -> Unit): Boolean {
@@ -99,7 +103,7 @@ private class StoredIncidentHistoryAccess(private val appContext: Context) : Inc
         RecordingIncidentStore.toggleIncidentAcknowledgedInBackground(appContext, incident)
     }
 
-    override fun deleteInBackground(incident: RecordingIncident) {
-        RecordingIncidentStore.deleteIncidentInBackground(appContext, incident)
+    override fun deleteInBackground(incidents: List<RecordingIncident>) {
+        RecordingIncidentStore.deleteIncidentsInBackground(appContext, incidents)
     }
 }

@@ -418,6 +418,7 @@ internal class NativeMainScreenView private constructor(
         libraryPointer = NativeLibraryPointerBinding(content, pointer.coordinates, frames, scope) { false }
         libraryText = NativeLibraryAccessibilityBinding(content, windowText, source, scrollEvents,
             source::retainPresentSemanticChildren)
+        content.publishInitialPresentation()
         libraryNodesChanged()
     }
 
@@ -552,7 +553,7 @@ internal class NativeMainScreenView private constructor(
         home.translationY = settingsMotion.panelProgress * height
         home.topBar.setIncidentsSuppressed(navigation.showLibrary || libraryMotion.panelProgress > 0f)
         settings?.alpha = if (settingsMotion.panelProgress > 0f || navigation.showSettings) 1f else .01f
-        libraryLayer?.bind(environment, statusInsets.top, libraryMotion.panelProgress, navigation.showLibrary)
+        libraryLayer?.bind(environment, visualInsets.top, libraryMotion.panelProgress, navigation.showLibrary)
         // Keep the preview's terminal glyph until the navigation owner accepts Home.
         val toolbarVisible = !navigation.showSettings &&
             (libraryMotion.panelProgress > 0f || (navigation.showLibrary && libraryMotion.backPreviewActive)) &&
@@ -563,7 +564,10 @@ internal class NativeMainScreenView private constructor(
                 libraryToolbar = it; addView(it)
             }
             // All toolbar inputs change through requestRender; motion only changes its membership.
-            if (created || bindToolbar) toolbar.bind(environment, hasIncidentAlert, libraryNavigation(), statusInsets.top)
+            if (created || bindToolbar) {
+                toolbar.setActionInsets(visualInsets.left, visualInsets.right)
+                toolbar.bind(environment, hasIncidentAlert, libraryNavigation(), visualInsets.top)
+            }
             toolbar.setBackIncidentProgress(backIncidentProgress)
             if (libraryToolbarText == null) libraryToolbarText = toolbar.bindAccessibility(
                 windowText.textWindow, source.geometry, source, source::retainPresentSemanticChildren)
@@ -687,7 +691,7 @@ internal class NativeMainScreenView private constructor(
         home.translationY = settingsMotion.panelProgress * height
     }
 
-    private fun homeInsets() = ReverbHomeInsets(statusInsets.top, visualInsets.left, visualInsets.right, visualInsets.bottom)
+    private fun homeInsets() = ReverbHomeInsets(visualInsets.top, visualInsets.left, visualInsets.right, visualInsets.bottom)
     private fun homeNavigation() = ReverbAppTopBarActions(
         { navigate { openAbout() } }, { navigate { openIncidents() } }, { navigate { openSettings() } })
     private fun libraryNavigation() = ReverbAppTopBarActions(
@@ -706,6 +710,7 @@ internal class NativeMainScreenView private constructor(
     override fun admitsSurfaceInput(descendant: View): Boolean = !source.inInactiveLayer(descendant)
 
     private fun updateSurfaceAdmission() {
+        if (!navigation.settingsPanelActive) settings?.dismissAudioChoices()
         val surfaces = listOfNotNull(home, settings, libraryLayer, libraryToolbar)
         blockedSurfaceFocus.keys.filter { it !in surfaces }.forEach(blockedSurfaceFocus::remove)
         for (surface in surfaces) {

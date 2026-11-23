@@ -496,44 +496,67 @@ internal class LibraryParityBoard(
             requireNativeParityHost(instrumentation, host)
             nativeParityOnMain(instrumentation) { show(compose) }
             awaitNativeParityDraw(instrumentation, if (compose) reference else checkNotNull(native))
-            // Both routes receive their genuine action while RESUMED. Pause this fixture owner
-            // synchronously before async preparation/recomposition can submit source auto-start.
-            nativeParityOnMain(instrumentation) {
-                entry.put("action_submitted", JSONObject.NULL)
-                invokeRecording(compose, longClick = false)
-                entry.put("action_submitted", true)
-                if (compose) sourceLifecycle.pause() else nativeLifecycle.pause()
-            }
-            awaitCondition(instrumentation, "paused player preparation") {
-                assertNoPlayback()
-                val playLabel = context.getString(R.string.player_play)
-                // Released clickable Box owns OnClick; its child Icon owns the description.
-                // Read their merged action node, as invokeDescription does. Unmerged geometry
-                // and passive description observers elsewhere must remain unmerged.
-                val playNodes = sourceNodes(merged = true).filter {
-                    it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains(playLabel) == true
+            val observer = native?.viewTreeObserver.takeUnless { compose }
+            var firstAttachedPresentation: Boolean? = null
+            val firstDraw = android.view.ViewTreeObserver.OnPreDrawListener {
+                val lease = native?.activePlayerLeases()?.singleOrNull()
+                if (firstAttachedPresentation == null && lease?.view?.isAttachedToWindow == true && lease.view.isShown) {
+                    firstAttachedPresentation = lease.currentPresentation != null
                 }
-                val nativePresentation = native?.activePlayerLeases()?.singleOrNull()?.currentPresentation
-                entry.put("source_expanded", sourceExpanded)
-                    .put("source_lifecycle", sourceLifecycle.lifecycle.currentState.name)
-                    .put("native_lifecycle", nativeLifecycle.lifecycle.currentState.name)
-                    .put("source_play_nodes", JSONArray(playNodes.map { node ->
-                        JSONObject().put("click_action", node.config.getOrNull(SemanticsActions.OnClick)?.action != null)
-                            .put("enabled", node.config.getOrNull(SemanticsProperties.Disabled) == null)
-                            .put("placed", node.layoutInfo.isPlaced).put("bounds", node.boundsInWindow.toString())
-                    }))
-                    .put("native_lease_count", native?.activePlayerLeases()?.size ?: 0)
-                    .put("native_prepared", nativePresentation?.state?.prepared ?: JSONObject.NULL)
-                    .put("native_waveform_loading", nativePresentation?.waveformLoading ?: JSONObject.NULL)
-                    .put("native_playing", nativePresentation?.state?.isPlaying ?: JSONObject.NULL)
-                val ready = if (compose) sourceExpanded && playNodes.any {
-                    it.config.getOrNull(SemanticsProperties.Disabled) == null &&
-                        it.config.getOrNull(SemanticsActions.OnClick) != null
-                } else nativePresentation?.let {
-                    it.state.prepared && !it.waveformLoading && !it.state.isPlaying
-                } == true
-                entry.put("ready", ready)
-                ready
+                true
+            }
+            try {
+                // Both routes receive their genuine action while RESUMED. Pause this fixture owner
+                // synchronously before async preparation/recomposition can submit source auto-start.
+                nativeParityOnMain(instrumentation) {
+                    observer?.addOnPreDrawListener(firstDraw)
+                    entry.put("action_submitted", JSONObject.NULL)
+                    invokeRecording(compose, longClick = false)
+                    entry.put("action_submitted", true)
+                    if (compose) sourceLifecycle.pause() else nativeLifecycle.pause()
+                }
+                awaitCondition(instrumentation, "paused player preparation") {
+                    assertNoPlayback()
+                    val playLabel = context.getString(R.string.player_play)
+                    // Released clickable Box owns OnClick; its child Icon owns the description.
+                    // Read their merged action node, as invokeDescription does. Unmerged geometry
+                    // and passive description observers elsewhere must remain unmerged.
+                    val playNodes = sourceNodes(merged = true).filter {
+                        it.config.getOrNull(SemanticsProperties.ContentDescription)?.contains(playLabel) == true
+                    }
+                    val nativePresentation = native?.activePlayerLeases()?.singleOrNull()?.currentPresentation
+                    entry.put("source_expanded", sourceExpanded)
+                        .put("source_lifecycle", sourceLifecycle.lifecycle.currentState.name)
+                        .put("native_lifecycle", nativeLifecycle.lifecycle.currentState.name)
+                        .put("source_play_nodes", JSONArray(playNodes.map { node ->
+                            JSONObject().put("click_action", node.config.getOrNull(SemanticsActions.OnClick)?.action != null)
+                                .put("enabled", node.config.getOrNull(SemanticsProperties.Disabled) == null)
+                                .put("placed", node.layoutInfo.isPlaced).put("bounds", node.boundsInWindow.toString())
+                        }))
+                        .put("native_lease_count", native?.activePlayerLeases()?.size ?: 0)
+                        .put("native_prepared", nativePresentation?.state?.prepared ?: JSONObject.NULL)
+                        .put("native_waveform_loading", nativePresentation?.waveformLoading ?: JSONObject.NULL)
+                        .put("native_playing", nativePresentation?.state?.isPlaying ?: JSONObject.NULL)
+                    val ready = if (compose) sourceExpanded && playNodes.any {
+                        it.config.getOrNull(SemanticsProperties.Disabled) == null &&
+                            it.config.getOrNull(SemanticsActions.OnClick) != null
+                    } else nativePresentation?.let {
+                        it.state.prepared && !it.waveformLoading && !it.state.isPlaying
+                    } == true
+                    entry.put("ready", ready)
+                    ready
+                }
+                if (!compose) {
+                    settle(instrumentation)
+                    nativeParityOnMain(instrumentation) {
+                        entry.put("first_attached_pre_draw_bound", firstAttachedPresentation ?: JSONObject.NULL)
+                        check(firstAttachedPresentation == true) { "Attached inline player reached pre-draw without its initial presentation" }
+                    }
+                }
+            } finally {
+                nativeParityOnMain(instrumentation) {
+                    if (observer?.isAlive == true) observer.removeOnPreDrawListener(firstDraw)
+                }
             }
         }
         settle(instrumentation)

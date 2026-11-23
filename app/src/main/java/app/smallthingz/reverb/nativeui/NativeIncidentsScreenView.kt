@@ -52,6 +52,7 @@ internal class NativeIncidentsScreenView(
     private var content: ReverbIncidentsContentView? = null
     private var menus: NativeIncidentMenuHost? = null
     private var textLease: NativePageTextAccessibilityOwner? = null
+    private var headerAccessibilityLease: AutoCloseable? = null
     private var scrollList: ReverbLibraryRecyclerView? = null
     private var scrollLease: NativeLibraryRecyclerAccessibility? = null
     private var panelScope: CoroutineScope? = null
@@ -79,7 +80,9 @@ internal class NativeIncidentsScreenView(
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         if (android.os.Build.VERSION.SDK_INT >= 29) isForceDarkAllowed = false
         visibility = GONE
-        backLease = owner.registerBack(dispatcher, lifecycleOwner)
+        backLease = owner.registerBack(dispatcher, lifecycleOwner,
+            selectionActive = { content?.selectionActive == true },
+            consumeSelectionBack = { content?.consumeSelectionBack() == true })
         try { renderLease = owner.connect(this) }
         catch (failure: Throwable) {
             try { close() } catch (cleanup: Throwable) { failure.addSuppressed(cleanup) }
@@ -89,13 +92,11 @@ internal class NativeIncidentsScreenView(
 
     private fun appearance(): IncidentsContentAppearance {
         val typography = environment.appearance.typography
-        val toolbar = environment.appearance.toolbars
         return IncidentsContentAppearance(
             IncidentCardAppearance(environment.palette, typography[ReverbTextRole.BODY_LARGE],
                 typography[ReverbTextRole.BODY_MEDIUM], typography[ReverbTextRole.BODY_SMALL],
                 environment.textDensity, environment.sharedFontResolver, environment.appearance.listDecorations.alertCard),
-            typography[toolbar.leadingTitleRole], typography[ReverbTextRole.TITLE_MEDIUM],
-            toolbar, environment.appearance.backdrops)
+            typography[ReverbTextRole.TITLE_MEDIUM], environment.appearance.backdrops)
     }
 
     override fun historyChanged(state: IncidentHistoryUiState) {
@@ -123,16 +124,19 @@ internal class NativeIncidentsScreenView(
         try {
             val menuOwner = NativeIncidentMenuHost(environment, frames, scope)
             menus = menuOwner
-            val shown = ReverbIncidentsContentView(context, appearance(), menuOwner,
+            val shown = ReverbIncidentsContentView(context, appearance(), environment, menuOwner,
                 incidentContentActions(context, owner.history), owner::requestBack, frames, scope,
                 { scope.coroutineContext[MotionDurationScale]?.scaleFactor ?: 1f }, inputRoot, savedPosition)
             content = shown
             shown.bindSourceAccessibility(sourceNode)
             shown.setStatusBarInsets(statusBarInsets)
             addView(shown)
-            textLease = windowText.bindContent(shown, NativeTextSemanticsClipPolicy(shown::semanticsClip), sourceNode) {
+            val clips = NativeTextSemanticsClipPolicy(shown::semanticsClip)
+            textLease = windowText.bindContent(shown, clips, sourceNode) {
                 !closed && content === shown && sourceNode(it).present
             }
+            headerAccessibilityLease = shown.bindHeaderAccessibility(windowText.textWindow,
+                windowText.contentGeometry(shown, clips), sourceNode)
             shown.observeAccessibilityMembership {
                 textLease?.refresh()
                 refreshScrollAccessibility()
@@ -168,7 +172,7 @@ internal class NativeIncidentsScreenView(
         if (closed) return
         environment = environment.withPalette(palette)
         menus?.bindPalette(palette)
-        content?.setAppearance(appearance(), owner::requestBack, incidentContentActions(context, owner.history))
+        content?.setAppearance(appearance(), environment, incidentContentActions(context, owner.history))
     }
 
     private fun applyMotion() {
@@ -210,6 +214,8 @@ internal class NativeIncidentsScreenView(
         current?.observeAccessibilityMembership {}
         cleanup { textLease?.close() }
         textLease = null
+        cleanup { headerAccessibilityLease?.close() }
+        headerAccessibilityLease = null
         cleanup { current?.dispose() }
         cleanup { menuOwner?.close() }
         cleanup { if (current != null) removeView(current) }

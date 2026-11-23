@@ -95,23 +95,24 @@ internal class ReverbRangeTimelineView(
         chrome.alpha = frame.chromeAlpha
         if (stylesDirty || renderedStart != state.startSeconds || renderedEnd != state.endSeconds ||
             renderedDuration != state.durationSeconds || renderedTarget != state.lastTarget) {
-            start.marker.bind(environment.palette.waveformStyle, density, state.lastTarget == RangeEditTarget.START,
-                state.lastTarget == RangeEditTarget.START, 1f)
-            end.marker.bind(environment.palette.waveformStyle, density, state.lastTarget == RangeEditTarget.END,
-                state.lastTarget == RangeEditTarget.END, 1f)
             val appearanceChanged = stylesDirty || renderedTarget != state.lastTarget
-            startBubble.bind(state.targetSeconds(RangeEditTarget.START), state.lastTarget == RangeEditTarget.START,
+            val startActive = state.lastTarget == RangeEditTarget.START
+            if (appearanceChanged) {
+                start.marker.bind(environment.palette.waveformStyle, density, startActive, startActive, 1f)
+                end.marker.bind(environment.palette.waveformStyle, density, !startActive, !startActive, 1f)
+                chrome.startActive = startActive
+            }
+            startBubble.bind(state.targetSeconds(RangeEditTarget.START), startActive,
                 textChanged = renderedStart != state.startSeconds, appearanceChanged = appearanceChanged)
-            endBubble.bind(state.targetSeconds(RangeEditTarget.END), state.lastTarget == RangeEditTarget.END,
+            endBubble.bind(state.targetSeconds(RangeEditTarget.END), !startActive,
                 textChanged = renderedEnd != state.endSeconds, appearanceChanged = appearanceChanged)
             if (renderedDuration != state.durationSeconds) {
                 last.setText(formatRangeTimeInput(state.durationSeconds.toDouble()))
             }
-            chrome.startActive = state.lastTarget == RangeEditTarget.START
             renderedStart = state.startSeconds; renderedEnd = state.endSeconds
             renderedDuration = state.durationSeconds; renderedTarget = state.lastTarget
             stylesDirty = false
-            requestLayout()
+            if (chrome.isLaidOut) chrome.moveEndpoints()
         }
         // Draw-only wobble/morph frames do not remeasure labels or recreate their typography.
         updateMorph()
@@ -254,21 +255,33 @@ internal class ReverbRangeTimelineView(
         }
         override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
             if (editor == null) return
-            fun place(target: RangeEditTarget, endpoint: View, bubble: View) {
-                val center = markerCenterPixels(target)
-                placeAt(endpoint, (center - timelineStyle.endpointWidthDp * density * .5f).roundToInt(),
-                    dp(timelineStyle.waveformTopDp))
-                val bubbleWidth = bubbleStyle.widthDp * density
-                val bubbleLeft = (center - bubbleWidth * .5f)
-                    .coerceIn(0f, (width - bubbleWidth).coerceAtLeast(0f)).roundToInt()
-                placeAt(bubble, bubbleLeft, dp(bubbleStyle.topDp))
-            }
-            place(RangeEditTarget.START, start, startBubble)
-            place(RangeEditTarget.END, end, endBubble)
+            placeAt(start, markerLeft(RangeEditTarget.START), dp(timelineStyle.waveformTopDp))
+            placeAt(end, markerLeft(RangeEditTarget.END), dp(timelineStyle.waveformTopDp))
+            placeAt(startBubble, bubbleLeft(RangeEditTarget.START), dp(bubbleStyle.topDp))
+            placeAt(endBubble, bubbleLeft(RangeEditTarget.END), dp(bubbleStyle.topDp))
             val inset = dp(timelineStyle.sideInsetDp)
             placeAt(first, inset, height - first.measuredHeight)
             placeAt(last, width - inset - last.measuredWidth, height - last.measuredHeight)
         }
+
+        fun moveEndpoints() {
+            // Only the horizontal positions change during a range edit. Keep their hit bounds in
+            // sync with the waveform without waiting for a new measurement/layout traversal.
+            start.offsetLeftAndRight(markerLeft(RangeEditTarget.START) - start.left)
+            end.offsetLeftAndRight(markerLeft(RangeEditTarget.END) - end.left)
+            startBubble.offsetLeftAndRight(bubbleLeft(RangeEditTarget.START) - startBubble.left)
+            endBubble.offsetLeftAndRight(bubbleLeft(RangeEditTarget.END) - endBubble.left)
+        }
+
+        private fun markerLeft(target: RangeEditTarget) =
+            (markerCenterPixels(target) - timelineStyle.endpointWidthDp * density * .5f).roundToInt()
+
+        private fun bubbleLeft(target: RangeEditTarget): Int {
+            val bubbleWidth = bubbleStyle.widthDp * density
+            return (markerCenterPixels(target) - bubbleWidth * .5f)
+                .coerceIn(0f, (width - bubbleWidth).coerceAtLeast(0f)).roundToInt()
+        }
+
         private fun placeAt(child: View, x: Int, y: Int) {
             // Time runs left-to-right in both the waveform renderer and its pointer coordinates.
             child.layout(x, y, x + child.measuredWidth, y + child.measuredHeight)

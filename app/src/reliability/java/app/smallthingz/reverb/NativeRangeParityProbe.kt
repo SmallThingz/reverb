@@ -3,6 +3,10 @@ package app.smallthingz.reverb
 import smallthingz.ui.components.NativeDurationWheelView
 import android.app.Application
 import android.app.Instrumentation
+import android.content.ComponentName
+import android.content.Context
+import android.content.ContextWrapper
+import android.content.Intent
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.os.Build
@@ -63,6 +67,12 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import org.json.JSONArray
 import org.json.JSONObject
+import smallthingz.ui.components.NativeModalWindowRuntime
+import smallthingz.ui.geometry.Offset
+import smallthingz.ui.input.phase.NativeDragPointerChange
+import smallthingz.ui.input.phase.NativeDragPointerEvent
+import smallthingz.ui.input.phase.NativePointerPass
+import smallthingz.ui.input.pointer.PointerType
 
 /**
  * Four actual settled Range bodies, plus the existing duration widget's safe discrete action.
@@ -223,6 +233,67 @@ internal fun verifyNativeRangeParity(instrumentation: Instrumentation, report: S
     failure?.let { throw it }
 }
 
+internal fun verifyNativeRangeInteractionCurrent(instrumentation: Instrumentation, report: StringBuilder) {
+    val context = instrumentation.targetContext
+    check(context.packageName == "app.smallthingz.reverb.uitheme.reliability")
+    check(context.applicationContext.javaClass == Application::class.java)
+    val directory = File(context.filesDir, "native-range-interaction-current-${System.currentTimeMillis()}")
+    check(directory.mkdir())
+    val result = JSONObject().put("selector", "native_range_interaction_current")
+        .put("historical_parity_claim", false).put("passed", false)
+        .put("scope", "Current native range preparation and interaction against an isolated synthetic audio lease")
+        .put("unqualified", JSONArray(listOf("physical touch", "audible fine-seek", "actual export", "TalkBack delivery")))
+    writeRangeEvidence(directory, result, null)
+    val preferencesBefore = rangePreferenceDigest(context)
+    var host: NativeParityActivity? = null
+    var trace: RangeHostTrace? = null
+    var runtime: NativeModalWindowRuntime? = null
+    var signal: RangeParitySignal? = null
+    var snapshot: ReverbService.TimelineSnapshot? = null
+    var board: RangeParityBoard? = null
+    var failure: Throwable? = null
+    try {
+        val fixture = RangeParitySignal(File(directory, "owned-known-signal")).also { signal = it }
+        val source = fixture.snapshot().also { snapshot = it }
+        result.put("signal", fixture.receipt())
+        val activity = launchCurrentUiSmokeActivity(instrumentation).also { host = it }
+        val hostTrace = RangeHostTrace(instrumentation, activity).also { trace = it }
+        awaitNativeParityDraw(instrumentation, activity.fixtureRoot)
+        hostTrace.awaitInitialReady()
+        val current = nativeParityOnMain(instrumentation) {
+            val clock = NativeModalWindowRuntime(activity).also { runtime = it; it.setStarted(true) }
+            RangeParityBoard(activity, dark = false, compact = false, referenceSnapshot = null,
+                nativeSnapshot = source, currentScope = clock.scope).also { board = it; it.show(false) }
+        }
+        awaitRangeReady(instrumentation, activity, current, false, hostTrace)
+        result.put("native_range_interactions", nativeParityOnMain(instrumentation) {
+            current.verifyInteractionRegressions()
+        })
+    } catch (error: Throwable) {
+        failure = error
+        try { trace?.recordFailure(error) } catch (traceError: Throwable) { error.addSuppressed(traceError) }
+    } finally {
+        fun release(action: () -> Unit) { try { action() } catch (error: Throwable) {
+            if (failure == null) failure = error else if (failure !== error) failure!!.addSuppressed(error)
+        } }
+        release { trace?.close() }
+        release { trace?.let { result.put("host_lifecycle_trace", it.snapshot()) } }
+        release { nativeParityOnMain(instrumentation) { board?.close() } }
+        release { nativeParityOnMain(instrumentation) { runtime?.close() } }
+        release { nativeParityOnMain(instrumentation) { host?.finish() } }
+        release { snapshot?.close() }
+        release { signal?.close() }
+        release {
+            result.put("qa_preferences_unchanged", rangePreferenceDigest(context) == preferencesBefore)
+            check(result.getBoolean("qa_preferences_unchanged"))
+        }
+        result.put("passed", failure == null).put("failure", failure?.stackTraceToString() ?: JSONObject.NULL)
+        report.append("RANGE_INTERACTION_EVIDENCE ").append(directory.name).append("/result.json\n")
+        writeRangeEvidence(directory, result, failure)
+    }
+    failure?.let { throw it }
+}
+
 private class RangeParitySignal(private val directory: File) : AutoCloseable {
     private val rate = 8_000
     private val duration = 8
@@ -261,8 +332,9 @@ private class RangeParityBoard(
     private val host: NativeParityActivity,
     dark: Boolean,
     private val compact: Boolean,
-    private val referenceSnapshot: ReverbService.TimelineSnapshot,
+    referenceSnapshot: ReverbService.TimelineSnapshot?,
     private val nativeSnapshot: ReverbService.TimelineSnapshot,
+    private val currentScope: CoroutineScope? = null,
 ) : AutoCloseable {
     val name = (if (dark) "dark" else "light") + (if (compact) "-compact" else "-regular")
     private val configuration = Configuration(host.resources.configuration).apply {
@@ -274,15 +346,13 @@ private class RangeParityBoard(
     private val colors = if (Build.VERSION.SDK_INT >= 31) {
         if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
     } else if (dark) darkColorScheme() else lightColorScheme()
-    private val typography = Class.forName("app.smallthingz.reverb.ReverbThemeKt")
-        .getDeclaredField("ReverbTypography").apply { isAccessible = true }.get(null) as Typography
     private val environment = nativeParityEnvironment(context, density,
         ReverbPalette.resolve(context, dark))
     private val height = if (compact) (420 * density.density).roundToInt() else host.fixtureRoot.height
     private val width = host.fixtureRoot.width
     private val source = RangeMorphSourceGeometry(0f, 0f, width * .5f, height * .5f, 180 * density.density)
-    private val referenceHost = FrameLayout(context)
-    private val reference = ComposeView(context)
+    private val referenceHost by lazy { FrameLayout(context) }
+    private val reference by lazy { ComposeView(context) }
     private val nativeHost = FrameLayout(context).apply {
         // The released18dp inset is padding inside a full-window ComposeView, not a clip.
         // Match NativeCaptureContentView: child shadows may extend into that inset.
@@ -294,8 +364,7 @@ private class RangeParityBoard(
         isFocusableInTouchMode = true
         defaultFocusHighlightEnabled = false
     }
-    private val composeContext: ComposeViewContext
-    private val blob = AudioBlobController()
+    private val blob by lazy { AudioBlobController() }
     private var referenceState: LegacyRangeExportEditorState? = null
     private var referenceScope: CoroutineScope? = null
     private var nativeScope: CoroutineScope? = null
@@ -309,52 +378,61 @@ private class RangeParityBoard(
             check(height > 0 && height <= host.fixtureRoot.height)
             host.fixtureRoot.removeAllViews()
             host.fixtureRoot.setBackgroundColor(colors.surface.toArgb())
-            for (view in listOf(referenceHost, nativeHost)) {
+            val views = if (referenceSnapshot == null) listOf(nativeHost) else listOf(referenceHost, nativeHost)
+            for (view in views) {
                 view.layoutDirection = View.LAYOUT_DIRECTION_LTR
                 if (Build.VERSION.SDK_INT >= 29) view.isForceDarkAllowed = false
                 view.setBackgroundColor(colors.surface.toArgb())
                 host.fixtureRoot.addView(view, FrameLayout.LayoutParams(width, height))
             }
             nativeHost.visibility = View.GONE
-            composeContext = ComposeViewContext(referenceHost)
-            reference.setContent {
-                val scope = rememberCoroutineScope()
-                SideEffect { referenceScope = scope }
-                CompositionLocalProvider(
-                    LocalContext provides context, LocalConfiguration provides configuration,
-                    LocalResources provides context.resources, LocalDensity provides density,
-                    LocalLayoutDirection provides LayoutDirection.Ltr,
-                ) {
-                    MaterialTheme(colorScheme = colors, typography = typography) {
-                        Box(Modifier.fillMaxSize().background(colors.surface)) {
-                            ReleasedRangeFixtureRangeExportHomeContent(
-                                snapshot = referenceSnapshot, fixtureStateObserver = { referenceState = it },
-                                initialDurationSeconds = 8f, selectedBuffer = ReverbService.BufferSlot.ONE_SHOT,
-                                activeBuffer = null, blobMetrics = BufferMetrics(8f, 128_000),
-                                blobEnabled = true, blobController = blob, sourceGeometry = source,
-                                isListening = false, isSaving = false, service = null,
-                                oneShotEnabled = true, oneShotFull = false, loopingEnabled = true,
-                                maxExportDurationSeconds = 6.0, modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp),
-                                visualizerVisible = true, onCancel = { error("No Close action in this fixture") },
-                                onExport = { _, _ -> error("No export action in this fixture") },
-                            )
-                        }
-                    }
-                }
-            }
-            reference.createComposition(composeContext)
-            referenceHost.addView(reference, FrameLayout.LayoutParams(-1, -1))
+            if (referenceSnapshot != null) mountReference(referenceSnapshot)
         } catch (error: Throwable) {
             try { close() } catch (cleanup: Throwable) { error.addSuppressed(cleanup) }
             throw error
         }
     }
 
+    private fun mountReference(snapshot: ReverbService.TimelineSnapshot) {
+        val typography = Class.forName("app.smallthingz.reverb.ReverbThemeKt")
+            .getDeclaredField("ReverbTypography").apply { isAccessible = true }.get(null) as Typography
+        val composeContext = ComposeViewContext(referenceHost)
+        reference.setContent {
+            val scope = rememberCoroutineScope()
+            SideEffect { referenceScope = scope }
+            CompositionLocalProvider(
+                LocalContext provides context, LocalConfiguration provides configuration,
+                LocalResources provides context.resources, LocalDensity provides density,
+                LocalLayoutDirection provides LayoutDirection.Ltr,
+            ) {
+                MaterialTheme(colorScheme = colors, typography = typography) {
+                    Box(Modifier.fillMaxSize().background(colors.surface)) {
+                        ReleasedRangeFixtureRangeExportHomeContent(
+                            snapshot = snapshot, fixtureStateObserver = { referenceState = it },
+                            initialDurationSeconds = 8f, selectedBuffer = ReverbService.BufferSlot.ONE_SHOT,
+                            activeBuffer = null, blobMetrics = BufferMetrics(8f, 128_000),
+                            blobEnabled = true, blobController = blob, sourceGeometry = source,
+                            isListening = false, isSaving = false, service = null,
+                            oneShotEnabled = true, oneShotFull = false, loopingEnabled = true,
+                            maxExportDurationSeconds = 6.0, modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp),
+                            visualizerVisible = true, onCancel = { error("No Close action in this fixture") },
+                            onExport = { _, _ -> error("No export action in this fixture") },
+                        )
+                    }
+                }
+            }
+        }
+        reference.createComposition(composeContext)
+        referenceHost.addView(reference, FrameLayout.LayoutParams(-1, -1))
+    }
+
     fun show(compose: Boolean): View {
-        check(!closed && host.hasWindowFocus())
+        check(!closed && host.hasWindowFocus() && (!compose || currentScope == null))
         if (!compose && native == null) {
-            val inherited = checkNotNull(referenceScope) { "Released reference scope is not ready" }
-            val scope = CoroutineScope((inherited.coroutineContext + SupervisorJob(inherited.coroutineContext[Job])).withNativeParityClock())
+            val inherited = currentScope?.coroutineContext ?: checkNotNull(referenceScope) {
+                "Released reference scope is not ready"
+            }.coroutineContext.withNativeParityClock()
+            val scope = CoroutineScope(inherited + SupervisorJob(inherited[Job]))
             nativeScope = scope
             val owner = NativeRangeExportOwner(context, host, ReverbService.BufferSlot.ONE_SHOT, 8f,
                 scope, true, ::renderNative)
@@ -371,9 +449,16 @@ private class RangeParityBoard(
             val side = (18 * density.density).roundToInt()
             nativeHost.addView(content, FrameLayout.LayoutParams((width - side - side).coerceAtLeast(0), height)
                 .apply { leftMargin = side; rightMargin = side })
+            if (currentScope != null) {
+                owner.bind(null, source, 6.0, 0f, true, ::renderNative)
+                val first = checkNotNull(nativeFrame) { "Preparation must bind before the next display frame" }
+                check(!first.snapshotPresent && !first.interactionReady)
+                check(content.controls.close.visual.glyph.contentDescription == context.getString(R.string.close))
+                check(content.controls.close.visual.isEnabled && !content.controls.exportAction.isEnabled)
+            }
             owner.bind(nativeSnapshot, source, 6.0, 0f, true, ::renderNative)
         }
-        referenceHost.visibility = if (compose) View.VISIBLE else View.GONE
+        if (currentScope == null) referenceHost.visibility = if (compose) View.VISIBLE else View.GONE
         nativeHost.visibility = if (compose) View.GONE else View.VISIBLE
         return content(compose)
     }
@@ -475,6 +560,76 @@ private class RangeParityBoard(
         return JSONObject().put("reference", reference).put("accepted", accepted)
             .put("before", before).put("after", stateEvidence(reference))
     }
+
+    fun verifyInteractionRegressions(): JSONObject {
+        val content = checkNotNull(native)
+        val owner = checkNotNull(nativeOwner)
+        val timeline = content.timeline
+        val state = owner.state
+        val frame = checkNotNull(nativeFrame)
+        check(ready(false) && !RecordingPlayback.hasPendingStart())
+
+        // The old drag audition synchronously revoked pending saved playback before starting native
+        // preview work. Observe the command boundary without launching a playback service.
+        var playbackToken = -1L
+        val playbackContext = object : ContextWrapper(context) {
+            override fun getApplicationContext(): Context = this
+            override fun startForegroundService(service: Intent): ComponentName {
+                playbackToken = service.getLongExtra(RecordingPlaybackService.EXTRA_REQUEST, -1L)
+                return checkNotNull(service.component)
+            }
+        }
+        val recording = RecordingEntity(id = "/unused-synthetic/range-test.wav", displayName = "range-test.wav",
+            mimeType = "audio/wav", startedAtMillis = 1L, durationMillis = 8_000L, sizeBytes = 128_044L,
+            codecSummary = "PCM", storageType = RecordingStorageType.FILE, directoryId = "/unused-synthetic",
+            fileIdentity = "range-test-saved-playback", createdAtMillis = 1L, lastSeenAtMillis = 1L)
+        state.setTarget(RangeEditTarget.END, 8f)
+        state.setTarget(RangeEditTarget.START, 5f)
+        renderNative(state, frame)
+        check(content.controls.exportAction.isEnabled)
+        val oldMarkerLeft = (timeline.endpointStart.parent as View).left
+        try {
+            check(RecordingPlayback.play(playbackContext, recording))
+            NativeRangeTimelineInput(state, { content.interactionEnabled }, timeline::timelineWidthPixels,
+                timeline::secondsForWaveformX, { it.position.x }, { 8f }).use { input ->
+                fun drag(gesture: NativeRangeTimelineInput.Gesture, from: Float, to: Float) {
+                    fun dispatch(x: Float, pressed: Boolean, previousDown: Boolean) {
+                        val position = Offset(x, 0f)
+                        val change = NativeDragPointerChange(1L, SystemClock.uptimeMillis(), position, position,
+                            pressed, previousDown, PointerType.Touch, position)
+                        gesture.dispatch(NativeDragPointerEvent(listOf(change), Offset.Zero), NativePointerPass.MAIN)
+                        check(RecordingPlayback.hasPendingStart()) { "Range drag attempted to audition" }
+                    }
+                    dispatch(from, true, false)
+                    dispatch(to, true, true)
+                    dispatch(to, false, true)
+                }
+                val width = timeline.timelineWidthPixels()
+                drag(input.waveform, width * .25f, width * .375f)
+                check(kotlin.math.abs(state.startSeconds - 3f) < .001f)
+                drag(input.end, width * .875f, width * .75f)
+                check(kotlin.math.abs(state.endSeconds - 7f) < .001f)
+                check(!state.isPlaying && !state.isScrubbing)
+            }
+        } finally { RecordingPlayback.takeStart(playbackToken) }
+        renderNative(state, frame)
+        check((timeline.endpointStart.parent as View).left < oldMarkerLeft) {
+            "The dragged marker must move in this render without another layout traversal"
+        }
+
+        val wheel = NativeDurationWheelView(context, environment.appearance.durationWheel)
+        wheel.setMaximumDurationSeconds(16.8)
+        wheel.setDurationSeconds(16.2)
+        wheel.setDurationSeconds(16.7)
+        check(wheel.contentDescription == "0:00:16 1x")
+        wheel.setMaximumDurationSeconds(16.6)
+        check(wheel.contentDescription == "0:00:17 1x")
+        wheel.setMaximumDurationSeconds(16.7)
+        check(wheel.contentDescription == "0:00:16 1x")
+        return JSONObject().put("first_render_prepared_controls", true).put("drag_audition_revoked", false)
+            .put("immediate_marker_geometry", true).put("exact_fractional_wheel_limit", true)
+    }
+
     override fun close() {
         if (closed) return
         closed = true
@@ -485,7 +640,7 @@ private class RangeParityBoard(
         release { native?.close() }
         release { nativeOwner?.close() }
         release { nativeScope?.cancel() }
-        release(reference::disposeComposition)
+        if (currentScope == null) release { reference.disposeComposition() }
         release(host.fixtureRoot::removeAllViews)
         error?.let { throw it }
     }
@@ -569,7 +724,7 @@ private class RangeHostTrace(
                     root.isAttachedToWindow && root.isShown && root.display?.displayId == Display.DEFAULT_DISPLAY) {
                     "New Range QA host lost its attached visible physical0 identity: $sample"
                 }
-                check(decor.context.packageName == "app.smallthingz.reverb.nativeparity.reliability")
+                check(decor.context.packageName == instrumentation.targetContext.packageName)
                 decor in WindowInspector.getGlobalWindowViews() && decor.isAttachedToWindow &&
                     decor.isShown && decor.display?.displayId == Display.DEFAULT_DISPLAY &&
                     decor.hasWindowFocus() && host.hasWindowFocus()

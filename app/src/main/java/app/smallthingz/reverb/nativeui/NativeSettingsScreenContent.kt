@@ -15,6 +15,7 @@ import android.view.ViewGroup
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.OnBackPressedDispatcher
 import smallthingz.ui.runtime.MonotonicFrameClock
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import app.smallthingz.reverb.*
 import kotlinx.coroutines.CoroutineScope
@@ -47,6 +48,7 @@ internal class NativeSettingsScreenContent(
     restoredPosition:SettingsListSavedPosition?=null,
     private val changedNodes:()->Unit,
 ):ViewGroup(context),AutoCloseable,NativeSourceFocusEntryBoundary {
+    private val lifecycle=lifecycleOwner.lifecycle
     private var input=initial
     private var sourceEnvironment=initialEnvironment
     private var environment=initialEnvironment.forSettings()
@@ -66,7 +68,7 @@ internal class NativeSettingsScreenContent(
     val topBar=ReverbSettingsTopBarView(context,environment,animationScope) {inputRoot}
     private val deleteSheet=NativeSettingsTileDeleteSheet(this) {environment}
     private val sections=NativeSettingsSections(context,owner,{environment},lifecycleOwner.lifecycle,
-        {inputRoot},frames,animationScope,parentInterested,{input.focusRetention},
+        {inputRoot},animationScope,parentInterested,{input.focusRetention},
         deleteSheet::bind,::structureChanged)
     private val editorBack=object:OnBackPressedCallback(false) {
         override fun handleOnBackPressed() {owner.navigateBack(owner.state.activation)}
@@ -89,6 +91,7 @@ internal class NativeSettingsScreenContent(
         importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
         clipChildren=false;clipToPadding=false
         if(android.os.Build.VERSION.SDK_INT>=29)isForceDarkAllowed=false
+        addView(topBar)
     }
 
     /** Start only after Main has installed its shared input/accessibility and Activity Result route. */
@@ -100,6 +103,7 @@ internal class NativeSettingsScreenContent(
     fun bind(next:NativeSettingsScreenInput,nextEnvironment:ReverbViewEnvironment=sourceEnvironment) {
         if(closed)return
         val geometryChanged=input.insets!=next.insets
+        if(!next.active||input.focusRetention!=next.focusRetention)dismissAudioChoices()
         input=next
         if(sourceEnvironment!==nextEnvironment) {
             sourceEnvironment=nextEnvironment
@@ -108,6 +112,11 @@ internal class NativeSettingsScreenContent(
         owner.setActive(next.active)
         if(started)publish()
         if(geometryChanged)requestLayout()
+    }
+    fun dismissAudioChoices() = sections.dismissAudioChoices()
+    override fun onWindowFocusChanged(hasWindowFocus:Boolean) {
+        if(!hasWindowFocus)dismissAudioChoices()
+        super.onWindowFocusChanged(hasWindowFocus)
     }
     fun savePosition():SettingsListSavedPosition = list?.savePosition()
         ?:savedPosition?:SettingsListSavedPosition(0,0)
@@ -125,6 +134,7 @@ internal class NativeSettingsScreenContent(
     }
     private fun render() {
         val state=owner.state
+        if(!inputAllowed||!lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))dismissAudioChoices()
         editorBack.isEnabled=state.active&&(state.hasUnsavedChanges||state.persisting||
             owner.quickTileEditorState.editorOpen||owner.calibration.running||
             owner.notificationDurationInteraction.pending)
@@ -136,17 +146,25 @@ internal class NativeSettingsScreenContent(
             previousFocusBuffer=focusBuffer
             if(input.focusRetention!=null)pendingRetentionFocus=true
         }
+        val bar=TopBarValues(state.activation,state.hasUnsavedChanges,state.persisting,
+            owner.calibration.running,owner.quickTileEditorState.editorOpen,
+            owner.notificationDurationInteraction.pending,owner.backHint,environment)
+        if(lastTopBar!=bar) {
+            lastTopBar=bar
+            topBar.bind(environment,SettingsTopBarBinding(bar.changed,bar.persisting,bar.calibrating,
+                bar.tileOpen,bar.durationPending,{owner.navigationAction(bar.activation)},{owner.done(bar.activation)},
+                bar.backHint))
+        }
+        topBar.setRemainingWindowInsets(NativeTopBarInsets(input.insets.left,input.insets.top,input.insets.right))
         if(!state.hydrated) {
             list?.let {savedPosition=it.savePosition();removeView(it);it.close()}
             list=null
-            if(topBar.parent===this)removeView(topBar)
-            lastSections=null;lastTopBar=null
+            lastSections=null
             tileEditorPublication.reset()
             showHydrationPending(state.hydrationPending)
             structureChanged()
             return
         }
-        if(topBar.parent==null)addView(topBar)
         val currentList=list?:SettingsSectionListView(context,sections,environment,
             true,savedPosition,::structureChanged).also {
             list=it;addView(it,0);lastSections=null;structureChanged()
@@ -164,16 +182,6 @@ internal class NativeSettingsScreenContent(
             if(tileEditorChanged)currentList.bindSection(SettingsSectionKey.QUICK_TILES)
             sections.refreshCalibration()
         }
-        val bar=TopBarValues(state.activation,state.hasUnsavedChanges,state.persisting,
-            owner.calibration.running,owner.quickTileEditorState.editorOpen,
-            owner.notificationDurationInteraction.pending,owner.backHint,environment)
-        if(lastTopBar!=bar) {
-            lastTopBar=bar
-            topBar.bind(environment,SettingsTopBarBinding(bar.changed,bar.persisting,bar.calibrating,
-                bar.tileOpen,bar.durationPending,{owner.navigationAction(bar.activation)},{owner.done(bar.activation)},
-                bar.backHint))
-        }
-        topBar.setRemainingWindowInsets(NativeTopBarInsets(input.insets.left,input.insets.top,input.insets.right))
         showHydrationPending(state.hydrationPending)
         if(pendingRetentionFocus) {
             pendingRetentionFocus=false
@@ -183,7 +191,6 @@ internal class NativeSettingsScreenContent(
     private fun showHydrationPending(pending:Boolean) {
         // The retained pixels keep their layout and scroll position while the existing gate owns input.
         val contentAlpha=if(pending).38f else 1f
-        topBar.alpha=contentAlpha
         list?.alpha=contentAlpha
         val descendants=if(inputAllowed)IMPORTANT_FOR_ACCESSIBILITY_NO
             else IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
@@ -230,8 +237,8 @@ internal class NativeSettingsScreenContent(
 
     override fun onMeasure(w:Int,h:Int) {
         val width=MeasureSpec.getSize(w);val height=MeasureSpec.getSize(h)
-        if(topBar.parent===this)topBar.measure(exact(width),atMost(height))
-        val top=if(topBar.parent===this)topBar.measuredHeight else 0
+        topBar.measure(exact(width),atMost(height))
+        val top=topBar.measuredHeight
         list?.measure(exact((width-input.insets.left-input.insets.right).coerceAtLeast(0)),
             exact((height-top-input.insets.bottom).coerceAtLeast(0)))
         val progressSize=(40f*environment.textDensity.density).toInt()
@@ -239,11 +246,11 @@ internal class NativeSettingsScreenContent(
         setMeasuredDimension(resolveSize(width,w),resolveSize(height,h))
     }
     override fun onLayout(changed:Boolean,l:Int,t:Int,r:Int,b:Int) {
-        if(topBar.parent===this)topBar.layout(0,0,width,topBar.measuredHeight)
+        topBar.layout(0,0,width,topBar.measuredHeight)
         list?.let {it.layout(input.insets.left,topBar.measuredHeight,
             input.insets.left+it.measuredWidth,topBar.measuredHeight+it.measuredHeight)}
         hydrationProgress?.let {
-            val top=if(topBar.parent===this)topBar.measuredHeight else input.insets.top
+            val top=topBar.measuredHeight
             val x=input.insets.left+(width-input.insets.left-input.insets.right-it.measuredWidth)/2
             val y=top+(height-top-input.insets.bottom-it.measuredHeight)/2
             it.layout(x,y,x+it.measuredWidth,y+it.measuredHeight)

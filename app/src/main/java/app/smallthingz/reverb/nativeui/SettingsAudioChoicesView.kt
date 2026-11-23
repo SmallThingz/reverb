@@ -233,4 +233,4 @@ private class SettingsAudioChoicePair(
     }
 }
 
-private fun ReverbPalette.dropdownColors() = NativeDropdownColors(field, raised, muted, ink, border)
+internal fun ReverbPalette.dropdownColors() = NativeDropdownColors(field, raised, muted, ink, border)

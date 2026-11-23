@@ -233,6 +233,11 @@ private class IncidentsFixtureAccess(private val scene: IncidentParityScene,
         IncidentParityScene.EMPTY -> IncidentHistoryPresentation(emptyList())
         IncidentParityScene.POPULATED -> rows
     }
+    fun replaceNativeRows(incidents: List<RecordingIncident>) {
+        check(interactive)
+        rows = prepareIncidentHistory(incidents, Locale.US, ZoneOffset.UTC)
+        revisions.value++
+    }
     override fun toggleAcknowledgedInBackground(incident: RecordingIncident) {
         mutations++
         check(interactive) { "Static Incidents fixture must not acknowledge" }
@@ -245,13 +250,13 @@ private class IncidentsFixtureAccess(private val scene: IncidentParityScene,
         commands += "ack:$key"
         revisions.value++
     }
-    override fun deleteInBackground(incident: RecordingIncident) {
+    override fun deleteInBackground(incidents: List<RecordingIncident>) {
         mutations++
         check(interactive) { "Static Incidents fixture must not delete" }
-        val key = recordingIncidentPresentationKey(incident)
-        check(rows.rows.count { it.key == key } == 1)
-        rows = IncidentHistoryPresentation(rows.rows.filterNot { it.key == key })
-        commands += "delete:$key"
+        val keys = incidents.mapTo(mutableSetOf(), ::recordingIncidentPresentationKey)
+        check(rows.rows.count { it.key in keys } == keys.size)
+        rows = IncidentHistoryPresentation(rows.rows.filterNot { it.key in keys })
+        keys.forEach { commands += "delete:$it" }
         revisions.value++
     }
 }
@@ -495,6 +500,10 @@ internal class IncidentsParityBoard(
     fun interactiveReopen(reference: Boolean) {
         check(interactive); requireNoAsyncFailure()
         if (reference) sourceOpen = true else checkNotNull(owner).bindNavigation(true, true)
+    }
+    fun replaceNativeFixtureHistory(incidents: List<RecordingIncident>) {
+        check(interactive && nativeOnly)
+        access.replaceNativeRows(incidents)
     }
     fun interactiveCommands(reference: Boolean): List<String> =
         (if (reference) checkNotNull(sourceAccess) else access).commands.toList()

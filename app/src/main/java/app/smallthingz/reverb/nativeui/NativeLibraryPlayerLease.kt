@@ -86,7 +86,8 @@ internal class NativeLibraryPlayerLease(
             screenActive && expanded && attached, owner,
             library::isCurrentPlaybackOwner, callbacks)
         input = next
-        controller = bindAttachedLibraryPlayer(controller, attached,
+        val previousController = controller
+        controller = bindAttachedLibraryPlayer(previousController, attached,
             create = {
                 NativeRecordingInlinePlayerController(container.context, container,
                     lifecycleOwner, scope, next, ::publish)
@@ -99,7 +100,10 @@ internal class NativeLibraryPlayerLease(
             back = NativeLibraryPredictiveBack(backDispatcher, lifecycleOwner, scope, frames, ::backFrame)
         }
         back?.bind(next.screenActive && owner != null) { finishBack(owner) }
-        changedNodes()
+        val currentController = controller
+        if (previousController == null && currentController != null) {
+            currentController.publishInitialPresentation()
+        } else changedNodes()
     }
 
     private fun publish(next: NativeInlinePlayerPresentation) {
