@@ -187,6 +187,7 @@ internal fun verifyNativeSettingsPointerCurrent(i: Instrumentation, report: Stri
                         .put("first_visible", manager.findFirstVisibleItemPosition())
                         .put("last_visible", manager.findLastVisibleItemPosition())
                         .put("pending_restoration", pendingRestoration()?.toString() ?: JSONObject.NULL)
+                        .put("scroll_state", viewport.scrollState)
                         .put("computing_layout", viewport.isComputingLayout)
                         .put("pending_adapter_updates", viewport.hasPendingAdapterUpdates())
                         .put("rows", rows).put("unfiltered_choices", candidates)
@@ -207,6 +208,8 @@ internal fun verifyNativeSettingsPointerCurrent(i: Instrumentation, report: Stri
                         "Restoration changed before explicit reveal; no scroll or input issued"
                     }
                     entry.put("before_explicit_reveal", listObservation())
+                    viewport.stopScroll()
+                    entry.put("after_stop_scroll_state", viewport.scrollState)
                     val adapter = checkNotNull(viewport.adapter)
                     val type = if (theme) SettingsSectionKey.THEME else SettingsSectionKey.RETENTION
                     val position = (0 until adapter.itemCount).single { adapter.getItemViewType(it) == type.ordinal }

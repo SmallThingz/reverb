@@ -563,6 +563,9 @@ internal fun verifyNativeMainMotionAdmission(
             fun revealGroup(): NativeSegmentedChoice {
                 ui {
                     val viewport = checkNotNull(screen.listViewport)
+                    entry.put("reveal_scroll_state_before", viewport.scrollState)
+                    viewport.stopScroll()
+                    entry.put("reveal_scroll_state_after_stop", viewport.scrollState)
                     val adapter = checkNotNull(viewport.adapter)
                     val key = if (theme) ReverbSettingsSectionKey.THEME else ReverbSettingsSectionKey.RETENTION
                     val position = (0 until adapter.itemCount).single { adapter.getItemViewType(it) == key.ordinal }
