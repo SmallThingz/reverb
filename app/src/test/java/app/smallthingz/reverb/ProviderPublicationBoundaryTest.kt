@@ -188,7 +188,232 @@ class ProviderPublicationBoundaryTest {
         }
     }
 
-    private suspend fun fixture(expectedDeletes: Int = 0, body: suspend (Application, PublicationMediaProvider, RecordingOutputTarget,
+    @Test fun updateFailureRetainsCauseAndPendingPublicationDiagnostic() =
+        rejectedUpdateRetainsDiagnostic(observationUnavailable = false)
+
+    @Test fun updateFailureRetainsCauseAndUnavailablePublicationDiagnostic() =
+        rejectedUpdateRetainsDiagnostic(observationUnavailable = true)
+
+    private fun rejectedUpdateRetainsDiagnostic(observationUnavailable: Boolean) = runBlocking {
+        fixture { app, provider, target, fingerprint, bytes, dao ->
+            val preferences = getRecorderPreferences(app)
+            val markers = preferences.getStringSet(PrefKey.VERIFIED_EXPORT_STAGING.name, emptySet())!!.toSet()
+            val suppressed = preferences.getStringSet(PrefKey.PENDING_OUTPUT_CLEANUP.name, emptySet())!!.toSet()
+            val original = IllegalStateException("provider update failed before commit")
+            val originalName = provider.name
+            provider.failureBeforeUpdateCommit = original
+            provider.unavailableAfterUpdateFailure = observationUnavailable
+            var publicationAttempts = 0
+            val failure = publicationFailure {
+                finalizeOutputTarget(app, target, fingerprint, beforePublish = { publicationAttempts++ })
+            }
+            assertEquals(IOException::class.java, failure.javaClass)
+            assertEquals("MediaStore publication result is uncertain: ${target.uri}", failure.message)
+            assertSame("retain the actual provider exception as the cause", original, failure.cause)
+            assertEquals(1, failure.suppressed.size)
+            val diagnostic = failure.suppressed.single()
+            assertEquals(IOException::class.java, diagnostic.javaClass)
+            val predicate = if (observationUnavailable) "metadata before payload unavailable" else "row still pending"
+            assertEquals("Unable to verify MediaStore publication postcondition ($predicate): ${target.uri}", diagnostic.message)
+            assertEquals(1, publicationAttempts)
+            assertEquals(1, provider.updates.size)
+            assertTrue(provider.didThrow)
+            assertFalse(provider.updated)
+            assertEquals(originalName, provider.name)
+            assertEquals(1, provider.pending)
+            assertEquals(0, provider.inserts)
+            assertEquals(0, provider.deletes)
+            assertArrayEquals(bytes, provider.payload.readBytes())
+            assertNull(dao.findById(target.id))
+            assertEquals(markers, preferences.getStringSet(PrefKey.VERIFIED_EXPORT_STAGING.name, emptySet()))
+            assertEquals(suppressed, preferences.getStringSet(PrefKey.PENDING_OUTPUT_CLEANUP.name, emptySet()))
+        }
+    }
+
+    @Test fun pendingZeroSizeCanRefreshSizeAndGenerationAtPublication() = runBlocking {
+        fixture(initialReportedSize = 0L) { app, provider, target, fingerprint, bytes, _ ->
+            assertEquals(providerIdentity(target.uri!!, 0L, 9L), fingerprint.providerIdentity)
+            assertEquals(bytes.size.toLong(), fingerprint.digest.byteCount)
+            provider.pendingAfterUpdate = 0
+            provider.refreshMetadataOnUpdate = true
+            val published = finalizeOutputTarget(app, target, fingerprint)
+            assertEquals(target.id, published.id)
+            assertFalse(published.staging)
+            assertEquals("clip.wav", published.displayName)
+            assertEquals(providerIdentity(target.uri!!, bytes.size.toLong(), 10L), published.publishedIdentity)
+            assertEquals(0, provider.pending)
+            assertEquals(1, provider.updates.size)
+            assertArrayEquals(bytes, provider.payload.readBytes())
+        }
+    }
+
+    // Regression candidate: the original single observation returns null when openFile changes
+    // the revision, then throws. Retrying a complete observation must accept only the stable read.
+    @Test fun firstUnstablePublicationObservationThenStableReadUsesOneUpdate() = runBlocking {
+        fixture(initialReportedSize = 0L) { app, provider, target, fingerprint, bytes, _ ->
+            provider.pendingAfterUpdate = 0
+            provider.unstablePublishedOpensRemaining = 1
+            val published = finalizeOutputTarget(app, target, fingerprint)
+            assertEquals(0, provider.unstablePublishedOpensRemaining)
+            assertEquals("one rejected read and one stable read", 2, provider.publishedOpens)
+            assertEquals(providerIdentity(target.uri!!, bytes.size.toLong(), 10L), published.publishedIdentity)
+            assertEquals(target.id, published.id)
+            assertFalse(published.staging)
+            assertEquals(1, provider.updates.size)
+            assertArrayEquals(bytes, provider.payload.readBytes())
+        }
+    }
+
+    @Test(timeout = 15_000) fun persistentlyUnstablePublicationThenStableRecoveryKeepsSameUriWithoutInsert() = runBlocking {
+        fixture(initialReportedSize = 0L) { app, provider, target, fingerprint, bytes, dao ->
+            val markers = getRecorderPreferences(app).getStringSet(PrefKey.VERIFIED_EXPORT_STAGING.name, emptySet())!!.toSet()
+            provider.pendingAfterUpdate = 0
+            provider.churnPublishedRevision = true
+            var publishing: RecordingOutputTarget? = null
+            publicationFailure {
+                finalizeOutputTarget(app, target, fingerprint, beforePublish = { publishing = it })
+            }
+            assertEquals("unstable publication has a bounded read budget", 3, provider.publishedOpens)
+            assertEquals(1, provider.updates.size)
+            assertEquals(markers, getRecorderPreferences(app).getStringSet(PrefKey.VERIFIED_EXPORT_STAGING.name, emptySet()))
+            assertNull(dao.findById(target.id))
+            assertArrayEquals(bytes, provider.payload.readBytes())
+
+            provider.churnPublishedRevision = false
+            provider.unstablePublishedOpensRemaining = 1
+            val opensBeforeRecovery = provider.publishedOpens
+            val expectedIdentity = providerIdentity(target.uri!!, bytes.size.toLong(), provider.generation + 1L)
+            // Exercise the real PUBLISHING-stage recovery entry point twice, not a fresh save.
+            // This covers target re-observation, not coordinator journal reload or Service delivery.
+            repeat(2) {
+                val recovered = checkNotNull(recoverDurableSavePublication(app, checkNotNull(publishing), fingerprint))
+                assertEquals(target.id, recovered.id)
+                assertEquals(target.uri, recovered.uri)
+                assertEquals("clip.wav", recovered.displayName)
+                assertFalse(recovered.staging)
+                assertEquals(expectedIdentity, recovered.publishedIdentity)
+            }
+            assertEquals(0, provider.unstablePublishedOpensRemaining)
+            assertEquals(opensBeforeRecovery + 3, provider.publishedOpens)
+            assertEquals(1, provider.updates.size)
+            assertEquals(0, provider.inserts)
+            assertEquals(0, provider.deletes)
+            assertArrayEquals(bytes, provider.payload.readBytes())
+        }
+    }
+
+    @Test fun recoveredPublicationRemovesOnlyItsMatchingSuppressionWithoutNewOutput() = runBlocking {
+        fixture(initialReportedSize = 0L) { app, provider, target, fingerprint, bytes, dao ->
+            val preferences = getRecorderPreferences(app)
+            val suppressionBefore = preferences.getStringSet(PrefKey.PENDING_OUTPUT_CLEANUP.name, emptySet())!!.toSet()
+            provider.pendingAfterUpdate = 0
+            provider.refreshMetadataOnUpdate = true
+            provider.nameAfterUpdate = "provider-temporary-name.wav"
+            var publishing: RecordingOutputTarget? = null
+            publicationFailure {
+                finalizeOutputTarget(app, target, fingerprint, beforePublish = { publishing = it })
+            }
+            val suppressed = preferences.getStringSet(PrefKey.PENDING_OUTPUT_CLEANUP.name, emptySet())!!.toSet()
+            val added = suppressed - suppressionBefore
+            assertEquals(1, added.size)
+            val record = checkNotNull(decodePendingOutputCleanupRecord(added.single()))
+            assertEquals(target.id, record.id)
+            assertEquals(RecordingStorageType.MEDIASTORE, record.storageType)
+            assertEquals(bytes.size.toLong(), record.byteCount)
+            assertNull("uncertain publication grants no delete identity", record.providerIdentity)
+            assertTrue(pendingOutputCleanupIds(app).contains(target.id))
+            assertTrue(preferences.getStringSet(PrefKey.VERIFIED_EXPORT_STAGING.name, emptySet())!!
+                .none { decodeVerifiedExportStagingRecord(it)?.id == target.id })
+            assertNull(verifiedExportStagingRecovery(app, target.storageType, target.id))
+            assertNull(dao.findById(target.id))
+
+            // Simulate the provider subsequently exposing the requested name. The original
+            // accepted job retains its fingerprint and exact URI even after marker revocation.
+            provider.name = "clip.wav"
+            provider.generation++
+            repeat(2) { attempt ->
+                val recovered = checkNotNull(recoverDurableSavePublication(app, checkNotNull(publishing), fingerprint))
+                assertEquals(target.id, recovered.id)
+                assertEquals(target.uri, recovered.uri)
+                assertFalse(recovered.staging)
+                assertEquals(providerIdentity(target.uri!!, bytes.size.toLong(), provider.generation), recovered.publishedIdentity)
+                if (attempt == 0) assertEquals(suppressed,
+                    preferences.getStringSet(PrefKey.PENDING_OUTPUT_CLEANUP.name, emptySet()))
+                // Helper-level integration only: recovery observes publication; suppression is
+                // retired later under mutation ownership, after cataloging and a fresh full read.
+                // This does not run DurableSaveCoordinator.materialize or its journal/pin retirement.
+                val mutation = checkNotNull(recordingMutations.tryBegin(recovered.id))
+                try {
+                    val entity = RecordingEntity(recovered.id, recovered.displayName, "audio/wav",
+                        1L, 1L, bytes.size.toLong(), "WAV", RecordingStorageType.MEDIASTORE,
+                        MEDIA_STORE_DIRECTORY_ID, recovered.publishedIdentity)
+                    val registered = RecordingRepository.registerFromAcceptedOperation(app, entity)
+                    assertEquals(registered, dao.findById(recovered.id))
+                    val current = checkNotNull(readStableOutputFingerprint(app, recovered.storageType,
+                        recovered.id, recovered.publishedIdentity, reuseVerifiedProviderRevision = false))
+                    assertEquals(recovered.publishedIdentity, current.providerIdentity)
+                    assertEquals(bytes.size.toLong(), current.digest.byteCount)
+                    assertArrayEquals(MessageDigest.getInstance("SHA-256").digest(bytes), current.digest.sha256)
+                    assertTrue(stableOutputFingerprintMatches(recovered.storageType,
+                        outputCleanupFingerprintForTarget(recovered, fingerprint), current))
+                    assertTrue(removePublishedMediaStoreSaveSuppression(app, recovered, current))
+                } finally {
+                    recordingMutations.finish(mutation)
+                }
+                assertEquals(suppressionBefore, preferences.getStringSet(PrefKey.PENDING_OUTPUT_CLEANUP.name, emptySet()))
+                assertFalse(pendingOutputCleanupIds(app).contains(target.id))
+            }
+            assertEquals(1, provider.updates.size)
+            assertEquals(0, provider.inserts)
+            assertEquals(0, provider.deletes)
+            assertArrayEquals(bytes, provider.payload.readBytes())
+        }
+    }
+
+    @Test fun publicationRecoveryRejectsChangedBytes() = rejectedPublicationRecovery("bytes")
+    @Test fun publicationRecoveryRejectsChangedName() = rejectedPublicationRecovery("name")
+    @Test fun publicationRecoveryRejectsDifferentRowWithSameBytes() = rejectedPublicationRecovery("row")
+
+    private fun rejectedPublicationRecovery(change: String) = runBlocking {
+        fixture(initialReportedSize = 0L) { app, provider, target, fingerprint, bytes, dao ->
+            provider.pendingAfterUpdate = 0
+            provider.refreshMetadataOnUpdate = true
+            finalizeOutputTarget(app, target, fingerprint)
+            var recoveryTarget = target
+            when (change) {
+                "bytes" -> provider.payload.writeBytes(bytes.clone().also { it[44] = 42 })
+                "name" -> provider.name = "other.wav"
+                "row" -> {
+                    provider.alternateRowAvailable = true
+                    val other = Uri.parse("content://media/external/audio/media/730033")
+                    recoveryTarget = target.copy(id = other.toString(), uri = other)
+                }
+                else -> error("Unknown fixture change")
+            }
+            val retainedBytes = provider.payload.readBytes()
+            val retainedName = provider.name
+            repeat(2) { publicationFailure { recoverDurableSavePublication(app, recoveryTarget, fingerprint) } }
+            assertEquals(retainedName, provider.name)
+            assertArrayEquals(retainedBytes, provider.payload.readBytes())
+            assertNull(dao.findById(target.id))
+            assertNull(dao.findById(recoveryTarget.id))
+            assertEquals(1, provider.updates.size)
+            assertEquals(0, provider.inserts)
+            assertEquals(0, provider.deletes)
+        }
+    }
+
+    private fun publicationFailure(action: () -> Any?): IOException {
+        try { action() } catch (failure: IOException) { return failure }
+        throw AssertionError("Unproven publication was accepted")
+    }
+
+    private fun providerIdentity(uri: Uri, size: Long, generation: Long): String =
+        "provider:3:" + Base64.getUrlEncoder().withoutPadding()
+            .encodeToString(uri.toString().toByteArray(Charsets.UTF_8)) + ":$size:$generation"
+
+    private suspend fun fixture(expectedDeletes: Int = 0, initialReportedSize: Long? = null,
+        body: suspend (Application, PublicationMediaProvider, RecordingOutputTarget,
         StableOutputFingerprint, ByteArray, RecordingDao) -> Unit) {
         val app = RuntimeEnvironment.getApplication()
         val directory = File(app.cacheDir, "publication-boundary-${java.util.UUID.randomUUID()}")
@@ -197,7 +422,7 @@ class ProviderPublicationBoundaryTest {
         val payload = File(directory, "owned.wav").apply { writeBytes(bytes) }
         val sentinel = File(directory, "unrelated.bin").apply { writeBytes(byteArrayOf(9, 8, 7, 6)) }
         val sentinelBytes = sentinel.readBytes()
-        val provider = PublicationMediaProvider(payload)
+        val provider = PublicationMediaProvider(payload).apply { reportedSize = initialReportedSize }
         val previousShadowPath = PlaybackSessionOsShadow.targetPath
         val uri = Uri.parse("content://media/external/audio/media/730031")
         val preferences = getRecorderPreferences(app)
@@ -226,8 +451,7 @@ class ProviderPublicationBoundaryTest {
             provider.attachInfo(app, ProviderInfo().apply { authority = "media" })
             ShadowContentResolver.registerProviderInternal("media", provider)
             PlaybackSessionOsShadow.targetPath = payload.absolutePath
-            val identity = "provider:3:" + Base64.getUrlEncoder().withoutPadding()
-                .encodeToString(uri.toString().toByteArray(Charsets.UTF_8)) + ":${bytes.size}:9"
+            val identity = providerIdentity(uri, initialReportedSize ?: bytes.size.toLong(), 9L)
             val target = RecordingOutputTarget(uri.toString(), "clip.wav", "audio/wav",
                 RecordingStorageType.MEDIASTORE, MEDIA_STORE_DIRECTORY_ID, 1L, uri = uri, staging = true,
                 stagingDisplayName = provider.name, stagingIdentity = identity)
@@ -291,12 +515,21 @@ private class PublicationMediaProvider(val payload: File) : ContentProvider() {
     var pending: Int? = 1
     var pendingAfterUpdate: Int? = 1
     var throwAfterCommit = false
+    var failureBeforeUpdateCommit: RuntimeException? = null
+    var unavailableAfterUpdateFailure = false
     var didThrow = false
     var updated = false
     var applyUpdate = true
     var updateResult = 1
     var expectedNameQuery = "clip.wav"
     var generation = 9L
+    var reportedSize: Long? = null
+    var refreshMetadataOnUpdate = false
+    var nameAfterUpdate: String? = null
+    var unstablePublishedOpensRemaining = 0
+    var churnPublishedRevision = false
+    var publishedOpens = 0
+    var alternateRowAvailable = false
     var replacementOnUpdate: ByteArray? = null
     var retainedOriginal: File? = null
     var removeOnDelete = false
@@ -319,12 +552,12 @@ private class PublicationMediaProvider(val payload: File) : ContentProvider() {
         trace += "query"
         val columns = requireNotNull(projection)
         val cursor = MatrixCursor(columns)
-        if (uri.lastPathSegment == "730031") {
+        if (uri.lastPathSegment == "730031" || (alternateRowAvailable && uri.lastPathSegment == "730033")) {
             if (missing) { trace += "query:missing"; cursors += cursor; return cursor }
             val values: Map<String, Any?> = mapOf(
-                MediaStore.MediaColumns._ID to 730031L,
+                MediaStore.MediaColumns._ID to uri.lastPathSegment!!.toLong(),
                 MediaStore.MediaColumns.DISPLAY_NAME to name,
-                MediaStore.MediaColumns.SIZE to payload.length(),
+                MediaStore.MediaColumns.SIZE to (reportedSize ?: payload.length()),
                 MediaStore.MediaColumns.DATE_MODIFIED to 100L,
                 MediaStore.MediaColumns.GENERATION_MODIFIED to generation,
                 MediaStore.MediaColumns.RELATIVE_PATH to "Music/Reverb/",
@@ -339,8 +572,17 @@ private class PublicationMediaProvider(val payload: File) : ContentProvider() {
         return cursor
     }
     override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor {
-        check(uri.lastPathSegment == "730031" && mode == "r")
+        check((uri.lastPathSegment == "730031" || (alternateRowAvailable && uri.lastPathSegment == "730033")) && mode == "r")
         trace += "open:$mode"
+        if (updated && pending == 0) {
+            publishedOpens++
+            if (churnPublishedRevision || unstablePublishedOpensRemaining > 0) {
+                if (unstablePublishedOpensRemaining > 0) unstablePublishedOpensRemaining--
+                reportedSize = payload.length()
+                generation++
+                trace += "refresh:$reportedSize:$generation"
+            }
+        }
         return ParcelFileDescriptor.open(payload, ParcelFileDescriptor.MODE_READ_ONLY).also {
             descriptors += it to it.fileDescriptor
         }
@@ -349,9 +591,15 @@ private class PublicationMediaProvider(val payload: File) : ContentProvider() {
         check(uri.lastPathSegment == "730031")
         trace += "update"
         updates += ContentValues(requireNotNull(values))
+        failureBeforeUpdateCommit?.let { failure ->
+            didThrow = true
+            queryUnavailable = unavailableAfterUpdateFailure
+            throw failure
+        }
         if (applyUpdate) {
-            name = checkNotNull(values.getAsString(MediaStore.MediaColumns.DISPLAY_NAME))
+            name = nameAfterUpdate ?: checkNotNull(values.getAsString(MediaStore.MediaColumns.DISPLAY_NAME))
             pending = pendingAfterUpdate
+            if (refreshMetadataOnUpdate) { reportedSize = payload.length(); generation++ }
             replacementOnUpdate?.let { replacement ->
                 val retained = File(payload.parentFile, "selected-original.wav")
                 check(payload.renameTo(retained))

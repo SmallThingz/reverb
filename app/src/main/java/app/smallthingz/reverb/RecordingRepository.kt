@@ -879,9 +879,9 @@ object RecordingRepository {
                     }
                     if (copied != null && !finishCopiedFileSourceLocked(context, copied, renamed,
                             FileCopyCleanupOwner.LIVE_ACCEPTED_OPERATION)) {
-                        reportFileCopyRecoveryIncident(context, copied.token,
-                            FileCopyCleanupPendingException("Renamed copy saved; original cleanup remains pending"))
-                        throw RecordingRenameStateUncertainException("Renamed copy saved; original cleanup remains pending")
+                        val pending = FileCopyCleanupPendingException("Renamed copy saved; original cleanup remains pending")
+                        reportFileCopyRecoveryIncident(context, copied.token, pending)
+                        throw RecordingRenameStateUncertainException(pending.message.orEmpty(), pending)
                     }
                     renamed
                 }
@@ -892,6 +892,9 @@ object RecordingRepository {
                     RecordingDeletionConsent.rename(consent, consentLifetime) { attempt(consent) }
                 }
             }
+        } catch (error: Exception) {
+            reportUnexpectedRecordingOperationFailure(context, "Rename recording", error)
+            throw error
         } finally {
             recordingMutations.finish(operation)
         }

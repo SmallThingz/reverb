@@ -9,6 +9,8 @@ import smallthingz.ui.scroll.NativeVerticalNestedHost
 import smallthingz.ui.scroll.NativeVerticalViewport
 import smallthingz.ui.text.view.NativeTextSemanticsClip
 import android.content.Context
+import android.graphics.Path
+import smallthingz.ui.reverb.ReverbRecordingSpotlight
 import android.view.View
 import android.view.ViewGroup
 import smallthingz.ui.reverb.ReverbLibraryLayout
@@ -75,10 +77,13 @@ internal class ReverbLibraryScreenContent(
     private val playbackReveal = NativeRecordingRevealRequest(
         scrollRestoration.consumeReveal(), scrollRestoration.consumeCancelledReveal())
     private var pendingRevealNeedsReconciliation = playbackReveal.pendingRecordingId != null
-    private class RenameLifetime(val recordingId: String, val sheet: NativeRecordingRenameSheet)
-    private class InfoLifetime(val recordingId: String, val sheet: NativeRecordingInfoSheet)
-    private var renameSheet: RenameLifetime? = null
-    private var infoSheet: InfoLifetime? = null
+    private class RenameLifetime(val recordingId: String, val presentation: NativeLibraryRenamePresentation)
+    private var renameHeader: RenameLifetime? = null
+    private var startRenamePending = false
+    private var revealEditorAfterLayout = false
+    private var spotlight: ReverbRecordingSpotlight? = null
+    private var spotlightRecordingId: String? = null
+    private val spotlightClipPath = Path()
     private val toolbar = ReverbLibraryToolbarView(context, environment, inputRoot)
     private val body = Body(context)
     private var status: ReverbLibraryStatusView? = null
@@ -106,10 +111,16 @@ internal class ReverbLibraryScreenContent(
 
     // Keep screen fallback and selection registrations before lazily composed player owners.
     private val fallbackBack = object : OnBackPressedCallback(false) {
-        override fun handleOnBackPressed() { owner.fallbackExpandedBack() }
+        override fun handleOnBackPressed() {
+            when {
+                renameHeader != null -> renameHeader?.presentation?.owner?.requestDismiss()
+                presentation?.infoRecording != null -> owner.dismissInfo()
+                else -> owner.fallbackExpandedBack()
+            }
+        }
     }.also { backDispatcher.addCallback(lifecycleOwner, it) }
     private val selectionBack = NativeLibraryPredictiveBack(backDispatcher, lifecycleOwner,
-        scope, frames, ::selectionBackFrame)
+        scope, frames, ::selectionBackFrame).apply { animateCancellation = true }
 
     private val list = ReverbLibraryListView(context, environment, animationScope, inputRoot,
         LibraryRecordingRowActions(
@@ -117,6 +128,10 @@ internal class ReverbLibraryScreenContent(
             longClick = { id -> currentRecording(id)?.let(owner::longClick) },
             leadingLongClick = { id -> currentRecording(id)?.let(owner::leadingLongClick) }),
         object : LibraryInlineExpansionHost {
+            override fun createInfo(context: Context, recordingId: String): LibraryInlineExpansionLease =
+                NativeLibraryInfoLease(context, environment, animationScope)
+            override fun renameHeader(recordingId: String): View? =
+                renameHeader?.takeIf { it.recordingId == recordingId }?.presentation?.view
             override fun create(context: Context, recordingId: String): LibraryInlineExpansionLease {
                 val lease = NativeLibraryPlayerLease(context, recordingId, environment, owner,
                     lifecycleOwner, backDispatcher, scope, frames, durationScale, inputRoot, changedNodes)
@@ -128,7 +143,7 @@ internal class ReverbLibraryScreenContent(
                 }
             }
         }, onRetryFailedSaves = owner::retryFailedSaves, onRowNodesChanged = {
-            if (!closed) changedNodes()
+            if (!closed) { changedNodes(); startInlineEditing() }
         })
     private val makeStatus = {
         ReverbLibraryStatusView(context, environment, frames, animationScope, pull.nested, inputRoot, durationScale)
@@ -142,6 +157,7 @@ internal class ReverbLibraryScreenContent(
         addView(toolbar)
         addView(body)
         body.addView(refreshIndicator)
+        list.onViewportGeometryChanged = { spotlight?.invalidate() }
         list.onPendingRecordingRevealCancelled = {
             playbackReveal.cancel()
             pendingRevealNeedsReconciliation = false
@@ -166,8 +182,8 @@ internal class ReverbLibraryScreenContent(
         environment = nextEnvironment
         if (environmentChanged) {
             menus.bindPalette(nextEnvironment.palette)
-            renameSheet?.sheet?.bindEnvironment(nextEnvironment)
-            infoSheet?.sheet?.bindEnvironment(nextEnvironment)
+            renameHeader?.presentation?.bindEnvironment(nextEnvironment)
+            spotlight?.bindEnvironment(nextEnvironment)
             refreshIndicator.bindEnvironment(nextEnvironment)
             toolbar.setEnvironment(nextEnvironment)
             list.setEnvironment(nextEnvironment)
@@ -176,7 +192,7 @@ internal class ReverbLibraryScreenContent(
         }
         owner.bind(next.owner)
         presentation?.let(::publish)
-        if (insetsChanged) requestLayout()
+        if (insetsChanged) { revealEditorAfterLayout = renameHeader != null; requestLayout() }
     }
 
     fun saveScrollPosition(): NativeLibrarySavedScrollPosition = scrollRestoration.save(
@@ -229,7 +245,9 @@ internal class ReverbLibraryScreenContent(
             pendingRevealNeedsReconciliation = false
         }
         pull.bind(value.isRefreshing) { owner.refresh(showSpinner = true, userInitiated = true) }
-        fallbackBack.isEnabled = input.owner.active && value.list.expandedOwner != null && value.selectedCount == 0
+        renderInline(value)
+        fallbackBack.isEnabled = input.owner.active && value.selectedCount == 0 &&
+            (value.list.expandedOwner != null || value.renameRecording != null || value.infoRecording != null)
         selectionBack.bind(input.owner.active && value.selectedCount > 0, owner::clearSelection)
         toolbar.setActionInsets(input.scaffoldInsets.left, input.scaffoldInsets.right)
         toolbar.bind(toolbarState(value), toolbarActions())
@@ -280,41 +298,105 @@ internal class ReverbLibraryScreenContent(
             card.bind(environment, notice.message, context.getString(R.string.undo)) { owner.undoDelete(notice.window) }
         }
         renderMenu(value)
-        renderSheets(value)
         transientStateChanged(value)
         changedNodes()
     }
 
-    private fun renderSheets(value: NativeLibraryPresentation) {
+    private fun renderInline(value: NativeLibraryPresentation) {
         val rename = value.renameRecording
-        if (renameSheet?.recordingId != rename?.id) {
-            val previous = renameSheet
-            renameSheet = null // Retire before dismissal can reenter callbacks.
-            previous?.sheet?.close()
+        if (renameHeader?.recordingId != rename?.id) {
+            val previous = renameHeader
+            renameHeader = null // Retire before focus/terminal callbacks can reenter.
+            startRenamePending = false
+            previous?.presentation?.close()
         }
         if (rename != null) {
-            val callbacks = NativeRecordingRenameCallbacks(owner::dismissRename, owner::renamed, owner::renameUncertain)
-            val current = renameSheet
+            val callbacks = NativeRecordingRenameCallbacks(owner::dismissRename,
+                { renamed -> owner.renamed(rename, renamed) }, owner::renameUncertain)
+            val current = renameHeader
             if (current == null) {
-                val sheet = NativeRecordingRenameSheet(this, environment, rename, input.owner.active,
-                    lifecycleOwner, scope, callbacks)
-                renameSheet = RenameLifetime(rename.id, sheet)
-                sheet.show()
-            } else current.sheet.bind(rename, input.owner.active, callbacks)
+                renameHeader = RenameLifetime(rename.id, NativeLibraryRenamePresentation(this, environment,
+                    rename, input.owner.active, lifecycleOwner, animationScope, callbacks, changedNodes,
+                    { revealEditorAfterLayout = true }))
+                startRenamePending = true
+            } else current.presentation.bind(rename, input.owner.active, callbacks)
         }
-        val info = value.infoRecording
-        if (infoSheet?.recordingId != info?.id) {
-            val previous = infoSheet
-            infoSheet = null
-            previous?.sheet?.close()
+        val modal = rename != null || value.infoRecording != null
+        toolbar.importantForAccessibility = if (modal) IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+            else IMPORTANT_FOR_ACCESSIBILITY_NO
+        refreshIndicator.importantForAccessibility = if (modal) IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+            else IMPORTANT_FOR_ACCESSIBILITY_NO
+        if (modal) {
+            spotlightRecordingId = rename?.id ?: value.infoRecording?.id
+            val current = spotlight ?: ReverbRecordingSpotlight(context, environment,
+                ::inlineCardPath, animationScope, ::retireSpotlight) { dismissInline() }.also {
+                spotlight = it
+                it.setShown(true)
+                addView(it)
+                requestLayout()
+            }
+            current.setShown(true)
+        } else {
+            spotlight?.setShown(false) // Captures the old card path before its identity retires.
+            spotlightRecordingId = null
         }
-        if (info != null) {
-            val current = infoSheet
-            if (current == null) {
-                val sheet = NativeRecordingInfoSheet(this, environment, info, owner::dismissInfo)
-                infoSheet = InfoLifetime(info.id, sheet)
-                sheet.show()
-            } else current.sheet.bind(info, owner::dismissInfo)
+        spotlight?.invalidate()
+    }
+
+    private fun retireSpotlight(view: ReverbRecordingSpotlight) {
+        if (spotlight !== view) return
+        spotlight = null
+        view.close()
+        removeView(view)
+        if (!closed) {
+            presentation?.let(transientStateChanged)
+            changedNodes()
+        }
+    }
+    val inlineBackdropVisible: Boolean get() = spotlight != null
+
+    private fun dismissInline() {
+        if (renameHeader != null) renameHeader?.presentation?.owner?.requestDismiss() else owner.dismissInfo()
+    }
+    private fun startInlineEditing() {
+        if (!startRenamePending || !input.owner.active) return
+        val view = renameHeader?.presentation?.view ?: return
+        if (!view.isAttachedToWindow || !view.isLaidOut) return
+        startRenamePending = false
+        view.post {
+            if (!closed && input.owner.active && renameHeader?.presentation?.view === view) {
+                view.startEditing()
+                list.revealRenameHeader(view, view.editor,
+                    validation = renameHeader?.presentation?.owner?.state?.error != null)
+            }
+        }
+    }
+    private fun inlineCardPath(out: Path) {
+        out.rewind()
+        val id = spotlightRecordingId ?: return
+        val row = list.attachedRecordingAnchor(id) as? ReverbLibraryRecordingRow ?: return
+        val viewport = listViewport ?: return
+        val surface = row.summarySurface
+        surface.copyVisualPath(out)
+        mapSpotlightPath(out, surface)
+        // The natural surface can exceed the animated row, and the row can cross the viewport.
+        // Intersect AFTER transforming the actual surface, never recreate its joined corners.
+        intersectSpotlightClip(out, row)
+        intersectSpotlightClip(out, viewport)
+    }
+    private fun intersectSpotlightClip(out: Path, clip: View) {
+        spotlightClipPath.rewind()
+        spotlightClipPath.addRect(0f, 0f, clip.width.toFloat(), clip.height.toFloat(), Path.Direction.CW)
+        mapSpotlightPath(spotlightClipPath, clip)
+        if (!out.op(spotlightClipPath, Path.Op.INTERSECT)) out.rewind()
+    }
+    private fun mapSpotlightPath(path: Path, descendant: View) {
+        var current = descendant
+        while (current !== this) {
+            val parent = current.parent as? View ?: run { path.rewind(); return }
+            path.transform(current.matrix)
+            path.offset((current.left - parent.scrollX).toFloat(), (current.top - parent.scrollY).toFloat())
+            current = parent
         }
     }
 
@@ -372,6 +454,19 @@ internal class ReverbLibraryScreenContent(
         }
         return emptyList()
     }
+    val inlineModalActive: Boolean get() = presentation?.let { it.infoRecording != null || it.renameRecording != null } == true
+    /** Native source admission and focus must agree with the modal pointer backdrop. */
+    fun inlineInputExcluded(view: View): Boolean {
+        if (!inlineModalActive) return false
+        val id = presentation?.renameRecording?.id ?: presentation?.infoRecording?.id
+        var current: View? = view
+        while (current != null && current !== this) {
+            if (current === toolbar || current === refreshIndicator || current === undo) return true
+            if (current.parent === listViewport) return (current as? ReverbLibraryRecordingRow)?.recordingId != id
+            current = current.parent as? View
+        }
+        return false
+    }
     val emptyViewport: NativeVerticalViewport? get() = status?.emptyViewport
     val listViewport: ReverbLibraryRecyclerView? get() = list.scrollView.takeIf { listVisible }
     val toolbarAccessibilityRoot: ViewGroup get() = toolbar
@@ -401,34 +496,53 @@ internal class ReverbLibraryScreenContent(
     val bodyPointerView: View get() = body
     val pointerEnvironment: ReverbViewEnvironment get() = environment
     val pointerDismissKey: Any get() = input.dismiss
-    fun dismissFromEdge() = input.dismiss()
+    fun dismissFromEdge() {
+        if (inlineModalActive) dismissInline() else input.dismiss()
+    }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val width = MeasureSpec.getSize(widthMeasureSpec)
         val height = MeasureSpec.getSize(heightMeasureSpec)
         ReverbLibraryLayout.measureScreen(toolbar, body, width, height, input.scaffoldInsets, environment.textDensity.density)
+        spotlight?.measure(MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY),
+            MeasureSpec.makeMeasureSpec(height, MeasureSpec.EXACTLY))
         setMeasuredDimension(width, height)
     }
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
         ReverbLibraryLayout.layoutScreen(toolbar, body, width, height, input.scaffoldInsets)
+        spotlight?.layout(0, 0, width, height)
+        spotlight?.invalidate()
+        startInlineEditing()
+        if (revealEditorAfterLayout) {
+            revealEditorAfterLayout = false
+            val header = renameHeader?.presentation?.view
+            header?.post {
+                if (!closed && input.owner.active && renameHeader?.presentation?.view === header)
+                    list.revealRenameHeader(header, header.editor,
+                        validation = renameHeader?.presentation?.owner?.state?.error != null)
+            }
+        }
         if (menuAwaitingLayout) presentation?.let(::renderMenu)
     }
     override fun close() {
         if (closed) return
         closed = true
         playbackReveal.cancel()
+        list.onViewportGeometryChanged = {}
         var failure: Throwable? = null
         fun release(block: () -> Unit) {
             try { block() } catch (error: Throwable) {
                 if (failure == null) failure = error else failure!!.addSuppressed(error)
             }
         }
-        val previousRename = renameSheet
-        val previousInfo = infoSheet
-        renameSheet = null
-        infoSheet = null
-        release { previousRename?.sheet?.close() }
-        release { previousInfo?.sheet?.close() }
+        val previousRename = renameHeader
+        renameHeader = null
+        startRenamePending = false
+        release { previousRename?.presentation?.close() }
+        val oldSpotlight = spotlight
+        spotlight = null
+        spotlightRecordingId = null
+        release { oldSpotlight?.close() }
         release(fallbackBack::remove)
         release(selectionBack::close)
         release(menus::close)

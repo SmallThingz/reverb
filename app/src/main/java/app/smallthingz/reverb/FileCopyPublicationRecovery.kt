@@ -8,6 +8,8 @@ import java.util.concurrent.ConcurrentHashMap
 private val reportedFileCopyRecovery = ConcurrentHashMap.newKeySet<String>()
 
 internal fun reportFileCopyRecoveryIncident(context: Context, token: String, failure: Exception) {
+    // Token ownership also covers repeated recovery attempts whose incident was already queued.
+    if (failure is FileCopyIncidentException) failure.incidentOwnedByRecovery = true
     if (reportedFileCopyRecovery.add(token)) {
         RecordingIncidentStore.recordUnexpectedErrorInBackground(context,
             "File publication preserved for recovery", failure)

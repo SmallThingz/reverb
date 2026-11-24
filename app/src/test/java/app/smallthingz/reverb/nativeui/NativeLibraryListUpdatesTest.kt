@@ -14,6 +14,37 @@ class NativeLibraryListUpdatesTest {
         active: Boolean = true,
     ) = NativeLibraryRowState(selected, selecting, blocked, owner?.id, owner, trim, active)
 
+    @Test fun inlineInfoRetainsItsOwnerlessExpansionWithoutCatalogWork() {
+        val updates = NativeLibraryListUpdates<Owner>()
+        val catalog = Any()
+        updates.submit(catalog, state())
+        val info = state().copy(infoRecordingId = "A")
+        val opened = updates.submit(catalog, info)!!
+        assertFalse(opened.catalogChanged)
+        assertTrue(opened.allVisibleRows) // Other rows revoke pointer/accessibility admission.
+        assertNull(updates.current!!.expandedOwner) // Info must never instantiate playback.
+        assertNull(updates.submit(catalog, info.copy()))
+        val closed = updates.submit(catalog, state())!!
+        assertTrue(closed.allVisibleRows)
+        assertEquals(setOf("A"), closed.recordingIds)
+    }
+
+    @Test fun switchingInfoToRenameRestoresOldRowAndReplacesOnlyTheNewHeader() {
+        val updates = NativeLibraryListUpdates<Owner>()
+        val catalog = Any()
+        updates.submit(catalog, state().copy(infoRecordingId = "A"))
+        val renamed = state().copy(renameRecordingId = "B")
+        val change = updates.submit(catalog, renamed)!!
+        assertFalse(change.catalogChanged)
+        assertEquals(setOf("A", "B"), change.recordingIds)
+        assertNull(updates.current!!.infoRecordingId)
+        assertNull(updates.submit(catalog, renamed))
+        val busy = updates.submit(catalog, renamed.copy(blockedIds = setOf("B")))!!
+        assertEquals(setOf("B"), busy.recordingIds)
+        assertFalse(busy.allVisibleRows)
+        assertEquals("B", updates.current!!.renameRecordingId)
+    }
+
     @Test fun noOpKeepsRevisionAndDoesNotInvalidateRows() {
         val updates = NativeLibraryListUpdates<Owner>()
         val catalog = listOf("A", "B")

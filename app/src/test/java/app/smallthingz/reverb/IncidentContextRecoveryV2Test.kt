@@ -29,6 +29,370 @@ import org.robolectric.shadows.ShadowProcess
 @RunWith(org.robolectric.RobolectricTestRunner::class)
 @Config(sdk = [35], application = Application::class, shadows = [JournalHostIoShadow::class])
 class IncidentContextRecoveryV2Test {
+    @Test fun bufferedPreparationFailureHasOnlyItsTerminalIncident() = fixture { context, root ->
+        withReportingService(context) { service ->
+            val failure = IllegalStateException("Save preparation failed")
+            val terminals = mutableListOf<Throwable?>()
+            val receiver = object : ReverbService.AudioFileReceiver {
+                override fun fileReady(recording: RecordingEntity) { fail("preparation failure succeeded") }
+                override fun fileFailed(message: String, error: Throwable?) { terminals += error }
+            }
+            val ownerType = ReverbService::class.java.declaredClasses.single { it.simpleName == "DurableSaveOwner" }
+            val owner = ownerType.declaredConstructors.single { it.parameterCount == 5 }.apply { isAccessible = true }
+                .newInstance(1L, receiver, 0L, null, null)
+            val ownersField = ReverbService::class.java.getDeclaredField("durableSaveOwners").apply { isAccessible = true }
+            @Suppress("UNCHECKED_CAST")
+            val owners = ownersField.get(service) as MutableMap<Long, Any>
+            owners[1L] = owner
+            val prepare = ReverbService::class.java.getDeclaredMethod("prepareBufferedSave",
+                String::class.java, kotlin.jvm.functions.Function0::class.java).apply { isAccessible = true }
+            val finish = ReverbService::class.java.getDeclaredMethod("finishDurableSaveFailure", ownerType,
+                String::class.java, Exception::class.java).apply { isAccessible = true }
+            val acquire: () -> Nothing = { throw failure }
+            val work = createBufferedExportWork<java.io.Closeable>(
+                started = java.util.concurrent.atomic.AtomicBoolean(), beforeAcquire = {},
+                acquire = {
+                    try { prepare.invoke(service, "prepare export", acquire); null }
+                    catch (wrapped: java.lang.reflect.InvocationTargetException) { throw wrapped.targetException }
+                },
+                releaseUnclaimed = { fail("no range was acquired") },
+                onReleaseFailure = { throw AssertionError(it) }, onEmpty = { fail("failure became empty") },
+                onFailure = { error ->
+                    assertSame(failure, error)
+                    // Retire without foreground work; preparation above ran on a live, stopped Service.
+                    ReverbService::class.java.getDeclaredField("serviceDestroying").apply { isAccessible = true }
+                        .setBoolean(service, true)
+                    repeat(2) { finish.invoke(service, owner, "Save failed", error) }
+                }, export = { _, _ -> fail("failure exported") },
+            )
+            try {
+                work.queuePreparation { it.run(); true }
+                work.task.run()
+                work.task.get()
+                org.robolectric.shadows.ShadowLooper.idleMainLooper()
+                awaitHistoryWriters()
+                assertEquals(listOf(failure), terminals)
+                assertTrue(owners.isEmpty())
+                val incident = RecordingIncidentStore.readIncidents(context).single()
+                assertEquals(RecordingIncidentKind.UNEXPECTED_ERROR, incident.kind)
+                assertTrue(incident.description.orEmpty().contains(failure.message!!))
+                assertFalse(File(root, "recording-session.bin").exists())
+            } finally { owners.clear() }
+        }
+    }
+
+    @Test fun saveCleanupFailuresReportOnceWithoutChangingTheOperationResult() {
+        for (path in listOf("buffered", "unclaimed", "parent", "child")) {
+            for (failure in listOf(IOException("cleanup IO"), IllegalStateException("cleanup invariant"),
+                    java.util.concurrent.CancellationException("cleanup cancelled"))) fixture { context, root ->
+                withReportingService(context) { service ->
+                    val reportMethod = ReverbService::class.java.getDeclaredMethod("reportSaveCleanupFailure",
+                        String::class.java, Throwable::class.java).apply { isAccessible = true }
+                    val reported = java.util.concurrent.CountDownLatch(1)
+                    val report: (Exception) -> Unit = {
+                        assertSame(failure, it)
+                        try { reportMethod.invoke(service, path, it) } finally { reported.countDown() }
+                    }
+                    var closes = 0
+                    var successes = 0
+                    val failing = java.io.Closeable { closes++; throw failure }
+                    val started = java.util.concurrent.atomic.AtomicBoolean()
+                    if (path == "buffered" || path == "unclaimed") {
+                        val work = createBufferedExportWork(started, {}, { failing },
+                            releaseUnclaimed = { releaseTimelineSnapshotOffMain(it, report) },
+                            onReleaseFailure = report, onEmpty = { fail("lost range") },
+                            onFailure = { throw AssertionError("cleanup changed terminal", it) },
+                            export = { _, close -> close(); close(); successes++ })
+                        work.queuePreparation { it.run(); true }
+                        if (path == "unclaimed") assertTrue(work.task.cancel(false))
+                        else { work.task.run(); work.task.get() }
+                    } else {
+                        val quiet = java.io.Closeable {}
+                        val task = createTimelineSnapshotExportTask(
+                            snapshot = if (path == "parent") failing else quiet, started = started,
+                            releaseUnstarted = { it.close() }, onParentReleaseFailure = report,
+                            onChildReleaseFailure = report, beforeAcquire = {},
+                            acquire = { if (path == "child") failing else quiet },
+                            onEmpty = { fail("lost range") },
+                            onFailure = { throw AssertionError("cleanup changed terminal", it) },
+                            export = { _, close -> close(); close(); successes++ })
+                        task.run(); task.get()
+                    }
+                    assertTrue(reported.await(5, TimeUnit.SECONDS))
+                    awaitHistoryWriters()
+                    assertEquals(1, closes)
+                    assertEquals(if (path == "unclaimed") 0 else 1, successes)
+                    val incidents = RecordingIncidentStore.readIncidents(context)
+                    assertEquals(if (failure is java.util.concurrent.CancellationException) 0 else 1, incidents.size)
+                    assertTrue(incidents.all { it.kind == RecordingIncidentKind.UNEXPECTED_ERROR })
+                    assertFalse(File(root, "recording-session.bin").exists())
+                }
+            }
+        }
+    }
+
+    @Test fun committedBookkeepingFailureReportsOnceAndKeepsSaveSuccess() {
+        for (failure in listOf(IOException("range memory IO"), IllegalStateException("range memory invariant"),
+                java.util.concurrent.CancellationException("range memory cancelled"))) fixture { context, root ->
+            var saved = 0
+            var terminals = 0
+            var status: CaptureSaveStatus? = null
+            val receiver = SaveResultReceiver(context, setSaving = {}, onStatus = { status = it },
+                onError = { fail("verified save failed") }, onSaved = { saved++ },
+                onCommitted = { throw failure }, onTerminal = { terminals++ })
+            val recording = RecordingEntity("/saved.wav", "saved.wav", "audio/wav", 1L, 100L, 100L,
+                "WAV", RecordingStorageType.FILE, "/", "identity")
+            repeat(2) { receiver.fileReady(recording) }
+            receiver.fileCancelled()
+            awaitHistoryWriters()
+            assertEquals(CaptureSaveStatus.Saved(recording), status)
+            assertEquals(1, saved)
+            assertEquals(1, terminals)
+            val incidents = RecordingIncidentStore.readIncidents(context)
+            assertEquals(if (failure is java.util.concurrent.CancellationException) 0 else 1, incidents.size)
+            assertTrue(incidents.all { it.kind == RecordingIncidentKind.UNEXPECTED_ERROR })
+            assertFalse(File(root, "recording-session.bin").exists())
+        }
+    }
+
+    private fun withReportingService(context: Context, test: (ReverbService) -> Unit) {
+        val service = org.robolectric.Robolectric.buildService(ReverbService::class.java).get()
+        val base = ContextWrapper::class.java.getDeclaredField("mBase").apply { isAccessible = true }
+        val oldBase = base.get(service)
+        base.set(service, context)
+        try { test(service) } finally {
+            org.robolectric.shadows.ShadowLooper.idleMainLooper()
+            awaitHistoryWriters()
+            base.set(service, oldBase)
+        }
+    }
+
+    @Test fun busyTrimReportsOnceWithoutReleasingTheExistingOwner() = fixture { context, _ ->
+        val selected = RecordingEntity("/isolated/busy.wav", "busy.wav", "audio/wav",
+            1L, 1000L, 100L, "WAV", RecordingStorageType.FILE, "/isolated", "selected")
+        val original = checkNotNull(recordingMutations.tryBegin(selected.id))
+        try {
+            val terminals = mutableListOf<Result<RecordingEntity>>()
+            runBlocking { runCommittedInlineTrim(
+                save = { saveTrimmedRecordingCopy(context, selected, 0, 500) },
+                onTerminal = { terminals += it },
+            ) }
+            awaitHistoryWriters()
+            assertTrue(terminals.single().exceptionOrNull() is IOException)
+            assertEquals("Trim is already in progress for this recording", terminals.single().exceptionOrNull()?.message)
+            assertTrue(recordingMutations.isActive(selected.id))
+            assertNull(recordingMutations.tryBegin(selected.id))
+            assertEquals(1, RecordingIncidentStore.readIncidents(context).size)
+        } finally { recordingMutations.finish(original) }
+    }
+
+    @Test fun copiedRenameCleanupFailureHasOneIncidentAndRetainsBothFiles() = fileCopyFixture { context, source, target, record, bytes ->
+        context.rejectDeletionCommit = true
+        val failure = runBlocking { runCatching { RecordingRepository.rename(context, source, "renamed") }.exceptionOrNull() }
+        assertTrue(failure is RecordingRenameStateUncertainException)
+        assertEquals("Renamed copy saved; original cleanup remains pending", failure?.message)
+        awaitHistoryWriters()
+        assertEquals(1, RecordingIncidentStore.readIncidents(context).size)
+        assertFalse(recordingMutations.isActive(source.id))
+        assertArrayEquals(bytes, File(source.id).readBytes())
+        assertArrayEquals(bytes, target.readBytes())
+        assertEquals(FileCopyPhase.CATALOGED, FileCopyPublications.snapshot(context).records.single { it.token == record.token }.phase)
+    }
+
+    @Test fun copiedRenameRecoveryExceptionKeepsTokenReportingAcrossRepeatedOperations() = fileCopyFixture { context, source, target, record, bytes ->
+        // This earlier transaction owns another name, so actual rename must preserve it and fail before mutation.
+        repeat(2) {
+            val failure = runBlocking { runCatching { RecordingRepository.rename(context, source, "different") }.exceptionOrNull() }
+            assertTrue(failure is FileCopyRecoveryRequired)
+            assertEquals("An earlier FILE publication needs recovery", failure?.message)
+        }
+        awaitHistoryWriters()
+        assertEquals(1, RecordingIncidentStore.readIncidents(context).size)
+        assertFalse(recordingMutations.isActive(source.id))
+        assertEquals(record, FileCopyPublications.snapshot(context).records.single())
+        assertArrayEquals(bytes, File(source.id).readBytes())
+        assertArrayEquals(bytes, target.readBytes())
+    }
+
+    @Test fun standaloneFileCopyRecoveryRetainsItsSingleTokenIncident() = fileCopyFixture { context, source, target, record, bytes ->
+        val incomplete = record.copy(phase = FileCopyPhase.CREATED, targetIdentity = "")
+        FileCopyPublications.replace(context, record, incomplete)
+        // Remove only this fixture's synthetic target, modeling a prior partial creation loss.
+        assertTrue(target.delete())
+        repeat(2) { recoverPendingFileCopyPublications(context) }
+        awaitHistoryWriters()
+        assertEquals(1, RecordingIncidentStore.readIncidents(context).size)
+        assertEquals(incomplete, FileCopyPublications.snapshot(context).records.single())
+        assertArrayEquals(bytes, File(source.id).readBytes())
+        assertFalse(target.exists())
+    }
+
+    @Test fun reservedPartialPreservationReportsOnceThroughActualRename() = partialCopyPreservation(FileCopyPhase.RESERVED)
+    @Test fun createdPartialPreservationReportsOnceThroughActualRename() = partialCopyPreservation(FileCopyPhase.CREATED)
+
+    private fun partialCopyPreservation(phase: FileCopyPhase) = fileCopyFixture { context, source, target, record, bytes ->
+        val partial = bytes.copyOf(16)
+        target.writeBytes(partial)
+        val incomplete = record.copy(phase = phase, targetIdentity = "",
+            createdIdentity = if (phase == FileCopyPhase.RESERVED) "" else record.createdIdentity)
+        FileCopyPublications.replace(context, record, incomplete)
+        val failure = runBlocking { runCatching { RecordingRepository.rename(context, source, "renamed") }.exceptionOrNull() }
+        assertTrue(failure is FileCopyRecoveryRequired)
+        awaitHistoryWriters()
+        assertEquals(1, RecordingIncidentStore.readIncidents(context).size)
+        assertFalse(recordingMutations.isActive(source.id))
+        assertTrue(FileCopyPublications.snapshot(context).records.isEmpty())
+        val suppression = getRecorderPreferences(context).getStringSet(PrefKey.PENDING_OUTPUT_CLEANUP.name, emptySet())!!
+            .mapNotNull(::decodePendingOutputCleanupRecord).single { it.id == target.path }
+        assertEquals(partial.size.toLong(), suppression.byteCount)
+        assertNull(suppression.fileKey)
+        assertNull(suppression.providerIdentity)
+        assertArrayEquals(bytes, File(source.id).readBytes())
+        assertArrayEquals(partial, target.readBytes())
+    }
+
+    private class CopyContext(base: Context, private val root: File) : ContextWrapper(base) {
+        var rejectDeletionCommit = false
+        override fun getApplicationContext(): Context = this
+        override fun getExternalFilesDir(type: String?): File = File(root, "external").apply { mkdirs() }
+        override fun getSharedPreferences(name: String?, mode: Int): android.content.SharedPreferences {
+            val prefs = super.getSharedPreferences(name + "-" + root.name, mode)
+            return object : android.content.SharedPreferences by prefs {
+                override fun edit(): android.content.SharedPreferences.Editor {
+                    val editor = prefs.edit()
+                    var deletion = false
+                    return object : android.content.SharedPreferences.Editor by editor {
+                        override fun putStringSet(key: String?, values: MutableSet<String>?): android.content.SharedPreferences.Editor {
+                            if (key == PrefKey.PENDING_RECORDING_DELETIONS.name && !values.isNullOrEmpty()) deletion = true
+                            editor.putStringSet(key, values)
+                            return this
+                        }
+                        override fun commit(): Boolean = if (rejectDeletionCommit && deletion) false else editor.commit()
+                    }
+                }
+            }
+        }
+    }
+
+    private fun fileCopyFixture(test: (CopyContext, RecordingEntity, File, FileCopyPublication, ByteArray) -> Unit) = fixture { base, root ->
+        val context = CopyContext(base, root)
+        val directory = getSavedRecordingsDirectory(context).apply { check(mkdirs()) }
+        val bytes = ByteBuffer.allocate(48).order(java.nio.ByteOrder.LITTLE_ENDIAN).apply {
+            put("RIFF".toByteArray()); putInt(40); put("WAVEfmt ".toByteArray()); putInt(16)
+            putShort(1); putShort(1); putInt(8000); putInt(16000); putShort(2); putShort(16)
+            put("data".toByteArray()); putInt(4); putShort(123); putShort(-321)
+        }.array()
+        val sourceFile = File(directory, "source.wav").apply { writeBytes(bytes) }
+        val target = File(directory, "renamed.wav").apply { writeBytes(bytes) }
+        val sourceProof = checkNotNull(readStableFileOutputFingerprint(sourceFile))
+        val targetProof = checkNotNull(readStableFileOutputFingerprint(target))
+        val selected = RecordingEntity(sourceFile.path, sourceFile.name, "audio/wav", 1L, 1L, 48L, "WAV",
+            RecordingStorageType.FILE, directory.path, checkNotNull(sourceProof.fileKey))
+        val record = FileCopyPublication(java.util.UUID.randomUUID().toString(), FileCopyPurpose.RENAME,
+            sourceFile.path, target.name, target.path, selected.fileIdentity, 48L,
+            sourceProof.digest.sha256.joinToString("") { "%02x".format(it.toInt() and 255) },
+            FileCopyPhase.VERIFIED, checkNotNull(targetProof.fileKey), targetProof.fileKey)
+        val dao = RecordingDatabase.getInstance(context).recordingDao()
+        try {
+            runBlocking { RecordingRepository.register(context, selected) }
+            FileCopyPublications.replace(context, null, record)
+            test(context, selected, target, record, bytes)
+        } finally {
+            context.rejectDeletionCommit = false
+            awaitHistoryWriters()
+            runBlocking { dao.deleteById(selected.id); dao.deleteById(target.path) }
+            check(getRecorderPreferences(context).edit().clear().commit())
+            RecordingDatabase.resetAfterCorruption()
+        }
+    }
+
+    @Test fun stoppedSaveSealFailureHasOneIncidentAndOneTerminalDelivery() = fixture { context, root ->
+        val service = org.robolectric.Robolectric.buildService(ReverbService::class.java).get()
+        val base = ContextWrapper::class.java.getDeclaredField("mBase").apply { isAccessible = true }
+        val oldBase = base.get(service)
+        base.set(service, context)
+        val destroying = ReverbService::class.java.getDeclaredField("serviceDestroying").apply { isAccessible = true }
+        destroying.setBoolean(service, true) // Retired service must not promote foreground during terminal cleanup.
+        val failures = mutableListOf<Throwable?>()
+        val receiver = object : ReverbService.AudioFileReceiver {
+            override fun fileReady(recording: RecordingEntity) { fail("failed save succeeded") }
+            override fun fileFailed(message: String, error: Throwable?) { failures += error }
+        }
+        val ownerType = ReverbService::class.java.declaredClasses.single { it.simpleName == "DurableSaveOwner" }
+        val constructor = ownerType.declaredConstructors.single { it.parameterCount == 5 }.apply { isAccessible = true }
+        val owner = constructor.newInstance(1L, receiver, 0L, null, null)
+        val ownersField = ReverbService::class.java.getDeclaredField("durableSaveOwners").apply { isAccessible = true }
+        @Suppress("UNCHECKED_CAST")
+        val owners = ownersField.get(service) as MutableMap<Long, Any>
+        owners[1L] = owner
+        val finish = ReverbService::class.java.getDeclaredMethod("finishDurableSaveFailure", ownerType,
+            String::class.java, Exception::class.java).apply { isAccessible = true }
+        val store = PersistentAudioChunkStore(File(root, "unused-source"))
+        val error = PersistentAudioChunkStore.SaveSealFailure(store, false, IOException("source close failure"))
+        try {
+            repeat(2) { finish.invoke(service, owner, "Save failed", error) }
+            org.robolectric.shadows.ShadowLooper.idleMainLooper()
+            awaitHistoryWriters()
+            assertEquals(listOf(error), failures)
+            assertTrue(owners.isEmpty())
+            val incident = RecordingIncidentStore.readIncidents(context).single()
+            assertEquals(RecordingIncidentKind.UNEXPECTED_ERROR, incident.kind)
+            assertTrue(incident.description.orEmpty().contains("source close failure"))
+            assertFalse(File(root, "recording-session.bin").exists())
+        } finally {
+            owners.clear()
+            org.robolectric.shadows.ShadowLooper.idleMainLooper()
+            base.set(service, oldBase)
+            store.close()
+        }
+    }
+
+    @Test fun stoppedTrimExceptionReportsOnceDeliversTerminalAndReleasesReservation() = fixture { context, root ->
+        val expected = IOException("Trim filename settings unavailable")
+        val failingContext = object : ContextWrapper(context) {
+            override fun getApplicationContext(): Context = this
+            override fun getSharedPreferences(name: String?, mode: Int): android.content.SharedPreferences = throw expected
+        }
+        val selected = RecordingEntity("/isolated/trim-source.wav", "source.wav", "audio/wav",
+            1L, 1000L, 100L, "WAV", RecordingStorageType.FILE, "/isolated", "selected")
+        val terminals = mutableListOf<Result<RecordingEntity>>()
+        runBlocking {
+            runCommittedInlineTrim(
+                save = { saveTrimmedRecordingCopy(failingContext, selected, 0, 500) },
+                onTerminal = { terminals += it },
+            )
+        }
+        awaitHistoryWriters()
+        val delivered = checkNotNull(terminals.single().exceptionOrNull())
+        assertEquals(IOException::class.java, delivered.javaClass)
+        assertEquals(expected.message, delivered.message)
+        // Coroutine stack recovery may clone IOException, retaining the original as its cause.
+        assertTrue(generateSequence(delivered) { it.cause }.take(8).any { it === expected })
+        assertFalse(recordingMutations.isActive(selected.id))
+        val incident = RecordingIncidentStore.readIncidents(context).single()
+        assertEquals(RecordingIncidentKind.UNEXPECTED_ERROR, incident.kind)
+        assertTrue(incident.description.orEmpty().contains("Trim filename settings unavailable"))
+        assertFalse(File(root, "recording-session.bin").exists())
+    }
+
+    @Test fun caughtSaveAndFilenameErrorsPersistWithoutACaptureSession() = fixture { context, root ->
+        assertFalse(File(root, "recording-session.bin").exists())
+        reportUnexpectedRecordingOperationFailure(context, "Save recording", IllegalStateException("save invariant"))
+        reportUnexpectedRecordingOperationFailure(context, "Rename recording",
+            IOException("Rename uncertain", NullPointerException("filename")))
+        reportUnexpectedRecordingOperationFailure(context, "Save recording", IOException("Storage unavailable"))
+        reportUnexpectedRecordingOperationFailure(context, "Rename recording", SecurityException("Permission denied"))
+        reportUnexpectedRecordingOperationFailure(context, "Save recording", java.util.concurrent.CancellationException())
+        awaitHistoryWriters()
+
+        val incidents = RecordingIncidentStore.readIncidents(context)
+        assertEquals(4, incidents.size)
+        assertTrue(incidents.all { it.kind == RecordingIncidentKind.UNEXPECTED_ERROR })
+        assertTrue(incidents.any { it.description.orEmpty().contains("save invariant") })
+        assertTrue(incidents.any { it.description.orEmpty().contains("filename") })
+        assertFalse(File(root, "recording-session.bin").exists())
+    }
+
     // Independently assembled published big-endian wire fixtures (Python struct).
     private val priorSession = hex("524953310301000000290000000000000000000000000000006400000000000000000000000000000007ffffffff")
     private val sentinel = hex("02000000000000025800000000000002bc0000000000000320000000030000000400000063000000640000000000000065000000000000006600000000000001900000000000000000000873656e74696e656c0000000000000000")
@@ -365,9 +729,17 @@ class IncidentContextRecoveryV2Test {
             check(previousRoot == null)
             JournalHostIoShadow.reset()
             ownsFixture = true
+            val app = RuntimeEnvironment.getApplication()
             ShadowProcess.setPid(4242)
+            // Initialize the Android runtime before aligning its synthetic process start with
+            // the reset Robolectric elapsed clock. Incident identity is captured lazily once.
+            val started = Process.getStartElapsedRealtime()
+            org.robolectric.shadows.ShadowSystemClock.advanceBy(
+                (started - android.os.SystemClock.elapsedRealtime()).coerceAtLeast(0L), TimeUnit.MILLISECONDS)
+            check(Process.myPid() > 0 && started >= 0L &&
+                android.os.SystemClock.elapsedRealtime() >= started && System.currentTimeMillis() > 0L)
             ServiceStateOsShadow.fixtureRoot = root.toPath()
-            test(IsolatedContext(RuntimeEnvironment.getApplication(), root), root)
+            test(IsolatedContext(app, root), root)
         } catch (error: Throwable) { failure = error }
         finally {
             if (ownsFixture) cleanup { JournalHostIoShadow.finishFixture()?.let(::record) }

@@ -40,6 +40,8 @@ internal data class LibraryNativeListState(
     val expandedOwner: InlinePlaybackRowOwner?,
     val trimRequestRecordingId: String?,
     val screenActive: Boolean,
+    val infoRecordingId: String? = null,
+    val renameRecordingId: String? = null,
 )
 
 /**
@@ -53,6 +55,8 @@ internal data class LibraryNativeListState(
  */
 internal interface LibraryInlineExpansionHost {
     fun create(context: Context, recordingId: String): LibraryInlineExpansionLease
+    fun createInfo(context: Context, recordingId: String): LibraryInlineExpansionLease = error("No Info host")
+    fun renameHeader(recordingId: String): View? = null
 }
 
 internal interface LibraryInlineExpansionLease {
@@ -83,6 +87,7 @@ internal class ReverbLibraryListView(
 ) : FrameLayout(context) {
     private var clearingListComposition = false
     private var disposed = false
+    var onViewportGeometryChanged: () -> Unit = {}
     var onPendingRecordingRevealCancelled: (() -> Unit)? = null
     private var rowNodesDirty = false
     private var rowNodesPosted = false
@@ -125,7 +130,10 @@ internal class ReverbLibraryListView(
         }
         override fun onLayoutCompleted(state: RecyclerView.State) {
             super.onLayoutCompleted(state)
-            if (!state.isPreLayout) pendingPosition.placed(placedPosition())
+            if (!state.isPreLayout) {
+                pendingPosition.placed(placedPosition())
+                onViewportGeometryChanged()
+            }
         }
     }
     private val rowAdapter = LibraryRowsAdapter()
@@ -139,6 +147,9 @@ internal class ReverbLibraryListView(
         isVerticalScrollBarEnabled = false
         isHorizontalScrollBarEnabled = false
         setHasFixedSize(false)
+        addOnScrollListener(object : RecyclerView.OnScrollListener() {
+            override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) = onViewportGeometryChanged()
+        })
     }
     val scrollView: ReverbLibraryRecyclerView get() = list
     private val guardedActions = LibraryRecordingRowActions(
@@ -199,6 +210,8 @@ internal class ReverbLibraryListView(
             expandedOwner = value.expandedOwner,
             trimRequestRecordingId = value.trimRequestRecordingId,
             screenActive = value.screenActive,
+            infoRecordingId = value.infoRecordingId,
+            renameRecordingId = value.renameRecordingId,
         )) ?: return
         val preserveTop = update.catalogChanged && !pendingPosition.hasKeyedRequest &&
             savePosition() == NativeListSavedPosition(0, 0)
@@ -260,6 +273,20 @@ internal class ReverbLibraryListView(
             if (holder.binding?.recording?.id == recordingId) result = holder.row
         }
         return result
+    }
+
+    /** Prefer editor plus actions over leading decoration when the padded header cannot fit. */
+    fun revealRenameHeader(header: View, editor: View, validation: Boolean = false) {
+        val item = list.findContainingItemView(header) as? ViewGroup ?: return
+        val headerBounds = android.graphics.Rect(0, 0, header.width, header.height)
+        val editorBounds = android.graphics.Rect(0, 0, editor.width, editor.height)
+        item.offsetDescendantRectToMyCoords(header, headerBounds)
+        item.offsetDescendantRectToMyCoords(editor, editorBounds)
+        val top = libraryRenameRevealTop(header.height, editorBounds.top - headerBounds.top,
+            (list.height - list.paddingTop - list.paddingBottom).coerceAtLeast(0), validation)
+        val rectangle = if (top == null) editorBounds else headerBounds.apply { this.top += top }
+        // Same retained-rectangle path as Settings: scroll RV, never request a second window pan.
+        list.requestChildRectangleOnScreen(item, rectangle, true)
     }
 
     /** Mirrors removal of the source LazyColumn branch; a temporary inactive screen does not call this. */
@@ -344,6 +371,9 @@ internal class ReverbLibraryListView(
         val expandedOwner: InlinePlaybackRowOwner? = null,
         val trimRequested: Boolean = false,
         val screenActive: Boolean = false,
+        val info: Boolean = false,
+        val rename: Boolean = false,
+        val modalHidden: Boolean = false,
         val footer: Boolean = false,
     )
 
@@ -409,7 +439,10 @@ internal class ReverbLibraryListView(
         private fun presentation(entry: Entry, previous: LibraryRecordingRow? = null): Entry {
             val recording = checkNotNull(entry.recording)
             val state = checkNotNull(rowUpdates.current)
-            val expanded = state.expandedRecordingId == recording.id
+            val info = state.infoRecordingId == recording.id
+            val rename = state.renameRecordingId == recording.id
+            val modalId = state.infoRecordingId ?: state.renameRecordingId
+            val expanded = info || state.expandedRecordingId == recording.id
             return entry.copy(row = LibraryRecordingRow(
                 recordingId = recording.id,
                 title = recording.displayName,
@@ -418,12 +451,15 @@ internal class ReverbLibraryListView(
                 timestamp = previous?.timestamp ?: formatRecordingStartTimestamp(context, recording.startedAtMillis),
                 selected = recording.id in state.selectedIds,
                 selectionActive = state.selectionActive,
-                interactionsEnabled = recording.id !in state.blockedIds,
+                interactionsEnabled = recording.id !in state.blockedIds && !rename &&
+                    (modalId == null || modalId == recording.id),
                 edges = checkNotNull(entry.edges),
                 expanded = expanded,
+                activationLabel = if (info) context.getString(R.string.recording_details_hide) else null,
             ), expandedOwner = state.expandedOwner?.takeIf { expanded },
                 trimRequested = state.trimRequestRecordingId == recording.id,
-                screenActive = state.screenActive)
+                screenActive = state.screenActive, info = info, rename = rename,
+                modalHidden = modalId != null && modalId != recording.id)
         }
 
         private fun refresh(holder: RecordingHolder) {
@@ -530,23 +566,28 @@ internal class ReverbLibraryListView(
 
         fun bind(entry: Entry) {
             if (binding?.key != entry.key) retire()
+            if (expansion != null && entry.row?.expanded == true && binding?.info != entry.info) releaseExpansion()
             binding = entry
             boundRevision = rowUpdates.revision
             boundFormattingRevision = formattingRevision
             row.setEnvironment(environment)
             val model = checkNotNull(entry.row)
+            row.importantForAccessibility = if (entry.modalHidden) View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+                else View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            row.setHeaderView(if (entry.rename) inlineHost.renameHeader(model.recordingId) else null)
             row.bind(model, guardedActions.copy(
                 activate = guardedActions.activate.takeIf { currentActions.activate != null },
-                longClick = guardedActions.longClick.takeIf { currentActions.longClick != null },
+                longClick = guardedActions.longClick.takeIf { currentActions.longClick != null && !entry.info },
                 leadingLongClick = guardedActions.leadingLongClick.takeIf {
-                    currentActions.leadingLongClick != null }))
+                    currentActions.leadingLongClick != null && !entry.info }))
             if (model.expanded && expansion == null) {
                 val token = Any()
                 expansionToken = token
                 row.onExpansionExit = {
                     if (expansionToken === token && binding?.row?.expanded == false) releaseExpansion()
                 }
-                val lease = inlineHost.create(context, model.recordingId)
+                val lease = if (entry.info) inlineHost.createInfo(context, model.recordingId)
+                    else inlineHost.create(context, model.recordingId)
                 expansion = lease
                 row.setExpansionView(lease.view)
                 lease.setPresentationAttached(attached)
@@ -577,6 +618,7 @@ internal class ReverbLibraryListView(
         }
 
         fun retire() {
+            row.setHeaderView(null)
             binding = null
             boundRevision = -1L
             boundFormattingRevision = -1L

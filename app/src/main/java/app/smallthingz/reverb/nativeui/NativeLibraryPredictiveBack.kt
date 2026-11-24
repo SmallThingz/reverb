@@ -54,7 +54,7 @@ internal class NativeLibraryPredictiveBack(
     private var activeJobStarted = false
     private var predictive = false
     private var closed = false
-    /** Library's shared Back/Incidents preview opts in; selection and inline owners retain their contract. */
+    /** Panels and child Library owners opt in; other callers retain immediate cancellation. */
     var animateCancellation: Boolean = false
     /** Panel-only handoff: revoke its ordinary frame publisher and return the currently displayed Back fraction. */
     var takeCurrentBackProgress: (() -> Float)? = null
@@ -107,10 +107,11 @@ internal class NativeLibraryPredictiveBack(
     fun bind(enabled: Boolean, onBack: () -> Unit) {
         if (closed) return
         this.onBack = onBack
-        val retirePanelGesture = !enabled && callback.isEnabled && takeCurrentBackProgress != null && !committed
+        val retireDisabledGesture = !enabled && callback.isEnabled &&
+            (takeCurrentBackProgress != null || animateCancellation) && !committed
         if (!enabled && callback.isEnabled && activeJob?.isActive == false) cancelGesture()
         callback.isEnabled = enabled
-        if (retirePanelGesture) cancelGesture()
+        if (retireDisabledGesture) cancelGesture()
         if (this.enabled == enabled) return
         this.enabled = enabled
         enabledEffect?.cancel()

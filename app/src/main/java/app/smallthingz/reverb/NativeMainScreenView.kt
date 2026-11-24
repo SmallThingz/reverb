@@ -93,9 +93,10 @@ internal class NativeMainScreenView private constructor(
     // Window relayout/configuration can change metrics without changing this constrained child.
     private val settingsWindowLayout = ViewTreeObserver.OnGlobalLayoutListener { settingsGeometryWidth = -1 }
     private val settingsGeometry = ViewTreeObserver.OnPreDrawListener {
-        if (closed || settings == null || !navigation.showSettings ||
+        if (closed || (!navigation.showSettings && library?.inlineModalActive != true) ||
             windowInsets.getInsets(WindowInsetsCompat.Type.ime()).bottom == 0 || !updateSettingsBottomInset()) true else {
             settings?.bind(settingsInput(), environment)
+            library?.bind(libraryInput(), environment)
             false // Lay out the changed viewport before publishing this frame.
         }
     }
@@ -120,11 +121,22 @@ internal class NativeMainScreenView private constructor(
     private val clipLeases = IdentityHashMap<View, Any>()
     private val shellLayouts = IdentityHashMap<View, ShellLayout>()
     private val blockedSurfaceFocus = IdentityHashMap<ViewGroup, Int>()
+    private var admittedSettings: View? = null
+    private var admittedLibrary: View? = null
+    private var admittedLibraryToolbar: View? = null
+    private var admittedInfo: RecordingEntity? = null
+    private var admittedRename: RecordingEntity? = null
+    private var admissionFlags = -1
+    private var admissionGeneration = 0L
     private var drawOrder = emptyList<View>()
+    private var inputOrder = emptyList<View>()
     private var orderedSettings: View? = null
     private var orderedLibrary: View? = null
     private var orderedLibraryToolbar: View? = null
     private var orderedLibraryAboveHome = false
+    private var orderedLibraryInlineModal = false
+    private var orderedLibraryBackdrop = false
+    private var libraryInlineModal = false
     private var orderedFeedbackLayer: ReverbMainFeedbackLayer? = null
     private var lastSaveFeedbackVisible: Boolean? = null
     private var measuredFeedbackBottom = Int.MIN_VALUE
@@ -139,7 +151,7 @@ internal class NativeMainScreenView private constructor(
         onBackRequested = { navigate { closeIncidents() } },
         onAlertChanged = { alert -> hasIncidentAlert = alert; requestRender() })
     private var hasIncidentAlert: Boolean = incidentsOwner.state.history.hasAlert
-    private val source = NativeMainAccessibility(windowRoot, this, { drawOrder }, ::ownNodeHidden,
+    private val source = NativeMainAccessibility(windowRoot, this, { inputOrder }, ::ownNodeHidden,
         ::sourceClip, inactiveLayer = ::inactiveSurface, minimumTouch = { view ->
             val sourceClick = view is NativeClickPhaseHost &&
                 (view !is NativeMergedRowAccessibilityHost || view.mergesAccessibilityDescendants)
@@ -171,7 +183,7 @@ internal class NativeMainScreenView private constructor(
             }
             requestRender()
         },
-        onDelta = { delta -> navigation.verticalRevealDelta(delta, home.height.toFloat()); requestRender() },
+        onDelta = ::revealDelta,
         onEnd = { navigation.endVerticalReveal(); requestRender() },
         onCancel = { navigation.cancelVerticalReveal(); requestRender() },
     )
@@ -314,6 +326,27 @@ internal class NativeMainScreenView private constructor(
         } finally { rendering = false }
     }
 
+    /** Start/end/cancel publish the full shell; a delta only retargets its live motion owner. */
+    private fun revealDelta(delta: Float) {
+        navigation.verticalRevealDelta(delta, home.height.toFloat())
+        if (!started || closed) return
+        if (rendering) { renderAgain = true; return }
+        rendering = true
+        renderAgain = false
+        try {
+            when (navigation.dragTarget) {
+                NativeMainPanel.SETTINGS -> settingsMotion.bind(navigation.showSettings, true,
+                    navigation.settingsDragProgress, navigation.settingsBackEnabled) { navigate { closeSettings() } }
+                NativeMainPanel.LIBRARY -> libraryMotion.bind(navigation.showLibrary, true,
+                    navigation.libraryDragProgress, navigation.libraryBackEnabled) { navigate { closeLibrary() } }
+                null -> Unit
+            }
+        } finally { rendering = false }
+        // A synchronous owner callback can change navigation while binding motion. It still gets
+        // a full render; otherwise coalesce motion's synchronous callback into one placement pass.
+        if (renderAgain) requestRender() else motionChanged()
+    }
+
     /** Motion changes placement only; never rebind every Library row or recapture semantics per frame. */
     private fun motionChanged() {
         if (!started || closed) return
@@ -414,7 +447,14 @@ internal class NativeMainScreenView private constructor(
         val content = ReverbLibraryScreenContent(context, environment, libraryInput(),
             lifecycleOwner, dispatcher, scope, frames,
             { scope.coroutineContext[MotionDurationScale]?.scaleFactor ?: 1f }, accessibilityManager,
-            this, noNestedScroll, ::libraryNodesChanged, {}, restoredScrollPosition = restored?.libraryPosition)
+            this, noNestedScroll, ::libraryNodesChanged, { state ->
+                val modal = state.renameRecording != null || state.infoRecording != null
+                if (libraryInlineModal != modal || orderedLibraryBackdrop != (library?.inlineBackdropVisible == true)) {
+                    libraryInlineModal = modal
+                    requestRender()
+                }
+                else if (started && !closed) updateSurfaceAdmission()
+            }, restoredScrollPosition = restored?.libraryPosition)
         library = content
         libraryLayer = NativeMainLibraryLayer(context, environment, content).also(::addView)
         libraryPointer = NativeLibraryPointerBinding(content, pointer.coordinates, frames, scope) { false }
@@ -448,7 +488,7 @@ internal class NativeMainScreenView private constructor(
                     navigation.libraryUndoVisible = it; requestRender()
                 } },
             )),
-        hasIncidentAlert, false, LibraryScaffoldInsets(visualInsets.left, visualInsets.right, visualInsets.bottom),
+        hasIncidentAlert, false, LibraryScaffoldInsets(visualInsets.left, visualInsets.right, settingsBottomInset),
         { navigate { openAbout() } }, { navigate { openIncidentsFromLibrary() } },
         { navigate { openSettingsFromLibrary() } }, { navigate { closeLibrary() } })
 
@@ -583,12 +623,25 @@ internal class NativeMainScreenView private constructor(
 
     private fun updateDrawOrder(feedbackLayer: ReverbMainFeedbackLayer) {
         val libraryAboveHome = navigation.showLibrary || libraryMotion.panelProgress > 0f
+        val inlineModal = library?.inlineModalActive == true
+        val backdrop = library?.inlineBackdropVisible == true
         // Home, feedback and incidents are fixed identities; only these child/order keys can change.
         if (drawOrder.isNotEmpty() && orderedSettings === settings && orderedLibrary === libraryLayer &&
             orderedLibraryToolbar === libraryToolbar && orderedLibraryAboveHome == libraryAboveHome &&
-            orderedFeedbackLayer == feedbackLayer) return
-        drawOrder = ReverbMainLayout.drawOrder(settings, home, feedback, libraryLayer, libraryToolbar,
+            orderedFeedbackLayer == feedbackLayer && orderedLibraryInlineModal == inlineModal &&
+            orderedLibraryBackdrop == backdrop) return
+        val order = ReverbMainLayout.drawOrder<View>(settings, home, feedback, libraryLayer, libraryToolbar,
             incidents, libraryAboveHome, feedbackLayer)
+        val withBackdrop = if (!backdrop || libraryLayer == null || libraryToolbar == null) order
+            else order.toMutableList().apply {
+                remove(checkNotNull(libraryToolbar))
+                add(indexOf(checkNotNull(libraryLayer)), checkNotNull(libraryToolbar))
+            }
+        drawOrder = withBackdrop
+        // A retiring backdrop is paint only. Restore toolbar hit order at the logical dismissal.
+        inputOrder = if (inlineModal) withBackdrop else order
+        orderedLibraryBackdrop = backdrop
+        orderedLibraryInlineModal = inlineModal
         orderedSettings = settings
         orderedLibrary = libraryLayer
         orderedLibraryToolbar = libraryToolbar
@@ -599,7 +652,7 @@ internal class NativeMainScreenView private constructor(
     override fun getChildDrawingOrder(childCount: Int, drawingPosition: Int): Int =
         drawOrder.getOrNull(drawingPosition)?.let(::indexOfChild)?.takeIf { it >= 0 } ?: drawingPosition
 
-    internal fun hitChildren(): List<NativeViewPointerHitLayout> = drawOrder.asReversed().mapNotNull { view ->
+    internal fun hitChildren(): List<NativeViewPointerHitLayout> = inputOrder.asReversed().mapNotNull { view ->
         when (view) {
             home -> homePointer.layout
             settings -> settingsPointer?.layout
@@ -688,14 +741,35 @@ internal class NativeMainScreenView private constructor(
     private fun inactiveSurface(view: View) = when (view) {
         home -> !navigation.homeGesturesEnabled
         settings -> !navigation.settingsPanelActive
-        libraryLayer, libraryToolbar -> !navigation.libraryActive || navigation.showSettings
-        else -> false
+        libraryLayer -> !navigation.libraryActive || navigation.showSettings
+        libraryToolbar -> !navigation.libraryActive || navigation.showSettings || library?.inlineModalActive == true
+        else -> library?.inlineInputExcluded(view) == true
     }
 
     override fun admitsSurfaceInput(descendant: View): Boolean = !source.inInactiveLayer(descendant)
 
     private fun updateSurfaceAdmission() {
+        val state = library?.currentState()
+        val flags = (if (navigation.homeGesturesEnabled) 1 else 0) or
+            (if (navigation.settingsPanelActive) 2 else 0) or
+            (if (navigation.libraryActive) 4 else 0) or
+            (if (navigation.showSettings) 8 else 0) or
+            (if (navigation.showAboutDialog) 16 else 0) or
+            (if (navigation.incidentsOverlayVisible) 32 else 0)
+        if (admissionFlags == flags && admittedSettings === settings &&
+            admittedLibrary === libraryLayer && admittedLibraryToolbar === libraryToolbar &&
+            admittedInfo === state?.infoRecording && admittedRename === state?.renameRecording) return
+        // Publish before menu/focus callbacks: an identical reentrant pass is already covered,
+        // and a newer admission generation must win over this pass's remaining cleanup.
+        admissionFlags = flags
+        admittedSettings = settings
+        admittedLibrary = libraryLayer
+        admittedLibraryToolbar = libraryToolbar
+        admittedInfo = state?.infoRecording
+        admittedRename = state?.renameRecording
+        val generation = ++admissionGeneration
         if (!navigation.settingsPanelActive) settings?.dismissAudioChoices()
+        if (generation != admissionGeneration || closed) return
         val surfaces = listOfNotNull(home, settings, libraryLayer, libraryToolbar)
         blockedSurfaceFocus.keys.filter { it !in surfaces }.forEach(blockedSurfaceFocus::remove)
         for (surface in surfaces) {
@@ -707,6 +781,7 @@ internal class NativeMainScreenView private constructor(
                 // Block first: clearFocus may synchronously request a replacement target.
                 surface.findFocus()?.clearFocus()
             } else blockedSurfaceFocus.remove(surface)?.let { surface.descendantFocusability = it }
+            if (generation != admissionGeneration || closed) return
             // Settings owns its importance while hydration/input readiness changes.
             if (surface !== settings) surface.importantForAccessibility =
                 if (inactiveSurface(surface)) IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS

@@ -9,6 +9,8 @@ internal data class NativeLibraryRowState<Owner : Any>(
     val expandedOwner: Owner?,
     val trimRequestRecordingId: String?,
     val screenActive: Boolean,
+    val infoRecordingId: String? = null,
+    val renameRecordingId: String? = null,
 )
 
 internal data class NativeLibraryListUpdate(
@@ -43,7 +45,9 @@ internal class NativeLibraryListUpdates<Owner : Any> {
             previous.expandedRecordingId == state.expandedRecordingId &&
             previous.expandedOwner === state.expandedOwner &&
             previous.trimRequestRecordingId == state.trimRequestRecordingId &&
-            previous.screenActive == state.screenActive) return null
+            previous.screenActive == state.screenActive &&
+            previous.infoRecordingId == state.infoRecordingId &&
+            previous.renameRecordingId == state.renameRecordingId) return null
 
         val next = state.copy(
             selectedIds = if (previous != null && !selectedChanged) previous.selectedIds else state.selectedIds.toSet(),
@@ -63,12 +67,22 @@ internal class NativeLibraryListUpdates<Owner : Any> {
                 next.trimRequestRecordingId?.let(affected::add)
             }
         }
+        if (previous?.infoRecordingId != next.infoRecordingId) {
+            previous?.infoRecordingId?.let(affected::add)
+            next.infoRecordingId?.let(affected::add)
+        }
+        if (previous?.renameRecordingId != next.renameRecordingId) {
+            previous?.renameRecordingId?.let(affected::add)
+            next.renameRecordingId?.let(affected::add)
+        }
         this.catalog = catalog
         current = next
         revision++
         return NativeLibraryListUpdate(catalogChanged,
             previous == null || previous.selectionActive != next.selectionActive ||
-                previous.screenActive != next.screenActive,
+                previous.screenActive != next.screenActive ||
+                previous.infoRecordingId != next.infoRecordingId ||
+                previous.renameRecordingId != next.renameRecordingId,
             affected)
     }
 

@@ -99,6 +99,7 @@ internal class NativeLibraryPlayerLease(
             backOwner = owner
             back?.close()
             back = NativeLibraryPredictiveBack(backDispatcher, lifecycleOwner, scope, frames, ::backFrame)
+                .apply { animateCancellation = true }
         }
         back?.bind(next.screenActive && owner != null) { finishBack(owner) }
         val currentController = controller

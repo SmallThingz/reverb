@@ -253,7 +253,7 @@ internal fun fileCopyPublicationForTarget(
 internal interface FileCopyPublicationStore {
     fun records(): List<FileCopyPublication>
     fun replace(previous: FileCopyPublication?, next: FileCopyPublication?)
-    fun preserveIncomplete(record: FileCopyPublication, fingerprint: StableOutputFingerprint)
+    fun preserveIncomplete(record: FileCopyPublication, fingerprint: StableOutputFingerprint, failure: FileCopyRecoveryRequired)
 }
 
 internal class ContextFileCopyPublicationStore(private val context: Context) : FileCopyPublicationStore {
@@ -261,14 +261,13 @@ internal class ContextFileCopyPublicationStore(private val context: Context) : F
     override fun replace(previous: FileCopyPublication?, next: FileCopyPublication?) =
         FileCopyPublications.replace(context, previous, next)
 
-    override fun preserveIncomplete(record: FileCopyPublication, fingerprint: StableOutputFingerprint) {
+    override fun preserveIncomplete(record: FileCopyPublication, fingerprint: StableOutputFingerprint, failure: FileCopyRecoveryRequired) {
         // A closed crash-left partial gains suppression only, never deletion authority.
         if (!suppressFileOutputWithoutDeletion(context, record.targetId, fingerprint.digest)) {
             throw IOException("Unable to preserve incomplete FILE publication")
         }
         replace(record, null)
-        reportFileCopyRecoveryIncident(context, record.token,
-            FileCopyRecoveryRequired("Incomplete or ambiguous publication preserved without deletion authority"))
+        reportFileCopyRecoveryIncident(context, record.token, failure)
     }
 }
 
@@ -356,8 +355,13 @@ internal object DefaultFileCopyPublicationIo : FileCopyPublicationIo {
     }
 }
 
-internal class FileCopyRecoveryRequired(message: String) : IOException(message)
-internal class FileCopyCleanupPendingException(message: String, cause: Throwable? = null) : IOException(message, cause)
+internal open class FileCopyIncidentException(message: String, cause: Throwable? = null) : IOException(message, cause) {
+    @Volatile var incidentOwnedByRecovery: Boolean = false
+        internal set
+}
+
+internal class FileCopyRecoveryRequired(message: String) : FileCopyIncidentException(message)
+internal class FileCopyCleanupPendingException(message: String, cause: Throwable? = null) : FileCopyIncidentException(message, cause)
 
 internal fun recoverFileCopyPublication(
     store: FileCopyPublicationStore,
@@ -390,16 +394,18 @@ internal fun recoverFileCopyPublication(
         ?: throw FileCopyRecoveryRequired("Copied publication is absent or unavailable; source is retained")
     when (record.phase) {
         FileCopyPhase.RESERVED -> {
-            store.preserveIncomplete(record, current)
-            throw FileCopyRecoveryRequired("Interrupted file creation preserved; retry will choose another name")
+            val failure = FileCopyRecoveryRequired("Interrupted file creation preserved; retry will choose another name")
+            store.preserveIncomplete(record, current, failure)
+            throw failure
         }
         FileCopyPhase.CREATED -> {
             if (!sameFileObjectAcrossRename(record.createdIdentity, current.fileKey.orEmpty())) {
                 throw FileCopyRecoveryRequired("Copied publication changed; both files are preserved")
             }
             if (!copyDigestMatches(record.sourceFingerprint().digest, current.digest)) {
-                store.preserveIncomplete(record, current)
-                throw FileCopyRecoveryRequired("Incomplete copied publication preserved; retry will choose another name")
+                val failure = FileCopyRecoveryRequired("Incomplete copied publication preserved; retry will choose another name")
+                store.preserveIncomplete(record, current, failure)
+                throw failure
             }
             io.forceFile(target, current)
             io.forceDirectory(requireNotNull(target.parentFile))

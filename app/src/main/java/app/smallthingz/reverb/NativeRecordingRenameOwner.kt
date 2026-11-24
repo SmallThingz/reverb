@@ -21,9 +21,9 @@ internal data class NativeRecordingRenameCallbacks(
 )
 
 /**
- * Mechanical RenameRecordingDialog operation/draft owner. The source editable remains enabled
- * while a rename is accepted; only Cancel/confirm and the sheet's dismiss callback are gated.
- * Accepted work reuses runCommittedRecordingRename and RenameResultReceiver without new checks.
+ * One captured recording lifetime owns the draft; metadata rebinds never replace user input.
+ * New edits/Done need current UI admission. Accepted work still uses the committed rename receiver
+ * and survives presentation retirement independently of that admission.
  */
 internal class NativeRecordingRenameOwner(
     context:Context,
@@ -32,6 +32,7 @@ internal class NativeRecordingRenameOwner(
     private val lifecycleOwner:LifecycleOwner,
     parentScope:CoroutineScope,
     initialCallbacks:NativeRecordingRenameCallbacks,
+    private val acceptsInput: () -> Boolean = { true },
     private val publish:(NativeRecordingRenameState)->Unit,
 ):AutoCloseable {
     private val appContext=context.applicationContext
@@ -50,19 +51,21 @@ internal class NativeRecordingRenameOwner(
 
     fun bind(recording:RecordingEntity,active:Boolean,callbacks:NativeRecordingRenameCallbacks) {
         if(closed)return
-        require(this.recording.id==recording.id){"A new recording ID requires a new source rename lifetime"}
-        if(this.recording.displayName!=recording.displayName)state=state.copy(name=baseName(recording.displayName))
+        require(sameRecordingActionTarget(this.recording, recording)){"A new recording target requires a new rename lifetime"}
+        // Seed only at construction. Even a same-asset name enrichment is not an edit/undo command.
         this.recording=recording;this.active=active;this.callbacks=callbacks
         changed()
     }
+    private fun inputAllowed() = !closed && active &&
+        lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) && acceptsInput()
     fun editName(value:String) {
-        if(closed)return
+        if(!inputAllowed() || state.isRenaming)return
         state=state.copy(name=value,error=null)
         changed()
     }
     fun requestDismiss() {if(!closed&&!state.isRenaming)callbacks.onDismiss()}
     fun submit() {
-        if(closed||state.isRenaming)return
+        if(!inputAllowed()||state.isRenaming)return
         val trimmed=state.name.trim()
         if(trimmed.isBlank()) {
             state=state.copy(error=resources.getString(R.string.rename_recording_invalid));changed();return

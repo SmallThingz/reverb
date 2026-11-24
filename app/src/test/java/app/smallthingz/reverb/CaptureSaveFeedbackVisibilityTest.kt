@@ -20,6 +20,32 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CaptureSaveFeedbackVisibilityTest {
+    @Test fun bookkeepingAndReporterFailuresCannotReplaceSuccessOrDuplicateDelivery() {
+        for (detached in listOf(false, true)) {
+            val failure = IllegalStateException("bookkeeping")
+            val reports = mutableListOf<Throwable>()
+            val fallbacks = mutableListOf<RecordingEntity>()
+            var saved = 0
+            var terminals = 0
+            val gate = SaveUiCallbackGate({}, {}, {}, { saved++ })
+            val receiver = SaveResultReceiver(gate,
+                object : ReverbService.AudioFileReceiver {
+                    override fun fileReady(recording: RecordingEntity) { fallbacks += recording }
+                    override fun fileFailed(message: String, error: Throwable?) { throw AssertionError("save failed") }
+                }, { "Save failed" }, onCommitted = { throw failure }, onTerminal = { terminals++ },
+                onCommittedFailure = { reports += it; throw IllegalStateException("reporter") })
+            if (detached) receiver.detachUi()
+            val output = recording("bookkeeping")
+            repeat(2) { receiver.fileReady(output) }
+            receiver.fileCancelled()
+            assertEquals(listOf(failure), reports)
+            assertEquals(if (detached) 0 else 1, saved)
+            assertEquals(if (detached) listOf(output) else emptyList<RecordingEntity>(), fallbacks)
+            assertEquals(1, terminals)
+            assertFalse(gate.attached)
+        }
+    }
+
     @Test
     fun visibleReceiverKeepsTheSavedCardAndCompletesItsExactOwnerOnce() {
         val host = Host { true }

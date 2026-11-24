@@ -2198,6 +2198,7 @@ open class ReverbService : Service() {
                     runBlocking { RecordingRepository.registerFromAcceptedOperation(this@ReverbService, created) }
                 } catch (error: Exception) {
                     if (!catalogRegistrationFailureAllowsVerifiedSaveSuccess(error)) throw error
+                    reportUnexpectedRecordingOperationFailure(this@ReverbService, "Export recording catalog", error)
                     Log.w(TAG, "FLAC copy saved; catalog refresh is pending", error)
                     created
                 }
@@ -2276,7 +2277,7 @@ open class ReverbService : Service() {
             acquire = {
                 // Readiness is an expected admission outcome, not a persistent-store incident.
                 if (!captureStoresReady) throw IOException("Audio history is not ready")
-                try {
+                prepareBufferedSave(failureOperation) {
                     flushAudioRecord()
                     ensureDurableSaveActive(owner)
                     val store = chunkStore(bufferSlot)
@@ -2284,17 +2285,14 @@ open class ReverbService : Service() {
                     acquireExportRange(store, start, end)?.let { lease ->
                         PreparedBufferedExport(lease, getConfigurationSnapshot())
                     }
-                } catch (error: Exception) {
-                    if (!serviceDestroying && !foregroundServiceTimedOut) reportPersistentStoreFailure(failureOperation, error)
-                    throw error
                 }
             },
             releaseUnclaimed = { prepared ->
                 releaseTimelineSnapshotOffMain(prepared) { error ->
-                    reportPersistentStoreFailure("release unclaimed export range", error)
+                    reportSaveCleanupFailure("release unclaimed export range", error)
                 }
             },
-            onReleaseFailure = { error -> reportPersistentStoreFailure("release export range", error) },
+            onReleaseFailure = { error -> reportSaveCleanupFailure("release export range", error) },
             onEmpty = {
                 finishDurableSaveFailure(owner, getString(R.string.nothing_to_export), null)
             },
@@ -2313,6 +2311,13 @@ open class ReverbService : Service() {
             }
         }
     }
+
+    private fun prepareBufferedSave(operation: String, acquire: () -> PreparedBufferedExport?): PreparedBufferedExport? =
+        try { acquire() } catch (error: Exception) {
+            // The terminal Save owner records this same exception after the worker receives it.
+            if (!serviceDestroying && !foregroundServiceTimedOut) reportSaveFailureFeedback(operation, error)
+            throw error
+        }
 
     private class PreparedBufferedExport(
         val lease: PersistentAudioChunkStore.RangeLease,
@@ -2395,6 +2400,7 @@ open class ReverbService : Service() {
         val beforeAdmission = owner.jobId == null
         finishDurableSaveOwner(owner)
         if (owner.terminalDelivered.compareAndSet(false, true)) {
+            error?.let { reportUnexpectedRecordingOperationFailure(this, "Save recording", it) }
             mainHandler.post {
                 // A newer recovery/progress/completion supersedes this attempt's failure.
                 // The claim is the delivery ordering point; receiver code runs outside the lock.
@@ -2454,11 +2460,8 @@ open class ReverbService : Service() {
                 loopingStore = if (::loopingAudioChunkStore.isInitialized) loopingAudioChunkStore else null,
                 oneShotStore = if (::oneShotAudioChunkStore.isInitialized) oneShotAudioChunkStore else null,
                 pauseCapture = { pauseListeningAfterPersistenceFailure("seal source for Save", error) },
-                recordIncident = {
-                    // Include IOException: a terminal close failure is an incident even when
-                    // finalized PCM is durable and capture can safely continue.
-                    RecordingIncidentStore.recordUnexpectedErrorInBackground(this, "Seal source for Save", error)
-                },
+                // The terminal save owner records this exception once after capture handling.
+                recordIncident = {},
             )
             throw error
         }
@@ -2633,7 +2636,7 @@ open class ReverbService : Service() {
     ) {
         val exportConfig = getConfigurationSnapshot()
         val onReleaseFailure: (Exception) -> Unit = { error ->
-            reportPersistentStoreFailure("release export-range snapshot", error)
+            reportSaveCleanupFailure("release export-range snapshot", error)
         }
         fun releaseRejectedSnapshot(owned: TimelineSnapshot) {
             releaseTimelineSnapshotOffMain(owned, onReleaseFailure)
@@ -2662,7 +2665,7 @@ open class ReverbService : Service() {
             releaseUnstarted = ::releaseRejectedSnapshot,
             onParentReleaseFailure = onReleaseFailure,
             onChildReleaseFailure = { error ->
-                reportPersistentStoreFailure("release export range", error)
+                reportSaveCleanupFailure("release export range", error)
             },
             beforeAcquire = { ensureDurableSaveActive(owner) },
             acquire = { owned ->
@@ -3230,10 +3233,12 @@ open class ReverbService : Service() {
     private inline fun deliverExportTerminal(
         token: ExportCancellationToken,
         receiver: AudioFileReceiver?,
+        onClaim: () -> Unit = {},
         crossinline delivery: AudioFileReceiver.() -> Unit,
     ) {
-        if (!token.terminalDelivered.compareAndSet(false, true) || receiver == null) return
-        mainHandler.post { receiver.delivery() }
+        if (!token.terminalDelivered.compareAndSet(false, true)) return
+        onClaim()
+        if (receiver != null) mainHandler.post { receiver.delivery() }
     }
 
     // The terminal receiver owns user feedback, including detached/throwing-UI fallback.
@@ -3247,7 +3252,9 @@ open class ReverbService : Service() {
         if (token.cancelled.get()) {
             finishExportCancellation(token, receiver)
         } else {
-            deliverExportTerminal(token, receiver) { fileFailed(message, error) }
+            deliverExportTerminal(token, receiver, onClaim = {
+                error?.let { reportUnexpectedRecordingOperationFailure(this@ReverbService, "Export recording", it) }
+            }) { fileFailed(message, error) }
         }
     }
 
@@ -5685,6 +5692,17 @@ open class ReverbService : Service() {
     private fun reportPersistentStoreFailure(operation: String, error: Throwable) {
         recordPersistentStoreFailure(operation, error)
         reportError(userFacingError(getString(R.string.recorder_state_persist_failed), error))
+    }
+
+    private fun reportSaveFailureFeedback(operation: String, error: Throwable) {
+        Log.e(TAG, "Persistent audio store $operation failed", error)
+        reportError(userFacingError(getString(R.string.recorder_state_persist_failed), error))
+    }
+
+    private fun reportSaveCleanupFailure(operation: String, error: Throwable) {
+        // Cleanup is independently owned and may fail after a verified Save has succeeded.
+        reportUnexpectedRecordingOperationFailure(this, "Save cleanup: $operation", error)
+        reportSaveFailureFeedback(operation, error)
     }
 
     private fun reportTerminalCaptureStoreFailure(operation: String, error: Throwable) {

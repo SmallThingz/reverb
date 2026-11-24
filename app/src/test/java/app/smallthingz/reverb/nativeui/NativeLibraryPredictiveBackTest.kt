@@ -642,6 +642,54 @@ class NativeLibraryPredictiveBackTest(private val queued: Boolean) {
         assertEquals(0, f.pendingFrames)
     }
 
+    @Test fun disabledSmoothChildRetiresOpenStreamBeforeLateTerminal() = smoothScenario { f ->
+        f.start(.6f)
+        f.back.bind(false) { f.commits++ }
+        f.drain()
+        assertFalse(f.last.active)
+        assertFalse(f.back.ownsProgress)
+        assertEquals(0f, f.last.progress, 0f)
+        val publications = f.states.size
+        f.callback.handleOnBackProgressed(event(.9f))
+        f.drain()
+        assertEquals(publications, f.states.size)
+        f.callback.handleOnBackPressed()
+        f.drain()
+        f.at(0)
+        f.at(300)
+        assertEquals(0, f.commits)
+        assertEquals(0, f.pendingFrames)
+        assertFalse(f.back.commitCompleted)
+        f.back.bind(true) { f.commits++ }
+        f.drain()
+        f.start(.4f)
+        assertEquals(.4f, f.last.progress, 0f)
+        f.callback.handleOnBackCancelled()
+        f.drain()
+        f.at(400)
+        f.at(560)
+        assertFalse(f.last.active)
+        assertEquals(0, f.pendingFrames)
+        assertEquals(0, f.commits)
+    }
+
+    @Test fun smoothReturnTerminalDoesNotKeepRequestingIdleFrames() = smoothScenario { f ->
+        f.start(.6f)
+        f.callback.handleOnBackCancelled()
+        f.drain()
+        f.at(0)
+        f.at(160)
+        val publications = f.states.size
+        val requests = f.frameRequests
+        f.at(320)
+        f.at(640)
+        assertFalse(f.back.ownsProgress)
+        assertEquals(0, f.pendingFrames)
+        assertEquals(requests, f.frameRequests)
+        assertEquals(publications, f.states.size)
+        assertEquals(0, f.commits)
+    }
+
     private fun smoothScenario(scale: Float = 1f, block: (Fixture) -> Unit) {
         Fixture(queued, smoothCancellation = true, durationScale = scale).use(block)
     }

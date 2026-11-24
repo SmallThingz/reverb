@@ -967,11 +967,15 @@ internal fun recoverDurableSavePublication(
             }
         }
         RecordingStorageType.MEDIASTORE -> {
-            val observed = readStableMediaStorePublicationObservation(context, requireNotNull(target.uri))
+            var unavailableReason = "observation unavailable"
+            val observed = readStableMediaStorePublicationObservation(context, requireNotNull(target.uri)) {
+                unavailableReason = it
+            }
             if (mediaStorePublicationMatchesExpected(target.displayName, expected, observed)) {
                 return target.copy(staging = false, publishedIdentity = requireNotNull(observed?.fingerprint?.providerIdentity))
             }
-            if (observed?.pending != true) throw IOException("Save publication is uncertain")
+            if (observed?.pending != true) throw IOException("Save publication is uncertain: " +
+                mediaStorePublicationMismatch(target.displayName, expected, observed, unavailableReason))
         }
         RecordingStorageType.DOCUMENT -> {
             val observed = readStableDocumentPublicationObservation(context, target.directoryId.toUri(),
@@ -1027,6 +1031,21 @@ private data class MediaStorePublicationMetadata(
     val pending: Boolean?,
 )
 
+internal fun mediaStorePublicationMismatch(
+    finalDisplayName: String,
+    expected: StableOutputFingerprint,
+    observed: MediaStorePublicationObservation?,
+    unavailableReason: String = "observation unavailable",
+): String = when {
+    observed == null -> unavailableReason
+    observed.pending == null -> "pending state unavailable"
+    observed.pending -> "row still pending"
+    observed.displayName != finalDisplayName -> "final name mismatch"
+    !copyDigestMatches(expected.digest, observed.fingerprint.digest) -> "payload digest mismatch"
+    !sameProviderObjectAcrossMutation(expected.providerIdentity, observed.fingerprint.providerIdentity) -> "provider object mismatch"
+    else -> "publication matched"
+}
+
 private fun queryMediaStorePublicationMetadata(
     context: Context,
     uri: Uri,
@@ -1048,20 +1067,22 @@ private fun queryMediaStorePublicationMetadata(
 private fun readStableMediaStorePublicationObservation(
     context: Context,
     uri: Uri,
+    onUnstable: (String) -> Unit = {},
 ): MediaStorePublicationObservation? {
-    val before = queryMediaStorePublicationMetadata(context, uri) ?: return null
-    val fingerprint = readStableOutputFingerprint(
-        context,
-        RecordingStorageType.MEDIASTORE,
-        uri.toString(),
-    ) ?: return null
-    val after = queryMediaStorePublicationMetadata(context, uri) ?: return null
-    if (before != after) return null
-    return MediaStorePublicationObservation(
-        displayName = after.displayName,
-        pending = after.pending,
-        fingerprint = fingerprint,
-    )
+    // Clearing IS_PENDING can trigger provider metadata scanning. Retry only observation,
+    // never update/create. Each accepted attempt still reads the entire payload with stable
+    // provider and descriptor revisions; this is not permission to accept a changing object.
+    repeat(3) {
+        val before = queryMediaStorePublicationMetadata(context, uri)
+        if (before == null) { onUnstable("metadata before payload unavailable"); return@repeat }
+        val fingerprint = readStableOutputFingerprint(context, RecordingStorageType.MEDIASTORE, uri.toString())
+        if (fingerprint == null) { onUnstable("payload identity/content observation unstable or unavailable"); return@repeat }
+        val after = queryMediaStorePublicationMetadata(context, uri)
+        if (after == null) { onUnstable("metadata after payload unavailable"); return@repeat }
+        if (before != after) { onUnstable("publication metadata changed during read"); return@repeat }
+        return MediaStorePublicationObservation(after.displayName, after.pending, fingerprint)
+    }
+    return null
 }
 
 @Throws(IOException::class)
@@ -1092,7 +1113,8 @@ private fun finalizeMediaStoreOutputTarget(
     // pending, renamed, replaced, or otherwise externally changed before Reverb adopts it.
     // Re-observe one stable metadata/content snapshot on every path and require the exact final
     // name plus positively non-pending state before granting publication authority.
-    val publication = readStableMediaStorePublicationObservation(context, uri)
+    var unavailableReason = "observation unavailable"
+    val publication = readStableMediaStorePublicationObservation(context, uri) { unavailableReason = it }
     if (!mediaStorePublicationMatchesExpected(finalName, expectedFingerprint, publication)) {
         // If the row is positively visible already, keep the uncertain result out of the Library
         // without granting delete authority. Pending/unknown rows keep their verified staging
@@ -1112,7 +1134,13 @@ private fun finalizeMediaStoreOutputTarget(
                 Log.w(TAG, "Unable to durably suppress ambiguous MediaStore publish $uri")
             }
         }
-        throw updateFailure ?: IOException("Unable to verify MediaStore publication postcondition: $uri")
+        val verificationFailure = IOException("Unable to verify MediaStore publication postcondition (" +
+            mediaStorePublicationMismatch(finalName, expectedFingerprint, publication, unavailableReason) + "): $uri")
+        if (updateFailure != null) {
+            updateFailure.addSuppressed(verificationFailure)
+            throw updateFailure
+        }
+        throw verificationFailure
     }
 
     val published = requireNotNull(publication).fingerprint

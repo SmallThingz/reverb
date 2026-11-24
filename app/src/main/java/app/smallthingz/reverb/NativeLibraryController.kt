@@ -357,7 +357,7 @@ internal class NativeLibraryController(
             val callback = input.callbacks.onSelectionActiveChange
             selectionEffect = scope.launch { callback(selected) }
         }
-        val expandedId = expandedRecordingOwner?.recordingId
+        val expandedId = renameRecording?.id ?: infoRecording?.id ?: expandedRecordingOwner?.recordingId
         if (!expandedEffectStarted || expandedId != lastExpandedId) {
             expandedEffectStarted = true
             lastExpandedId = expandedId
@@ -368,7 +368,7 @@ internal class NativeLibraryController(
         publish(NativeLibraryPresentation(
             list = LibraryNativeListState(lastListItems, selectedIds.keys.toSet(), selected,
                 activeMutationRecordingIds, localOperationBusyIds.toSet(), expandedRecordingOwner,
-                trimRequestRecordingId, input.active),
+                trimRequestRecordingId, input.active, infoRecording?.id, renameRecording?.id),
             recordings = visible,
             hasLoaded = hasLoaded && saveJobsReadiness.loaded,
             loadFailed = loadFailed || saveJobsReadiness.recoveryFailure != null,
@@ -400,31 +400,41 @@ internal class NativeLibraryController(
         recordingMutations::isActive, { setExpandedRecording(null) })
 
     fun activate(recording: RecordingEntity) {
+        if (renameRecording != null) return
+        if (infoRecording != null) { dismissInfo(); return }
         if (pendingSaveOwns(recording)) return
         contextMenuRecordingId = null
         if (selectedIds.isNotEmpty()) toggleSelection(recording)
         else setExpandedRecording(if (expandedRecordingOwner?.recordingId == recording.id) null else recording.id)
     }
     fun leadingLongClick(recording: RecordingEntity) {
+        if (renameRecording != null || infoRecording != null) return
         if (pendingSaveOwns(recording)) return
         contextMenuRecordingId = null
         setExpandedRecording(null)
         toggleSelection(recording)
     }
     fun longClick(recording: RecordingEntity) {
+        if (renameRecording != null || infoRecording != null) return
         if (pendingSaveOwns(recording)) return
         if (selectedIds.isNotEmpty()) toggleSelection(recording) else contextMenuRecordingId = recording.id
     }
     fun dismissMenu() { contextMenuRecordingId = null }
     fun rename(recording: RecordingEntity) {
         if (pendingSaveOwns(recording)) return
-        contextMenuRecordingId = null; setExpandedRecording(null)
+        contextMenuRecordingId = null
+        infoRecording = null
         renameRecording = recording
+        setExpandedRecording(null)
     }
     fun info(recording: RecordingEntity) {
-        if (pendingSaveOwns(recording)) return
-        contextMenuRecordingId = null; setExpandedRecording(null)
+        // A menu callback may outlive its published enabled state. Check live ownership before
+        // collapsing any player/trim presentation or installing Info.
+        if (renameRecording != null || pendingSaveOwns(recording) ||
+            recordingMutations.isActive(recording.id) || recording.id in localOperationBusyIds) return
+        contextMenuRecordingId = null
         infoRecording = recording
+        setExpandedRecording(null)
     }
     fun share(recording: RecordingEntity) { contextMenuRecordingId = null; shareRecordings(listOf(recording)) }
     fun shareSelection() = shareRecordings(selectedIds.values.toList())
@@ -469,11 +479,13 @@ internal class NativeLibraryController(
             })
     }
     fun dismissRename() { renameRecording = null }
-    fun renamed(renamed: RecordingEntity) {
-        val updated = recordings.map { if (it.id == (renameRecording?.id ?: renamed.id)) renamed else it }
+    fun renamed(original: RecordingEntity, renamed: RecordingEntity) {
+        // Completion belongs to the accepted target, never whichever editor is currently open.
+        val updated = libraryRecordingsAfterRename(recordings, original, renamed)
         recordings = updated
         input.callbacks.onVisibleRecordingsChanged(actionableCatalogRows(updated))
-        dismissRename(); clearSelection(); refresh(showSpinner = false)
+        if (renameRecording?.let { sameRecordingActionTarget(it, original) } == true) dismissRename()
+        clearSelection(); refresh(showSpinner = false)
     }
     fun renameUncertain(error: Throwable) {
         dismissRename(); clearSelection()
@@ -510,7 +522,7 @@ internal class NativeLibraryController(
             expandedRecordingOwner = id?.let(::InlinePlaybackRowOwner)
         }
         if (id == null) trimRequestRecordingId = null
-        input.callbacks.onExpandedRecordingActiveChange(id != null)
+        input.callbacks.onExpandedRecordingActiveChange(id != null || renameRecording != null || infoRecording != null)
     }
 
     fun syncSelectionActive() {
@@ -972,3 +984,10 @@ internal class NativeLibraryController(
         override fun putAll(from: Map<out String, RecordingEntity>) { from.forEach { (key, value) -> put(key, value) } }
     }
 }
+
+/** A late accepted result can only replace its original target, including same-ID reuse checks. */
+internal fun libraryRecordingsAfterRename(
+    recordings: List<RecordingEntity>,
+    original: RecordingEntity,
+    renamed: RecordingEntity,
+): List<RecordingEntity> = recordings.map { if (sameRecordingActionTarget(it, original)) renamed else it }

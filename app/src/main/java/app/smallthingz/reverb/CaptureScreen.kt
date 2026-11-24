@@ -524,6 +524,7 @@ internal class SaveResultReceiver(
     private val defaultFailureMessage: () -> String,
     private val onCommitted: (RecordingEntity) -> Unit = {},
     private val onTerminal: (SaveResultReceiver) -> Unit = {},
+    private val onCommittedFailure: (Throwable) -> Unit = {},
 ) : ReverbService.AudioFileReceiver {
     constructor(
         context: Context,
@@ -552,6 +553,9 @@ internal class SaveResultReceiver(
         },
         onCommitted = onCommitted,
         onTerminal = onTerminal,
+        onCommittedFailure = context.applicationContext.let { appContext ->
+            { error -> reportUnexpectedRecordingOperationFailure(appContext, "Save range bookkeeping", error) }
+        },
     )
 
     private val terminalDelivered = AtomicBoolean(false)
@@ -572,7 +576,10 @@ internal class SaveResultReceiver(
             deliver = {
                 // Range-memory bookkeeping is convenience state; it must never suppress terminal
                 // delivery for a recording that is already durably committed.
-                runCatching { onCommitted(recording) }
+                runCleanupReportingThrowable(
+                    cleanup = { onCommitted(recording) },
+                    onFailure = onCommittedFailure,
+                )
                 deliverVisibleTerminalOrFallback(
                     deliverVisible = { uiCallbacks.saved(recording) },
                     fallback = { fallback.fileReady(recording) },

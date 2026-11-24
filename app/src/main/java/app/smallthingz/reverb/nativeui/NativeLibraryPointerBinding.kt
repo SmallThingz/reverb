@@ -1,6 +1,10 @@
 package app.smallthingz.reverb.nativeui
 
 import smallthingz.ui.reverb.ReverbLibraryLayout
+import smallthingz.ui.reverb.ReverbSingleLineInputView
+import smallthingz.ui.reverb.ReverbRecordingSpotlight
+import smallthingz.ui.input.NativeAndroidInteropHost
+import smallthingz.ui.input.phase.NativeAndroidInteropNode
 
 import smallthingz.ui.input.phase.NativePointerLayerShape
 import smallthingz.ui.components.NativeGroupLayout
@@ -112,7 +116,7 @@ internal class NativeLibraryPointerBinding(
                 ?: emptyList()
         }
         val obsolete = layouts.keys.filter { !it.isAttachedToWindow }
-        obsolete.forEach { layouts.remove(it)?.cancel() }
+        obsolete.forEach { layouts.remove(it)?.close() }
     }
 
     /** Native window preview-key phase calls this only for a focused descendant of the list. */
@@ -163,6 +167,16 @@ internal class NativeLibraryPointerBinding(
             override fun dispatch(event: NativeDragPointerEvent, pass: NativePointerPass) = Unit
             override fun cancel() = Unit
         } else null
+        private val interop = when {
+            view is ReverbRecordingSpotlight -> NativeAndroidInteropNode(view, view.nativeInteropRequests)
+            view is ReverbSingleLineInputView && view.parent is NativeAndroidInteropHost ->
+                NativeAndroidInteropNode(view, (view.parent as NativeAndroidInteropHost).nativeInteropRequests)
+            else -> null
+        }
+        private val interopNodes = interop?.let { node -> listOf(object : NativeViewPhasePointerNode by node {
+            // The backdrop must never deliver the same DOWN to the row/toolbar behind it.
+            override val shareWithSiblings get() = view !is ReverbRecordingSpotlight
+        }) } ?: emptyList()
         private val clickNodes = click?.let(::listOf) ?: emptyList()
         private val shieldNodes = shield?.let(::listOf) ?: emptyList()
         override val placed get() = view.isAttachedToWindow && view.isLaidOut && view.visibility == View.VISIBLE
@@ -173,7 +187,8 @@ internal class NativeLibraryPointerBinding(
         override fun screenToLocal(screen: Offset) = geometry.coordinates(view).local(screen)
         override val nodes: List<NativeViewPhasePointerNode>
             get() {
-                if (view === content.bodyPointerView) return edgeNodes
+                if (view === content.bodyPointerView) return if (content.inlineModalActive) emptyList() else edgeNodes
+                if (interop != null) return interopNodes
                 if (view === listView) return listNodes
                 if (view === emptyView) return emptyNodes
                 val player = content.pointerNodes(view)
@@ -192,7 +207,7 @@ internal class NativeLibraryPointerBinding(
                 local.x >= 0f && local.x < view.width && local.y >= 0f && local.y < view.height
             else -> true // No source graphicsLayer clip on ordinary Column/Row/layout wrappers.
         }
-        fun cancel() { click?.cancel() }
+        fun close() { try { click?.cancel() } finally { interop?.close() } }
     }
     override fun close() {
         if (closed) return
@@ -201,7 +216,7 @@ internal class NativeLibraryPointerBinding(
         listNodes = emptyList()
         emptyScroll?.close(); emptyScroll = null; emptyView = null
         emptyNodes = emptyList()
-        layouts.values.forEach { it.cancel() }
+        layouts.values.forEach { it.close() }
         layouts.clear()
         edge.restart()
     }

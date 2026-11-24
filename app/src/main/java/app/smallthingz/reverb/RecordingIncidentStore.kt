@@ -960,9 +960,9 @@ internal object RecordingIncidentStore {
 
     fun recordUnexpectedErrorInBackground(context: Context, source: String, error: Throwable) {
         val appContext = context.applicationContext
-        val description = unexpectedErrorIncidentDescription(source, error, MAX_DESCRIPTION_CHARS)
         historyMutationScope.launch {
             try {
+                val description = unexpectedErrorIncidentDescription(source, error, MAX_DESCRIPTION_CHARS)
                 recordUnexpectedErrorDescription(appContext, description)
             } catch (recordingFailure: Throwable) {
                 // Never recurse through the incident system when incident persistence itself fails.

@@ -100,6 +100,7 @@ internal class DurableSaveCoordinator private constructor(private val context: C
                     }
                 }
             }, onFailure = { id, failure ->
+                reportUnexpectedRecordingOperationFailure(context, "Recover saved recording", failure)
                 presentedFailures[id] = actionableErrorMessage(context,
                     context.getString(R.string.save_jobs_recovery_failed), failure)
             })
@@ -112,6 +113,7 @@ internal class DurableSaveCoordinator private constructor(private val context: C
             DurableSaveJobs.recovered(result.failures.entries.firstOrNull()?.let { (id, error) ->
                 presentedFailures[id] ?: safeReportedErrorDetail(error, 512) ?: context.getString(R.string.failure_reason_unknown) })
         } catch (failure: Exception) {
+            reportUnexpectedRecordingOperationFailure(context, "Recover saved recordings", failure)
             DurableSaveJobs.recovered(actionableErrorMessage(context, context.getString(R.string.save_jobs_recovery_failed), failure))
             throw failure
         }
@@ -286,6 +288,7 @@ internal class DurableSaveCoordinator private constructor(private val context: C
                 runBlocking { RecordingRepository.registerFromAcceptedOperation(context, recording) }
             } catch (failure: Exception) {
                 if (!catalogRegistrationFailureAllowsVerifiedSaveSuccess(failure)) throw failure
+                reportUnexpectedRecordingOperationFailure(context, "Save recording catalog", failure)
                 recording
             }
             DurableSaveFaultHooks.reached(id, "AFTER_CATALOG")
@@ -295,6 +298,9 @@ internal class DurableSaveCoordinator private constructor(private val context: C
             val current = readStableOutputFingerprint(context, target.storageType, target.id, fingerprint.providerIdentity)
             if (current == null || !stableOutputFingerprintMatches(target.storageType, fingerprint, current)) {
                 throw IOException("Published save changed before releasing source pins")
+            }
+            if (!removePublishedMediaStoreSaveSuppression(context, target, current)) {
+                throw IOException("Published save suppression cleanup is pending")
             }
             publishProgress(0.98f, force = true)
             DurableSaveFaultHooks.reached(id, "BEFORE_STAGING_MARKER_RETIREMENT")

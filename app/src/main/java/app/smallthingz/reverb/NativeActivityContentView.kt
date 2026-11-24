@@ -1,6 +1,8 @@
 package app.smallthingz.reverb
 
 import smallthingz.ui.components.NativeWindowInsetsBinding
+import smallthingz.ui.animation.view.ViewFrameLoop
+import smallthingz.ui.reverb.ReverbFadeMotion
 import smallthingz.ui.components.NativeStatusBarProtection
 
 import smallthingz.ui.components.NativeGroupLayout
@@ -44,6 +46,14 @@ internal class NativeActivityContentView(
     private var environment = initialEnvironment
     private var snapshot = owner.snapshot
     private var main: NativeMainScreenView? = null
+    private var enteringMain: NativeMainScreenView? = null
+    private val mainEntrance = ReverbFadeMotion(1f)
+    private val entranceFrames = ViewFrameLoop(this, scope,
+        { !closed && enteringMain != null && mainEntrance.running }) { time, scale ->
+        mainEntrance.frame(time, scale)
+        enteringMain?.alpha = mainEntrance.alpha
+        if (!mainEntrance.running) enteringMain = null
+    }
     private var playbackRequest: RecordingPlaybackRequest? = null
     private var playbackRequestFinished: (() -> Unit)? = null
     private var onboarding: NativeOnboardingScreenView? = null
@@ -163,6 +173,7 @@ internal class NativeActivityContentView(
             }
             feedback?.bind(true, environment)
         } else {
+            val enteringFromOnboarding = main == null && onboarding?.isShown == true && isAttachedToWindow
             // The old onboarding queue/cursor leases retire before Main opens its scroll queue.
             retireFeedback()
             retireLoading()
@@ -185,12 +196,20 @@ internal class NativeActivityContentView(
                 releaseInputFocus = { findFocus()?.clearFocus() },
             ).also {
                 main = it // Install callback/result destination before source effects may run.
+                if (enteringFromOnboarding) {
+                    enteringMain = it
+                    mainEntrance.settle(false)
+                    mainEntrance.target(true, entranceFrames.durationScale)
+                    it.alpha = mainEntrance.alpha
+                    if (!mainEntrance.running) enteringMain = null
+                }
                 remainingMainState = null
                 it.setWindowInsets(windowInsets)
                 addView(it)
                 it.start()
             }
             current.bind(NativeMainScreenInput(snapshot.requiredPermissionsGranted, snapshot.showPermissionDenied), environment)
+            entranceFrames.request()
             deliverPlaybackRequest()
             if (snapshot.showPermissionDenied) {
                 retireRestartInvitation()
@@ -282,7 +301,20 @@ internal class NativeActivityContentView(
     fun saveOnboarding(): NativeOnboardingViewportSavedState? =
         onboarding?.saveViewportState() ?: remainingOnboardingState
 
-    private fun retireMain() { main?.let { main = null; removeView(it); it.close() } }
+    private fun settleMainEntrance() {
+        enteringMain = null
+        entranceFrames.cancel()
+        mainEntrance.settle(true)
+        main?.alpha = 1f
+    }
+    override fun onDetachedFromWindow() {
+        settleMainEntrance()
+        super.onDetachedFromWindow()
+    }
+    private fun retireMain() {
+        settleMainEntrance()
+        main?.let { main = null; removeView(it); it.close() }
+    }
     private fun retireOnboarding() { onboarding?.let { onboarding = null; removeView(it); it.close() } }
     private fun retireLoading() { loading?.let { loading = null; removeView(it) } }
     private fun retireFeedback() { feedback?.let { feedback = null; removeView(it); it.close() } }

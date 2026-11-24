@@ -51,9 +51,10 @@ internal suspend fun saveTrimmedRecordingCopy(
     endMillis: Int,
 ): RecordingEntity {
     val appContext = context.applicationContext
-    val operation = recordingMutations.tryBegin(recording.id)
-        ?: throw IOException("Trim is already in progress for this recording")
+    var operation: RecordingOperationToken? = null
     try {
+        operation = recordingMutations.tryBegin(recording.id)
+            ?: throw IOException("Trim is already in progress for this recording")
         return withContext(Dispatchers.IO + NonCancellable) {
             val created = writeTrimmedRecordingCopy(appContext, recording, startMillis, endMillis)
             try {
@@ -63,12 +64,16 @@ internal suspend fun saveTrimmedRecordingCopy(
                     Log.w(TRIM_TAG, "Trim output changed before catalog registration", error)
                     throw error
                 }
+                reportUnexpectedRecordingOperationFailure(appContext, "Trim recording catalog", error)
                 Log.w(TRIM_TAG, "Trim was saved but catalog registration failed", error)
                 created
             }
         }
+    } catch (error: Exception) {
+        reportUnexpectedRecordingOperationFailure(appContext, "Trim recording", error)
+        throw error
     } finally {
-        recordingMutations.finish(operation)
+        operation?.let(recordingMutations::finish)
     }
 }
 

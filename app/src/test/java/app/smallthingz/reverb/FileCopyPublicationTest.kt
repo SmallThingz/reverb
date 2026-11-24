@@ -28,7 +28,7 @@ class FileCopyPublicationTest {
             if (previous != null) check(entries.remove(previous))
             if (next != null) entries += next
         }
-        override fun preserveIncomplete(record: FileCopyPublication, fingerprint: StableOutputFingerprint) {
+        override fun preserveIncomplete(record: FileCopyPublication, fingerprint: StableOutputFingerprint, failure: FileCopyRecoveryRequired) {
             if (rejectPreservation) throw IOException("suppression boundary")
             preserved += record to fingerprint
             replace(record, null)

@@ -4,14 +4,17 @@ import android.app.ActivityManager
 import android.app.ApplicationExitInfo
 import android.content.Context
 import android.content.res.Resources
+import smallthingz.ui.reverb.ReverbIncidentDay
 import smallthingz.ui.reverb.ReverbIncidentGroup
 import smallthingz.ui.reverb.ReverbIncidentHistory
 import smallthingz.ui.reverb.ReverbIncidentLiveEnd
 import smallthingz.ui.reverb.ReverbIncidentLoadStatus
 import smallthingz.ui.reverb.ReverbIncidentOccurrence
 import smallthingz.ui.reverb.ReverbIncidentTarget
+import smallthingz.ui.reverb.formatReverbIncidentTime
 import java.io.IOException
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -145,10 +148,8 @@ private fun incidentRuntimeLine(incident: RecordingIncident): String = buildList
     if (incident.pssKb > 0L) add("PSS ${formatIncidentMemory(incident.pssKb)}")
 }.joinToString(" · ")
 
-private fun incidentAgeLine(incident: RecordingIncident): String = buildList {
-    if (incident.processStartedAtMillis > 0L && incident.occurredAtMillis >= incident.processStartedAtMillis) {
-        add("process ${formatDurationInput((incident.occurredAtMillis - incident.processStartedAtMillis) / 1000L)}")
-    }
+private fun incidentAgeLine(incident: RecordingIncident, processAge: String?): String = buildList {
+    processAge?.let { add("process $it") }
     if (incident.captureArmedAtMillis > 0L && incident.occurredAtMillis >= incident.captureArmedAtMillis) {
         add("capture ${formatDurationInput((incident.occurredAtMillis - incident.captureArmedAtMillis) / 1000L)}")
     }
@@ -166,10 +167,11 @@ internal data class IncidentPresentation(
     val description: String?,
     val started: String = date,
     val ended: String? = null,
-    override val diagnostics: String = listOf(runtime, age).filter(String::isNotEmpty).joinToString(" · "),
-    override val startLabel: String = started,
-    override val endLabel: String = ended.orEmpty(),
-    override val causeLabel: String = cause,
+    val epochDay: Long = 0L,
+    val startLabel: String = started,
+    val durationLabel: String = ended.orEmpty(),
+    override val timeLabel: String = formatReverbIncidentTime(null, startLabel, durationLabel),
+    override val processLabel: String = cause,
     override val liveEnd: ReverbIncidentLiveEnd? = null,
 ) : ReverbIncidentOccurrence, ReverbIncidentTarget {
     override val target: ReverbIncidentTarget get() = this
@@ -188,25 +190,45 @@ internal fun IncidentPresentation.summaryAt(context: Context, elapsedMillis: Lon
     return context.getString(R.string.incident_policy_ongoing, stopSummary, formatDurationInput(seconds))
 }
 
-internal data class IncidentMessage(val description: String?, val fallbackKind: RecordingIncidentKind?) {
-    fun displayText(resources: Resources): String = description ?: resources.getString(when (fallbackKind) {
-        RecordingIncidentKind.CAPTURE_INPUT_OBSERVATION -> R.string.incident_input_heading
-        RecordingIncidentKind.UNEXPECTED_ERROR -> R.string.incident_error_heading
-        else -> R.string.incident_shutdown_heading
-    })
+private data class IncidentMessage(
+    val description: String?,
+    val fallbackKind: RecordingIncidentKind?,
+    val exitReason: Int,
+) {
+    val key get() = description?.let { "message:$it" } ?: "kind:${fallbackKind?.storageCode}:$exitReason"
+    fun displayText(resources: Resources?): String {
+        description?.let { return it }
+        if (exitReason != 0) return recordingExitReasonLabel(exitReason)
+        return when (fallbackKind) {
+            RecordingIncidentKind.CAPTURE_INPUT_OBSERVATION ->
+                resources?.getString(R.string.incident_input_heading) ?: "Microphone input issue"
+            RecordingIncidentKind.UNEXPECTED_ERROR ->
+                resources?.getString(R.string.incident_error_heading) ?: "Unexpected error"
+            else -> resources?.getString(R.string.incident_shutdown_heading) ?: "Unexpected shutdown"
+        }
+    }
 }
 
-internal class IncidentHistoryPresentation(val rows: List<IncidentPresentation>, resources: Resources? = null) {
+internal class IncidentHistoryPresentation(
+    val rows: List<IncidentPresentation>,
+    resources: Resources? = null,
+    locale: Locale = Locale.getDefault(),
+) {
     val hasAlert: Boolean = rows.any { !it.incident.acknowledged }
-    val groups: Map<IncidentMessage, List<IncidentPresentation>> = rows.groupBy { row ->
-        IncidentMessage(row.description, row.incident.kind.takeIf { row.description == null })
-    }
-    val nativeGroups = resources?.let { labels ->
-        groups.map { (message, occurrences) ->
-            val key = message.description?.let { "message:$it" } ?: "kind:${message.fallbackKind?.storageCode}"
-            ReverbIncidentGroup(key, message.displayText(labels), occurrences)
+    // Keep day boundaries in the incident's local time zone. Within each day, a
+    // message's newest occurrence positions its card and the rows stay newest first.
+    val days: List<ReverbIncidentDay> = if (rows.isEmpty()) emptyList() else {
+        val dayFormatter = DateTimeFormatter.ofPattern("EEEE, d MMM yy", locale)
+        rows.groupBy { it.epochDay }.map { (epochDay, dayRows) ->
+            val groups = dayRows.groupBy { row ->
+                IncidentMessage(row.description, row.incident.kind.takeIf { row.description == null },
+                    if (row.description == null) row.incident.exitReason else 0)
+            }.map { (message, occurrences) ->
+                ReverbIncidentGroup(message.key, message.displayText(resources), occurrences)
+            }
+            ReverbIncidentDay(epochDay, dayFormatter.format(LocalDate.ofEpochDay(epochDay)), groups)
         }
-    }.orEmpty()
+    }
 }
 
 internal enum class IncidentHistoryLoadStatus { LOADING, READY, UNAVAILABLE }
@@ -217,7 +239,7 @@ internal data class IncidentHistoryUiState(
 ) {
     val canMutate: Boolean get() = status == IncidentHistoryLoadStatus.READY
     val showEmptyHistory: Boolean get() = canMutate && history.rows.isEmpty()
-    val nativeHistory = ReverbIncidentHistory(history.nativeGroups, when (status) {
+    val nativeHistory = ReverbIncidentHistory(history.days, when (status) {
         IncidentHistoryLoadStatus.LOADING -> ReverbIncidentLoadStatus.LOADING
         IncidentHistoryLoadStatus.READY -> ReverbIncidentLoadStatus.READY
         IncidentHistoryLoadStatus.UNAVAILABLE -> ReverbIncidentLoadStatus.UNAVAILABLE
@@ -275,51 +297,62 @@ internal fun prepareIncidentHistory(
     }
     val newestFirst = visible.sortedWith(compareByDescending<RecordingIncident> { it.occurredAtMillis }
         .thenBy(::recordingIncidentPresentationKey))
-    val ongoingPattern = resources?.getString(R.string.incident_occurrence_ongoing)
+    val ongoingPattern = resources?.getString(R.string.incident_occurrence_ongoing) ?: "Ongoing · %s"
     return IncidentHistoryPresentation(newestFirst.map { incident ->
-        val started = formatDateTime(incident.occurredAtMillis)
+        val localStart = Instant.ofEpochMilli(incident.occurredAtMillis).atZone(zone)
+        val date = dateFormatter.format(localStart)
+        val startTime = clockFormatter.format(localStart)
+        val processAge = incident.processStartedAtMillis
+            .takeIf { it > 0L && it <= incident.occurredAtMillis }
+            ?.let { formatDurationInput((incident.occurredAtMillis - it) / 1_000L) }
         val ended = incident.resumedAtMillis.takeIf { it > 0L }?.let(::formatDateTime)
+        val duration = when {
+            incident.kind == RecordingIncidentKind.UNEXPECTED_ERROR -> formatDurationInput(0)
+            incident.recoveryPending ->
+                resources?.getString(R.string.incident_occurrence_pending_recovery) ?: "Awaiting capture resume"
+            else -> recordingIncidentDowntimeMillis(incident)?.let { millis ->
+                formatDurationInput(millis / 1_000L + if (millis % 1_000L == 0L) 0L else 1L)
+            } ?: (resources?.getString(R.string.incident_duration_unknown) ?: "Unknown")
+        }
         val cause = incidentCauseLine(incident)
         IncidentPresentation(
             incident = incident,
             key = recordingIncidentPresentationKey(incident),
-            date = dateFormatter.format(Instant.ofEpochMilli(incident.occurredAtMillis).atZone(zone)),
+            date = date,
             stopSummary = formatIncidentSummary(incident, clockFormatter, zone),
             cause = cause,
             runtime = incidentRuntimeLine(incident),
-            age = incidentAgeLine(incident),
+            age = incidentAgeLine(incident, processAge),
             description = incident.description?.takeIf { it.isNotBlank() },
-            started = started,
+            started = "$date · $startTime",
             ended = ended,
-            startLabel = resources?.getString(R.string.incident_occurrence_start, started) ?: started,
-            endLabel = when {
-                resources == null -> ended.orEmpty()
-                ended != null -> resources.getString(R.string.incident_occurrence_end, ended)
-                incident.kind == RecordingIncidentKind.UNEXPECTED_ERROR -> resources.getString(R.string.incident_occurrence_instant)
-                incident.recoveryPending -> resources.getString(R.string.incident_occurrence_pending_recovery)
-                else -> resources.getString(R.string.incident_occurrence_unknown_end)
+            epochDay = localStart.toLocalDate().toEpochDay(),
+            startLabel = startTime,
+            durationLabel = duration,
+            timeLabel = formatReverbIncidentTime(resources, startTime, duration),
+            processLabel = buildList {
+                add(incident.pid.takeIf { it > 0 }?.let { "PID $it" }
+                    ?: (resources?.getString(R.string.incident_pid_unknown) ?: "PID unknown"))
+                processAge?.let { add(resources?.getString(R.string.incident_process_age, it) ?: "Process $it") }
+            }.joinToString(" · "),
+            liveEnd = incident.ongoingPolicyDuration?.let {
+                LiveIncidentEnd(it, ongoingPattern, locale, startTime, resources)
             },
-            causeLabel = when {
-                resources == null || incident.pid > 0 -> cause
-                cause.isEmpty() -> resources.getString(R.string.incident_pid_unknown)
-                else -> resources.getString(R.string.incident_cause_without_pid, cause)
-            },
-            liveEnd = if (ongoingPattern != null) incident.ongoingPolicyDuration?.let {
-                LiveIncidentEnd(it, ongoingPattern, locale)
-            } else null,
         )
-    }, resources)
+    }, resources, locale)
 }
 
 private data class LiveIncidentEnd(
     val duration: CaptureObservationDuration,
     val pattern: String,
     val locale: Locale,
+    val start: String,
+    val resources: Resources?,
 ) : ReverbIncidentLiveEnd {
     override val ongoing get() = duration.isOngoing
     override fun labelAt(elapsedMillis: Long): String {
         val seconds = (elapsedMillis - duration.startedAtElapsedMillis).coerceAtLeast(0L) / 1000L
-        return String.format(locale, pattern, formatDurationInput(seconds))
+        return formatReverbIncidentTime(resources, start, String.format(locale, pattern, formatDurationInput(seconds)))
     }
 }
 

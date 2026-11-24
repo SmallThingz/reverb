@@ -340,6 +340,40 @@ internal fun suppressProviderOutputWithoutDeletion(
     putPendingOutputCleanup(context, record)
 }
 
+/** Only a durable save's independently verified published output can retire its ambiguous-publication hiding. */
+internal fun publishedMediaStoreSaveSuppressionEntries(
+    entries: Set<String>,
+    id: String,
+    digest: CopyDigest,
+): Set<String>? {
+    val selected = pendingOutputCleanupRawEntriesForId(entries, id)
+    if (selected.isEmpty()) return entries
+    val hash = digest.sha256.toHexString()
+    for (raw in selected) {
+        val record = decodePendingOutputCleanupRecord(raw) ?: return null
+        if (record.storageType != RecordingStorageType.MEDIASTORE || record.byteCount != digest.byteCount ||
+            !record.sha256Hex.equals(hash, ignoreCase = true) || record.fileKey != null || record.providerIdentity != null
+        ) return null
+    }
+    return entries - selected
+}
+
+/** Caller holds the recording mutation owner and has just rechecked full bytes and current published identity. */
+internal fun removePublishedMediaStoreSaveSuppression(
+    context: Context,
+    target: RecordingOutputTarget,
+    fingerprint: StableOutputFingerprint,
+): Boolean {
+    if (target.storageType != RecordingStorageType.MEDIASTORE) return true
+    if (target.staging || !providerRecordingIdentityMatches(target.publishedIdentity, fingerprint.providerIdentity.orEmpty())) return false
+    return synchronized(outputCleanupJournalLock) {
+        val current = pendingOutputCleanupEntriesLocked(context)
+        val updated = publishedMediaStoreSaveSuppressionEntries(current, target.id, fingerprint.digest)
+            ?: return@synchronized false
+        writePendingOutputCleanupEntriesLocked(context, updated)
+    }
+}
+
 internal fun verifiedExportStagingRecordMatches(
     record: VerifiedExportStagingRecord,
     fingerprint: StableOutputFingerprint,

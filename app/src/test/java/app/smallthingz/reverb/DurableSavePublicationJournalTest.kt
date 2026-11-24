@@ -5,6 +5,29 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class DurableSavePublicationJournalTest {
+    @Test fun exactPublishedSaveRetiresOnlyItsSuppressionAndIsIdempotent() {
+        val id = "content://media/external/audio/media/7"
+        val record = checkNotNull(suppressionOnlyProviderOutputRecord(RecordingStorageType.MEDIASTORE, id, digest))
+        val own = encodePendingOutputCleanupRecord(record)
+        val other = encodePendingOutputCleanupRecord(record.copy(id = "content://media/external/audio/media/8"))
+        val entries = setOf(own, other, "unrelated-corrupt-entry")
+        val remaining = checkNotNull(publishedMediaStoreSaveSuppressionEntries(entries, id, digest))
+        assertEquals(setOf(other, "unrelated-corrupt-entry"), remaining)
+        assertEquals(remaining, publishedMediaStoreSaveSuppressionEntries(remaining, id, digest))
+    }
+
+    @Test fun conflictingSameUriSuppressionNeverGrantsRetirement() {
+        val id = "content://media/external/audio/media/7"
+        val record = checkNotNull(suppressionOnlyProviderOutputRecord(RecordingStorageType.MEDIASTORE, id, digest))
+        val own = encodePendingOutputCleanupRecord(record)
+        for (conflict in listOf(record.copy(byteCount = digest.byteCount + 1),
+                record.copy(sha256Hex = "43".repeat(32)), record.copy(providerIdentity = "different-owner"),
+                record.copy(storageType = RecordingStorageType.DOCUMENT))) {
+            assertNull(publishedMediaStoreSaveSuppressionEntries(setOf(own, encodePendingOutputCleanupRecord(conflict)), id, digest))
+        }
+        assertNull(publishedMediaStoreSaveSuppressionEntries(setOf(own, own + "|torn"), id, digest))
+    }
+
     private val firstJob = UUID.fromString("11111111-1111-4111-8111-111111111111").toString()
     private val secondJob = UUID.fromString("22222222-2222-4222-8222-222222222222").toString()
     private val digest = CopyDigest(1234L, ByteArray(32) { 0x42 })

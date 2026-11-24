@@ -171,6 +171,8 @@
     <string name="recording_details_mime">MIME:</string>
     <string name="recording_details_storage">Storage:</string>
     <string name="recording_details_location">Location:</string>
+    <string name="recording_details_loading">Loading…</string>
+    <string name="recording_details_hide">Hide recording details</string>
     <string name="player_play">Play</string>
     <string name="player_pause">Pause</string>
     <string name="trim_recording">Trim</string>
@@ -193,14 +195,12 @@
     <string name="incident_input_heading">Microphone input issue</string>
     <string name="incident_error_heading">Unexpected app error</string>
     <string name="incident_shutdown_heading">Recording interrupted</string>
-    <string name="incident_occurrence_start">Start · %1$s</string>
+    <string name="incident_duration_unknown">Unknown</string>
+    <string name="incident_process_age">Process %1$s</string>
     <string name="incident_occurrence_end">End · %1$s</string>
     <string name="incident_occurrence_ongoing">Ongoing · %1$s</string>
-    <string name="incident_occurrence_instant">Instantaneous</string>
     <string name="incident_occurrence_pending_recovery">Awaiting capture resume</string>
-    <string name="incident_occurrence_unknown_end">End time unknown</string>
     <string name="incident_pid_unknown">PID unknown</string>
-    <string name="incident_cause_without_pid">%1$s · PID unknown</string>
     <string name="incident_select">Select incident</string>
     <string name="incident_deselect">Deselect incident</string>
     <string name="incidents_select_all">Select all incidents</string>
