@@ -2,6 +2,7 @@ package app.smallthingz.reverb
 
 import android.app.Application
 import android.app.Instrumentation
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
@@ -15,6 +16,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
 import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.core.graphics.ColorUtils
 import app.smallthingz.reverb.nativeui.*
 import java.io.File
 import java.lang.reflect.Field
@@ -26,10 +28,13 @@ import smallthingz.ui.animation.ColorTransition
 import smallthingz.ui.animation.view.ViewColorTransition
 import smallthingz.ui.components.NativeDropdown
 import smallthingz.ui.components.NativeBackdropBinding
+import smallthingz.ui.components.NativeColorScheme
 import smallthingz.ui.controls.textSurfaceForeground
 import smallthingz.ui.reverb.settings.ReverbRetentionInputView
 import smallthingz.ui.reverb.settings.ReverbRetentionMode
 import smallthingz.ui.reverb.ReverbTitledTopBarLayout
+import smallthingz.ui.reverb.ReverbDesign
+import smallthingz.ui.graphics.NoiseDrawable
 import smallthingz.ui.text.RetentionLineHeightSpan
 import smallthingz.ui.text.view.ParagraphView
 import smallthingz.ui.graphics.Color as NativeColor
@@ -56,6 +61,9 @@ internal fun verifyNativeSettingsThemeContrast(instrumentation: Instrumentation,
     fun <T> main(block: () -> T) = nativeParityOnMain(instrumentation, block)
     fun settle(view: View) { repeat(3) { awaitNativeParityDraw(instrumentation, view); instrumentation.waitForIdleSync() } }
     try {
+        val producer = JSONObject().put("name", "reverb_surface_producer_preserves_source_alpha")
+        cases.put(producer)
+        main { verifyReverbSurfaceProducer(host, producer) }
         cases.put(main { verifyRetentionEditorPaletteGeometry(host) })
         for (scene in listOf(SettingsSectionKey.RETENTION, SettingsSectionKey.RECORDING)) {
             val current = main {
@@ -184,6 +192,74 @@ internal fun verifyNativeSettingsThemeContrast(instrumentation: Instrumentation,
     }
     failure?.let { throw it }
     report.appendLine("PASS native_settings_theme_contrast actual Settings glyphs, grain bounds, parent-only hardware invalidation and retained editor")
+}
+
+/** Actual Android producer/consumer check; expected RGB never comes from the Reverb producer. */
+private fun verifyReverbSurfaceProducer(context: Context, result: JSONObject) {
+    val rows = JSONArray()
+    result.put("samples", rows)
+    var oldOpaqueFailures = 0
+    var oldTransparentFailures = 0
+    fun verify(label: String, source: Int, amount: Float, actual: Int) {
+        val alpha = Color.alpha(source)
+        val retained = 1f - amount
+        // Independent black-blend RGB reference, preserving the source alpha verbatim.
+        val expectedRgb = ((Color.red(source) * retained).toInt() shl 16) or
+            ((Color.green(source) * retained).toInt() shl 8) or (Color.blue(source) * retained).toInt()
+        val expected = (alpha shl 24) or expectedRgb
+        val old = ColorUtils.blendARGB(source, Color.BLACK, amount)
+        val range = NoiseDrawable(actual).paintedTextSurface
+        val oldRange = NoiseDrawable(old).paintedTextSurface
+        rows.put(JSONObject().put("label", label).put("source_argb", source.toLong() and 0xffffffffL)
+            .put("amount", amount.toDouble()).put("expected_rgb", expectedRgb).put("expected_alpha", alpha)
+            .put("expected_argb", expected.toLong() and 0xffffffffL)
+            .put("actual_argb", actual.toLong() and 0xffffffffL)
+            .put("old_blend_argb", old.toLong() and 0xffffffffL)
+            .put("known_surface", range != 0L).put("old_known_surface", oldRange != 0L))
+        check((old and 0x00ffffff) == expectedRgb) { "$label: independent RGB reference differs from old blend" }
+        check(actual == expected && Color.alpha(actual) == alpha) { "$label: producer changed RGB or source alpha" }
+        if (alpha == 255) {
+            check(range != 0L && (range ushr 56).toInt() == 255 && (range.toInt() ushr 24) == 255) {
+                "$label: opaque producer became an unknown surface"
+            }
+        } else check(range == 0L) { "$label: translucent producer claimed an opaque surface" }
+        if (amount == .04f) {
+            check(alpha == 255 && Color.alpha(old) == 254 && oldRange == 0L && old != expected) {
+                "$label: old opaque-alpha truncation negative control did not reproduce"
+            }
+            oldOpaqueFailures++
+        } else if (alpha in listOf(0, 1, 127)) {
+            check(Color.alpha(old) != alpha && old != expected) { "$label: old transparency mutation did not reproduce" }
+            oldTransparentFailures++
+        }
+    }
+    for ((name, sdk) in listOf("fallback28" to 28, "device" to Build.VERSION.SDK_INT)) {
+        for (dark in listOf(false, true)) {
+            // Retain one resource snapshot for both resolvers, avoiding a changing system palette.
+            val resources = HashMap<Int, Int>()
+            val readColor: (Int) -> Int = { id ->
+                check(sdk >= 31) { "Fallback palette unexpectedly requested a device resource" }
+                resources.getOrPut(id) { context.resources.getColor(id, context.theme) }
+            }
+            val source = NativeColorScheme.resolve(dark, sdk, readColor)
+            val actual = ReverbDesign.appearance.colorScheme.resolve(dark, sdk, readColor)
+            val label = "$name-sdk$sdk-${if (dark) "dark" else "light"}"
+            check(Color.alpha(source.background) == 255 && Color.alpha(source.surface) == 255)
+            verify("$label-background", source.background, .04f, actual.background)
+            verify("$label-surface", source.surface, .04f, actual.surface)
+            check(actual.copy(background = source.background, surface = source.surface) == source) {
+                "$label: unrelated palette roles changed"
+            }
+            for (alpha in listOf(0, 1, 127, 254, 255)) {
+                val modalSource = (source.surfaceContainerLow and 0x00ffffff) or (alpha shl 24)
+                verify("$label-modal-alpha$alpha", modalSource, .08f,
+                    ReverbDesign.modalSurface(source.copy(surfaceContainerLow = modalSource)))
+            }
+        }
+    }
+    check(rows.length() == 28 && oldOpaqueFailures == 8 && oldTransparentFailures == 12)
+    result.put("old_opaque_failures", oldOpaqueFailures).put("old_transparent_failures", oldTransparentFailures)
+        .put("passed", true)
 }
 
 private fun verifySettingsBackgroundWarnings(instrumentation: Instrumentation, host: NativeParityActivity,
