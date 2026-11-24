@@ -13,6 +13,7 @@ import android.view.Gravity
 import android.view.View
 import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.TextView
 import java.io.File
 import org.json.JSONArray
 import org.json.JSONObject
@@ -22,6 +23,10 @@ import smallthingz.ui.graphics.NoiseDrawable
 import smallthingz.ui.reverb.ReverbTextSurface
 import smallthingz.ui.reverb.ReverbTextSurfaceScope
 import smallthingz.ui.reverb.ReverbTextSurfaceTarget
+import smallthingz.ui.reverb.ReverbEnvironment
+import smallthingz.ui.reverb.settings.ReverbRetentionMode
+import smallthingz.ui.reverb.settings.ReverbRetentionSection
+import kotlin.math.roundToInt
 
 /** Attached View/PixelCopy contract, not a frame-time benchmark or a typography contrast test. */
 internal fun verifyNativeTextSurfaceInvalidation(instrumentation: Instrumentation, report: StringBuilder) {
@@ -233,6 +238,7 @@ internal fun verifyNativeTextSurfaceInvalidation(instrumentation: Instrumentatio
             scene.root.addView(scene.groups.getValue("known"), 1, LinearLayout.LayoutParams(-1, INK_ROW_HEIGHT))
             check(scene.targets.getValue("known").isAttachedToWindow)
         }
+        verifyRetentionCallerInk(instrumentation, activity, cases, ::persist)
         result.put("passed", true)
     } catch (error: Throwable) { failure = error }
     finally {
@@ -245,6 +251,112 @@ internal fun verifyNativeTextSurfaceInvalidation(instrumentation: Instrumentatio
     }
     failure?.let { throw it }
     report.appendLine("PASS native_text_surface_invalidation attached ownership, conservative fallbacks, current-paint pixels; no timing claim")
+}
+
+private fun verifyRetentionCallerInk(instrumentation: Instrumentation, activity: NativeParityActivity,
+                                     cases: JSONArray, persist: () -> Unit) {
+    // The production case runs first. An unchanged c777 constructor must fail its first
+    // page refresh; the later deliberate control cannot relax that assertion.
+    for (oldBoundary in listOf(false, true)) {
+        val name = if (oldBoundary) "retention-caller-old-boundary-negative-control" else "retention-caller-page-and-local-paint"
+        val entry = JSONObject().put("name", name).put("passed", false)
+            .put("scope", "Attached actual ReverbRetentionSection; cached page paint and TextView ink, without capture")
+        val steps = JSONArray().also { entry.put("steps", it) }
+        cases.put(entry)
+        persist()
+        requireNativeParityHost(instrumentation, activity, name)
+        fun <T> main(action: () -> T): T = nativeParityOnMain(instrumentation, action)
+        val page = NoiseDrawable(Color.BLACK, null)
+        val root = main { TextSurfaceScopeLayout(activity).apply { background = page } }
+        val caller = main { RetentionPageInkProbe(activity, page) }
+        var section: ReverbRetentionSection? = null
+        var modeRequests = 0
+        var failure: Throwable? = null
+        try {
+            main {
+                val environment = ReverbEnvironment(activity, false)
+                section = ReverbRetentionSection(activity, ReverbRetentionMode.TIME, environment, { "Retention" },
+                    { true }, { modeRequests++; error("Paint changed retention mode") }, caller,
+                    TextView(activity).apply { text = "Looping value" }).also {
+                    root.addView(it, LinearLayout.LayoutParams(-1, -2))
+                }
+                activity.fixtureRoot.addView(root,
+                    FrameLayout.LayoutParams((320 * environment.textDensity.density).roundToInt(), -2, Gravity.CENTER))
+            }
+            awaitNativeParityDraw(instrumentation, root)
+            main {
+                check(caller.isAttachedToWindow && caller.isShown && caller.width > 0 && caller.height > 0)
+                val surface = generateSequence(caller.parent as? View) { it.parent as? View }
+                    .filterIsInstance<NativeGroupLayout>().first()
+                val groupPaint = surface.paintedTextSurface
+                check(groupPaint ushr 56 == 255L && (groupPaint ushr 24 and 255L) == 255L && surface.alpha == 1f)
+                caller.invalidateTextSurfaceInk()
+                caller.refreshes = 0
+                val initialPage = page.paintedTextSurface
+                check(caller.sampledPage == initialPage && caller.currentTextColor == Color.WHITE)
+                entry.put("initial_group_paint", groupPaint).put("initial_page_paint", initialPage)
+                    .put("caller_width", caller.width).put("caller_height", caller.height)
+                if (oldBoundary) {
+                    // Recreate precisely the former ancestor-pruning opt-in on the actual
+                    // section's group. Its local callback is never triggered in this control.
+                    ReverbTextSurface.ownGroupInk(surface)
+                    page.setBackgroundColor(Color.WHITE)
+                    check(page.paintedTextSurface != initialPage)
+                    ReverbTextSurface.invalidate(root)
+                    steps.put(caller.snapshot("first-page-white", page))
+                    check(caller.refreshes == 0 && caller.sampledPage == initialPage && caller.currentTextColor == Color.WHITE) {
+                        "Old ownership boundary must expose the first missed refresh"
+                    }
+                    check(surface.paintedTextSurface == groupPaint)
+                    entry.put("first_missed_refresh_detected", true)
+                } else {
+                    for (color in listOf(Color.WHITE, Color.BLACK)) {
+                        val beforeRefreshes = caller.refreshes
+                        val beforePaint = caller.sampledPage
+                        page.setBackgroundColor(color)
+                        check(page.paintedTextSurface != beforePaint)
+                        ReverbTextSurface.invalidate(root)
+                        steps.put(caller.snapshot(if (color == Color.WHITE) "page-white" else "page-black", page))
+                        check(caller.refreshes == beforeRefreshes + 1) { "Page paint failed to reach caller through opaque retention group" }
+                        check(caller.sampledPage == page.paintedTextSurface)
+                        check(caller.currentTextColor == if (color == Color.WHITE) Color.BLACK else Color.WHITE)
+                        check(surface.paintedTextSurface == groupPaint && surface.alpha == 1f)
+                    }
+                    val beforeRefreshes = caller.refreshes
+                    val nextFill = if (surface.paintedFillColor == Color.BLACK) Color.WHITE else Color.BLACK
+                    surface.setPaletteImmediately(nextFill, Color.TRANSPARENT)
+                    steps.put(caller.snapshot("local-fill", page))
+                    check(surface.paintedFillColor == nextFill && surface.paintedTextSurface != groupPaint)
+                    check(caller.refreshes == beforeRefreshes + 1) { "Retention local fill lost its ordinary ink callback" }
+                    check(caller.sampledPage == page.paintedTextSurface && caller.currentTextColor == Color.WHITE)
+                }
+                check(modeRequests == 0)
+                entry.put("mode_requests", modeRequests)
+            }
+        } catch (error: Throwable) { failure = error }
+        finally {
+            failure = captureNativeParityCleanup(failure) { main { section?.close() } }
+            failure = captureNativeParityCleanup(failure) { main { activity.fixtureRoot.removeView(root) } }
+            if (failure == null) entry.put("passed", true) else entry.put("failure", failure!!.stackTraceToString())
+            failure = captureNativeParityCleanup(failure) { persist() }
+        }
+        failure?.let { throw it }
+    }
+}
+
+private class RetentionPageInkProbe(context: Context, private val page: NoiseDrawable) : TextView(context), ReverbTextSurfaceTarget {
+    var refreshes = 0
+    var sampledPage = 0L
+        private set
+    init { text = "Page-dependent retention value" }
+    override fun invalidateTextSurfaceInk() {
+        refreshes++
+        sampledPage = page.paintedTextSurface
+        setTextColor(textSurfaceForeground(sampledPage, Color.BLACK))
+    }
+    fun snapshot(stage: String, page: NoiseDrawable): JSONObject = JSONObject().put("stage", stage)
+        .put("refreshes", refreshes).put("cached_page_paint", sampledPage)
+        .put("current_page_paint", page.paintedTextSurface).put("ink_argb", currentTextColor)
 }
 
 private const val INK_ROW_HEIGHT = 24
