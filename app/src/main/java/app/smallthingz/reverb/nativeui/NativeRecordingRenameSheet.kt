@@ -1,6 +1,8 @@
 package app.smallthingz.reverb.nativeui
 
 import android.view.View
+import smallthingz.ui.reverb.ReverbRecordingRenameSheet
+import smallthingz.ui.util.closePreservingPrimaryFailure
 import androidx.lifecycle.LifecycleOwner
 import app.smallthingz.reverb.NativeRecordingRenameCallbacks
 import app.smallthingz.reverb.NativeRecordingRenameOwner
@@ -25,28 +27,16 @@ internal class NativeRecordingRenameSheet(
     private var closed=false
     private val owner=NativeRecordingRenameOwner(anchor.context,recording,active,lifecycleOwner,
         parentScope,callbacks){if(ready&&!closed)render()}
-    private val dialog=createReverbActionSheet(anchor,environment,
-        anchor.context.getString(R.string.rename_recording),owner::requestDismiss)
-    private val field=ReverbRenameFieldView(anchor.context,dialog.contentContext,environment,
-        owner.state.name,owner.state.error,{owner.state.name},owner::editName,owner::submit)
-    private val cancel=LibrarySheetButton(anchor.context,dialog.contentContext,environment,false,
-        anchor.context.getString(R.string.cancel),owner::requestDismiss)
-    private val confirm=LibrarySheetButton(anchor.context,dialog.contentContext,environment,true,
-        anchor.context.getString(R.string.rename_recording),owner::submit)
-    private val actions=LibrarySheetActions(anchor.context,dialog.contentContext,environment,listOf(cancel,confirm))
+    private val sheet = ReverbRecordingRenameSheet(anchor, environment,
+        anchor.context.getString(R.string.rename_recording), anchor.context.getString(R.string.cancel),
+        owner.state.name, owner.state.error, { owner.state.name }, { !owner.state.isRenaming },
+        owner::editName, owner::requestDismiss, owner::submit)
     init {
-        dialog.setDismissalAdmission { !owner.state.isRenaming }
-        dialog.setContent(field,actions,listOf(actions.hitLayout,field.hitLayout),scrollable=true)
-        ready=true
+        ready = true
         render()
     }
-    fun show()=dialog.show()
-    fun bindEnvironment(next:ReverbViewEnvironment) {
-        if(closed)return
-        dialog.bindEnvironment(next)
-        field.bindEnvironment(next)
-        actions.bindEnvironment(next)
-    }
+    fun show() = sheet.show()
+    fun bindEnvironment(next: ReverbViewEnvironment) = sheet.bindEnvironment(next)
     fun bind(recording:RecordingEntity,active:Boolean,callbacks:NativeRecordingRenameCallbacks) {
         if(closed)return
         owner.bind(recording,active,callbacks)
@@ -54,21 +44,12 @@ internal class NativeRecordingRenameSheet(
     }
     private fun render() {
         val state=owner.state
-        dialog.refreshDismissalAdmission()
-        field.bind(state.name,state.error,{owner.state.name},owner::editName,owner::submit)
-        cancel.bind(dialog.context.getString(R.string.cancel),!state.isRenaming,owner::requestDismiss)
-        confirm.bind(dialog.context.getString(R.string.rename_recording),
-            !state.isRenaming&&state.name.isNotBlank(),owner::submit)
+        sheet.bind(state.name, state.error, !state.isRenaming && state.name.isNotBlank())
     }
     override fun close() {
         if(closed)return
         closed=true
-        var failure:Throwable?=null
-        fun release(block:()->Unit){try{block()}catch(error:Throwable){if(failure==null)failure=error else if(failure!==error)failure!!.addSuppressed(error)}}
-        release(dialog::dismiss)
-        release(actions::close)
-        release(field::close)
-        release(owner::close)
-        failure?.let{throw it}
+        val failure = closePreservingPrimaryFailure(null, sheet::close)
+        closePreservingPrimaryFailure(failure, owner::close)?.let { throw it }
     }
 }

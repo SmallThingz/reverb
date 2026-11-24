@@ -30,7 +30,9 @@ internal class NativeSettingsTileDeleteSheet(
             return
         }
         if(owner===currentOwner&&target===next) {
-            content?.bind(environment())
+            val value = environment()
+            dialog?.bindEnvironment(value)
+            content?.bind(value)
             return
         }
         retire()

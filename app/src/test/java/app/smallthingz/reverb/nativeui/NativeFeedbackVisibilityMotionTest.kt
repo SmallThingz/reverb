@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.reverb.NativeFeedbackVisibilityMotion
+
 import smallthingz.ui.unit.IntOffset
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse

@@ -1,5 +1,7 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.reverb.ReverbMainLayout
+
 /** Exactly the five released rememberSaveable fields; motion/selection/retention stay transient. */
 internal data class NativeMainSavedNavigation(
     val showSettings: Boolean = false,
@@ -11,13 +13,7 @@ internal data class NativeMainSavedNavigation(
 
 internal enum class NativeMainPanel { SETTINGS, LIBRARY }
 
-internal data class NativeMainFeedbackPlacement(
-    val deliveryAllowed: Boolean,
-    val z: Float,
-    val horizontalPaddingDp: Int,
-    val bottomPaddingDp: Int,
-    val addNavigationBarBottom: Boolean,
-)
+internal typealias NativeMainFeedbackPlacement = smallthingz.ui.reverb.ReverbMainFeedbackPlacement
 
 /**
  * Direct renderer-neutral owner of MainActivity.MainScreen's existing fields and decisions.
@@ -138,17 +134,11 @@ internal class NativeMainNavigationState(restored: NativeMainSavedNavigation = N
         homeGesturesEnabled && dragTarget == null && settingsSettledProgress == 0f && librarySettledProgress == 0f
 
     fun feedbackPlacement(libraryPanelProgress: Float): NativeMainFeedbackPlacement {
-        val abovePanel = incidentsOverlayVisible || showLibrary || libraryPanelProgress > 0f
-        return NativeMainFeedbackPlacement(
+        return ReverbMainLayout.feedbackPlacement(
+            libraryVisible = showLibrary || libraryPanelProgress > 0f,
+            incidentsVisible = incidentsOverlayVisible,
+            settingsVisible = showSettings,
             deliveryAllowed = !showAboutDialog && !(showLibrary && !incidentsOverlayVisible && libraryUndoVisible),
-            z = when {
-                incidentsOverlayVisible -> 7f
-                showLibrary || libraryPanelProgress > 0f -> 5f
-                else -> 2f
-            },
-            horizontalPaddingDp = 18,
-            bottomPaddingDp = if (abovePanel || showSettings) 20 else 104,
-            addNavigationBarBottom = abovePanel,
         )
     }
 }

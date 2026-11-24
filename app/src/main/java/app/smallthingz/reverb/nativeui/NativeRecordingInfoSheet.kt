@@ -3,6 +3,12 @@ package app.smallthingz.reverb.nativeui
 import android.view.View
 import app.smallthingz.reverb.R
 import app.smallthingz.reverb.RecordingEntity
+import app.smallthingz.reverb.describeRecordingLocation
+import app.smallthingz.reverb.formatSavedRecordingDuration
+import app.smallthingz.reverb.formatShortFileSize
+import android.content.Context
+import java.util.Date
+import smallthingz.ui.reverb.ReverbRecordingInfoSheet
 
 /** One source RecordingInfoDialogContent lifetime; no recording read/write, player or operation owner. */
 internal class NativeRecordingInfoSheet(
@@ -11,31 +17,31 @@ internal class NativeRecordingInfoSheet(
     recording:RecordingEntity,
     onDismiss:()->Unit,
 ):AutoCloseable {
-    private val dialog=createReverbActionSheet(anchor,environment,
-        anchor.context.getString(R.string.recording_info),onDismiss)
-    private val body=ReverbRecordingInfoBody(anchor.context,dialog.contentContext,environment,recording)
-    private val actions=LibrarySheetActions(anchor.context,dialog.contentContext,environment,listOf(
-        LibrarySheetButton(anchor.context,dialog.contentContext,environment,true,anchor.context.getString(R.string.close),onDismiss)))
-    private var closed=false
-    init {dialog.setContent(body,actions,listOf(actions.hitLayout,body.hitLayout))}
-    fun show()=dialog.show()
-    fun bindEnvironment(next:ReverbViewEnvironment) {
-        if(closed)return
-        dialog.bindEnvironment(next)
-        body.bindEnvironment(next)
-        actions.bindEnvironment(next)
-    }
-    fun bind(recording:RecordingEntity,onDismiss:()->Unit) {
-        body.bind(recording)
-        dialog.bind(dialog.context.getString(R.string.recording_info),onDismiss)
-        actions.buttons.single().bind(dialog.context.getString(R.string.close),true,onDismiss)
-    }
-    override fun close() {
-        if(closed)return
-        closed=true
-        var failure:Throwable?=null
-        fun cleanup(block:()->Unit){try{block()}catch(error:Throwable){if(failure==null)failure=error else if(failure!==error)failure!!.addSuppressed(error)}}
-        cleanup(dialog::dismiss);cleanup(actions::close);cleanup(body::close)
-        failure?.let{throw it}
-    }
+    private val context = anchor.context
+    private val sheet = ReverbRecordingInfoSheet(anchor, environment.theme,
+        context.getString(R.string.recording_info), context.getString(R.string.close),
+        recording.displayName, recording.infoRows(context), onDismiss)
+
+    fun show() = sheet.show()
+    fun bindEnvironment(next: ReverbViewEnvironment) = sheet.bindEnvironment(next.theme)
+    fun bind(recording: RecordingEntity, onDismiss: () -> Unit) = sheet.bind(
+        context.getString(R.string.recording_info), context.getString(R.string.close),
+        recording.displayName, recording.infoRows(context), onDismiss,
+    )
+    override fun close() = sheet.close()
+}
+
+private fun RecordingEntity.infoRows(context: Context): List<Pair<String, String>> {
+    val started = Date(startedAtMillis)
+    val date = android.text.format.DateFormat.getMediumDateFormat(context)
+    val time = android.text.format.DateFormat.getTimeFormat(context)
+    return listOf(
+        context.getString(R.string.recording_details_started) to "${date.format(started)} ${time.format(started)}",
+        context.getString(R.string.recording_details_duration) to formatSavedRecordingDuration(context, durationMillis),
+        context.getString(R.string.recording_details_size) to formatShortFileSize(sizeBytes),
+        context.getString(R.string.recording_details_codec) to codecSummary,
+        context.getString(R.string.recording_details_mime) to mimeType,
+        context.getString(R.string.recording_details_storage) to storageType.name,
+        context.getString(R.string.recording_details_location) to describeRecordingLocation(context, this),
+    )
 }

@@ -1,11 +1,11 @@
 package app.smallthingz.reverb.nativeui
 
-import smallthingz.ui.components.NativeTopBarLayout
+import smallthingz.ui.reverb.ReverbTopBarLayout
 import smallthingz.ui.components.NativePathMorph
-import smallthingz.ui.components.NativeToolbarBackground
 import smallthingz.ui.components.NativeToolbarActionTone
-import smallthingz.ui.components.NativeToolbarContentAction
-import smallthingz.ui.components.NativeTopBarAction
+import smallthingz.ui.reverb.ReverbToolbarContentActionView
+import smallthingz.ui.reverb.ReverbToolbarActionView
+import smallthingz.ui.reverb.ReverbDesign
 import smallthingz.ui.text.view.closeAccessibilityLeases
 import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
 import smallthingz.ui.text.view.NativePlainTextViewGeometry
@@ -13,10 +13,7 @@ import smallthingz.ui.text.view.NativeSourceAccessibilityNode
 import smallthingz.ui.text.view.NativeTextSemanticsClip
 import smallthingz.ui.text.view.PlainTextAccessibilityWindowScope
 import android.content.Context
-import android.os.Build
 import android.view.View
-import androidx.core.graphics.ColorUtils
-import smallthingz.ui.animation.view.ViewColorTransition
 import app.smallthingz.reverb.R
 
 internal data class ReverbAppTopBarActions(
@@ -31,7 +28,7 @@ internal class ReverbAppTopBarView(
     context: Context,
     initialEnvironment: ReverbViewEnvironment,
     private val nativeInputRoot: View,
-) : NativeTopBarLayout(context, initialEnvironment.appearance.toolbars) {
+) : ReverbTopBarLayout(context, initialEnvironment.textDensity.density, initialEnvironment.palette) {
     private var environment = initialEnvironment
     private var back: ReverbTopBarIconAction? = null
     private var incidentAction: (() -> Unit)? = null
@@ -41,27 +38,22 @@ internal class ReverbAppTopBarView(
     private val incidents = ReverbTopBarIconAction(context, environment, nativeInputRoot, ReverbIcon.Incidents, R.string.open_incidents, false)
     private val settings = ReverbTopBarIconAction(context, environment, nativeInputRoot, ReverbIcon.Settings, R.string.open_settings, false)
     private val brand = ReverbTopBarBrandAction(context, environment, nativeInputRoot)
-    private val chrome = NativeToolbarBackground(this, toolbarStyle, toolbarStyle.backgroundColor(environment.palette))
     private var accessibilityLease: AutoCloseable? = null
     private var refreshAccessibilityBack: (() -> Unit)? = null
     private var admitAccessibilityChildren: ((ArrayList<View>, Int, (View) -> View?) -> Unit)? = null
     init {
-        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
-        bindStyle(initialEnvironment.textDensity.density, 0, initialEnvironment.appearance.toolbars)
-        addView(brand, ActionLayoutParams(Slot.CENTER, minimumVisualOffset = true))
-        addView(incidents, ActionLayoutParams(Slot.START))
-        addView(settings, ActionLayoutParams(Slot.END))
-        if (Build.VERSION.SDK_INT >= 29) isForceDarkAllowed = false
+        addToolbarSlot(brand, Slot.CENTER)
+        addToolbarSlot(incidents, Slot.START)
+        addToolbarSlot(settings, Slot.END)
     }
     fun bind(value: ReverbViewEnvironment, hasIncidents: Boolean, actions: ReverbAppTopBarActions,
              statusInsetPx: Int = 0, applyStatusBarPadding: Boolean = true) {
         environment = value
-        bindStyle(value.textDensity.density, if (applyStatusBarPadding) statusInsetPx else 0, value.appearance.toolbars)
-        chrome.bind(toolbarStyle, toolbarStyle.backgroundColor(value.palette))
+        bindToolbar(value.textDensity.density, value.palette, if (applyStatusBarPadding) statusInsetPx else 0)
         val onBack = actions.back
         if (onBack == null) { back?.let(::removeView); back = null }
         else {
-            if (back == null) back = ReverbTopBarIconAction(context, value, nativeInputRoot, ReverbIcon.Back, R.string.back, false).also { addView(it, 0, ActionLayoutParams(Slot.START)) }
+            if (back == null) back = ReverbTopBarIconAction(context, value, nativeInputRoot, ReverbIcon.Back, R.string.back, false).also { addToolbarSlot(it, Slot.START, index = 0) }
             back!!.bind(value, true, NativeToolbarActionTone.MUTED, onBack)
         }
         settings.bind(value, true, NativeToolbarActionTone.MUTED, actions.settings)
@@ -190,12 +182,10 @@ internal class ReverbTopBarIconAction(
     private var glyph: ReverbIcon,
     description: Int,
     selectionWrapper: Boolean,
-    private val sharedSurface: Boolean = false,
+    sharedSurface: Boolean = false,
     rolePresent: Boolean = false,
-) : NativeTopBarAction(context, environment.textDensity.density, inputRoot, context.getString(description),
-    selectionWrapper, sharedSurface, rolePresent, environment.appearance.toolbars.contentColor(environment.palette),
-    ::invalidateSettingsTextContrast, { view, tint -> smallthingz.ui.controls.textSurfaceForeground(settingsTextSurface(view), tint) },
-    environment.appearance.toolbars.action) {
+) : ReverbToolbarActionView(context, environment.textDensity.density, environment.palette, inputRoot,
+    context.getString(description), selectionWrapper, sharedSurface, rolePresent) {
     constructor(context: Context, environment: ReverbViewEnvironment, inputRoot: View,
         glyph: ReverbIcon, description: Int, selectionWrapper: Boolean, sharedSurface: Boolean = false,
         rolePresent: Boolean = false) :
@@ -203,38 +193,20 @@ internal class ReverbTopBarIconAction(
     private var incidentProgress = 0f
     private var incidentAlert = false
     private var incidentMorph: NativePathMorph? = null
-    private var surfaceMotion: ViewColorTransition? = null
-    private val incidentColorMotion = if (glyph == ReverbIcon.Back)
-        visual.colorTransition(environment.appearance.toolbars.actionTint(environment.palette, NativeToolbarActionTone.MUTED)) {
-            visual.invalidate()
-        } else null
-    private val incidentTint = { checkNotNull(incidentColorMotion).color(0) }
     init {
-        val tint = environment.appearance.toolbars.contentColor(environment.palette)
+        val tint = ReverbDesign.appearance.toolbars.contentColor(environment.palette)
         setGlyph(ReverbIconDrawable(glyph, environment.textDensity.density, tint), tint)
     }
+
     fun bind(value: ReverbViewEnvironment, enabled: Boolean, tone: NativeToolbarActionTone, onClick: () -> Unit) {
-        val style = value.appearance.toolbars
-        val tint = style.actionTint(value.palette, tone)
-        val border = style.actionOutline(value.palette, tone)
         if (environment.textDensity.density != value.textDensity.density) {
+            val tint = ReverbDesign.appearance.toolbars.actionTint(value.palette, tone)
             setGlyph(ReverbIconDrawable(glyph, value.textDensity.density, tint), tint)
-            if (incidentMorph != null) {
-                incidentMorph = libraryBackIncidentMorph(value.textDensity.density)
-                setGlyphMorph(incidentMorph, incidentProgress, incidentTint)
-            }
+            if (incidentMorph != null) incidentMorph = libraryBackIncidentMorph(value.textDensity.density)
         }
         environment = value
-        bindStyle(style.action)
-        if (!sharedSurface) {
-            val fill = style.actionFill(value.palette)
-            val motion = surfaceMotion ?: ViewColorTransition(this,
-                intArrayOf(fill, border, border), ::applySurfacePalette).also { surfaceMotion = it }
-            motion.retarget(fill, border, incidentBorder())
-            applySurfacePalette()
-        }
-        incidentColorMotion?.retarget(style.actionTint(value.palette, incidentTone()))
-        bindAction(value.textDensity.density, enabled, tint, style.contentColor(value.palette), onClick)
+        bindToolbarAction(value.textDensity.density, value.palette, enabled, tone, onClick)
+        incidentMorph?.let { setToolbarActionPreview(it, incidentProgress, incidentTone()) }
     }
     fun bindIcon(next: ReverbIcon, description: String) {
         setDescription(description)
@@ -244,25 +216,14 @@ internal class ReverbTopBarIconAction(
     }
     fun setIncidentMorph(progress: Float, hasIncidents: Boolean) {
         incidentProgress = progress.coerceIn(0f, 1f)
-        if (incidentAlert != hasIncidents) {
-            incidentAlert = hasIncidents
-            val style = environment.appearance.toolbars
-            surfaceMotion?.retarget(style.actionFill(environment.palette),
-                style.actionOutline(environment.palette, NativeToolbarActionTone.MUTED), incidentBorder())
-        }
+        incidentAlert = hasIncidents
         if (glyph == ReverbIcon.Back) {
-            if (incidentMorph == null) incidentMorph = libraryBackIncidentMorph(environment.textDensity.density)
-            incidentColorMotion?.retarget(environment.appearance.toolbars.actionTint(environment.palette, incidentTone()))
-            setGlyphMorph(incidentMorph, incidentProgress, incidentTint)
+            val morph = incidentMorph ?: libraryBackIncidentMorph(environment.textDensity.density).also { incidentMorph = it }
+            setToolbarActionPreview(morph, incidentProgress, incidentTone())
         }
-        applySurfacePalette()
     }
+
     private fun incidentTone() = if (incidentAlert) NativeToolbarActionTone.ALERT else NativeToolbarActionTone.MUTED
-    private fun incidentBorder() = environment.appearance.toolbars.actionOutline(environment.palette, incidentTone())
-    private fun applySurfacePalette() {
-        val motion = surfaceMotion ?: return
-        setSurfacePaletteImmediately(motion.color(0), ColorUtils.blendARGB(motion.color(1), motion.color(2), incidentProgress))
-    }
 }
 
 private class ReverbTopBarBrandAction(
@@ -270,13 +231,11 @@ private class ReverbTopBarBrandAction(
     environment: ReverbViewEnvironment,
     inputRoot: View,
     private val mark: ReverbBrandMarkView = ReverbBrandMarkView(context),
-) : NativeToolbarContentAction(context, mark, context.getString(R.string.app_name), inputRoot,
-    environment.textDensity.density, environment.appearance.toolbars.action.minimumTargetDp,
-    environment.appearance.toolbars.contentColor(environment.palette)) {
+) : ReverbToolbarContentActionView(context, mark, context.getString(R.string.app_name), inputRoot,
+    environment.textDensity.density, environment.palette) {
     fun bind(value: ReverbViewEnvironment, callback: () -> Unit) {
         mark.refreshResourcePalette()
-        val style = value.appearance.toolbars
-        bindAction(value.textDensity.density, style.action.minimumTargetDp, style.contentColor(value.palette), callback)
+        bindToolbarContent(value.textDensity.density, value.palette, callback)
     }
 }
 

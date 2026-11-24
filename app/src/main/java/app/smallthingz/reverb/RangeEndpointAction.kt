@@ -1,5 +1,7 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.common.UiInputGesture
+
 /** Reachable endpoint bounds use the same minimum gap and corner pushing as pointer edits. */
 internal fun rangeEndpointLimits(
     durationSeconds: Float,
@@ -23,7 +25,7 @@ internal fun runRangeEndpointAction(
     durationSeconds: Float,
     target: RangeEditTarget,
     requestedSeconds: Double?,
-    gesture: RangeInputGesture,
+    gesture: UiInputGesture,
     pause: () -> Unit,
     apply: (RangeEditUpdate) -> Unit,
 ): Boolean {
@@ -47,27 +49,4 @@ internal fun runRangeEndpointAction(
     }
 }
 
-/** Auto-repeat retains its original wheel generation, including a complete intervening scroll. */
-internal class RangeEndpointKeyOwner {
-    private var keyCode: Int? = null
-    private var gesture: RangeInputGesture? = null
-
-    fun keyDown(keyCode: Int, repeatCount: Int, create: () -> RangeInputGesture): RangeInputGesture? {
-        if (repeatCount == 0) {
-            clear()
-            this.keyCode = keyCode
-            gesture = create()
-        }
-        return gesture.takeIf { this.keyCode == keyCode }
-    }
-
-    fun keyUp(keyCode: Int) {
-        if (this.keyCode == keyCode) clear()
-    }
-
-    fun clear() {
-        gesture?.cancel()
-        gesture = null
-        keyCode = null
-    }
-}
+internal typealias RangeEndpointKeyOwner = smallthingz.ui.reverb.RangeEndpointKeyOwner<RangeInputGesture>

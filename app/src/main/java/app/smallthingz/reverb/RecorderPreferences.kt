@@ -639,38 +639,9 @@ fun parseDurationInput(value: String): Int? {
     return if (result >= 0) result else null
 }
 
-internal val DIGIT_0 = charArrayOf('0', '1', '2', '3', '4', '5', '6', '7', '8', '9')
+fun formatDurationInput(seconds: Int): String = smallthingz.ui.common.formatDurationInput(seconds)
 
-fun formatDurationInput(seconds: Int): String = formatDurationInput(seconds.toLong())
-
-fun formatDurationInput(seconds: Long): String {
-    val total = max(0, seconds)
-    val hours = total / 3600
-    val minutes = total % 3600 / 60
-    val secs = total % 60
-    return if (hours > 0) {
-        val hs = hours.toString()
-        val chars = CharArray(hs.length + 6)
-        var i = 0
-        for (c in hs) chars[i++] = c
-        chars[i++] = ':'; chars[i++] = DIGIT_0[minutes.toInt() / 10]; chars[i++] = DIGIT_0[minutes.toInt() % 10]
-        chars[i++] = ':'; chars[i++] = DIGIT_0[secs.toInt() / 10]; chars[i] = DIGIT_0[secs.toInt() % 10]
-        String(chars)
-    } else {
-        val m = minutes.toInt()
-        val s = secs.toInt()
-        if (m >= 10) {
-            val chars = CharArray(5)
-            chars[0] = DIGIT_0[m / 10]; chars[1] = DIGIT_0[m % 10]
-            chars[2] = ':'; chars[3] = DIGIT_0[s / 10]; chars[4] = DIGIT_0[s % 10]
-            String(chars)
-        } else {
-            val chars = CharArray(4)
-            chars[0] = DIGIT_0[m]; chars[1] = ':'; chars[2] = DIGIT_0[s / 10]; chars[3] = DIGIT_0[s % 10]
-            String(chars)
-        }
-    }
-}
+fun formatDurationInput(seconds: Long): String = smallthingz.ui.common.formatDurationInput(seconds)
 
 fun exportFileSizeLimitBytes(format: ExportFormat): Long =
     // RIFF ChunkSize is fileSize - 8, so a max unsigned-32 ChunkSize permits eight

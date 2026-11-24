@@ -1,5 +1,7 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.components.NativeToggleRow
+
 import smallthingz.ui.components.NativeModalWindowRuntime
 
 import smallthingz.ui.scroll.NativeVerticalViewport
@@ -357,10 +359,10 @@ private class OnboardingAudioQaFixture(
     private fun update(next: OnboardingPageContentState) { state = next; view.bind(next) }
     fun compression() = onboardingAudioQaRow(
         onboardingViewDescendants(view).filterIsInstance<SettingsOutputCompressionView>().single(),
-        view.context.getString(R.string.output_compression)) as SettingsToggleRowView
+        view.context.getString(R.string.output_compression)) as NativeToggleRow
     fun silence() = onboardingAudioQaRow(
         onboardingViewDescendants(view).filterIsInstance<SettingsSilenceView>().single(),
-        view.context.getString(R.string.silence_title)) as SettingsToggleRowView
+        view.context.getString(R.string.silence_title)) as NativeToggleRow
     fun footer(label: String) = onboardingAudioQaRow(
         onboardingViewDescendants(view).filterIsInstance<OnboardingFooterView>().single(), label)
     fun evidence(): JSONObject = JSONObject().put("output_compression", state.outputCompression)

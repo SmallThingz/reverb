@@ -4,7 +4,13 @@ import smallthingz.ui.scroll.NativeVerticalNestedHost
 import smallthingz.ui.scroll.NativeVerticalScrollSource
 
 import smallthingz.ui.components.NativeDropdown
+import smallthingz.ui.common.DropdownContent
+import smallthingz.ui.reverb.ReverbLibraryPlayerView as LibraryPlayerView
+import smallthingz.ui.reverb.settings.ReverbAudioActions
+import smallthingz.ui.reverb.settings.ReverbAudioChoices
+import smallthingz.ui.reverb.settings.ReverbAudioOptions
 import smallthingz.ui.text.view.ParagraphView
+import smallthingz.ui.util.closePreservingPrimaryFailure
 import android.Manifest
 import android.animation.ValueAnimator
 import android.app.Application
@@ -23,10 +29,14 @@ import android.view.ContextThemeWrapper
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewGroup
+import android.view.ViewTreeObserver
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.inspector.WindowInspector
 import android.widget.FrameLayout
 import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
+import androidx.core.graphics.Insets
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -73,6 +83,7 @@ import kotlinx.coroutines.launch
 import android.util.AtomicFile
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
@@ -449,22 +460,29 @@ internal fun verifyNativeLibraryMenuCurrent(instrumentation: Instrumentation, re
             namePrefix = "Reverb QA menu ${java.util.UUID.randomUUID()}").also { ledger = it }
         owned.admit()
         val records = owned.create()
+        val perf = ownerPerfCycle.get()
         val current = nativeParityOnMain(instrumentation) {
-            TransactionBoard(activity, false, records, transitions) { board = it }
+            TransactionBoard(activity, false, records, transitions, fitCurrentWindowInsets = perf == null) { board = it }
         }
         current.awaitReady(instrumentation, records.map { it.id }.toSet())
         val timing = JSONObject().also { result.put("menu_open_timing", it) }
+        perf?.opening(activity)
         current.openMenu(instrumentation, records.first().displayName, timing)
+        perf?.openSettled(current.performanceMenuWindow(instrumentation), timing)
         val expected = listOf(R.string.rename_recording, R.string.recording_info, R.string.share_recording,
             R.string.trim_recording, R.string.delete_recording, R.string.multi_select).map(context::getString)
         val actual = current.clickLabels(instrumentation)
         result.put("menu_labels", JSONArray(expected)).put("actual_menu_labels", JSONArray(actual))
         check(actual == expected) { "Menu label/order/enabled mismatch" }
-        val capture = JSONObject().also { result.put("menu_capture", it) }
-        current.capture(instrumentation, directory, "native-menu", true, capture, observeMenu = true)
-        owned.requireUnchanged()
-        val audioChoice = JSONObject().also { result.put("audio_choice", it) }
-        current.verifyAudioChoiceMenu(instrumentation, directory, audioChoice, requireLandscapeTouch = false)
+        if (perf == null) {
+            val capture = JSONObject().also { result.put("menu_capture", it) }
+            current.capture(instrumentation, directory, "native-menu", true, capture, observeMenu = true)
+            owned.requireUnchanged()
+            val audioChoice = JSONObject().also { result.put("audio_choice", it) }
+            current.verifyAudioChoiceMenu(instrumentation, directory, audioChoice, requireLandscapeTouch = false)
+            val playerFirstDraw = JSONObject().also { result.put("playing_player_first_draw", it) }
+            current.verifyPlayingPlayerFirstDraw(instrumentation, records.first(), playerFirstDraw)
+        }
         owned.requireUnchanged()
     } catch (error: Throwable) {
         failure = error
@@ -488,7 +506,8 @@ internal fun verifyNativeLibraryMenuCurrent(instrumentation: Instrumentation, re
         report.appendLine("PARITY_EVIDENCE ${directory.name}/result.json")
     }
     failure?.let { throw it }
-    report.appendLine("PASS $selector recording_menu_cases=1 audio_choice_cases=1")
+    val audioChoices = if (ownerPerfCycle.get() == null) 1 else 0
+    report.appendLine("PASS $selector recording_menu_cases=1 audio_choice_cases=$audioChoices")
 }
 
 /* Current-only actual Rename sheet; existing transaction ledger owns all fixture media. */
@@ -681,6 +700,7 @@ private class TransactionBoard(
     private val records: List<RecordingEntity>,
     private val windowTransitions: JSONArray,
     private val commonGrain: NativeParityCommonGrainSession? = null,
+    private val fitCurrentWindowInsets: Boolean = false,
     onOwned: (TransactionBoard) -> Unit,
 ) : AutoCloseable {
     private val configuration = Configuration(host.resources.configuration).apply {
@@ -765,18 +785,56 @@ private class TransactionBoard(
             val callbacks = NativeLibraryCallbacks(onVisibleRecordingsChanged = {
                 visibleIds = it.map(RecordingEntity::id).toSet()
             })
-            val input = NativeLibraryScreenInput(NativeLibraryInput(true, records, callbacks),
-                false, true, LibraryScaffoldInsets(), {}, {}, {}, {})
+            val initialInsets = if (fitCurrentWindowInsets) {
+                residualVisualInsets(checkNotNull(ViewCompat.getRootWindowInsets(host.fixtureRoot)))
+            } else Insets.NONE
+            var input = NativeLibraryScreenInput(NativeLibraryInput(true, records, callbacks),
+                false, true, initialInsets.libraryContent(), {}, {}, {}, {})
             val content = ReverbLibraryScreenContent(context, environment, input, lifecycle,
                 host.onBackPressedDispatcher, owned, checkNotNull(owned.coroutineContext[MonotonicFrameClock]),
                 ValueAnimator::getDurationScale, accessibility, host.fixtureRoot, transactionNoNested, {}, {})
             native = content // Retain the owner before any attachment callback can fail.
             content.layoutDirection = View.LAYOUT_DIRECTION_LTR
-            host.fixtureRoot.addView(content, FrameLayout.LayoutParams(-1, -1))
+            val layout = FrameLayout.LayoutParams(-1, -1).apply { topMargin = initialInsets.top }
+            if (fitCurrentWindowInsets) ViewCompat.setOnApplyWindowInsetsListener(content) { _, _ ->
+                ViewCompat.getRootWindowInsets(host.fixtureRoot)?.let { rootInsets ->
+                    val insets = residualVisualInsets(rootInsets)
+                    if (layout.topMargin != insets.top) {
+                        layout.topMargin = insets.top
+                        content.layoutParams = layout
+                    }
+                    val scaffold = insets.libraryContent()
+                    if (input.scaffoldInsets != scaffold) {
+                        input = input.copy(scaffoldInsets = scaffold)
+                        content.bind(input)
+                    }
+                }
+                WindowInsetsCompat.CONSUMED
+            }
+            host.fixtureRoot.addView(content, layout)
             clockHost.visibility = View.GONE
         }
         awaitVisible(i, ids)
     }
+    /** The standalone fixture has no Main reveal layer. Apply only unconsumed physical insets. */
+    private fun residualVisualInsets(windowInsets: WindowInsetsCompat): Insets {
+        val visual = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
+        val decor = host.window.decorView
+        val root = host.fixtureRoot
+        val origin = IntArray(2).also(root::getLocationInWindow)
+        val windowOrigin = IntArray(2).also(decor::getLocationInWindow)
+        val x = origin[0] - windowOrigin[0]
+        val y = origin[1] - windowOrigin[1]
+        return Insets.of(
+            (visual.left - x).coerceAtLeast(0),
+            (visual.top - y).coerceAtLeast(0),
+            (x + root.width - decor.width + visual.right).coerceAtLeast(0),
+            (y + root.height - decor.height + visual.bottom).coerceAtLeast(0),
+        )
+    }
+
+    private fun Insets.libraryContent() = LibraryScaffoldInsets(left, right, bottom)
+
     fun catalogReadiness(i: Instrumentation, expected: Set<String>): JSONObject = nativeParityOnMain(i) {
         val state = native?.currentState()
         val readiness = DurableSaveJobs.readiness.value
@@ -922,8 +980,12 @@ private class TransactionBoard(
         val title = "QA audio choice"
         val callbacks = JSONArray().also { entry.put("callback_order", it) }
         var selected: Choice? = null
-        var owner: SettingsAudioMenuHost? = null
-        var anchor: ParagraphView? = null
+        val channels = DropdownContent(title, options[1], options, Choice::label)
+        val hidden = DropdownContent("Unused", 0, listOf(0), Int::toString)
+        val initial = ReverbAudioOptions(channels, hidden, hidden, hidden, hidden)
+        var owner: ReverbAudioChoices<Choice, Int, Int, Int>? = null
+        var anchor: View? = null
+        fun overlay(): View? = transactionViews(host.window.decorView).singleOrNull { it.accessibilityPaneTitle == title }
         var failure: Throwable? = null
         try {
             nativeParityOnMain(i) {
@@ -940,34 +1002,34 @@ private class TransactionBoard(
             awaitActivity(i)
             nativeParityOnMain(i) {
                 guard()
-                anchor = ParagraphView(context, ReverbParagraphStyles[ReverbTextRole.LABEL_LARGE],
-                    environment.textDensity, environment.sharedFontResolver, environment.palette.ink).also {
-                    it.setText(title)
-                    val scale = environment.textDensity.density
-                    host.fixtureRoot.addView(it, FrameLayout.LayoutParams((160 * scale).toInt(),
-                        (72 * scale).toInt(), android.view.Gravity.CENTER_VERTICAL or android.view.Gravity.START).apply {
-                        marginStart = (24 * scale).toInt()
-                    })
-                }
-                val overlayHost = host.findViewById<FrameLayout>(android.R.id.content)
-                owner = SettingsAudioMenuHost(environment, { overlayHost }, { host.hasWindowFocus() },
-                    expandedChanged = { kind, expanded ->
-                        check(kind == SettingsAudioChoice.CHANNELS)
-                        callbacks.put("expanded:$expanded")
-                    })
+                val unused: (Int) -> Unit = { error("Hidden audio choice activated") }
+                val actions = ReverbAudioActions<Choice, Int, Int, Int>({ value ->
+                    checkNotNull(overlay())
+                    selected = value
+                    callbacks.put("selected:${value.id}")
+                    checkNotNull(owner).bind(initial.copy(channels = channels.copy(selected = value)), environment.theme)
+                }, unused, unused, unused, unused)
+                val choices = ReverbAudioChoices(context, environment.theme, initial, actions, { host.fixtureRoot },
+                    host::hasWindowFocus)
+                owner = choices
+                val scale = environment.textDensity.density
+                host.fixtureRoot.addView(choices.view, FrameLayout.LayoutParams((160 * scale).toInt(),
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    android.view.Gravity.CENTER_VERTICAL or android.view.Gravity.START).apply {
+                    marginStart = (24 * scale).toInt()
+                })
+                anchor = transactionViews(choices.view).filterIsInstance<NativeDropdown<*>>()
+                    .single { it.visibility == View.VISIBLE }
             }
             awaitNativeParityDraw(i, host.fixtureRoot)
             nativeParityOnMain(i) {
                 guard()
-                check(checkNotNull(anchor).isShown && checkNotNull(anchor).isLaidOut)
-                check(focusRoot() === host.window.decorView)
-                checkNotNull(owner).open(SettingsAudioChoice.CHANNELS, checkNotNull(anchor),
-                    SettingsDropdownContent(title, options[1], options, Choice::label)) {
-                    selected = it
-                    callbacks.put("selected:${it.id}")
-                }
+                val field = checkNotNull(anchor)
+                check(field.isShown && field.isLaidOut && focusRoot() === host.window.decorView)
+                check(field.performClick())
+                checkNotNull(overlay())
+                callbacks.put("expanded:true")
             }
-            fun overlay(): View? = transactionViews(host.window.decorView).singleOrNull { it.accessibilityPaneTitle == title }
             fun choiceRows(): List<NativeDropdown<*>> = overlay()?.let(::transactionViews)
                 ?.filterIsInstance<NativeDropdown<*>>().orEmpty()
             await(i, "Settings audio choice overlay") {
@@ -1039,6 +1101,7 @@ private class TransactionBoard(
                 check(callbacks.optString(0) == "expanded:true" && callbacks.optString(1) == "selected:1")
             }
             await(i, "collapsed Settings audio choice overlay") { focusRoot() === host.window.decorView && overlay() == null }
+            callbacks.put("expanded:false")
             check(callbacks.toString() == JSONArray(listOf("expanded:true", "selected:1", "expanded:false")).toString())
             entry.put("selected_id", selected?.id).put("typed_duplicate_identity", true)
         } catch (error: Throwable) { failure = error; throw error }
@@ -1049,7 +1112,7 @@ private class TransactionBoard(
                 }
             }
             cleanup { owner?.close() }
-            cleanup { anchor?.let(host.fixtureRoot::removeView) }
+            cleanup { owner?.view?.let(host.fixtureRoot::removeView) }
             if (failure != null && !entry.has("selected_id")) entry.put("choice_failure", failure!!.stackTraceToString())
             // The caller records the original exception; cleanup-only failure must also fail the case.
             failure?.let { throw it }
@@ -1090,6 +1153,93 @@ private class TransactionBoard(
     }
     fun hasText(text: String): Boolean = if (compose) nodes(false).any { text in textOf(it) }
         else nativeParagraphs().any { it.getText().toString() == text }
+    fun performanceMenuWindow(i: Instrumentation): View = nativeParityOnMain(i) { guard(); focusRoot() }
+
+    /** First production player binding from a supplied playing snapshot, without audible playback. */
+    fun verifyPlayingPlayerFirstDraw(i: Instrumentation, recording: RecordingEntity, evidence: JSONObject) {
+        check(!compose)
+        awaitActivity(i)
+        val pauseLabel = context.getString(R.string.player_pause)
+        val attachedKey = "first_attached_pre_draw"
+        val visibleKey = "first_visible_glyph_pre_draw"
+        evidence.put("playback_source", "seeded_matching_playing_snapshot").put("passed", false)
+        val (playback, original, observer) = nativeParityOnMain(i) {
+            guard()
+            check(checkNotNull(native).activePlayerLeases().isEmpty())
+            @Suppress("UNCHECKED_CAST")
+            val source = RecordingPlayback.javaClass.getDeclaredField("mutableState").run {
+                isAccessible = true
+                get(RecordingPlayback) as MutableStateFlow<RecordingPlaybackState>
+            }
+            val before = source.value
+            check(!before.playing && !before.wantsPlayback && !RecordingPlayback.hasPendingStart())
+            Triple(source, before, host.fixtureRoot.viewTreeObserver)
+        }
+        val seeded = original.copy(recording = recording, prepared = true, playing = true, wantsPlayback = true,
+            positionMillis = 0, durationMillis = recording.durationMillis.toInt(), playbackAnchor = null)
+        val visibleBounds = Rect()
+        val preDraw = ViewTreeObserver.OnPreDrawListener {
+            if (evidence.has(visibleKey)) return@OnPreDrawListener true
+            val lease = native?.activePlayerLeases()?.singleOrNull() ?: return@OnPreDrawListener true
+            if (!lease.view.isAttachedToWindow || !lease.view.isShown) return@OnPreDrawListener true
+            val player = transactionViews(lease.view).filterIsInstance<LibraryPlayerView<*>>().singleOrNull()
+            val puck = player?.fineSeekView?.puckClickView as? ViewGroup
+            val glyph = puck?.getChildAt(0)
+            val visible = glyph?.getGlobalVisibleRect(visibleBounds) == true
+            if (evidence.has(attachedKey) && !visible) return@OnPreDrawListener true
+            // This field selects the Drawable used by the actual glyph's onDraw.
+            val drawsPause = glyph?.let {
+                runCatching { it.javaClass.getDeclaredField("playing").apply { isAccessible = true }.getBoolean(it) }
+                    .getOrNull()
+            }
+            val presentation = lease.currentPresentation
+            val observed = JSONObject().put("seed_still_current", RecordingPlayback.state.value === seeded)
+                .put("state_playing", presentation?.state?.isPlaying ?: JSONObject.NULL)
+                .put("binding_playing", presentation?.fineSeek?.isPlaying ?: JSONObject.NULL)
+                .put("glyph_draws_pause", drawsPause ?: JSONObject.NULL)
+                .put("glyph_label", glyph?.contentDescription?.toString() ?: JSONObject.NULL)
+            if (!evidence.has(attachedKey)) evidence.put(attachedKey, observed)
+            if (visible) evidence.put(visibleKey, observed)
+            true
+        }
+        var failure: Throwable? = null
+        var expanded = false
+        try {
+            nativeParityOnMain(i) {
+                guard()
+                check(playback.value === original)
+                playback.value = seeded
+                observer.addOnPreDrawListener(preDraw)
+                expanded = nativeAction(recording.displayName).performClick()
+                check(expanded)
+            }
+            await(i, "first visible playing player pre-draw") { evidence.has(visibleKey) }
+            for (key in listOf(attachedKey, visibleKey)) {
+                val frame = evidence.getJSONObject(key)
+                check(frame.optBoolean("seed_still_current") && frame.optBoolean("state_playing") &&
+                    frame.optBoolean("binding_playing") && frame.optBoolean("glyph_draws_pause") &&
+                    frame.optString("glyph_label") == pauseLabel) { "Already-playing player rendered $key incorrectly: $frame" }
+            }
+        } catch (error: Throwable) {
+            failure = error
+            throw error
+        } finally {
+            val terminal = closePreservingPrimaryFailure(failure) {
+                nativeParityOnMain(i) {
+                    try {
+                        if (observer.isAlive) observer.removeOnPreDrawListener(preDraw)
+                        if (expanded && host.hasWindowFocus()) check(nativeAction(recording.displayName).performClick())
+                    } finally {
+                        if (playback.value === seeded) playback.value = original
+                    }
+                    check(!RecordingPlayback.hasPendingStart()) { "First-draw fixture attempted real playback" }
+                }
+            }
+            if (failure == null && terminal != null) throw terminal
+        }
+        evidence.put("passed", true)
+    }
+
     fun openMenu(i: Instrumentation, title: String, timing: JSONObject? = null) {
         awaitActivity(i)
         val triggeredAt = nativeParityOnMain(i) {
@@ -1341,6 +1491,17 @@ private class TransactionBoard(
             Rect(p[0], p[1], p[0] + host.fixtureRoot.width, p[1] + host.fixtureRoot.height)
         }
         val (viewport, region) = nativeParityOnMain(i) { transactionCaptureRegion(host, bounds) }
+        if (fitCurrentWindowInsets) observation.put("toolbar_window_insets", nativeParityOnMain(i) {
+            val content = checkNotNull(native)
+            val decor = host.window.decorView
+            val windowInsets = checkNotNull(ViewCompat.getRootWindowInsets(host.fixtureRoot))
+            val platformTop = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()).top
+            val origin = IntArray(2).also(content::getLocationInWindow)
+            val windowOrigin = IntArray(2).also(decor::getLocationInWindow)
+            val toolbarTop = origin[1] - windowOrigin[1]
+            check(toolbarTop >= platformTop) { "Standalone Library toolbar crosses the platform safe top" }
+            JSONObject().put("safe_top_px", platformTop).put("toolbar_top_px", toolbarTop)
+        })
         observation.put("region", region)
         val frames = JSONArray().also { observation.put("frames", it) }
         fun currentState(): JSONObject = nativeParityOnMain(i) {
@@ -1409,7 +1570,12 @@ private class TransactionBoard(
         fun release(block: () -> Unit) { try { block() } catch (error: Throwable) {
             if (primary == null) primary = error else if (primary !== error) primary!!.addSuppressed(error)
         } }
-        release { native?.close() }
+        release {
+            native?.let {
+                if (fitCurrentWindowInsets) ViewCompat.setOnApplyWindowInsetsListener(it, null)
+                it.close()
+            }
+        }
         release { nativeScope?.cancel() }
         release { reference.disposeComposition() }
         release { recomposer.cancel() }

@@ -1,18 +1,19 @@
 package app.smallthingz.reverb
 
 import smallthingz.ui.components.blob.AudioReactiveBlobView
+import smallthingz.ui.reverb.home.ReverbHomeBlobAttachment
 
 /** Replays the last app-owned visualization frame when the stationary renderer transfers buffers. */
-internal class NativeAudioBlobController {
+internal class NativeAudioBlobController : ReverbHomeBlobAttachment {
     private var view: AudioReactiveBlobView? = null
     private var latestFrame = ReverbService.VisualizationFrame.EMPTY
 
-    fun attach(view: AudioReactiveBlobView) {
+    override fun attach(view: AudioReactiveBlobView) {
         this.view = view
         view.present(latestFrame)
     }
 
-    fun detach(view: AudioReactiveBlobView) {
+    override fun detach(view: AudioReactiveBlobView) {
         if (this.view === view) this.view = null
     }
 
@@ -26,7 +27,7 @@ internal class NativeAudioBlobController {
         view?.clearFrame()
     }
 
-    fun currentBaseRadiusFraction(): Float? = view?.currentBaseRadiusFraction()
+    override fun currentBaseRadiusFraction(): Float? = view?.currentBaseRadiusFraction()
 }
 
 private fun AudioReactiveBlobView.present(frame: ReverbService.VisualizationFrame) =

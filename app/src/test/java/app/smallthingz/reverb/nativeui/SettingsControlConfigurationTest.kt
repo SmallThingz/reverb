@@ -24,8 +24,17 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.annotation.LooperMode
+import smallthingz.ui.common.ControlTheme
+import smallthingz.ui.common.DropdownGroup
+import smallthingz.ui.common.ToggleState
+import smallthingz.ui.components.NativeDecorativeIconView
 import smallthingz.ui.components.NativeDropdown
-import smallthingz.ui.components.NativeDropdownContent
+import smallthingz.ui.common.DropdownContent
+import smallthingz.ui.reverb.settings.ReverbAudioActions
+import smallthingz.ui.reverb.settings.ReverbAudioChoices
+import smallthingz.ui.reverb.settings.ReverbAudioOptions
+import smallthingz.ui.reverb.settings.ReverbSettingsToggle
+import smallthingz.ui.reverb.settings.ReverbSettingsToggleRole
 import smallthingz.ui.text.font.createFontFamilyResolver
 import smallthingz.ui.text.view.ParagraphView
 import smallthingz.ui.unit.Density
@@ -49,18 +58,20 @@ class SettingsControlConfigurationTest {
         fun environment(scale: Float) = ReverbViewEnvironment(Density(1f, scale),
             createFontFamilyResolver(activity), ReverbPalette.fallback(false)).forSettings()
         var actions = 0
-        val state = SettingsAudioChoicesState(ChannelMode.MONO, listOf(ChannelMode.MONO, ChannelMode.STEREO),
-            PcmSampleFormat.PCM_16, listOf(PcmSampleFormat.PCM_16, PcmSampleFormat.PCM_FLOAT),
-            48_000, listOf(44_100, 48_000), AudioSourceMode.MIC, listOf(AudioSourceMode.MIC, AudioSourceMode.CAMCORDER),
-            InputRouteMode.AUTO, listOf(InputRouteMode.AUTO, InputRouteMode.BUILTIN_MIC), emptySet())
-        val popup = object : SettingsAudioPopupHost {
-            override fun <T> update(kind: SettingsAudioChoice, anchor: View,
-                content: SettingsDropdownContent<T>, onSelected: (T) -> Unit) = Unit
-            override fun <T> open(kind: SettingsAudioChoice, anchor: View,
-                content: SettingsDropdownContent<T>, onSelected: (T) -> Unit) { actions++ }
-        }
-        val choices = SettingsAudioChoicesView(activity, environment(1f), state, { "$it Hz" }, popup,
-            SettingsAudioSelections({ actions++ }, { actions++ }, { actions++ }, { actions++ }, { actions++ }), { root })
+        fun state() = ReverbAudioOptions(
+            DropdownContent(activity.getString(R.string.channel_mode_label),
+                ChannelMode.MONO, listOf(ChannelMode.MONO, ChannelMode.STEREO)) { activity.getString(it.labelRes) },
+            DropdownContent(activity.getString(R.string.sample_format_label),
+                PcmSampleFormat.PCM_16, listOf(PcmSampleFormat.PCM_16, PcmSampleFormat.PCM_FLOAT)) { activity.getString(it.labelRes) },
+            DropdownContent(activity.getString(R.string.sample_rate_label), 48_000, listOf(44_100, 48_000)) { "$it Hz" },
+            DropdownContent(activity.getString(R.string.audio_source_label),
+                AudioSourceMode.MIC, listOf(AudioSourceMode.MIC, AudioSourceMode.CAMCORDER)) { activity.getString(it.labelRes) },
+            DropdownContent(activity.getString(R.string.input_route_label),
+                InputRouteMode.AUTO, listOf(InputRouteMode.AUTO, InputRouteMode.BUILTIN_MIC)) { activity.getString(it.labelRes) },
+        )
+        val choices = ReverbAudioChoices(activity, environment(1f).theme, state(),
+            ReverbAudioActions({ actions++ }, { actions++ }, { actions++ }, { actions++ }, { actions++ }),
+            inputRoot = { root }, inputAllowed = { true })
         root.addView(choices.view, FrameLayout.LayoutParams(-1, -2))
         fun layout() {
             root.measure(exact(480), exact(1200)); root.layout(0, 0, 480, 1200)
@@ -83,7 +94,7 @@ class SettingsControlConfigurationTest {
             @Suppress("DEPRECATION")
             activity.resources.updateConfiguration(Configuration(original).apply { setLocale(Locale.FRENCH) },
                 activity.resources.displayMetrics)
-            choices.bind(state, environment(2f))
+            choices.bind(state(), environment(2f).theme)
             layout()
             assertNotEquals(oldLabel, title.getText())
             assertEquals(activity.getString(R.string.channel_mode_label), title.getText())
@@ -94,9 +105,9 @@ class SettingsControlConfigurationTest {
             reference.setText(title.getText())
             reference.measure(exact(title.measuredWidth), unspecified())
             assertEquals("retained metrics match a fresh current-style paragraph", reference.measuredHeight, title.measuredHeight)
-            val arrows = nodes.filterIsInstance<OnboardingIconView>()
+            val arrows = nodes.filterIsInstance<NativeDecorativeIconView>()
             assertEquals(5, arrows.size)
-            arrows.forEach { assertEquals(activity.getString(R.string.open_options), it.contentDescription) }
+            arrows.forEach { assertEquals(activity.getString(smallthingz.ui.R.string.common_open_options), it.contentDescription) }
             assertEquals(0, actions)
         } finally {
             choices.close()
@@ -117,8 +128,11 @@ class SettingsControlConfigurationTest {
         activity.setContentView(root)
         fun environment() = ReverbViewEnvironment(Density(1f), createFontFamilyResolver(activity), ReverbPalette.fallback(false))
         val calls = mutableListOf<Boolean>()
-        val row = SettingsToggleRowView(activity, R.string.auto_start_title, true, true, environment(),
-            { root }, true, { calls += it }, summary = activity.getString(R.string.auto_start_summary))
+        fun state() = ToggleState(activity.getString(R.string.auto_start_title), true, true,
+            activity.getString(R.string.auto_start_summary))
+        val control = ReverbSettingsToggle(activity, environment().theme, state(), ReverbSettingsToggleRole.AUTO_START,
+            { root }) { calls += it }
+        val row = control.view as ViewGroup
         root.addView(row)
         try {
             root.measure(exact(360), exact(800)); root.layout(0, 0, 360, 800)
@@ -126,7 +140,7 @@ class SettingsControlConfigurationTest {
             @Suppress("DEPRECATION")
             activity.resources.updateConfiguration(Configuration(original).apply { setLocale(Locale.FRENCH) },
                 activity.resources.displayMetrics)
-            row.bind(true, true, environment(), activity.getString(R.string.auto_start_summary))
+            control.bind(state(), environment().theme)
             root.measure(exact(360), exact(800)); root.layout(0, 0, 360, 800)
             val title = row.getChildAt(0) as ParagraphView
             val description = row.getChildAt(1) as ParagraphView
@@ -137,7 +151,7 @@ class SettingsControlConfigurationTest {
             assertTrue(row.performClick())
             assertEquals(listOf(false), calls)
         } finally {
-            row.close()
+            control.close()
             @Suppress("DEPRECATION")
             activity.resources.updateConfiguration(original, activity.resources.displayMetrics)
             owner.pause().stop().destroy()
@@ -148,74 +162,66 @@ class SettingsControlConfigurationTest {
         val activityOwner = Robolectric.buildActivity(Activity::class.java).setup().visible()
         val activity = activityOwner.get()
         val root = FrameLayout(activity)
-        val anchor = View(activity)
         activity.setContentView(root)
-        root.addView(anchor, FrameLayout.LayoutParams(240, 96, Gravity.CENTER))
-        val appearance = reverbAppearance.copy(anchoredDropdown = reverbAppearance.anchoredDropdown.copy(
-            expandMillis = 0, settleMillis = 0, collapseMillis = 0,
-        ))
-        val resolver = createFontFamilyResolver(activity)
-        val palette = ReverbPalette.fallback(false)
-        val environment = ReverbViewEnvironment(Density(1f), resolver, palette, appearance = appearance)
+        val theme = ControlTheme.resolve(activity, dark = false)
         var admitted = true
-        val expanded = mutableListOf<Boolean>()
         val selected = mutableListOf<Int>()
-        val host = SettingsAudioMenuHost(environment, { root }, { admitted }) { _, value -> expanded += value }
-        val kind = SettingsAudioChoice.SAMPLE_RATE
-        val first = NativeDropdownContent("Sample rate", 2, (1..3).toList()) { value: Int -> "Rate $value" }
+        val group = DropdownGroup(theme, { root }, { admitted })
+        val first = DropdownContent("Sample rate", 2, (1..3).toList()) { value: Int -> "Rate $value" }
+        val field = group.field(activity, first) { fail("Retired callback received a selection") }
+        val anchor = field.view
+        root.addView(anchor, FrameLayout.LayoutParams(240, 96, Gravity.CENTER))
         fun overlay() = root.getChildAt(1) as ViewGroup
         fun wheel() = overlay().getChildAt(1) as ViewGroup
         fun row(index: Int) = wheel().getChildAt(index) as NativeDropdown<*>
-        fun drawn() = shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(32))
+        fun drawn() = shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(380))
         val select: (Int) -> Unit = { value ->
             selected += value
-            host.update(kind, anchor, first.copy(selected = value)) { selected += it }
+            field.bind(first.copy(selected = value))
         }
-        fun open(content: NativeDropdownContent<Int> = first) {
-            host.open(kind, anchor, content, select)
+        fun open(content: DropdownContent<Int> = first) {
+            field.bind(content, select)
+            assertTrue(anchor.performClick())
             drawn()
             assertEquals(2, root.childCount)
         }
-        fun assertRetired() {
-            assertEquals(1, root.childCount)
-            assertEquals(false, expanded.last())
-        }
+        fun assertRetired() = assertEquals(1, root.childCount)
         try {
             drawn()
             assertTrue(anchor.isAttachedToWindow && anchor.isLaidOut)
-            host.open(kind, anchor, first) { fail("Retired callback received a selection") }
+            assertTrue(anchor.performClick())
             drawn()
             val original = overlay()
             val oldRow = row(0)
             val oldTextHeight = (oldRow.getChildAt(1) as ParagraphView).measuredHeight
             assertTrue(oldTextHeight > 0)
-            host.bindConfiguration(environment)
-            host.update(kind, anchor, first, select)
+            group.bindTheme(theme)
+            field.bind(first, select)
             assertSame(original, overlay())
             assertTrue(wheel().performAccessibilityAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD, null))
             drawn()
             assertSame("the Settings draft echoes the in-flight wheel choice", original, overlay())
             assertEquals(listOf(3), selected)
-            assertEquals(listOf(true), expanded)
-            host.update(kind, anchor, first.copy(selected = 1), select)
+            field.bind(first.copy(selected = 1))
             assertRetired()
             assertFalse(oldRow.performClick())
 
             open()
-            host.update(kind, anchor, first.copy(options = listOf(2, 3)), select)
+            field.bind(first.copy(options = listOf(2, 3)))
             assertRetired()
             open()
             val next = first.copy(optionLabel = { "Frequence $it" })
-            host.update(kind, anchor, next, select)
+            field.bind(next)
             assertRetired()
             open()
             anchor.layoutDirection = View.LAYOUT_DIRECTION_RTL
-            host.update(kind, anchor, first, select)
+            field.bind(first)
             assertRetired()
             open()
-            host.bindConfiguration(ReverbViewEnvironment(Density(1f, 1.5f), resolver, palette, appearance = appearance))
+            val larger = activity.createConfigurationContext(Configuration(activity.resources.configuration).apply { fontScale = 1.5f })
+            group.bindTheme(ControlTheme.resolve(larger, dark = false))
             assertRetired()
-            host.update(kind, anchor, next, select)
+            field.bind(next)
             assertRetired()
             open(next)
             assertEquals(View.LAYOUT_DIRECTION_RTL, overlay().layoutDirection)
@@ -224,14 +230,17 @@ class SettingsControlConfigurationTest {
             assertTrue(currentText.measuredHeight > oldTextHeight)
 
             admitted = false
-            host.dismissAll()
-            host.update(kind, anchor, next, select)
-            host.open(kind, anchor, next, select)
+            group.dismiss()
+            field.bind(next)
+            anchor.performClick()
             assertRetired()
             assertEquals(listOf(3), selected)
         } finally {
-            try { host.close() }
-            finally { activityOwner.pause().stop().destroy() }
+            try { field.close() }
+            finally {
+                try { group.close() }
+                finally { activityOwner.pause().stop().destroy() }
+            }
         }
     }
 

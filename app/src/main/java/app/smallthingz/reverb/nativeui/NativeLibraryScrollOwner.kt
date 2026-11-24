@@ -4,22 +4,16 @@
  */
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.reverb.ReverbLibraryLayout
+
 import smallthingz.ui.scroll.NativeVerticalFling
 import smallthingz.ui.scroll.NativeVerticalNestedHost
 import smallthingz.ui.scroll.NativeVerticalOverscroll
 import smallthingz.ui.scroll.NativeVerticalScrollSource
 
-import smallthingz.ui.text.view.NativeSourceAccessibilityNode
-import android.content.Context
-import android.graphics.Canvas
-import android.graphics.Outline
-import android.view.ViewOutlineProvider
 import android.view.MotionEvent
-import android.view.InputDevice
 import android.view.View
 import android.view.ViewConfiguration
-import android.view.accessibility.AccessibilityNodeInfo
-import android.view.accessibility.AccessibilityEvent
 import smallthingz.ui.animation.core.TargetBasedAnimation
 import smallthingz.ui.animation.core.VectorConverter
 import smallthingz.ui.animation.core.spring
@@ -52,63 +46,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
-/** Actual RV virtualization; native pointer dispatch does not run RV's alternate drag/fling path. */
-internal class ReverbLibraryRecyclerView(context: Context) : RecyclerView(context) {
-    var sourceOverscroll: NativeVerticalOverscroll? = null
-    var sourceAccessibilityNode: (() -> NativeSourceAccessibilityNode)? = null
-    var sourceAccessibilityChildren: (() -> List<View>)? = null
-    var sourceSemanticsScrollBy: ((Float) -> Boolean)? = null
-    var sourceStopScroll: (() -> Unit)? = null
-    var sourceOnUserScroll: (() -> Unit)? = null
-    var sourceAccessibilityEventsBound=false
-    override fun sendAccessibilityEventUnchecked(event:AccessibilityEvent) {
-        if(sourceAccessibilityEventsBound && (event.eventType==AccessibilityEvent.TYPE_VIEW_SCROLLED ||
-            event.eventType==AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED))return
-        super.sendAccessibilityEventUnchecked(event)
-    }
-    override fun createAccessibilityNodeInfo(): AccessibilityNodeInfo? =
-        if(sourceAccessibilityNode?.invoke()?.present==false)null else super.createAccessibilityNodeInfo()
-    override fun addChildrenForAccessibility(out:ArrayList<View>) {
-        val children=sourceAccessibilityChildren
-        if(children==null)super.addChildrenForAccessibility(out)else out.addAll(children())
-    }
-    init {
-        overScrollMode = OVER_SCROLL_NEVER
-        isNestedScrollingEnabled = false // Shared source nested-scroll chain owns pre/self/post.
-        clipChildren = false
-        clipToPadding = false
-        clipToOutline = true
-        outlineProvider = object : ViewOutlineProvider() {
-            override fun getOutline(view: View, outline: Outline) {
-                val extra = (30f * resources.displayMetrics.density).roundToInt()
-                outline.setRect(-extra, 0, width + extra, height)
-            }
-        }
-    }
-    override fun onGenericMotionEvent(event: MotionEvent): Boolean {
-        val manager = layoutManager
-        if (isEnabled && !isLayoutSuppressed && manager != null &&
-            event.actionMasked == MotionEvent.ACTION_SCROLL && manager.canScrollVertically()) {
-            val axis = when {
-                event.isFromSource(InputDevice.SOURCE_CLASS_POINTER) -> MotionEvent.AXIS_VSCROLL
-                event.isFromSource(InputDevice.SOURCE_ROTARY_ENCODER) -> MotionEvent.AXIS_SCROLL
-                else -> null
-            }
-            // RecyclerView may scroll and still return false; revoke the reveal before delegation.
-            if (axis != null && event.getAxisValue(axis) != 0f) sourceOnUserScroll?.invoke()
-        }
-        return super.onGenericMotionEvent(event)
-    }
-
-    override fun draw(canvas: Canvas) {
-        val edge = sourceOverscroll
-        if (edge == null) super.draw(canvas) else edge.draw(canvas) { super.draw(it) }
-    }
-    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
-        super.onSizeChanged(w, h, oldw, oldh)
-        sourceOverscroll?.measured(w, h)
-    }
-}
+internal typealias ReverbLibraryRecyclerView = smallthingz.ui.scroll.NativeSourceRecyclerView
 
 /**
  * A finite Library adapter: RV only places/measures rows and reports actual consumed integer pixels.
@@ -126,7 +64,7 @@ internal class NativeLibraryScrollOwner(
     private val mutex = MutatorMutex()
     private var fraction = NativeLibraryScrollAccumulator()
     private val decay = splineBasedDecay(environment.textDensity)
-    private val overscroll = NativeVerticalOverscroll(view.context, environment.textDensity, 0xff666666.toInt(), view::invalidate)
+    private val overscroll = NativeVerticalOverscroll(view.context, environment.textDensity, ReverbLibraryLayout.overscrollGlowColor, view::invalidate)
     private var scope: CoroutineScope? = null
     private var channel: Channel<Event>? = null
     private var router: NativeDragPointerRouter? = null

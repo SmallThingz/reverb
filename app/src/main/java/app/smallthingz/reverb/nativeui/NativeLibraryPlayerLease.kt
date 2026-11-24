@@ -16,6 +16,7 @@ import app.smallthingz.reverb.NativeRecordingInlinePlayerController
 import smallthingz.ui.input.phase.NativeViewPhasePointerNode
 import app.smallthingz.reverb.RecordingEntity
 import kotlinx.coroutines.CoroutineScope
+import smallthingz.ui.util.closePreservingPrimaryFailure
 
 /**
  * Concrete native row lease. Only the row and the controller own resources; this does not create a
@@ -146,14 +147,17 @@ internal class NativeLibraryPlayerLease(
     override fun closePresentation() {
         if (closed) return
         closed = true
-        back?.close()
+        val previousBack = back
+        val previousController = controller
         back = null
-        controller?.close()
+        backOwner = null
         controller = null
-        motion.close()
-        player.release()
         presentation = null
         input = null
-        changedNodes()
+        var failure = closePreservingPrimaryFailure(null) { previousBack?.close() }
+        failure = closePreservingPrimaryFailure(failure) { previousController?.close() }
+        failure = closePreservingPrimaryFailure(failure, motion::close)
+        failure = closePreservingPrimaryFailure(failure, player::release)
+        closePreservingPrimaryFailure(failure, changedNodes)?.let { throw it }
     }
 }

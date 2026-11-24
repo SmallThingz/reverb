@@ -2,6 +2,8 @@ package app.smallthingz.reverb.nativeui
 
 import smallthingz.ui.input.phase.NativePointerLayerShape
 import smallthingz.ui.components.NativeGroupLayout
+import smallthingz.ui.reverb.ReverbDesign
+import smallthingz.ui.reverb.ReverbIncidentsContentView
 import smallthingz.ui.scroll.NativeVerticalNestedHost
 import smallthingz.ui.scroll.NativeVerticalScrollSource
 import android.view.KeyEvent
@@ -20,7 +22,6 @@ import smallthingz.ui.input.phase.NativeViewPointerHitLayout
 import smallthingz.ui.input.phase.NativeWindowPointerCoordinates
 import kotlinx.coroutines.CoroutineScope
 import java.util.IdentityHashMap
-import kotlin.math.roundToInt
 
 /**
  * IncidentsScreen's concrete modifier/input hierarchy in Main's existing phase dispatcher.
@@ -55,7 +56,7 @@ internal class NativeIncidentsPointerBinding(
         override val placed get() = !closed && view.isAttachedToWindow && view.isLaidOut &&
             view.visibility == View.VISIBLE
         override val size get() = Size(view.width.toFloat(), view.height.toFloat())
-        override val minimumTouchTarget get() = Size(48f * density, 48f * density)
+        override val minimumTouchTarget get() = Size(minimumTarget, minimumTarget)
         override val nodes = emptyList<NativeViewPhasePointerNode>()
         override val childrenInHitOrder: List<NativeViewPointerHitLayout>
             get() {
@@ -68,6 +69,7 @@ internal class NativeIncidentsPointerBinding(
     }
     private val membership = view.observePointerMembership(::refresh)
     private val density get() = view.pointerEnvironment.textDensity.density
+    private val minimumTarget get() = ReverbDesign.appearance.toolbars.action.minimumTargetDp * density
 
     init {
         try { refresh() }
@@ -176,7 +178,7 @@ internal class NativeIncidentsPointerBinding(
 
         override val placed get() = !retired && sourceAttached(target) && target.isLaidOut
         override val size get() = Size(target.width.toFloat(), target.height.toFloat())
-        override val minimumTouchTarget get() = Size(48f * density, 48f * density)
+        override val minimumTouchTarget get() = Size(minimumTarget, minimumTarget)
         override val childrenInHitOrder get() = children(target)
         override fun screenToLocal(screen: Offset) = geometry.coordinates(target).local(screen)
         override val nodes: List<NativeViewPhasePointerNode>
@@ -200,10 +202,7 @@ internal class NativeIncidentsPointerBinding(
         override fun withinLayerBounds(local: Offset): Boolean = when {
             target is NativeGroupLayout -> target.containsVisualPoint(local.x, local.y)
             target is NativePointerLayerShape -> target.containsPointerLayer(local.x, local.y)
-            target === listView -> {
-                val extra = (30f * density).roundToInt()
-                local.x >= -extra && local.x < target.width + extra && local.y >= 0f && local.y < target.height
-            }
+            target is ReverbLibraryRecyclerView -> target.containsSourcePointer(local.x, local.y, density)
             target is ReverbIncidentsContentView ->
                 local.x >= 0f && local.x < target.width && local.y >= 0f && local.y < target.height
             else -> true // Unclipped structural Column/Row wrappers.

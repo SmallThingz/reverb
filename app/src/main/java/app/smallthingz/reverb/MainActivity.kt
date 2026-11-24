@@ -26,6 +26,8 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import app.smallthingz.reverb.nativeui.*
+import smallthingz.ui.graphics.NoiseDrawable
+import smallthingz.ui.reverb.ReverbDesign
 import java.util.UUID
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -43,6 +45,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var runtime: NativeModalWindowRuntime
     private lateinit var content: NativeActivityContentView
     private lateinit var statusBarProtection: NativeStatusBarProtection
+    private lateinit var windowBackdrop: NoiseDrawable
     private var themeJob: Job? = null
     private var closed = false
     private var renderedDark: Boolean? = null
@@ -94,7 +97,6 @@ class MainActivity : ComponentActivity() {
         deletionConsentToken = savedInstanceState?.getString(STATE_DELETION_CONSENT_TOKEN)
             ?.takeIf(RecordingDeletionConsent::owns)
         deletionConsentToken?.let(::registerDeletionConsent)
-        reverbAppearance.backdrops.windowBackground(this)?.let { window.setBackgroundDrawable(it) }
 
         val restoredUi = restoreReleased012SavedUi(
             registry = savedStateRegistry,
@@ -118,6 +120,8 @@ class MainActivity : ComponentActivity() {
         val dark = themePresentation.mode.nativeIsDark(systemDark())
         renderedDark = dark
         environment = ReverbViewEnvironment(this, dark)
+        windowBackdrop = ReverbDesign.windowBackdrop(environment.palette)
+        window.setBackgroundDrawable(windowBackdrop)
         runtime = NativeModalWindowRuntime(this)
         lifecycle.addObserver(runtimeLifecycle)
         runtime.setStarted(lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
@@ -230,7 +234,8 @@ class MainActivity : ComponentActivity() {
         if (renderedDark != dark) {
             renderedDark = dark
             // A palette preview retains the current Density/resolver and every live native owner.
-            environment = environment.withPalette(environment.appearance.resolveColorScheme(this, dark))
+            environment = environment.withPalette(ReverbDesign.appearance.resolveColorScheme(this, dark))
+            ReverbDesign.bindWindowBackdrop(windowBackdrop, environment.palette)
             content.bind(owner.snapshot, environment)
         }
     }

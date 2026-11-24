@@ -5,7 +5,6 @@ import smallthingz.ui.components.NativeFloatingPredictiveMotion
 
 import smallthingz.ui.input.phase.NativePointerLayerShape
 import smallthingz.ui.components.NativeGroupLayout
-import smallthingz.ui.geometry.roundedGroupContains
 import smallthingz.ui.scroll.NativeVerticalPhaseBinding
 import smallthingz.ui.scroll.NativeVerticalScrollAccessibilityBinding
 import smallthingz.ui.scroll.NativeVerticalScrollState
@@ -39,7 +38,7 @@ import smallthingz.ui.runtime.MonotonicFrameClock
 import smallthingz.ui.geometry.Offset
 import smallthingz.ui.geometry.Size
 import smallthingz.ui.graphics.Matrix
-import smallthingz.ui.unit.dp
+import smallthingz.ui.reverb.onboarding.ReverbOnboardingScreenLayout
 import androidx.lifecycle.LifecycleOwner
 import app.smallthingz.reverb.nativeui.*
 import kotlinx.coroutines.CoroutineScope
@@ -104,9 +103,7 @@ internal class NativeOnboardingScreenView private constructor(
     private var reportedPage = -1
     private var contentLaidOut = false
     private var safeDrawing = Rect()
-    private var pageHeight = 0
-    private var innerLeft = 0
-    private var innerTop = 0
+    private val screenLayout = ReverbOnboardingScreenLayout(density)
     private var inputScope: CoroutineScope? = null
     private var inputJob: Job? = null
     private var backFrameJob: Job? = null
@@ -114,16 +111,13 @@ internal class NativeOnboardingScreenView private constructor(
     // Same released rememberPredictiveBackMotion helper as About; reuse the reviewed scalar engine.
     private val backMotion = NativeFloatingPredictiveMotion()
     private val pager = NativeOnboardingPager(scope, density, onChanged = ::pagerChanged)
-    private val pageArea = FrameLayout(context).apply { clipChildren = false; clipToPadding = false }
-    private val overscroll = NativeHorizontalOverscroll(context, density, 0xff666666.toInt()) { invalidate() }
+    private val pageArea = ReverbOnboardingScreenLayout.createPageArea(context)
+    private val overscroll = NativeHorizontalOverscroll(context, density, ReverbOnboardingScreenLayout.overscrollColor) { invalidate() }
     private val scrolling = NativeOnboardingPagerScrollOwner(pager, overscroll) {
         this::viewport.isInitialized && viewport.isAttachedToWindow
     }
     private val scrollStates = List(3) { NativeVerticalScrollState(restored.verticalPositions[it]) }
-    private val typography = environment.appearance.typography.let {
-        OnboardingPageTypography(it[ReverbTextRole.HEADLINE_MEDIUM], it[ReverbTextRole.TITLE_MEDIUM],
-            it[ReverbTextRole.BODY_LARGE], it[ReverbTextRole.BODY_MEDIUM], it[ReverbTextRole.BODY_SMALL])
-    }
+    private val typography = ReverbOnboardingScreenLayout.typography(environment)
     private val pages: List<OnboardingPageContentView> = List(3) { page -> createPage(page, initialState) }
     private lateinit var viewport: NativeOnboardingPlacedPagerViewport
     private lateinit var horizontal: NativeOnboardingPagerPhaseBinding
@@ -144,7 +138,8 @@ internal class NativeOnboardingScreenView private constructor(
         transformPolicy = sourceTextTransforms)
     var externalAccessibilityOcclusion: () -> List<android.graphics.Rect> = { emptyList() }
     private val accessibility = NativeOnboardingAccessibility(this, { viewport }, { preview }, footer,
-        externalOcclusion = { externalAccessibilityOcclusion() }, transformPolicy = sourceTextTransforms)
+        externalOcclusion = { externalAccessibilityOcclusion() }, transformPolicy = sourceTextTransforms,
+        additionalSemanticLeaf = { it is SilenceCurveView })
     private val scrollEvents = windowText.openScrollEvents(scope,
         onScrollGeometryChanged = { invalidate() },
         // Actual native Views own their live focus bounds; there is no copied semantics cache.
@@ -321,7 +316,6 @@ internal class NativeOnboardingScreenView private constructor(
     private fun createPage(page: Int, value: OnboardingPageContentState): OnboardingPageContentView = OnboardingPageContentView(
         context, page, typography, density, environment.sharedFontResolver, value,
         environment.palette, scrollStates[page], frames, scope, scrolling.pageNestedHost,
-        appearance = environment.appearance,
         inputRoot = { this },
         parentInterested = { change ->
             pages.getOrNull(page)?.sourceVerticalViewport?.let { vertical[it]?.interested(change) } == true ||
@@ -352,15 +346,14 @@ internal class NativeOnboardingScreenView private constructor(
         val target = navigation.predictiveBackTarget
         val page = target?.sourcePage ?: pager.settledPage
         val footerPage = target?.sourcePage ?: minOf(page, pager.targetPage)
-        footer.bind(OnboardingFooterState(page, footerPage,
-            footerPage != 0 || state.permissions.isReadyForHighlightedContinue(), stateIsFinishing),
-            environment.palette)
+        footer.bind(page, footerPage, footerPage != 0 || state.permissions.isReadyForHighlightedContinue(),
+            stateIsFinishing, environment.palette)
         if (this::horizontal.isInitialized) horizontal.updateEnabled()
         backCallback.isEnabled = (page > 0 || target != null) && !stateIsFinishing && !closed
         val visiblePage = if (!closed && inputScope != null && isAttachedToWindow && contentLaidOut && isShown &&
             windowVisibility == VISIBLE && !stateIsFinishing && !backMotion.active &&
             !pager.isScrollInProgress && pager.targetPage == pager.settledPage) pager.settledPage else -1
-        pages.forEach { it.pageInteractionAllowed(it.page == visiblePage) }
+        for (index in pages.indices) pages[index].pageInteractionAllowed(index == visiblePage)
         if (reportedPage != visiblePage) {
             reportedPage = visiblePage // Set before callback: owner publication may synchronously bind this screen.
             actions.pageChanged(visiblePage)
@@ -456,14 +449,7 @@ internal class NativeOnboardingScreenView private constructor(
     private fun applyMotion() {
         val progress = if (backMotion.active) backMotion.progress.coerceIn(0f, 1f) else 0f
         val direction = predictiveBackHorizontalDirection(backEdge)
-        viewport.translationX = direction * pageArea.width * progress
-        viewport.alpha = 1f - .05f * progress
-        preview?.let {
-            it.translationX = -direction * pageArea.width * .08f * (1f - progress)
-            it.scaleX = .97f + .03f * progress
-            it.scaleY = it.scaleX
-            it.alpha = (progress * 1.45f).coerceIn(0f, 1f)
-        }
+        ReverbOnboardingScreenLayout.applyPredictiveBack(viewport, preview, pageArea.width, direction, progress)
         publishState()
     }
 
@@ -471,22 +457,12 @@ internal class NativeOnboardingScreenView private constructor(
         check(MeasureSpec.getMode(w) == MeasureSpec.EXACTLY && MeasureSpec.getMode(h) == MeasureSpec.EXACTLY)
         val width = MeasureSpec.getSize(w)
         val height = MeasureSpec.getSize(h)
-        innerLeft = safeDrawing.left + with(density) { 24.dp.roundToPx() }
-        innerTop = safeDrawing.top + with(density) { 20.dp.roundToPx() }
-        val contentWidth = (width - safeDrawing.left - safeDrawing.right -
-            2 * with(density) { 24.dp.roundToPx() }).coerceAtLeast(0)
-        val contentHeight = (height - safeDrawing.top - safeDrawing.bottom -
-            2 * with(density) { 20.dp.roundToPx() }).coerceAtLeast(0)
-        footer.measure(exact(contentWidth), MeasureSpec.makeMeasureSpec(contentHeight, MeasureSpec.AT_MOST))
-        pageHeight = (contentHeight - footer.measuredHeight).coerceAtLeast(0)
-        pageArea.measure(exact(contentWidth), exact(pageHeight))
+        screenLayout.measure(width, height, safeDrawing, pageArea, footer)
         setMeasuredDimension(width, height)
     }
 
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
-        pageArea.layout(innerLeft, innerTop, innerLeft + pageArea.measuredWidth, innerTop + pageHeight)
-        footer.layout(innerLeft, innerTop + pageHeight, innerLeft + footer.measuredWidth,
-            innerTop + pageHeight + footer.measuredHeight)
+        screenLayout.layout(pageArea, footer)
         // View sets its first isLaidOut flag after this callback returns; our children are already
         // laid out here. Publish readiness now, without waiting for an unrelated second layout.
         contentLaidOut = true
@@ -564,7 +540,6 @@ internal class NativeOnboardingScreenView private constructor(
 
     internal fun isPager(view: View) = view === viewport
     internal fun isFooterButton(view: View) = view is NativeClickPhaseHost && view.parent === footer
-    private fun exact(size: Int) = MeasureSpec.makeMeasureSpec(size, MeasureSpec.EXACTLY)
 
     companion object {
         fun create(
@@ -618,7 +593,7 @@ private class OnboardingPointerGeometry(private val environment: ReverbViewEnvir
         private val view get() = getView()
         override val placed get() = view.isAttachedToWindow && view.visibility == View.VISIBLE
         override val size get() = Size(view.width.toFloat(), view.height.toFloat())
-        override val minimumTouchTarget get() = Size(48f * environment.textDensity.density, 48f * environment.textDensity.density)
+        override val minimumTouchTarget get() = ReverbOnboardingScreenLayout.minimumTouchTarget(environment.textDensity)
         override val nodes get() = root.pointerNodes(view)
         override val childrenInHitOrder: List<NativeViewPointerHitLayout> get() {
             val group = view as? ViewGroup ?: return emptyList()
@@ -629,17 +604,16 @@ private class OnboardingPointerGeometry(private val environment: ReverbViewEnvir
             val target = view
             val width = target.width.toFloat()
             val height = target.height.toFloat()
-            val margin = with(environment.textDensity) { 30.dp.roundToPx() }.toFloat()
+            val density = environment.textDensity
             return when {
-                root.isPager(target) -> local.x >= 0f && local.x < width && local.y >= -margin && local.y < height + margin
-                target is NativeVerticalViewport -> local.y >= 0f && local.y < height && local.x >= -margin && local.x < width + margin
+                root.isPager(target) -> ReverbOnboardingScreenLayout.pagerHitContains(width, height, density, local)
+                target is NativeVerticalViewport -> ReverbOnboardingScreenLayout.pageScrollHitContains(width, height, density, local)
                 target is SettingsExpansionView -> local.x >= 0f && local.x < width && local.y >= 0f && local.y < height
                 target is NativePointerLayerShape -> target.containsPointerLayer(local.x, local.y)
                 target is NativeGroupLayout -> target.containsVisualPoint(local.x, local.y)
                 target is SettingsOutputCompressionView || target is SettingsSilenceView -> true // One outer group clips both consecutive controls.
-                target.parent is NativeGroupLayout -> roundedGroupContains(width, height, environment.textDensity.density, 20f, local.x, local.y)
-                root.isFooterButton(target) -> roundedGroupContains(width, height, environment.textDensity.density,
-                    minOf(width, height) / (2f * environment.textDensity.density), local.x, local.y)
+                target.parent is NativeGroupLayout -> ReverbOnboardingScreenLayout.groupRowHitContains(width, height, density, local)
+                root.isFooterButton(target) -> ReverbOnboardingScreenLayout.footerButtonHitContains(width, height, density, local)
                 else -> true // The remaining released Column/Box/page/body boundaries have no clip.
             }
         }

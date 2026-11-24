@@ -8,7 +8,9 @@ import android.os.SystemClock
 import android.view.Display
 import android.view.InputDevice
 import android.view.MotionEvent
+import android.view.View
 import android.view.ViewGroup
+import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Space
 import android.widget.TextView
 import androidx.lifecycle.Lifecycle
@@ -23,6 +25,7 @@ import org.json.JSONObject
 import smallthingz.ui.components.NativeActionSheet
 import smallthingz.ui.components.NativeFloatingDialog
 import smallthingz.ui.components.NativeFloatingDialogContent
+import smallthingz.ui.components.NativeSheetDragHandle
 import smallthingz.ui.text.font.createFontFamilyResolver
 import smallthingz.ui.unit.Density
 
@@ -38,8 +41,8 @@ internal fun verifyNativeActionSheetDismissalCurrent(instrumentation: Instrument
     val scrimTargets = JSONArray()
     val result = JSONObject().put("selector", "native_action_sheet_dismissal_current")
         .put("passed", false).put("cases", cases).put("scrim_targets", scrimTargets)
-        .put("scope", "NativeActionSheet AndroidX Back-dispatcher completion/scrim busy veto, plus NativeFloatingDialog dispatcher completion and content/window retirement")
-        .put("input_route", "Instance ComponentDialog.onBackPressedDispatcher.onBackPressed(); scrim Dialog.dispatchTouchEvent; no global input injection")
+        .put("scope", "Reverb action sheet thin handle, accessibility dismiss, Back, scrim, and content drag admission; floating dialog retirement")
+        .put("input_route", "Owned dialog Back dispatcher and instance touch dispatch")
         .put("unqualified", JSONArray(listOf("physical/system Back delivery", "platform OnBackInvoked registration/delivery",
             "predictive system Back gesture", "IME", "production recorder")))
     val host = launchCurrentUiSmokeActivity(instrumentation)
@@ -56,12 +59,14 @@ internal fun verifyNativeActionSheetDismissalCurrent(instrumentation: Instrument
             }
         }
         awaitNativeParityDraw(instrumentation, anchor)
-        for (route in listOf("androidx-back-dispatcher", "scrim")) {
+        for (route in listOf("androidx-back-dispatcher", "scrim", "content-drag", "scroll-content-drag")) {
+            val dragRoute = route.endsWith("content-drag")
             requireNativeParityHost(instrumentation, host, "before-$route-sheet")
             var busy = true
             var ownerDismissals = 0
             var windowDismissals = 0
             lateinit var dialog: NativeActionSheet
+            lateinit var body: TextView
             main {
                 val environment = ReverbViewEnvironment(Density(host), createFontFamilyResolver(host), ReverbPalette.fallback(true))
                 dialog = createReverbActionSheet(anchor, environment, "Dismissal admission") {
@@ -69,9 +74,12 @@ internal fun verifyNativeActionSheetDismissalCurrent(instrumentation: Instrument
                     dialog.dismiss()
                 }
                 currentSheet = dialog
-                val body = TextView(host).apply { text = "Busy operations must keep this window open." }
+                body = TextView(host).apply {
+                    text = "Busy operations must keep this window open."
+                    minHeight = ceil(96 * host.resources.displayMetrics.density).toInt()
+                }
                 val actions = Space(host)
-                dialog.setContent(body, actions, emptyList())
+                dialog.setContent(body, actions, emptyList(), scrollable = route == "scroll-content-drag")
                 dialog.setDismissalAdmission { !busy }
                 dialog.setOnDismissListener { windowDismissals++ }
                 dialog.show()
@@ -90,9 +98,20 @@ internal fun verifyNativeActionSheetDismissalCurrent(instrumentation: Instrument
             }
             val expandedBounds = main {
                 guard()
+                val descendants = descendantsOf(dialog.contentView)
+                val handle = descendants.filterIsInstance<NativeSheetDragHandle>().single()
+                val closeText = context.getString(smallthingz.ui.R.string.close_sheet)
+                check(descendants.none { it.contentDescription == closeText }) { "Sheet installed an X action" }
+                val node = checkNotNull(handle.createAccessibilityNodeInfo())
+                try {
+                    check(node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_DISMISS })
+                    val mark = handle.getChildAt(0)
+                    val density = host.resources.displayMetrics.density
+                    check(mark.height in 1 until ceil(4 * density).toInt() && mark.width > mark.height)
+                } finally { node.recycle() }
                 Rect().also { check(dialog.contentView.getGlobalVisibleRect(it) && !it.isEmpty) }
             }
-            fun dispatch() = main {
+            fun dispatchOrdinary() = main {
                 guard()
                 if (route == "androidx-back-dispatcher") {
                     // Direct key dispatch skips the modern framework Back input stage.
@@ -135,7 +154,45 @@ internal fun verifyNativeActionSheetDismissalCurrent(instrumentation: Instrument
                     }
                 }
             }
-            dispatch()
+            fun dragFromBody(expectMotion: Boolean, cancelled: Boolean = false) {
+                val points = main {
+                    guard()
+                    val origin = Point()
+                    val windowBounds = Rect().also { check(decor.getGlobalVisibleRect(it, origin)) }
+                    val bodyBounds = Rect().also { check(body.getGlobalVisibleRect(it) && !it.isEmpty) }
+                    val x = bodyBounds.exactCenterX() - origin.x
+                    val start = bodyBounds.top + bodyBounds.height() * .2f - origin.y
+                    val end = windowBounds.bottom - origin.y - 1f
+                    check(end - start > android.view.ViewConfiguration.get(host).scaledTouchSlop * 2)
+                    Triple(x, start, end)
+                }
+                val (x, start, end) = points
+                val downTime = SystemClock.uptimeMillis()
+                fun send(action: Int, y: Float, offsetMillis: Long) = main {
+                    guard()
+                    val contact = MotionEvent.PointerProperties().apply { id = 0; toolType = MotionEvent.TOOL_TYPE_FINGER }
+                    val position = MotionEvent.PointerCoords().apply { this.x = x; this.y = y; pressure = 1f; size = 1f }
+                    val event = MotionEvent.obtain(downTime, downTime + offsetMillis, action, 1,
+                        arrayOf(contact), arrayOf(position), 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0)
+                    try { check(dialog.dispatchTouchEvent(event)) { "Body drag event was not routed" } }
+                    finally { event.recycle() }
+                }
+                send(MotionEvent.ACTION_DOWN, start, 0)
+                send(MotionEvent.ACTION_MOVE, start + (end - start) * .45f, 20)
+                send(MotionEvent.ACTION_MOVE, start + (end - start) * .8f, 40)
+                awaitNativeParityDraw(instrumentation, decor)
+                main {
+                    guard()
+                    val moved = Rect().also { check(dialog.contentView.getGlobalVisibleRect(it)) }
+                    val dismissThresholdPx = 56f * host.resources.displayMetrics.density
+                    check(if (expectMotion) moved.top - expandedBounds.top > dismissThresholdPx else moved == expandedBounds) {
+                        "Body drag motion mismatch. Expected movement=$expectMotion, bounds=$expandedBounds → $moved"
+                    }
+                }
+                send(MotionEvent.ACTION_MOVE, end - 2f, 56)
+                send(if (cancelled) MotionEvent.ACTION_CANCEL else MotionEvent.ACTION_UP, end, 64)
+            }
+            if (dragRoute) dragFromBody(expectMotion = false) else dispatchOrdinary()
             repeat(2) { awaitNativeParityDraw(instrumentation, decor) }
             main {
                 guard()
@@ -146,7 +203,20 @@ internal fun verifyNativeActionSheetDismissalCurrent(instrumentation: Instrument
                 busy = false
                 dialog.refreshDismissalAdmission()
             }
-            dispatch()
+            if (dragRoute) {
+                dragFromBody(expectMotion = true, cancelled = true)
+                val returnDeadline = SystemClock.uptimeMillis() + 8000
+                while (!main {
+                    guard()
+                    check(ownerDismissals == 0 && windowDismissals == 0) { "$route cancelled drag dismissed" }
+                    actionSheetFixtureExpanded(dialog) &&
+                        Rect().let { dialog.contentView.getGlobalVisibleRect(it) && it == expandedBounds }
+                }) {
+                    check(SystemClock.uptimeMillis() < returnDeadline) { "$route cancelled drag did not return" }
+                    awaitNativeParityDraw(instrumentation, decor)
+                }
+                dragFromBody(expectMotion = true)
+            } else dispatchOrdinary()
             val dismissDeadline = SystemClock.uptimeMillis() + 8000
             while (!main { !dialog.isShowing && ownerDismissals == 1 && windowDismissals == 1 }) {
                 check(SystemClock.uptimeMillis() < dismissDeadline) {
@@ -163,6 +233,7 @@ internal fun verifyNativeActionSheetDismissalCurrent(instrumentation: Instrument
             requireNativeParityHost(instrumentation, host, "after-$route-sheet")
             cases.put(JSONObject().put("route", route).put("busy_veto_retained_window", true)
                 .put("veto_retained_bounds", expandedBounds.toShortString())
+                .put("cancelled_drag_returned_from_beyond_threshold", if (dragRoute) true else JSONObject.NULL)
                 .put("owner_dismissals", ownerDismissals).put("window_dismissals", windowDismissals)
                 .put("admitted_dismiss_removed_window", true).put("duplicate_terminal", false))
         }
@@ -239,7 +310,12 @@ internal fun verifyNativeActionSheetDismissalCurrent(instrumentation: Instrument
         report.appendLine("ACTION_SHEET_DISMISSAL_EVIDENCE ${directory.absolutePath}")
     }
     failure?.let { throw it }
-    report.appendLine("PASS native_action_sheet_dismissal_current AndroidX dispatcher completion/scrim busy veto and floating dialog retirement")
+    report.appendLine("PASS native_action_sheet_dismissal_current Back, scrim, content drag, thin accessible handle, and floating dialog retirement")
+}
+
+private fun descendantsOf(view: View): Sequence<View> = sequence {
+    yield(view)
+    if (view is ViewGroup) for (index in 0 until view.childCount) yieldAll(descendantsOf(view.getChildAt(index)))
 }
 
 /** Observe readiness only; transitions use the instance dispatcher or dialog touch dispatch. */

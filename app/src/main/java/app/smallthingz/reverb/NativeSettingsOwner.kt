@@ -330,19 +330,28 @@ internal class NativeSettingsOwner(
         refreshMoveAvailability()
     }
 
-    fun themeChanged(owner: Any, value: AppThemeMode) {
-        if (!acceptsInput(owner)) return
+    fun themeChanged(owner: Any, value: AppThemeMode): Boolean {
+        if (!acceptsInput(owner)) return false
         val current = snapshot
-        if (value == current.themeMode) return
-        editSnapshot(current.copy(themeMode = value))
-        draft.previewTheme(value)
+        if (value == current.themeMode) return true
+        // Publish the edit with its preview palette so the retained rows need one visual bind.
+        draftReconciliationDepth++
+        try {
+            editSnapshot(current.copy(themeMode = value))
+            draft.previewTheme(value)
+        } finally {
+            draftReconciliationDepth--
+        }
+        notifyChanged()
+        return true
     }
 
-    fun retentionModeChanged(owner: Any, mode: RetentionMode) {
-        if (!acceptsInput(owner)) return
+    fun retentionModeChanged(owner: Any, mode: RetentionMode): Boolean {
+        if (!acceptsInput(owner)) return false
         val current = snapshot
-        val change = settingsRetentionModeChange(current.retentionMode, mode) ?: return
+        val change = settingsRetentionModeChange(current.retentionMode, mode) ?: return false
         editSnapshot(current.copy(retentionMode = change.mode))
+        return true
     }
 
     fun oneShotTimeChanged(owner: Any, raw: String) {

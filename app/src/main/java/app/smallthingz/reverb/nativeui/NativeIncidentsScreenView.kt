@@ -1,22 +1,24 @@
 package app.smallthingz.reverb.nativeui
 
-import smallthingz.ui.components.NativeWindowInsetsBinding
-
 import smallthingz.ui.text.view.NativeSourceAccessibilityNode
 import smallthingz.ui.text.view.NativeTextSemanticsClipPolicy
 import android.content.Context
 import android.view.View
-import android.view.ViewGroup
+import android.widget.FrameLayout
 import androidx.activity.OnBackPressedDispatcher
 import smallthingz.ui.runtime.MonotonicFrameClock
 import smallthingz.ui.MotionDurationScale
 import androidx.lifecycle.LifecycleOwner
 import androidx.core.graphics.Insets
+import androidx.core.view.WindowInsetsCompat
 import app.smallthingz.reverb.IncidentHistoryUiState
 import app.smallthingz.reverb.NativeIncidentsRenderer
 import app.smallthingz.reverb.NativeIncidentsScreenOwner
 import smallthingz.ui.scroll.NativeWindowScrollAccessibilityEvents
-import app.smallthingz.reverb.incidentsPanelTranslationX
+import smallthingz.ui.reverb.NativeIncidentsSavedPosition
+import smallthingz.ui.reverb.ReverbIncidentListPosition
+import smallthingz.ui.reverb.ReverbIncidentsContentView
+import smallthingz.ui.reverb.reverbIncidentSafeInsets
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
@@ -43,14 +45,15 @@ internal class NativeIncidentsScreenView(
     private val scrollEvents: NativeWindowScrollAccessibilityEvents,
     restoredPosition: NativeListSavedPosition? = null,
     private val admitChildren: ((ArrayList<View>, Int, (View) -> View?) -> Unit)? = null,
-) : ViewGroup(context), NativeIncidentsRenderer, AutoCloseable {
-    private val savedPosition = NativeIncidentsSavedPosition(restoredPosition)
+) : FrameLayout(context), NativeIncidentsRenderer, AutoCloseable {
+    private val savedPosition = NativeIncidentsSavedPosition(restoredPosition?.let {
+        ReverbIncidentListPosition(it.firstVisibleItemIndex, it.firstVisibleItemScrollOffset)
+    })
     private var closed = false
     private var state = owner.state
     private var progress = owner.openProgress
     private var overlay = false
     private var content: ReverbIncidentsContentView? = null
-    private var menus: NativeIncidentMenuHost? = null
     private var textLease: NativePageTextAccessibilityOwner? = null
     private var headerAccessibilityLease: AutoCloseable? = null
     private var scrollList: ReverbLibraryRecyclerView? = null
@@ -65,7 +68,9 @@ internal class NativeIncidentsScreenView(
     val pointerContent: ReverbIncidentsContentView? get() = content
 
     /** Pending unconsumed restore survives initial loading; closed/empty consumed lists do not. */
-    fun savePosition(): NativeListSavedPosition? = content?.savePosition() ?: savedPosition.save()
+    fun savePosition(): NativeListSavedPosition? = (content?.savePosition() ?: savedPosition.save())?.let {
+        NativeListSavedPosition(it.firstVisibleItemIndex, it.firstVisibleItemScrollOffset)
+    }
 
     /** One Main-window pointer binding; source mount/branch changes retire its input immediately. */
     fun observePointerMembership(changed: () -> Unit): AutoCloseable {
@@ -90,19 +95,10 @@ internal class NativeIncidentsScreenView(
         }
     }
 
-    private fun appearance(): IncidentsContentAppearance {
-        val typography = environment.appearance.typography
-        return IncidentsContentAppearance(
-            IncidentCardAppearance(environment.palette, typography[ReverbTextRole.BODY_LARGE],
-                typography[ReverbTextRole.BODY_MEDIUM], typography[ReverbTextRole.BODY_SMALL],
-                environment.textDensity, environment.sharedFontResolver, environment.appearance.listDecorations.alertCard),
-            typography[ReverbTextRole.TITLE_MEDIUM], environment.appearance.backdrops)
-    }
-
     override fun historyChanged(state: IncidentHistoryUiState) {
         if (closed) return
         this.state = state
-        content?.bind(state)
+        content?.bind(state.nativeHistory)
     }
 
     override fun panelChanged(visible: Boolean, openProgress: Float) {
@@ -114,7 +110,7 @@ internal class NativeIncidentsScreenView(
             visibility = if (visible) VISIBLE else GONE
             overlayVisibilityChanged(visible)
         }
-        applyMotion()
+        content?.setPanelProgress(progress)
     }
 
     private fun mount() {
@@ -122,15 +118,13 @@ internal class NativeIncidentsScreenView(
         panelScope = scope
         val frames = requireNotNull(scope.coroutineContext[MonotonicFrameClock])
         try {
-            val menuOwner = NativeIncidentMenuHost(environment, frames, scope)
-            menus = menuOwner
-            val shown = ReverbIncidentsContentView(context, appearance(), environment, menuOwner,
+            val shown = ReverbIncidentsContentView(context, environment.theme, incidentTexts(context),
                 incidentContentActions(context, owner.history), owner::requestBack, frames, scope,
                 { scope.coroutineContext[MotionDurationScale]?.scaleFactor ?: 1f }, inputRoot, savedPosition)
             content = shown
             shown.bindSourceAccessibility(sourceNode)
             shown.setStatusBarInsets(statusBarInsets)
-            addView(shown)
+            addView(shown, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
             val clips = NativeTextSemanticsClipPolicy(shown::semanticsClip)
             textLease = windowText.bindContent(shown, clips, sourceNode) {
                 !closed && content === shown && sourceNode(it).present
@@ -142,7 +136,7 @@ internal class NativeIncidentsScreenView(
                 refreshScrollAccessibility()
                 pointerMembershipChanged?.invoke()
             }
-            shown.bind(state)
+            shown.bind(state.nativeHistory)
         } catch (failure: Throwable) {
             try { unmount() } catch (cleanup: Throwable) { failure.addSuppressed(cleanup) }
             throw failure
@@ -162,45 +156,21 @@ internal class NativeIncidentsScreenView(
     }
 
     /** Delivered by the one main-window NativeWindowInsetsBinding, before child consumption. */
-    fun setStatusBarInsets(insets: Insets) {
-        statusBarInsets = insets
-        content?.setStatusBarInsets(insets)
+    fun setWindowInsets(insets: WindowInsetsCompat) {
+        statusBarInsets = reverbIncidentSafeInsets(insets)
+        content?.setStatusBarInsets(statusBarInsets)
     }
 
     /** Palette changes retain list/scroll/row identity; window density/resolver remain host-owned. */
     fun bindPalette(palette: ReverbPalette) {
         if (closed) return
         environment = environment.withPalette(palette)
-        menus?.bindPalette(palette)
-        content?.setAppearance(appearance(), environment, incidentContentActions(context, owner.history))
-    }
-
-    private fun applyMotion() {
-        // Source graphicsLayer belongs to the full Surface, including header/noise/list.
-        content?.let {
-            it.translationX = incidentsPanelTranslationX(width.toFloat(), progress)
-            it.alpha = .82f + progress * .18f
-        }
-    }
-
-    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        val width = MeasureSpec.getSize(widthMeasureSpec)
-        val height = MeasureSpec.getSize(heightMeasureSpec)
-        content?.measure(MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY),
-            MeasureSpec.makeMeasureSpec(height, MeasureSpec.EXACTLY))
-        setMeasuredDimension(width, height)
-    }
-
-    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
-        content?.layout(0, 0, width, height)
-        applyMotion()
+        content?.bindTheme(environment.theme)
     }
 
     private fun unmount() {
         val current = content
         content = null
-        val menuOwner = menus
-        menus = null
         val scope = panelScope
         panelScope = null
         var failure: Throwable? = null
@@ -217,7 +187,6 @@ internal class NativeIncidentsScreenView(
         cleanup { headerAccessibilityLease?.close() }
         headerAccessibilityLease = null
         cleanup { current?.dispose() }
-        cleanup { menuOwner?.close() }
         cleanup { if (current != null) removeView(current) }
         cleanup { scope?.cancel() }
         failure?.let { throw it }

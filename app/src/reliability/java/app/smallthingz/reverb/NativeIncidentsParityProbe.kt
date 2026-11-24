@@ -9,11 +9,15 @@ import smallthingz.ui.text.view.NativeTextSemanticsClipPolicy
 import android.app.Application
 import android.app.Instrumentation
 import android.content.res.Configuration
+import android.content.res.Resources
 import android.graphics.Bitmap
 import android.os.Build
 import android.os.SystemClock
+import android.view.ContextThemeWrapper
 import android.view.View
 import android.widget.FrameLayout
+import androidx.core.view.ViewCompat
+import smallthingz.ui.components.NativeWindowInsetsBinding
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -51,12 +55,14 @@ import java.time.ZoneOffset
 import java.util.Locale
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -221,17 +227,24 @@ private fun incidentParityHistory(): IncidentHistoryPresentation = prepareIncide
 
 private class IncidentsFixtureAccess(private val scene: IncidentParityScene,
                                     private var rows: IncidentHistoryPresentation,
-                                    private val interactive: Boolean = false) : IncidentHistoryAccess {
+                                    private val interactive: Boolean = false,
+                                    private val displayResources: Resources? = null) : IncidentHistoryAccess {
     val commands = ArrayList<String>()
     override val revisions = MutableStateFlow(0L)
     var mutations = 0
         private set
-    override suspend fun readHistory(): IncidentHistoryPresentation = when (scene) {
-        IncidentParityScene.LOADING -> awaitCancellation()
-        IncidentParityScene.ERROR -> error("QA synthetic unavailable history")
-        IncidentParityScene.STALE -> if (revisions.value == 0L) rows else error("QA synthetic stale history")
-        IncidentParityScene.EMPTY -> IncidentHistoryPresentation(emptyList())
-        IncidentParityScene.POPULATED -> rows
+    override suspend fun readHistory(): IncidentHistoryPresentation {
+        val snapshot = when (scene) {
+            IncidentParityScene.LOADING -> awaitCancellation()
+            IncidentParityScene.ERROR -> error("QA synthetic unavailable history")
+            IncidentParityScene.STALE -> if (revisions.value == 0L) rows else error("QA synthetic stale history")
+            IncidentParityScene.EMPTY -> IncidentHistoryPresentation(emptyList())
+            IncidentParityScene.POPULATED -> rows
+        }
+        val resources = displayResources ?: return snapshot
+        return withContext(Dispatchers.IO) {
+            prepareIncidentHistory(snapshot.rows.map { it.incident }, Locale.US, ZoneOffset.UTC, resources)
+        }
     }
     fun replaceNativeRows(incidents: List<RecordingIncident>) {
         check(interactive)
@@ -280,7 +293,8 @@ internal class IncidentsParityBoard(
         // Match this fixture's declared direction at construction; keep its language/locale list.
         setLayoutDirection(if (dark) Locale.forLanguageTag("ar") else Locale.ROOT)
     }
-    private val context = host.createConfigurationContext(configuration)
+    // Keep the Activity's local WindowManager for the real clear-confirmation dialog.
+    private val context = ContextThemeWrapper(host, 0).apply { applyOverrideConfiguration(configuration) }
     private val density = Density(context.resources.displayMetrics.density, configuration.fontScale)
     private val colors = if (Build.VERSION.SDK_INT >= 31) {
         if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
@@ -299,7 +313,7 @@ internal class IncidentsParityBoard(
             else -> IncidentHistoryLoadStatus.READY
         },
     )
-    private val access = IncidentsFixtureAccess(scene, history, interactive)
+    private val access = IncidentsFixtureAccess(scene, history, interactive, context.resources)
     private val sourceAccess = if (interactive && !nativeOnly) IncidentsFixtureAccess(scene, history, true) else null
     private var sourceState by mutableStateOf(expected)
     private var sourceOpen by mutableStateOf(true)
@@ -341,6 +355,7 @@ internal class IncidentsParityBoard(
     private var owner: NativeIncidentsScreenOwner? = null
     private var windowText: NativeWindowTextAccessibilityOwner? = null
     private var scrollEvents: NativeWindowScrollAccessibilityEvents? = null
+    private var insetsBinding: NativeWindowInsetsBinding? = null
     private var closed = false
     private var referenceComposed = false
     private var unexpectedCallbacks = 0
@@ -442,6 +457,10 @@ internal class IncidentsParityBoard(
             native = content
             content.layoutDirection = direction
             contentRoot.addView(content, FrameLayout.LayoutParams(-1, -1))
+            if (nativeOnly) {
+                ViewCompat.getRootWindowInsets(host.fixtureRoot)?.let(content::setWindowInsets)
+                insetsBinding = NativeWindowInsetsBinding(host.fixtureRoot, consume = false, changed = content::setWindowInsets)
+            }
             show(!nativeOnly)
         } catch (failure: Throwable) {
             try { close() } catch (cleanup: Throwable) { if (failure !== cleanup) failure.addSuppressed(cleanup) }
@@ -480,7 +499,7 @@ internal class IncidentsParityBoard(
             nativeParityOnMain(instrumentation) { access.revisions.value = 1L }
         }
         await { (nativeOnly || referenceComposed) && (!interactive || nativeOnly || sourceState.status == expected.status) && owner?.state?.let {
-            it.status == expected.status && it.history.rows == expected.history.rows
+            it.status == expected.status && it.history.rows.map { row -> row.incident } == expected.history.rows.map { row -> row.incident }
         } == true }
     }
 
@@ -501,6 +520,8 @@ internal class IncidentsParityBoard(
         check(interactive); requireNoAsyncFailure()
         if (reference) sourceOpen = true else checkNotNull(owner).bindNavigation(true, true)
     }
+    fun nativeFixturePalette(): ReverbPalette = environment.palette
+
     fun replaceNativeFixtureHistory(incidents: List<RecordingIncident>) {
         check(interactive && nativeOnly)
         access.replaceNativeRows(incidents)
@@ -538,7 +559,7 @@ internal class IncidentsParityBoard(
         recordFocus("captured-state")
         requireStaticRootFocus()
         val actual = checkNotNull(owner).state
-        check(actual.status == expected.status && actual.history.rows == expected.history.rows)
+        check(actual.status == expected.status && actual.history.rows.map { it.incident } == expected.history.rows.map { it.incident })
         check(access.mutations == 0 && unexpectedCallbacks == 0)
         check(checkNotNull(owner).openProgress == 1f)
     }
@@ -574,6 +595,8 @@ internal class IncidentsParityBoard(
                 if (failure == null) failure = error else if (failure !== error) failure!!.addSuppressed(error)
             }
         }
+        release { insetsBinding?.close() }
+        insetsBinding = null
         release { native?.close() }
         release { owner?.close() }
         release { scrollEvents?.close() }

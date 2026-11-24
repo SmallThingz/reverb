@@ -2,13 +2,16 @@ package app.smallthingz.reverb.nativeui
 
 import smallthingz.ui.input.phase.NativePointerLayerShape
 import smallthingz.ui.components.NativeGroupLayout
-import smallthingz.ui.components.NativeMenuAction
+import smallthingz.ui.reverb.ReverbActionMenuHost
+import smallthingz.ui.reverb.ReverbActionMenuKind
+import smallthingz.ui.reverb.ReverbMenuAction
 import smallthingz.ui.scroll.NativeVerticalNestedHost
 import smallthingz.ui.scroll.NativeVerticalViewport
 import smallthingz.ui.text.view.NativeTextSemanticsClip
 import android.content.Context
 import android.view.View
 import android.view.ViewGroup
+import smallthingz.ui.reverb.ReverbLibraryLayout
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.OnBackPressedDispatcher
 import smallthingz.ui.runtime.MonotonicFrameClock
@@ -25,11 +28,9 @@ import app.smallthingz.reverb.RecordingPlaybackRequest
 import app.smallthingz.reverb.R
 import app.smallthingz.reverb.libraryEmptyStateVisible
 import kotlinx.coroutines.CoroutineScope
-import kotlin.math.max
-import kotlin.math.roundToInt
 
 /** Already-consumed ScaffoldDefaults.contentWindowInsets; top is owned by the 66dp top bar. */
-internal data class LibraryScaffoldInsets(val left: Int = 0, val right: Int = 0, val bottom: Int = 0)
+internal typealias LibraryScaffoldInsets = smallthingz.ui.reverb.ReverbLibraryInsets
 internal data class NativeLibraryScreenInput(
     val owner: NativeLibraryInput,
     val hasIncidents: Boolean,
@@ -85,7 +86,7 @@ internal class ReverbLibraryScreenContent(
     private var listVisible = false
     private var undo: ReverbLibraryUndoCard? = null
     private val leases = LinkedHashSet<NativeLibraryPlayerLease>()
-    private val menus = ReverbActionMenuHost(environment, frames, scope)
+    private val menus = ReverbActionMenuHost(environment.theme, ReverbActionMenuKind.RECORDINGS, frames, scope)
     private class MenuLifetime(val id: String, val anchor: View, val identity: Any = Any())
     private val menuLifetimes = mutableListOf<MenuLifetime>()
     private var activeMenu: MenuLifetime? = null
@@ -122,9 +123,7 @@ internal class ReverbLibraryScreenContent(
                 leases += lease
                 return object : LibraryInlineExpansionLease by lease {
                     override fun closePresentation() {
-                        lease.closePresentation()
-                        leases -= lease
-                        changedNodes()
+                        if (leases.remove(lease)) lease.closePresentation()
                     }
                 }
             }
@@ -278,7 +277,7 @@ internal class ReverbLibraryScreenContent(
                 undo = it
                 body.addView(it)
             }
-            card.bind(environment, notice.message) { owner.undoDelete(notice.window) }
+            card.bind(environment, notice.message, context.getString(R.string.undo)) { owner.undoDelete(notice.window) }
         }
         renderMenu(value)
         renderSheets(value)
@@ -344,18 +343,17 @@ internal class ReverbLibraryScreenContent(
         if (activeMenu !== lifetime) activeMenu?.let { menus.hide(it.identity) }
         activeMenu = lifetime
         val busy = recording.id in value.list.activeMutationIds || recording.id in value.list.localOperationBusyIds
-        val ink = environment.palette.ink
-        fun item(label: Int, icon: ReverbIcon, enabled: Boolean = !busy, color: Int = ink, action: () -> Unit) =
-            NativeMenuAction(context.getString(label), icon, color, color, enabled, action)
+        fun item(label: Int, icon: ReverbIcon, enabled: Boolean = !busy, destructive: Boolean = false,
+                 action: () -> Unit) = ReverbMenuAction(context.getString(label), icon, destructive, enabled, action)
         menus.show(lifetime.identity, anchor, listOf(
             item(R.string.rename_recording, ReverbIcon.Edit) { owner.rename(recording) },
             item(R.string.recording_info, ReverbIcon.Info) { owner.info(recording) },
             item(R.string.share_recording, ReverbIcon.Share) { owner.share(recording) },
             item(R.string.trim_recording, ReverbIcon.Trim) { owner.trim(recording) },
             item(R.string.delete_recording, ReverbIcon.Delete, !busy && value.acceptsDeletions,
-                environment.palette.error) { owner.deleteRecordings(listOf(recording)) },
+                destructive = true) { owner.deleteRecordings(listOf(recording)) },
             item(R.string.multi_select, ReverbIcon.MultiSelect) { owner.multiSelect(recording) },
-        ), environment.palette.raised, owner::dismissMenu)
+        ), owner::dismissMenu)
     }
 
     /** Parent source selection predictive owner is registered before lazily created row owners. */
@@ -391,7 +389,7 @@ internal class ReverbLibraryScreenContent(
         return when {
             view===this || view is ReverbLibraryRecordingRow || view is LibraryExpansionViewport -> rectangle()
             view===listViewport || view===emptyViewport -> {
-                val extra=(30f*environment.textDensity.density).roundToInt().toFloat()
+                val extra=ReverbLibraryLayout.horizontalOverflowPx(environment.textDensity.density).toFloat()
                 NativeTextSemanticsClip.Rectangle(smallthingz.ui.geometry.Rect(-extra,0f,
                     view.width+extra,view.height.toFloat()))
             }
@@ -408,16 +406,11 @@ internal class ReverbLibraryScreenContent(
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val width = MeasureSpec.getSize(widthMeasureSpec)
         val height = MeasureSpec.getSize(heightMeasureSpec)
-        toolbar.measure(libraryRootExact(width), libraryRootExact(toolbar.contentHeightPx))
-        val insets = input.scaffoldInsets
-        body.measure(libraryRootExact(max(0, width - insets.left - insets.right)),
-            libraryRootExact(max(0, height - toolbar.measuredHeight - insets.bottom)))
+        ReverbLibraryLayout.measureScreen(toolbar, body, width, height, input.scaffoldInsets, environment.textDensity.density)
         setMeasuredDimension(width, height)
     }
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
-        toolbar.layout(0, 0, width, toolbar.measuredHeight)
-        val insets = input.scaffoldInsets
-        body.layout(insets.left, toolbar.measuredHeight, width - insets.right, height - insets.bottom)
+        ReverbLibraryLayout.layoutScreen(toolbar, body, width, height, input.scaffoldInsets)
         if (menuAwaitingLayout) presentation?.let(::renderMenu)
     }
     override fun close() {
@@ -450,32 +443,18 @@ internal class ReverbLibraryScreenContent(
         release(changedNodes)
         failure?.let { throw it }
     }
-    private fun dp(value: Float) = (value * environment.textDensity.density).roundToInt()
-
     private inner class Body(context: Context) : ViewGroup(context) {
         init { importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO; clipChildren = false }
         override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
             val width = MeasureSpec.getSize(widthMeasureSpec)
             val height = MeasureSpec.getSize(heightMeasureSpec)
             val content = if (listVisible) list else status
-            content?.measure(libraryRootExact(width), libraryRootExact(height))
-            refreshIndicator.measure(MeasureSpec.makeMeasureSpec(width, MeasureSpec.AT_MOST),
-                MeasureSpec.makeMeasureSpec(height, MeasureSpec.AT_MOST))
-            undo?.measure(libraryRootExact(max(0, width - dp(16f) - dp(16f))),
-                MeasureSpec.makeMeasureSpec(max(0, height - dp(12f) - dp(12f)), MeasureSpec.AT_MOST))
+            ReverbLibraryLayout.measureBody(content, refreshIndicator, undo, width, height, environment.textDensity.density)
             setMeasuredDimension(width, height)
         }
         override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
             val content = if (listVisible) list else status
-            content?.layout(0, 0, width, height)
-            val indicatorX = ((width - refreshIndicator.measuredWidth) / 2f).roundToInt()
-            refreshIndicator.layout(indicatorX, 0, indicatorX + refreshIndicator.measuredWidth, refreshIndicator.measuredHeight)
-            undo?.let { card ->
-                val x = ((width - card.measuredWidth) / 2f).roundToInt()
-                val y = height - dp(12f) - card.measuredHeight
-                card.layout(x, y, x + card.measuredWidth, y + card.measuredHeight)
-            }
+            ReverbLibraryLayout.layoutBody(content, refreshIndicator, undo, width, height, environment.textDensity.density)
         }
     }
 }
-private fun libraryRootExact(value: Int) = View.MeasureSpec.makeMeasureSpec(value.coerceAtLeast(0), View.MeasureSpec.EXACTLY)

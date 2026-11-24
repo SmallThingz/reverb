@@ -31,6 +31,8 @@ import smallthingz.ui.text.view.NativePlainTextViewGeometry
 import smallthingz.ui.text.view.NativeTextSemanticsClip
 import smallthingz.ui.text.view.NativeTextSemanticsClipPolicy
 import smallthingz.ui.unit.Density
+import smallthingz.ui.reverb.PlayerTrimButtons
+import smallthingz.ui.reverb.PlayerTrimHeading
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], application = Application::class)
@@ -58,7 +60,7 @@ class PlayerTrimButtonsTest {
         try {
             for (appearance in listOf(defaults, alternate)) {
                 val changed = appearance === alternate
-                val environment = ReverbViewEnvironment(Density(1f), createFontFamilyResolver(context), palette,
+                val environment = ReverbViewEnvironment.withTestAppearance(Density(1f), createFontFamilyResolver(context), palette,
                     appearance = appearance)
                 val fineSeek = createReverbSpringFineSeekView(context, SpringFineSeekEnvironment(
                     palette, environment.textDensity, ViewConfiguration.get(context).scaledTouchSlop.toFloat(),
@@ -74,7 +76,7 @@ class PlayerTrimButtonsTest {
                     assertEquals(if (changed) 96 else 128, wave.height)
                     assertEquals(if (changed) 6 else 2, times.top - wave.bottom)
 
-                    val heading = PlayerTrimHeading(context, environment)
+                    val heading = PlayerTrimHeading(context, environment, reverbPlayerLabels.trimRecording)
                     heading.bind(environment, state())
                     place(heading)
                     val glyph = heading.getChildAt(0)
@@ -93,7 +95,7 @@ class PlayerTrimButtonsTest {
         val frames = AndroidUiFrameClock(Choreographer.getInstance())
         val scope = CoroutineScope(Dispatchers.Main.immediate + frames)
         val environment = ReverbViewEnvironment(Density(1f, 2f), createFontFamilyResolver(activity), ReverbPalette.fallback(false))
-        val row = PlayerTrimButtons(activity, environment, root, frames, scope) { 0f }
+        val row = PlayerTrimButtons(activity, environment, root, frames, scope, reverbPlayerLabels) { 0f }
         root.addView(row, FrameLayout.LayoutParams(-1, -2))
         fun buttons(view: View): List<NativeMaterialButtonView> = when (view) {
             is NativeMaterialButtonView -> listOf(view)
@@ -145,7 +147,7 @@ class PlayerTrimButtonsTest {
         val frames = AndroidUiFrameClock(Choreographer.getInstance())
         val scope = CoroutineScope(Dispatchers.Main.immediate + frames)
         val environment = ReverbViewEnvironment(Density(1f), createFontFamilyResolver(activity), ReverbPalette.fallback(false))
-        val row = PlayerTrimButtons(activity, environment, root, frames, scope) { 0f }
+        val row = PlayerTrimButtons(activity, environment, root, frames, scope, reverbPlayerLabels) { 0f }
         root.addView(row, FrameLayout.LayoutParams(-1, -2))
         val events = mutableListOf<String>()
         fun actions(tag: String) = LibraryPlayerActions({ _, _ -> }, { _, _ -> }, {}, {}, { _, _ -> false },

@@ -1,5 +1,7 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.reverb.home.ReverbCaptureSaveStatus
+import smallthingz.ui.reverb.home.ReverbCaptureSaveStatusView
 import smallthingz.ui.components.NativeModalWindowRuntime
 
 import smallthingz.ui.components.NativeGroupLayout
@@ -225,7 +227,7 @@ internal fun verifyNativeMaterialProgress(instrumentation: Instrumentation, repo
     report.appendLine("PASS native_material_progress_current evidence ${directory.absolutePath}")
 }
 
-/** Actual private production card, driven by the production UI gate; no Service durability claim. */
+/** Actual production card, driven by the production UI gate; no Service durability claim. */
 private fun verifyMaterialHomePending(
     instrumentation: Instrumentation,
     host: NativeParityActivity,
@@ -235,11 +237,14 @@ private fun verifyMaterialHomePending(
     result: JSONObject,
     admittedScale: Float,
 ) {
-    val type = Class.forName("app.smallthingz.reverb.nativeui.CaptureSaveStatusView")
-    val bind = type.getDeclaredMethod("bind", CaptureSaveStatus::class.java, ReverbViewEnvironment::class.java)
-        .apply { isAccessible = true }
-    val close = type.getDeclaredMethod("close").apply { isAccessible = true }
-    var card: View? = null
+    var card: ReverbCaptureSaveStatusView? = null
+    fun render(value: CaptureSaveStatus?) {
+        checkNotNull(card).bind(when (value) {
+            null -> null
+            is CaptureSaveStatus.Saving -> ReverbCaptureSaveStatus.Saving(value.cancellable)
+            is CaptureSaveStatus.Saved -> error("Pending-save fixture must not reach a saved result")
+        }, environment)
+    }
     var saving = true
     var status: CaptureSaveStatus? = CaptureSaveStatus.Saving(false)
     var error: String? = null
@@ -265,16 +270,15 @@ private fun verifyMaterialHomePending(
                     override fun screenToLocal(screen: smallthingz.ui.geometry.Offset) = screen
                     override fun withinLayerBounds(local: smallthingz.ui.geometry.Offset) = clip(local)
                 } })
-            val constructor = type.declaredConstructors.single().apply { isAccessible = true }
-            val view = constructor.newInstance(host, environment, buttons, runtime.scope, {}) as View
+            val view = ReverbCaptureSaveStatusView(host, environment, buttons, runtime.scope) {}
             card = view
             host.fixtureRoot.addView(view, FrameLayout.LayoutParams(-1, -2))
             gate = SaveUiCallbackGate(
                 setSaving = { saving = it },
-                onStatus = { status = it; bind.invoke(view, it, environment) },
+                onStatus = { status = it; render(it) },
                 onError = { error = it }, onSaved = {},
             )
-            bind.invoke(view, status, environment)
+            render(status)
             check(view.visibility == View.VISIBLE) { "Saving cue was deferred" }
         }
         var heldFrames = 0
@@ -286,7 +290,7 @@ private fun verifyMaterialHomePending(
                 check(readCachedAnimatorDurationScale(host) == admittedScale) { "Animator scale changed during probe" }
                 status = reconcileCaptureExportStatus(false, gate.attached, status, false)
                 saving = captureExportUiBusy(false, gate.attached, status)
-                bind.invoke(card, status, environment)
+                render(status)
                 check(saving && card!!.visibility == View.VISIBLE)
             }
             heldFrames++
@@ -310,8 +314,8 @@ private fun verifyMaterialHomePending(
         nativeParityOnMain(instrumentation) {
             saving = true
             status = CaptureSaveStatus.Saving(false)
-            bind.invoke(card, status, environment)
-            val failure = SaveUiCallbackGate({ saving = it }, { status = it; bind.invoke(card, it, environment) },
+            render(status)
+            val failure = SaveUiCallbackGate({ saving = it }, { status = it; render(it) },
                 { error = it }, { throw AssertionError("Failure reported saved") })
             check(failure.failed("Synthetic admission failure"))
             check(!saving && status == null && error == "Synthetic admission failure")
@@ -321,7 +325,7 @@ private fun verifyMaterialHomePending(
         failure = error
     } finally {
         failure = captureNativeParityCleanup(failure) { nativeParityOnMain(instrumentation) {
-            card?.let { host.fixtureRoot.removeView(it); close.invoke(it) }
+            card?.let { host.fixtureRoot.removeView(it); it.close() }
         } }
     }
     failure?.let { throw it }

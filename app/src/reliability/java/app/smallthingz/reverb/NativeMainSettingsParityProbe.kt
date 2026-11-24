@@ -1,5 +1,7 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.components.NativeToggleRow
+
 import smallthingz.ui.components.NativeWindowInsetsBinding
 import smallthingz.ui.components.NativeDiscreteSliderView
 
@@ -492,7 +494,7 @@ private fun verifyMainSettingsPageKeyDispatch(
         settings.owner.snapshot
     }
     var slider: View? = null
-    var toggle: SettingsToggleRowView? = null
+    var toggle: NativeToggleRow? = null
     var fallbackPixels = 0
     var fallbackAnimated = false
     val scrollEvents = object : RecyclerView.OnScrollListener() {
@@ -652,7 +654,7 @@ private fun verifyMainSettingsPageKeyDispatch(
         main {
             focusedSlider.setOnKeyListener(null)
             val compression = mainParityViews(settings).filterIsInstance<SettingsOutputCompressionView>().single()
-            toggle = mainParityViews(compression).filterIsInstance<SettingsToggleRowView>().single().also {
+            toggle = mainParityViews(compression).filterIsInstance<NativeToggleRow>().single().also {
                 requestTargetFocus(it, "compression_toggle")
                 it.setOnKeyListener { _, code, event ->
                     if (code == KeyEvent.KEYCODE_PAGE_DOWN) toggleEvents += event.action

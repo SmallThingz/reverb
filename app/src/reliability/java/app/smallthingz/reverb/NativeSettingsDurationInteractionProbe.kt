@@ -116,8 +116,7 @@ internal fun verifyNativeSettingsDurationInteraction(instrumentation: Instrument
             }
             val owner = NativeQuickTileInlineOwner(host, host.lifecycle, parent.scope, editor,
                 target, inputs, { 1L }, { 1L }, ::changed).also { inline = it }
-            view = QuickTileInlineView(host, owner, host.lifecycle, parent.environment,
-                { parent.inputRoot }, parent.scope)
+            view = QuickTileInlineView(host, owner, host.lifecycle, parent.environment, { parent.inputRoot })
             container.addView(view, FrameLayout.LayoutParams(-1, -2))
             owner.bind(inputs); view.bind(parent.environment)
             SettingsInteractionNativeContent(container, {

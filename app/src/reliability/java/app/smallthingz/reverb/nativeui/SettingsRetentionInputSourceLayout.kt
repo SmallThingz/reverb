@@ -16,7 +16,7 @@ import java.lang.reflect.Method
 import smallthingz.ui.text.AnnotatedString
 import smallthingz.ui.text.MultiParagraph
 import smallthingz.ui.text.MultiParagraphIntrinsics
-import smallthingz.ui.text.Paragraph
+import smallthingz.ui.reverb.settings.ReverbRetentionInputView
 import smallthingz.ui.text.TextLayoutInput
 import smallthingz.ui.text.TextLayoutResult
 import smallthingz.ui.text.TextStyle
@@ -29,9 +29,8 @@ import kotlin.math.ceil
 
 /** Exact owner-state descriptors; a renamed or changed production member fails the QA probe. */
 private object RetentionLayoutOwner {
-    private val owner = SettingsRetentionInputView::class.java
+    private val owner = ReverbRetentionInputView::class.java
     val environment = field("environment", ReverbViewEnvironment::class.java)
-    val minimumParagraph = field("minimumParagraph", Paragraph::class.java)
     val currentStyle = method("currentStyle", TextStyle::class.java)
     val direction = method("direction", LayoutDirection::class.java)
 
@@ -58,7 +57,6 @@ private object RetentionLayoutOwner {
  */
 internal fun SettingsRetentionInputView.sourceLayout(containerWidth: Int = width): TextLayoutResult {
     val environment = RetentionLayoutOwner.environment.get(this) as ReverbViewEnvironment
-    val minimumParagraph = RetentionLayoutOwner.minimumParagraph.get(this) as Paragraph?
     fun currentStyle(): TextStyle =
         RetentionLayoutOwner.invoke(RetentionLayoutOwner.currentStyle, this) as TextStyle
     fun direction(): LayoutDirection =
@@ -70,7 +68,7 @@ internal fun SettingsRetentionInputView.sourceLayout(containerWidth: Int = width
         environment.textDensity, environment.sharedFontResolver)
     val sourceWidth = maxOf(containerWidth, ceil(intrinsics.maxIntrinsicWidth).toInt())
     val constraints = Constraints.fitPrioritizingWidth(minWidth = containerWidth, maxWidth = sourceWidth,
-        minHeight = ceil(checkNotNull(minimumParagraph).height).toInt(), maxHeight = Constraints.Infinity)
+        minHeight = minimumHeight, maxHeight = Constraints.Infinity)
     val paragraph = MultiParagraph(intrinsics,
         Constraints.fitPrioritizingWidth(minWidth = 0, maxWidth = sourceWidth,
             minHeight = 0, maxHeight = Constraints.Infinity), maxLines = 1, overflow = TextOverflow.Clip)

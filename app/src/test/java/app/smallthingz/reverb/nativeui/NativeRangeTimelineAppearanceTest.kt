@@ -40,7 +40,7 @@ class NativeRangeTimelineAppearanceTest {
             ProgressiveWaveformFrame(1f, 0f, 0f, 0f, .25f, 1f, false))
         try {
             fun timeline(appearance: NativeUiAppearance): ReverbRangeTimelineView {
-                val environment = ReverbViewEnvironment(Density(1.3f), resolver, ReverbPalette.fallback(false),
+                val environment = ReverbViewEnvironment.withTestAppearance(Density(1.3f), resolver, ReverbPalette.fallback(false),
                     appearance = appearance)
                 return ReverbRangeTimelineView(context, environment) {}.also {
                     it.bind(editor, presentation)

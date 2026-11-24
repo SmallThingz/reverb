@@ -11,6 +11,7 @@ import android.view.View
 import android.view.ViewGroup
 import androidx.recyclerview.widget.LinearLayoutManager
 import app.smallthingz.reverb.nativeui.*
+import smallthingz.ui.components.NativeMaterialButtonView
 import java.io.File
 import org.json.JSONArray
 import org.json.JSONObject
@@ -115,7 +116,18 @@ internal fun verifyNativeSettingsCalibrationCurrent(
             main { check(view.getGlobalVisibleRect(Rect())) }
         }
         val curve = nativeParityOnMain(instrumentation) {
-            calibrationCurrentViews(silence).filterIsInstance<SilenceCurveView>().single()
+            val graph = calibrationCurrentViews(silence).filterIsInstance<SilenceCurveView>().single()
+            val retiredCaptions = setOf(host.getString(R.string.silence_calibration_heading),
+                host.getString(R.string.silence_calibration_hint))
+            check(calibrationCurrentViews(silence).filterIsInstance<ParagraphView>()
+                .none { it.visibility == View.VISIBLE && it.getText() in retiredCaptions })
+            val expansion = calibrationCurrentViews(silence).filterIsInstance<SettingsExpansionView>().single()
+            check(graph.parent === expansion.content?.view && graph.top == 0) {
+                "The calibration graph must start at the top of the expanded content"
+            }
+            cases.put(JSONObject().put("case", "graph_first_no_visible_captions")
+                .put("graph_top_px", graph.top).put("passed", true))
+            graph
         }
         // The histogram is optional. A drag must commit through the real section callback/draft.
         reveal(curve)
@@ -146,6 +158,22 @@ internal fun verifyNativeSettingsCalibrationCurrent(
         settle()
         val button = nativeParityOnMain(instrumentation) { checkNotNull(silence.calibrationPointerNode).view }
         reveal(button)
+        main {
+            val action = calibrationCurrentViews(button).filterIsInstance<NativeMaterialButtonView>().single()
+            val node = checkNotNull(action.createAccessibilityNodeInfo())
+            try {
+                check(node.isClickable && node.isVisibleToUser)
+                val description = node.contentDescription?.toString()
+                check(description?.contains(host.getString(R.string.silence_calibration_hint)) == true) {
+                    "The published calibration action is missing its accessible instructions: $description"
+                }
+                cases.put(JSONObject().put("case", "calibration_action_publishes_accessible_instructions")
+                    .put("description", description).put("passed", true))
+            } finally {
+                @Suppress("DEPRECATION")
+                node.recycle()
+            }
+        }
         if (liveCalibration) {
             var down = 0L
             lateinit var startBounds: Rect

@@ -56,7 +56,7 @@ class NativeProgressPresetsTest {
         try {
             for ((appearance, overlay) in listOf(NativeUiAppearance.Default to 0xff222222.toInt(),
                 alternate to 0xff808080.toInt())) {
-                val environment = ReverbViewEnvironment(Density(1f), createFontFamilyResolver(context), palette,
+                val environment = ReverbViewEnvironment.withTestAppearance(Density(1f), createFontFamilyResolver(context), palette,
                     appearance = appearance)
                 LibraryPendingSaveRowPresentation(context, environment, scope, FrameLayout(context)).use { presentation ->
                     val row = presentation.row

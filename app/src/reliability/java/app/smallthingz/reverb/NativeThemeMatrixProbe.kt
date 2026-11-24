@@ -43,12 +43,17 @@ internal fun verifyNativeThemeMatrix(instrumentation: Instrumentation, report: S
     }
     var failure: Throwable? = null
     try {
-        for (dark in listOf(false, true)) {
+        val perf = ownerPerfCycle.get()
+        if (perf != null) {
+            awaitNativeParityDraw(instrumentation, host.fixtureRoot)
+        }
+        for (dark in if (perf == null) listOf(false, true) else listOf(false)) {
             val mode = if (dark) AppThemeMode.DARK else AppThemeMode.LIGHT
             val name = if (dark) "dark" else "light"
             val palette = ReverbPalette.resolve(host, dark)
             val runtime = nativeParityOnMain(instrumentation) { NativeModalWindowRuntime(host).apply { setStarted(true) } }
             try {
+                perf?.opening(host)
                 val home = nativeParityOnMain(instrumentation) {
                     val environment = nativeParityEnvironment(host,
                         androidx.compose.ui.unit.Density(host.resources.displayMetrics.density, host.resources.configuration.fontScale), palette)
@@ -66,8 +71,14 @@ internal fun verifyNativeThemeMatrix(instrumentation: Instrumentation, report: S
                             host.fixtureRoot.addView(it, FrameLayout.LayoutParams(-1, -1))
                         }
                 }
-                try { capture("$name-home", home) { it.getText() == host.getString(R.string.buffer_loop) } }
-                finally { main { home.close(); host.fixtureRoot.removeView(home) } }
+                try {
+                    if (perf == null) capture("$name-home", home) { it.getText() == host.getString(R.string.buffer_loop) }
+                    else {
+                        perf.openSettled(home)
+                        evidence.put(JSONObject().put("name", "$name-home").put("sampled", true))
+                    }
+                } finally { main { home.close(); host.fixtureRoot.removeView(home) } }
+                if (perf != null) continue
                 val editor = nativeParityOnMain(instrumentation) { RangeExportEditorState(120f) }
                 val range = nativeParityOnMain(instrumentation) {
                     val environment = nativeParityEnvironment(host,
@@ -131,9 +142,8 @@ internal fun verifyNativeThemeMatrix(instrumentation: Instrumentation, report: S
                     settle()
                     main { calibration.fullScroll(View.FOCUS_DOWN) }
                     try { capture("$name-calibration-$clearance-${progress ?: if (terminalError == null) "idle" else "error"}", calibration) {
-                        it.getText() in setOf(host.getString(R.string.silence_calibration_heading),
-                            host.getString(R.string.silence_calibration_hint), host.getString(R.string.silence_sampling),
-                            host.getString(R.string.silence_calibrate), terminalError)
+                        it.getText() in setOf(host.getString(R.string.silence_calibrate),
+                            host.getString(R.string.cancel), terminalError)
                     }
                         if (terminalError != null) main {
                             fun find(view: View): ParagraphView? {

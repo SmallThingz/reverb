@@ -8,11 +8,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 internal fun canEnterInlineTrim(durationMillis: Int): Boolean = durationMillis > 0
 
-internal enum class InlineFineSeekTarget {
-    PLAYHEAD,
-    TRIM_START,
-    TRIM_END,
-}
+internal typealias InlineFineSeekTarget = smallthingz.ui.reverb.InlineFineSeekTarget
 
 internal data class InlineFineSeekValues(
     val cursorMillis: Int,

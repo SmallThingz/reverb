@@ -279,17 +279,17 @@ internal class NativeQuickTileInlineOwner(
         }
     }
 
-    fun selectBuffer(buffer: ReverbService.BufferSlot) {
-        val revision = admission()
-        if (enabled && revision != null && target.selectBuffer(buffer)) {
-            shortened = null
-            message = null
-            if (capacityLoad.ready(revision) == null) {
-                retry++
-                bind(inputs)
-            }
-            changed()
+    fun selectBuffer(buffer: ReverbService.BufferSlot): Boolean {
+        val revision = admission() ?: return false
+        if (!enabled || !target.selectBuffer(buffer)) return false
+        shortened = null
+        message = null
+        if (capacityLoad.ready(revision) == null) {
+            retry++
+            bind(inputs)
         }
+        changed()
+        return true
     }
 
     fun wheelOwner(maximum: Int): Long? = admission()?.takeIf {

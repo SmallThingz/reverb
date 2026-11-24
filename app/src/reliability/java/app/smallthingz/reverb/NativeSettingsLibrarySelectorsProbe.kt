@@ -14,12 +14,22 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.inputmethod.BaseInputConnection
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputConnection
 import kotlin.math.pow
 import app.smallthingz.reverb.nativeui.NativeSettingsScreenContent
+import app.smallthingz.reverb.nativeui.QuickTileInlineView
+import app.smallthingz.reverb.nativeui.SettingsCalibrationActionView
+import app.smallthingz.reverb.nativeui.SettingsRetentionInputView
 import app.smallthingz.reverb.nativeui.segmentedPalette
 import smallthingz.ui.components.NativeChoice
+import smallthingz.ui.components.NativeChip
+import smallthingz.ui.components.NativeDurationWheelView
+import smallthingz.ui.components.NativeModalWindowRuntime
 import smallthingz.ui.components.NativeSegmentedChoice
 import smallthingz.ui.components.NativeSegmentedControl
+import smallthingz.ui.reverb.settings.ReverbRetentionSection
 import java.io.File
 import org.json.JSONArray
 import org.json.JSONObject
@@ -171,16 +181,17 @@ internal fun verifyNativeSettingsLibrarySelectors(instrumentation: Instrumentati
             check(!(group.choiceStyle.selectedOutlined ?: group.choiceStyle.outlined)) {
                 "Selected size/theme choice must not request an outline"
             }
-            // Draw the actual settled background, independently observing its solid fill and edge.
-            val bitmap = android.graphics.Bitmap.createBitmap(selected.width, selected.height,
+            // The retained group paints the selection. Sample the straight edge above the label.
+            val bitmap = android.graphics.Bitmap.createBitmap(group.width, group.height,
                 android.graphics.Bitmap.Config.ARGB_8888)
-            val priorState = selected.background.state
+            val density = context.resources.displayMetrics.density
             try {
-                selected.background.state = intArrayOf(android.R.attr.state_enabled, android.R.attr.state_selected)
-                selected.background.draw(android.graphics.Canvas(bitmap))
-                val fill = bitmap.getPixel(bitmap.width / 2, bitmap.height / 2)
-                val edge = bitmap.getPixel(bitmap.width / 2,
-                    maxOf(1, (context.resources.displayMetrics.density / 2).toInt()))
+                group.draw(android.graphics.Canvas(bitmap))
+                val x = selected.left + selected.width / 2
+                val edgeY = selected.top + maxOf(1, (density / 2).toInt())
+                val fillY = selected.top + (3f * density).roundToInt()
+                val fill = bitmap.getPixel(x, fillY)
+                val edge = bitmap.getPixel(x, edgeY)
                 check(fill == palette.primary && fill == palette.settingsSelection && fill ushr 24 == 255) {
                     "Selected fill must be the opaque primary role"
                 }
@@ -189,22 +200,26 @@ internal fun verifyNativeSettingsLibrarySelectors(instrumentation: Instrumentati
                 cases.put(JSONObject().put("case", "actual selected solid paint without outline")
                     .put("dark", current.effectiveDark).put("foreground", selected.currentTextColor)
                     .put("fill", fill).put("edge", edge).put("selected_outlined", false).put("passed", true))
-            } finally { selected.background.state = priorState; bitmap.recycle() }
-            val density = context.resources.displayMetrics.density
+            } finally { bitmap.recycle() }
             check(group.height == (34 * density).roundToInt())
         }
-        for ((label, firstId, secondId) in listOf(Triple("theme", "LIGHT", "DARK"), Triple("retention", "time", "size"))) {
+        for (label in listOf("theme", "retention")) {
             lateinit var group: NativeSegmentedChoice
             await("$label group") {
                 selectorViews(settings).filterIsInstance<NativeSegmentedChoice>()
-                    .firstOrNull { it.choiceView(firstId) != null }?.also { group = it } != null
+                    .firstOrNull { if (label == "theme") it.choiceView("LIGHT") != null else it.isRetentionSelector() }
+                    ?.also { group = it } != null
             }
             reveal(group)
             snapshot("$label-before")
             main { checkRestingContrast(group) }
-            val before = nativeParityOnMain(instrumentation) { group.selectedId }
-            val targetId = if (before == secondId) firstId else secondId
-            val target = nativeParityOnMain(instrumentation) { checkNotNull(group.choiceView(targetId)) }
+            val (first, second) = nativeParityOnMain(instrumentation) {
+                if (label == "theme") checkNotNull(group.choiceView("LIGHT")) to checkNotNull(group.choiceView("DARK"))
+                else (group.getChildAt(0) as NativeChip) to (group.getChildAt(1) as NativeChip)
+            }
+            val (target, other) = nativeParityOnMain(instrumentation) {
+                if (second.isChecked) first to second else second to first
+            }
             main {
                 val density = context.resources.displayMetrics.density
                 check(group.height == (34 * density).roundToInt())
@@ -226,12 +241,11 @@ internal fun verifyNativeSettingsLibrarySelectors(instrumentation: Instrumentati
             main { motion(MotionEvent.ACTION_DOWN, down, box.exactCenterX(), box.exactCenterY()) }
             settle()
             SystemClock.sleep(android.view.ViewConfiguration.getLongPressTimeout().toLong() + 30)
-            main { check(group.selectedId == before); motion(MotionEvent.ACTION_UP, down, box.exactCenterX(), box.exactCenterY()) }
-            await("$label held release") { group.selectedId == targetId }
+            main { check(!target.isChecked); motion(MotionEvent.ACTION_UP, down, box.exactCenterX(), box.exactCenterY()) }
+            await("$label held release") { target.isChecked }
             snapshot("$label-after-selection")
             main { checkRestingContrast(group) }
             cases.put(JSONObject().put("case", "$label held release, radio semantics, 34/42dp geometry").put("passed", true))
-            val other = nativeParityOnMain(instrumentation) { checkNotNull(group.choiceView(if (targetId == secondId) firstId else secondId)) }
             val otherBox = nativeParityOnMain(instrumentation) { bounds(other) }
             val dragDown = SystemClock.uptimeMillis()
             main {
@@ -239,7 +253,7 @@ internal fun verifyNativeSettingsLibrarySelectors(instrumentation: Instrumentati
                 motion(MotionEvent.ACTION_MOVE, dragDown, otherBox.exactCenterX(), otherBox.exactCenterY() - 100)
                 motion(MotionEvent.ACTION_UP, dragDown, otherBox.exactCenterX(), otherBox.exactCenterY() - 100)
             }; settle()
-            main { check(group.selectedId == targetId) }
+            main { check(target.isChecked) }
             cases.put(JSONObject().put("case", "$label scroll cancellation").put("passed", true))
             reveal(group)
             main { group.layoutDirection = View.LAYOUT_DIRECTION_RTL }; settle()
@@ -250,7 +264,7 @@ internal fun verifyNativeSettingsLibrarySelectors(instrumentation: Instrumentati
                 .put("hardware_keyboard_claim", false)
             try {
                 main {
-                    check(checkNotNull(group.choiceView(firstId)).left > checkNotNull(group.choiceView(secondId)).left)
+                    check(first.left > second.left)
                     keyboardEvidence.put("touch_mode_before", group.isInTouchMode)
                     // Direct dispatch bypasses ViewRoot's physical-key touch-mode transition.
                     keyboardCandidates.forEach { (view, _) -> view.isFocusableInTouchMode = true }
@@ -258,7 +272,7 @@ internal fun verifyNativeSettingsLibrarySelectors(instrumentation: Instrumentati
                     check(current.board.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER)))
                     check(current.board.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER)))
                 }
-                await("$label keyboard") { group.selectedId != targetId }
+                await("$label keyboard") { !target.isChecked }
                 main {
                     val beforeNavigation = group.selectedId
                     val focused = group.findFocus()
@@ -284,7 +298,7 @@ internal fun verifyNativeSettingsLibrarySelectors(instrumentation: Instrumentati
                 motion(MotionEvent.ACTION_DOWN, expandedDown, expandedBox.exactCenterX(), outsideY)
                 motion(MotionEvent.ACTION_UP, expandedDown, expandedBox.exactCenterX(), outsideY)
             }
-            await("$label expanded minimum touch target") { group.selectedId == targetId }
+            await("$label expanded minimum touch target") { target.isChecked }
             cases.put(JSONObject().put("case", "$label compact expanded touch").put("passed", true))
             val lowerBox = nativeParityOnMain(instrumentation) { bounds(other) }
             val lowerDown = SystemClock.uptimeMillis()
@@ -293,23 +307,23 @@ internal fun verifyNativeSettingsLibrarySelectors(instrumentation: Instrumentati
                 motion(MotionEvent.ACTION_DOWN, lowerDown, lowerBox.exactCenterX(), lowerY)
                 motion(MotionEvent.ACTION_UP, lowerDown, lowerBox.exactCenterX(), lowerY)
             }
-            await("$label lower expanded gap") { group.selectedId != targetId }
+            await("$label lower expanded gap") { !target.isChecked }
             val outsideDown = SystemClock.uptimeMillis()
             main {
                 motion(MotionEvent.ACTION_DOWN, outsideDown, expandedBox.exactCenterX(), expandedBox.exactCenterY())
                 motion(MotionEvent.ACTION_UP, outsideDown, expandedBox.exactCenterX(), expandedBox.bottom + 80 * context.resources.displayMetrics.density)
             }
             settle()
-            main { check(group.selectedId != targetId) }
+            main { check(!target.isChecked) }
             cases.put(JSONObject().put("case", "$label lower inset gap and outside release").put("passed", true))
             main {
                 group.isEnabled = false
                 check(!target.performAccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, null))
-                check(group.selectedId != targetId)
+                check(!target.isChecked)
                 group.isEnabled = true
                 check(target.performAccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, null))
             }
-            await("$label accessibility activation") { group.selectedId == targetId }
+            await("$label accessibility activation") { target.isChecked }
             snapshot("$label-final")
             main { checkRestingContrast(group) }
         }
@@ -327,11 +341,20 @@ internal fun verifyNativeSettingsLibrarySelectors(instrumentation: Instrumentati
             main { checkRestingContrast(theme) }
             val retention = nativeParityOnMain(instrumentation) {
                 selectorViews(settings).filterIsInstance<NativeSegmentedChoice>()
-                    .first { it.choiceView("time") != null }
+                    .first { it.isRetentionSelector() }
             }
             reveal(retention)
             snapshot("material-${mode.lowercase()}-retention")
             main { checkRestingContrast(retention) }
+        }
+        val retention = nativeParityOnMain(instrumentation) {
+            selectorViews(settings).filterIsInstance<ReverbRetentionSection>().single()
+        }
+        reveal(retention)
+        main {
+            val modeChips = selectorViews(retention).filterIsInstance<NativeSegmentedChoice>().single()
+            cases.put(verifyCurrentTileEditorGeometry(host, current.board, settings, modeChips))
+            cases.put(verifyCurrentRetentionModeDrafts(host, settings, retention, modeChips))
         }
         val retired = nativeParityOnMain(instrumentation) { selectorViews(settings).filterIsInstance<NativeSegmentedChoice>().first().getChildAt(0) }
         main { current.close(); check(!retired.performClick());
@@ -350,6 +373,96 @@ internal fun verifyNativeSettingsLibrarySelectors(instrumentation: Instrumentati
     failure?.let { throw it }
     report.appendLine("PASS native_settings_library_selectors isolated actual Settings root bridge")
 }
+
+/** Synthetic InputConnection commands against the actual Settings draft editor on the QA device. */
+private fun verifyCurrentRetentionModeDrafts(
+    host: NativeParityActivity,
+    settings: NativeSettingsScreenContent,
+    retention: ReverbRetentionSection,
+    chips: NativeSegmentedChoice,
+): JSONObject {
+    val editor = selectorViews(retention).filterIsInstance<SettingsRetentionInputView>()
+        .single { it.contentDescription == host.getString(R.string.buffer_one_shot) }
+    fun select(mode: RetentionMode) {
+        val chip = chips.getChildAt(if (mode == RetentionMode.TIME) 0 else 1) as NativeChip
+        if (!chip.isChecked) check(chip.performAccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, null))
+        check(chip.isChecked && settings.owner.snapshot.retentionMode == mode)
+    }
+    fun replace(connection: InputConnection, text: String) {
+        check(connection.setSelection(0, editor.length()))
+        check(connection.commitText(text, 1))
+    }
+
+    select(RetentionMode.TIME)
+    val time = checkNotNull(editor.onCreateInputConnection(EditorInfo()))
+    replace(time, "1:23")
+    check(time.setSelection(1, 2) && time.setComposingRegion(0, 1))
+    check(time.beginBatchEdit() && time.commitText("queued Time command", 1))
+
+    select(RetentionMode.SIZE)
+    check(!time.endBatchEdit() && !time.commitText("stale Time command", 1))
+    val size = checkNotNull(editor.onCreateInputConnection(EditorInfo()))
+    replace(size, "384.50")
+    check(size.setSelection(2, 5) && size.setComposingRegion(3, 4))
+
+    select(RetentionMode.TIME)
+    check(editor.text.toString() == "1:23" && editor.selectionStart == 1 && editor.selectionEnd == 2)
+    check(BaseInputConnection.getComposingSpanStart(editor.editableText) == 0 &&
+        BaseInputConnection.getComposingSpanEnd(editor.editableText) == 1)
+    select(RetentionMode.SIZE)
+    check(editor.text.toString() == "384.50" && editor.selectionStart == 2 && editor.selectionEnd == 5)
+    check(BaseInputConnection.getComposingSpanStart(editor.editableText) == 3 &&
+        BaseInputConnection.getComposingSpanEnd(editor.editableText) == 4)
+    val drafts = settings.owner.state.displayed
+    check(drafts.oneShotTimeText == "1:23" && drafts.oneShotSizeText == "384.50")
+    return JSONObject().put("case", "actual_retention_drafts_preserve_selection_and_reject_stale_ime_batch")
+        .put("time", drafts.oneShotTimeText).put("size", drafts.oneShotSizeText).put("passed", true)
+}
+
+/** The current inline editor with synthetic capacity, so geometry checks have no tile side effects. */
+private fun verifyCurrentTileEditorGeometry(
+    host: NativeParityActivity,
+    board: View,
+    settings: NativeSettingsScreenContent,
+    retentionChips: NativeSegmentedChoice,
+): JSONObject {
+    val runtime = NativeModalWindowRuntime(host)
+    val target = QuickSettingsTileEditorTarget()
+    val editor = QuickSettingsTilesEditorState().apply { this.target = target }
+    val owner = NativeQuickTileInlineOwner(host, host.lifecycle, runtime.scope, editor,
+        target, NativeQuickTilesInputs(true, true, true, 1L), { 1L }, { 1L },
+        { error("Tile geometry must not dispatch an application action") })
+    val environment = settings.pointerEnvironment
+    val tile = QuickTileInlineView(host, owner, host.lifecycle, environment, { board })
+    try {
+        val request = checkNotNull(owner.capacityLoad.begin(1L))
+        check(owner.capacityLoad.finish(request, 1L, TileCapacities(3600, 120.0, 120.0)))
+        tile.bind(environment)
+        tile.measure(View.MeasureSpec.makeMeasureSpec(board.width, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED))
+        tile.layout(0, 0, tile.measuredWidth, tile.measuredHeight)
+        val selector = selectorViews(tile).filterIsInstance<NativeSegmentedControl>().single()
+        val tileChips = selectorViews(selector).filterIsInstance<NativeSegmentedChoice>().single()
+        val wheel = selectorViews(tile).filterIsInstance<NativeDurationWheelView>().single()
+        val actions = selectorViews(tile).filterIsInstance<SettingsCalibrationActionView>().toList()
+        val cancel = actions.single { it.textView.getText() == host.getString(R.string.cancel) }
+        val save = actions.single { it.textView.getText() == host.getString(R.string.tiles_ui_save) }
+        val inset = (environment.appearance.quickTiles.editorInsetDp * environment.textDensity.density).roundToInt()
+        check(tileChips.choiceStyle == retentionChips.choiceStyle)
+        check(selector.top == inset && selector.bottom < wheel.top)
+        check(wheel.bottom < minOf(cancel.top, save.top) && maxOf(cancel.bottom, save.bottom) == tile.height - inset)
+        return JSONObject().put("case", "actual_tile_editor_shared_capsule_at_top_and_actions_at_bottom")
+            .put("capsule_top_px", selector.top).put("wheel_top_px", wheel.top)
+            .put("footer_bottom_px", maxOf(cancel.bottom, save.bottom)).put("passed", true)
+    } finally {
+        try { owner.close() } finally {
+            try { tile.close() } finally { runtime.close() }
+        }
+    }
+}
+
+private fun NativeSegmentedChoice.isRetentionSelector(): Boolean =
+    generateSequence(parent as? View) { it.parent as? View }.any { it is ReverbRetentionSection }
 
 private fun selectorViews(view: View): Sequence<View> = sequence {
     yield(view)

@@ -12,6 +12,7 @@ import app.smallthingz.reverb.rangeFineTuneDeltaSeconds
 import app.smallthingz.reverb.rangeFineTuneSeekPull
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -103,6 +104,31 @@ class NativeSpringFineSeekStateTest {
         assertTrue(h.commits.isEmpty())
         assertEquals(1, h.events.count { it == "old:cancel" })
         assertFalse(h.events.any { it.endsWith(":end") })
+    }
+
+    @Test fun releaseClearsTheGestureAndBindingWhenItsCancelCallbackThrows() {
+        val h = Harness()
+        val failure = IllegalStateException("cancel failed")
+        var cancelled = 0
+        h.state.bind(h.binding("retired").copy(onCancelFineAdjust = {
+            cancelled++
+            throw failure
+        }), 10f)
+        h.send(event(266f, 60f, true, false))
+        assertTrue(h.state.dragging)
+
+        assertSame(failure, runCatching(h.state::release).exceptionOrNull())
+        h.send(event(266f, 60f, true, false))
+        assertFalse(h.state.dragging)
+        assertFalse(h.state.needsFrames)
+        assertEquals(0f, h.state.horizontalPull, 0f)
+        h.state.release()
+        assertEquals(1, cancelled)
+
+        h.state.bind(h.binding("reopened"), 10f)
+        h.send(event(266f, 60f, true, false))
+        assertTrue(h.state.dragging)
+        assertEquals("reopened:begin", h.events.last())
     }
 
     @Test fun elapsedFrameHitchIsCappedToFiftyMillis() {

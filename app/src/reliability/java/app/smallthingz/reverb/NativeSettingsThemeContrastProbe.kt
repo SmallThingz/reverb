@@ -26,9 +26,13 @@ import smallthingz.ui.animation.ColorTransition
 import smallthingz.ui.animation.view.ViewColorTransition
 import smallthingz.ui.components.NativeDropdown
 import smallthingz.ui.controls.textSurfaceForeground
+import smallthingz.ui.reverb.settings.ReverbRetentionInputView
+import smallthingz.ui.reverb.settings.ReverbRetentionMode
+import smallthingz.ui.text.RetentionLineHeightSpan
 import smallthingz.ui.text.view.ParagraphView
 import smallthingz.ui.graphics.Color as NativeColor
 import smallthingz.ui.graphics.toArgb
+import smallthingz.ui.unit.Density
 
 /** Deterministic colors on the existing mounted Settings owners; no production probe hooks. */
 internal fun verifyNativeSettingsThemeContrast(instrumentation: Instrumentation, report: StringBuilder) {
@@ -49,6 +53,7 @@ internal fun verifyNativeSettingsThemeContrast(instrumentation: Instrumentation,
     fun <T> main(block: () -> T) = nativeParityOnMain(instrumentation, block)
     fun settle(view: View) { repeat(3) { awaitNativeParityDraw(instrumentation, view); instrumentation.waitForIdleSync() } }
     try {
+        cases.put(main { verifyRetentionEditorPaletteGeometry(host) })
         for (scene in listOf(SettingsSectionKey.RETENTION, SettingsSectionKey.RECORDING)) {
             val current = main {
                 MainSettingsParityRender(host, false, AppThemeMode.SYSTEM, true, null,
@@ -243,6 +248,65 @@ private fun verifySettingsBackgroundWarnings(instrumentation: Instrumentation, h
             battery.setBoolean(owner, original.first); blocked.setBoolean(owner, original.second)
             restart.setBoolean(owner, original.third); changed.invoke(owner)
         }
+    }
+}
+
+private fun verifyRetentionEditorPaletteGeometry(host: NativeParityActivity): JSONObject {
+    val light = ReverbViewEnvironment(host, false)
+    val dark = light.withPalette(ReverbPalette.fallback(true))
+    val editor = ReverbRetentionInputView(host, light)
+    val draft = "1:23"
+    fun bind(environment: ReverbViewEnvironment) {
+        editor.bind(draft, ReverbRetentionMode.TIME, host.getString(R.string.buffer_one_shot), environment,
+            requestFocus = false, readCurrentRaw = { draft }, onRawChanged = { error("Theme binding edited the draft") })
+    }
+    fun measureAndPlace() {
+        val width = (320f * light.textDensity.density).toInt()
+        editor.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED))
+        editor.layout(0, 0, editor.measuredWidth, editor.measuredHeight)
+    }
+    fun lineHeightSpan(): RetentionLineHeightSpan {
+        val editable = checkNotNull(editor.editableText)
+        return editable.getSpans(0, editable.length, RetentionLineHeightSpan::class.java).single()
+    }
+    try {
+        editor.layoutDirection = View.LAYOUT_DIRECTION_LTR
+        bind(light)
+        editor.setSelection(1, 3)
+        measureAndPlace()
+        val originalLayout = checkNotNull(editor.layout)
+        val originalSpan = lineHeightSpan()
+        val originalInk = editor.currentTextColor
+        val originalSize = editor.textSize
+
+        bind(dark)
+        check(editor.layout === originalLayout && lineHeightSpan() === originalSpan && !editor.isLayoutRequested) {
+            "A palette-only bind replaced the native editor geometry"
+        }
+        check(editor.currentTextColor == dark.palette.ink && editor.currentTextColor != originalInk)
+        check(editor.highlightColor == dark.appearance.editorVisuals.selectionColor(dark.palette.primary))
+        check(editor.text.toString() == draft && editor.selectionStart == 1 && editor.selectionEnd == 3)
+
+        val larger = ReverbViewEnvironment(Density(dark.textDensity.density, dark.textDensity.fontScale * 1.4f),
+            dark.sharedFontResolver, dark.palette)
+        bind(larger)
+        measureAndPlace()
+        val largerSpan = lineHeightSpan()
+        check(largerSpan !== originalSpan && editor.textSize > originalSize)
+
+        editor.layoutDirection = View.LAYOUT_DIRECTION_RTL
+        bind(larger)
+        measureAndPlace()
+        check(editor.layoutDirection == View.LAYOUT_DIRECTION_RTL && lineHeightSpan() !== largerSpan)
+        check(editor.selectionStart == 1 && editor.selectionEnd == 3)
+        return JSONObject().put("name", "retention_palette_reuses_native_geometry")
+            .put("light_ink", originalInk).put("dark_ink", editor.currentTextColor)
+            .put("original_text_size_px", originalSize.toDouble()).put("larger_text_size_px", editor.textSize.toDouble())
+            .put("same_measured_layout_and_line_height_span_after_palette", true)
+            .put("font_scale_and_rtl_replace_line_height_span", true)
+    } finally {
+        editor.releaseCallbacks()
     }
 }
 
@@ -542,7 +606,9 @@ private class HeldThemeMotion(val motion: ViewColorTransition) {
     fun publish() { @Suppress("UNCHECKED_CAST") val callback = themeField(motion, "publish").get(motion) as () -> Unit; callback() }
 }
 private fun themeState(motion: ViewColorTransition) = themeField(motion, "state").get(motion) as ColorTransition
-private fun themeEditorMotion(view: SettingsRetentionInputView) = view.javaClass.getDeclaredMethod("getColorMotion").apply { isAccessible = true }.invoke(view) as ViewColorTransition
+private fun themeEditorMotion(view: SettingsRetentionInputView) =
+    smallthingz.ui.reverb.settings.ReverbRetentionInputView::class.java.getDeclaredMethod("getColorMotion")
+        .apply { isAccessible = true }.invoke(view) as ViewColorTransition
 private fun themeField(owner: Any, name: String) = themeField(owner.javaClass, name)
 private fun themeField(type: Class<*>, name: String): Field = type.getDeclaredField(name).apply { isAccessible = true }
 private fun themeViews(view: View): Sequence<View> = sequence {

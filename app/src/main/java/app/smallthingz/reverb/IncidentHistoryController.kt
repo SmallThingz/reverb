@@ -1,6 +1,9 @@
 package app.smallthingz.reverb
 
 import android.content.Context
+import android.content.res.Configuration
+import android.content.res.Resources
+import java.util.Locale
 import androidx.annotation.MainThread
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -27,7 +30,8 @@ internal class IncidentHistoryController(
     private val access: IncidentHistoryAccess,
     private val waitBeforeRetry: suspend (Long) -> Unit = { delay(it) },
 ) {
-    constructor(context: Context) : this(StoredIncidentHistoryAccess(context.applicationContext))
+    constructor(context: Context) : this(StoredIncidentHistoryAccess(context.applicationContext,
+        context.applicationContext.createConfigurationContext(Configuration(context.resources.configuration)).resources))
 
     var state: IncidentHistoryUiState = IncidentHistoryUiState()
         private set
@@ -91,12 +95,16 @@ internal class IncidentHistoryController(
     }
 }
 
-private class StoredIncidentHistoryAccess(private val appContext: Context) : IncidentHistoryAccess {
+private class StoredIncidentHistoryAccess(
+    private val appContext: Context,
+    private val displayResources: Resources,
+) : IncidentHistoryAccess {
     override val revisions: StateFlow<Long>
         get() = RecordingIncidentStore.historyRevision
 
     override suspend fun readHistory(): IncidentHistoryPresentation = withContext(Dispatchers.IO) {
-        prepareIncidentHistory(RecordingIncidentStore.readIncidents(appContext))
+        prepareIncidentHistory(RecordingIncidentStore.readIncidents(appContext),
+            locale = displayResources.configuration.locales[0] ?: Locale.getDefault(), resources = displayResources)
     }
 
     override fun toggleAcknowledgedInBackground(incident: RecordingIncident) {

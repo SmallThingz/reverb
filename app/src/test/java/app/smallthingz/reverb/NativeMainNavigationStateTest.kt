@@ -1,5 +1,8 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.reverb.ReverbMainFeedbackLayer
+import smallthingz.ui.reverb.ReverbMainLayout
+
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -95,9 +98,9 @@ class NativeMainNavigationStateTest {
     @Test fun feedbackReturnsToHomePaddingImmediatelyOnSettingsClose() {
         val state = NativeMainNavigationState()
         state.openSettings()
-        assertEquals(NativeMainFeedbackPlacement(true, 2f, 18, 20, false), state.feedbackPlacement(0f))
+        assertEquals(NativeMainFeedbackPlacement(true, ReverbMainFeedbackLayer.SCREEN, 18, 20, false), state.feedbackPlacement(0f))
         state.closeSettings()
-        assertEquals(NativeMainFeedbackPlacement(true, 2f, 18, 104, false), state.feedbackPlacement(0f))
+        assertEquals(NativeMainFeedbackPlacement(true, ReverbMainFeedbackLayer.SCREEN, 18, 104, false), state.feedbackPlacement(0f))
         assertFalse(state.saveFeedbackVisible(.5f, 0f))
         assertTrue(state.homeVisualizerVisible)
     }
@@ -108,8 +111,23 @@ class NativeMainNavigationStateTest {
         state.libraryUndoVisible = true
         assertFalse(state.feedbackPlacement(1f).deliveryAllowed)
         state.closeLibrary()
-        assertEquals(NativeMainFeedbackPlacement(true, 5f, 18, 20, true), state.feedbackPlacement(.5f))
-        assertEquals(NativeMainFeedbackPlacement(true, 2f, 18, 104, false), state.feedbackPlacement(0f))
+        assertEquals(NativeMainFeedbackPlacement(true, ReverbMainFeedbackLayer.LIBRARY, 18, 20, true), state.feedbackPlacement(.5f))
+        assertEquals(NativeMainFeedbackPlacement(true, ReverbMainFeedbackLayer.SCREEN, 18, 104, false), state.feedbackPlacement(0f))
+    }
+
+    @Test fun shellLayerOrderRetainsEveryPresentLayerAcrossOverlayStates() {
+        fun order(settings: String?, library: String?, toolbar: String?, visible: Boolean,
+                  layer: ReverbMainFeedbackLayer) = ReverbMainLayout.drawOrder(
+            settings, "home", "feedback", library, toolbar, "incidents", visible, layer,
+        )
+        assertEquals(listOf("home", "feedback", "incidents"),
+            order(null, null, null, false, ReverbMainFeedbackLayer.SCREEN))
+        assertEquals(listOf("library", "settings", "home", "feedback", "incidents"),
+            order("settings", "library", null, false, ReverbMainFeedbackLayer.SCREEN))
+        assertEquals(listOf("settings", "home", "library", "toolbar", "feedback", "incidents"),
+            order("settings", "library", "toolbar", true, ReverbMainFeedbackLayer.LIBRARY))
+        assertEquals(listOf("settings", "home", "library", "toolbar", "incidents", "feedback"),
+            order("settings", "library", "toolbar", true, ReverbMainFeedbackLayer.INCIDENTS))
     }
 
     @Test fun libraryHeaderNavigationClosesLibraryWithoutResettingUnrelatedFlags() {

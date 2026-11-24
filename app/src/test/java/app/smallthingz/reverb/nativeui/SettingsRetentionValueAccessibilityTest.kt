@@ -5,12 +5,14 @@ import android.app.Application
 import android.text.InputType
 import android.view.View
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import android.widget.LinearLayout
 import app.smallthingz.reverb.R
 import app.smallthingz.reverb.RetentionMode
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -35,6 +37,59 @@ import smallthingz.ui.unit.Density
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @LooperMode(LooperMode.Mode.PAUSED)
 class SettingsRetentionValueAccessibilityTest {
+    @Test
+    fun modeSwitchRestoresEachDraftSelectionAndRejectsAnOldKeyboardBatch() {
+        val owner = Robolectric.buildActivity(Activity::class.java).setup().visible()
+        val activity = owner.get()
+        val environment = ReverbViewEnvironment(activity, false)
+        val editor = SettingsRetentionInputView(activity, environment)
+        val root = LinearLayout(activity).apply {
+            isFocusableInTouchMode = true
+            addView(editor)
+        }
+        activity.setContentView(root)
+        root.requestFocus()
+        val drafts = mutableMapOf(RetentionMode.TIME to "1:23", RetentionMode.SIZE to "384.5")
+        fun bind(mode: RetentionMode) {
+            editor.bind(drafts.getValue(mode), mode, "One-shot", environment, false,
+                { drafts.getValue(mode) }, { drafts[mode] = it })
+        }
+        try {
+            bind(RetentionMode.TIME)
+            val timeInput = requireNotNull(editor.onCreateInputConnection(EditorInfo()))
+            assertTrue(timeInput.setSelection(1, 2))
+            assertTrue(timeInput.setComposingRegion(0, 1))
+            assertTrue(timeInput.beginBatchEdit())
+            assertTrue(timeInput.commitText("late keyboard edit", 1))
+
+            bind(RetentionMode.SIZE)
+            assertEquals("384.5", editor.text.toString())
+            assertEquals(0, editor.selectionStart)
+            assertFalse(timeInput.endBatchEdit())
+            assertFalse(timeInput.commitText("stale", 1))
+            val sizeAttributes = EditorInfo()
+            val sizeInput = requireNotNull(editor.onCreateInputConnection(sizeAttributes))
+            assertEquals(InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL, sizeAttributes.inputType)
+            assertTrue(sizeInput.setSelection(3, 5))
+
+            bind(RetentionMode.TIME)
+            assertEquals("1:23", editor.text.toString())
+            assertEquals(1, editor.selectionStart)
+            assertEquals(2, editor.selectionEnd)
+            assertEquals(0, BaseInputConnection.getComposingSpanStart(editor.editableText))
+            assertEquals(1, BaseInputConnection.getComposingSpanEnd(editor.editableText))
+
+            bind(RetentionMode.SIZE)
+            assertEquals("384.5", editor.text.toString())
+            assertEquals(3, editor.selectionStart)
+            assertEquals(5, editor.selectionEnd)
+            assertEquals(-1, BaseInputConnection.getComposingSpanStart(editor.editableText))
+        } finally {
+            editor.releaseCallbacks()
+            owner.pause().stop().destroy()
+        }
+    }
+
     @Test
     fun sizeEditorsExposeTheirOwnLabelAndKeepNativeDecimalEditing() {
         val owner = Robolectric.buildActivity(Activity::class.java).setup().visible()
@@ -89,11 +144,11 @@ class SettingsRetentionValueAccessibilityTest {
         val role = NativeTypographyRole.BODY_LARGE
         val editorRecipe = default.editorVisuals.copy(largeValueText = default.editorVisuals.largeValueText.copy(fontSizeSp = 42f))
         val appearance = default.copy(editorVisuals = editorRecipe)
-        val baseline = ReverbViewEnvironment(Density(1f), createFontFamilyResolver(activity),
+        val baseline = ReverbViewEnvironment.withTestAppearance(Density(1f), createFontFamilyResolver(activity),
             ReverbPalette.fallback(false), appearance = appearance).forSettings()
         val changedTypography = NativeTypography(mapOf(role to default.typography[role].copy(fontFamily = FontFamily.Monospace)))
         val changedAppearance = appearance.copy(typography = changedTypography)
-        val next = ReverbViewEnvironment(baseline.textDensity, baseline.sharedFontResolver, baseline.palette,
+        val next = ReverbViewEnvironment.withTestAppearance(baseline.textDensity, baseline.sharedFontResolver, baseline.palette,
             appearance = changedAppearance).forSettings()
         val editor = SettingsRetentionInputView(activity, baseline)
         val row = SettingsRetentionValueView(activity, ReverbIcon.OneShot, "iii", editor, baseline)

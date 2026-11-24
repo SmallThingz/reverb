@@ -11,6 +11,43 @@ import smallthingz.ui.components.waveform.ProgressiveWaveformFrame
 import smallthingz.ui.runtime.MonotonicFrameClock
 
 class NativeInlineWaveformMotionTest {
+    @Test fun unchangedFramesAreSkippedAcrossWaveformRevisionsAndTrueVisualChangesPublish() = runBlocking {
+        val clock = ManualFrames()
+        val published = mutableListOf<ProgressiveWaveformFrame>()
+        var scale = 0f
+        val motion = NativeInlineWaveformMotion(clock, CoroutineScope(coroutineContext), { scale }) { published += it }
+        try {
+            motion.bind(data(2, 1), loading = false, morphStarted = false)
+            repeat(12) { motion.bind(data(2, 1), loading = false, morphStarted = false) }
+            assertEquals(1, published.size)
+
+            val full = data(4, 4)
+            motion.bind(full, loading = false, morphStarted = false)
+            assertEquals(2, published.size)
+            assertEquals(1f, published.last().visibleCoarseFraction, 0f)
+            assertEquals(1f, published.last().visibleDetailFraction, 0f)
+
+            motion.bind(full, loading = false, morphStarted = true)
+            assertEquals(3, published.size)
+            assertEquals(1f, published.last().morphProgress, 0f)
+            assertEquals(0, clock.pendingCount)
+
+            scale = 1f
+            motion.bind(full, loading = true, morphStarted = true)
+            yield()
+            assertEquals(1, clock.pendingCount)
+            clock.frame(1_000_000_000L)
+            yield()
+            assertEquals(3, published.size)
+            clock.frame(1_100_000_000L)
+            yield()
+            assertEquals(4, published.size)
+            assertEquals(.1f, published.last().wobblePhaseSeconds, .000001f)
+        } finally {
+            motion.close()
+        }
+    }
+
     @Test fun zeroScalePublishesNewAvailabilityAndMorphWithoutRequestingFrames() = runBlocking {
         val clock = ManualFrames()
         var latest: ProgressiveWaveformFrame? = null

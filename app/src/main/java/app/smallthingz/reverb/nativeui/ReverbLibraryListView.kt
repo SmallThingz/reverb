@@ -12,6 +12,7 @@ import android.os.Looper
 import android.provider.Settings
 import android.view.View
 import android.view.ViewGroup
+import smallthingz.ui.reverb.ReverbLibraryLayout
 import android.widget.FrameLayout
 import kotlinx.coroutines.CoroutineScope
 import androidx.core.content.ContextCompat
@@ -27,7 +28,7 @@ import app.smallthingz.reverb.formatRecordingStartTimestamp
 import app.smallthingz.reverb.formatSavedRecordingDuration
 import app.smallthingz.reverb.formatShortFileSize
 import app.smallthingz.reverb.libraryListItemKey
-import kotlin.math.roundToInt
+import smallthingz.ui.util.closePreservingPrimaryFailure
 
 /** Existing FilesScreen state is sampled by the owner; this View does not own or mutate it. */
 internal data class LibraryNativeListState(
@@ -261,15 +262,16 @@ internal class ReverbLibraryListView(
 
     /** Mirrors removal of the source LazyColumn branch; a temporary inactive screen does not call this. */
     fun clearListComposition() {
-        forEachRecordingHolder { it.retire() }
-        forEachPendingHolder { it.presentation.close() }
-        rowAdapter.clear()
+        var failure: Throwable? = null
+        forEachRecordingHolder { failure = closePreservingPrimaryFailure(failure, it::retire) }
+        forEachPendingHolder { failure = closePreservingPrimaryFailure(failure, it.presentation::close) }
+        failure = closePreservingPrimaryFailure(failure, rowAdapter::clear)
         rowUpdates.clear()
         blockedRecordingIds = emptySet()
         // Old detached holders can survive until the next RV layout. A new source branch must save
         // its fresh zero state instead of reading those stale positions during that interval.
         pendingPosition = NativePendingListPosition(NativeListSavedPosition(0, 0))
-        layout.scrollToPositionWithOffset(0, 0)
+        closePreservingPrimaryFailure(failure) { layout.scrollToPositionWithOffset(0, 0) }?.let { throw it }
     }
 
     fun dispose() {
@@ -277,10 +279,10 @@ internal class ReverbLibraryListView(
         removeCallbacks(publishRowNodes)
         rowNodesPosted = false
         rowNodesDirty = false
-        clearListComposition()
+        val failure = closePreservingPrimaryFailure(null, ::clearListComposition)
         list.sourceOnUserScroll = null
         onPendingRecordingRevealCancelled = null
-        list.adapter = null
+        closePreservingPrimaryFailure(failure) { list.adapter = null }?.let { throw it }
     }
 
     override fun onAttachedToWindow() {
@@ -305,8 +307,7 @@ internal class ReverbLibraryListView(
     private fun admit(id: String) = rowAdapter.containsRecording(id) && id !in blockedRecordingIds
     private fun updateInsets() {
         // Source modifier.padding(horizontal=16.dp) shrinks the viewport; it is not scroll content padding.
-        val inset = (16f * environment.textDensity.density).roundToInt()
-        setPadding(inset, 0, inset, 0)
+        ReverbLibraryLayout.applyListInsets(this, environment.textDensity.density)
     }
     private inline fun forEachRecordingHolder(block: (RecordingHolder) -> Unit) {
         for (index in 0 until list.childCount) {
@@ -462,7 +463,7 @@ internal class ReverbLibraryListView(
             val entry = entries[position]
             if (entry.footer) {
                 holder.itemView.layoutParams = RecyclerView.LayoutParams(LayoutParams.MATCH_PARENT,
-                    (84f * environment.textDensity.density).roundToInt())
+                    ReverbLibraryLayout.pendingRecoveryHeightPx(environment.textDensity.density))
             } else if (entry.retryFailedSaves) {
                 (holder.itemView as ReverbLibraryTextAction).bind(environment, context.getString(R.string.library_retry)) {
                     if (rowUpdates.current?.screenActive == true) onRetryFailedSaves()
@@ -561,16 +562,16 @@ internal class ReverbLibraryListView(
             row.onExpansionExit = null
             val old = expansion
             expansion = null
-            row.setExpansionView(null)
-            old?.closePresentation()
+            val failure = closePreservingPrimaryFailure(null) { row.setExpansionView(null) }
+            closePreservingPrimaryFailure(failure) { old?.closePresentation() }?.let { throw it }
         }
 
         fun retire() {
-            releaseExpansion()
             binding = null
             boundRevision = -1L
             boundFormattingRevision = -1L
-            row.unbind()
+            val failure = closePreservingPrimaryFailure(null, ::releaseExpansion)
+            closePreservingPrimaryFailure(failure, row::unbind)?.let { throw it }
         }
     }
 }

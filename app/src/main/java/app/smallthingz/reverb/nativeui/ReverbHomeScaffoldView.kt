@@ -1,57 +1,42 @@
 package app.smallthingz.reverb.nativeui
 
 import android.content.Context
-import android.os.Build
 import android.view.View
-import android.view.ViewGroup
+import smallthingz.ui.reverb.ReverbScaffold
 import app.smallthingz.reverb.NativeSourceFocusChildOrder
 
 /** The released Home Scaffold itself; its direct body slot is Capture or the permission branch. */
-internal open class ReverbHomeScaffoldView(
+internal open class ReverbHomeScaffoldView private constructor(
     context: Context,
     initialEnvironment: ReverbViewEnvironment,
     initialNavigation: ReverbAppTopBarActions,
     initialHasIncidents: Boolean,
     initialInsets: ReverbHomeInsets,
-    nativeInputRoot: View,
-) : ViewGroup(context), NativeSourceFocusChildOrder {
+    private val header: ReverbAppTopBarView,
+) : ReverbScaffold(context, header, initialEnvironment.palette, initialInsets), NativeSourceFocusChildOrder {
+    constructor(context: Context, initialEnvironment: ReverbViewEnvironment, initialNavigation: ReverbAppTopBarActions,
+                initialHasIncidents: Boolean, initialInsets: ReverbHomeInsets, nativeInputRoot: View) :
+        this(context, initialEnvironment, initialNavigation, initialHasIncidents, initialInsets,
+            ReverbAppTopBarView(context, initialEnvironment, nativeInputRoot))
+
     private var environment = initialEnvironment
     private var insets = initialInsets
     private var navigation = initialNavigation
     private var hasIncidents = initialHasIncidents
-    private val backdrop = initialEnvironment.appearance.backdrops.attachPage(this, initialEnvironment.palette)
-    private val header = ReverbAppTopBarView(context, environment, nativeInputRoot)
     val topBar: ReverbAppTopBarView get() = header
-    private var body: View? = null
 
     init {
-        clipChildren = false
-        clipToPadding = false
-        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
-        if (Build.VERSION.SDK_INT >= 29) isForceDarkAllowed = false
-        addView(header)
         header.setActionInsets(insets.contentLeft, insets.contentRight)
-        header.bind(environment, initialHasIncidents, initialNavigation,
-            statusInsetPx = insets.statusTop)
+        header.bind(environment, initialHasIncidents, initialNavigation, statusInsetPx = insets.statusTop)
     }
 
-    /** No wrapper is added; the body remains the same direct child at index 1. */
-    fun setBody(value: View?) {
-        if (body === value) return
-        body?.let(::removeView)
-        body = value
-        if (value != null) addView(value)
-    }
-
-    // Material3 Scaffold places its body before the top bar for one-dimensional focus search.
-    override fun sourceFocusChildAt(index: Int): View =
-        getChildAt(if (body != null && childCount > 1 && index < 2) 1 - index else index)
+    override fun sourceFocusChildAt(index: Int): View = scaffoldFocusChildAt(index)
 
     fun bindShell(navigation: ReverbAppTopBarActions, hasIncidents: Boolean, nextInsets: ReverbHomeInsets) {
         if (insets != nextInsets) {
             insets = nextInsets
             header.setActionInsets(insets.contentLeft, insets.contentRight)
-            requestLayout()
+            setScaffoldInsets(nextInsets)
         }
         this.navigation = navigation
         this.hasIncidents = hasIncidents
@@ -60,28 +45,8 @@ internal open class ReverbHomeScaffoldView(
 
     open fun setEnvironment(value: ReverbViewEnvironment) {
         environment = value
-        value.appearance.backdrops.bindPage(backdrop, value.palette)
+        bindScaffoldPalette(value.palette)
         header.bind(value, hasIncidents, navigation, statusInsetPx = insets.statusTop)
         requestLayout()
     }
-
-    override fun onMeasure(w: Int, h: Int) {
-        val width = MeasureSpec.getSize(w)
-        val height = MeasureSpec.getSize(h)
-        setMeasuredDimension(width, height)
-        header.measure(exact(width), MeasureSpec.makeMeasureSpec(height, MeasureSpec.AT_MOST))
-        val contentWidth = (width - insets.contentLeft - insets.contentRight).coerceAtLeast(0)
-        val contentHeight = (height - header.measuredHeight - insets.contentBottom).coerceAtLeast(0)
-        body?.measure(exact(contentWidth), exact(contentHeight))
-    }
-
-    override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
-        header.layout(0, 0, width, header.measuredHeight)
-        body?.let {
-            it.layout(insets.contentLeft, header.measuredHeight,
-                insets.contentLeft + it.measuredWidth, header.measuredHeight + it.measuredHeight)
-        }
-    }
-
-    private fun exact(size: Int) = MeasureSpec.makeMeasureSpec(size, MeasureSpec.EXACTLY)
 }

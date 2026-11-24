@@ -1,6 +1,7 @@
 package app.smallthingz.reverb
 
 import android.os.SystemClock
+import smallthingz.ui.common.UiInputGesture
 import smallthingz.ui.runtime.getValue
 import smallthingz.ui.runtime.mutableFloatStateOf
 import smallthingz.ui.runtime.mutableIntStateOf
@@ -10,14 +11,9 @@ import smallthingz.ui.geometry.Rect
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
-import kotlin.math.abs
-import kotlin.math.cosh
-import kotlin.math.pow
 import kotlin.math.roundToLong
-import kotlin.math.sign
-import kotlin.math.tanh
 
-internal enum class RangeEditTarget { START, END }
+internal typealias RangeEditTarget = smallthingz.ui.reverb.RangeEditTarget
 
 internal data class RangeDurationWheelInteraction(
     val target: RangeEditTarget? = null,
@@ -44,24 +40,24 @@ internal class RangeInputGesture(
     private val durationInteraction: () -> RangeDurationWheelInteraction,
     // Local cleanup always runs; editor/audio cleanup belongs only to the still-current owner.
     private val onCancel: (stillCurrent: Boolean) -> Unit,
-) {
+) : UiInputGesture {
     private val durationGeneration = durationInteraction().generation
     private var terminal = false
 
-    fun perform(action: () -> Unit): Boolean {
+    override fun perform(action: () -> Unit): Boolean {
         if (!admit()) return false
         action()
         return true
     }
 
-    fun finish(action: () -> Unit): Boolean {
+    override fun finish(action: () -> Unit): Boolean {
         if (!admit()) return false
         terminal = true
         action()
         return true
     }
 
-    fun cancel() {
+    override fun cancel() {
         if (terminal) return
         terminal = true
         val durationOwner = durationInteraction()
@@ -170,75 +166,27 @@ internal fun rememberedRangeExportFromSavedRange(
 internal data class RangeEditUpdate(
     val values: RangeEditValues,
 )
-internal const val RANGE_BLOB_MORPH_HANDOFF_PROGRESS = 0.07f
+internal const val RANGE_BLOB_MORPH_HANDOFF_PROGRESS = smallthingz.ui.reverb.RANGE_BLOB_MORPH_HANDOFF_PROGRESS
+internal typealias RangeMorphSourceGeometry = smallthingz.ui.reverb.RangeMorphSourceGeometry
 
-// These are the exact base-radius terms used by AudioBlobView's shader/fallback renderer:
-// baseRadius = 0.095 + life * (0.235 + activity * 0.018).
-private const val AUDIO_BLOB_BASE_RADIUS_FRACTION = 0.095f
-private const val AUDIO_BLOB_LIFE_RADIUS_FRACTION = 0.235f
-private const val AUDIO_BLOB_ACTIVITY_RADIUS_FRACTION = 0.018f
-private const val AUDIO_BLOB_COLLAPSED_LIFE = 0.38f
-private const val AUDIO_BLOB_DISABLED_LIFE = 0.36f
-
-internal data class RangeMorphSourceGeometry(
-    val rootLeftInRootPx: Float,
-    val rootTopInRootPx: Float,
-    val centerXInRootPx: Float,
-    val centerYInRootPx: Float,
-    val bodyDiameterPx: Float,
-) {
-    val centerXInLocalPx: Float get() = centerXInRootPx - rootLeftInRootPx
-    val centerYInLocalPx: Float get() = centerYInRootPx - rootTopInRootPx
-}
-
-internal fun rangeBlobBaseRadiusFraction(
-    active: Boolean,
-    enabled: Boolean,
-    activity: Float,
-): Float {
-    val life = when {
-        !enabled -> AUDIO_BLOB_DISABLED_LIFE
-        active -> 1f
-        else -> AUDIO_BLOB_COLLAPSED_LIFE
-    }
-    val liveActivity = if (active) activity.coerceIn(0f, 1f) else 0f
-    return AUDIO_BLOB_BASE_RADIUS_FRACTION +
-        life * (AUDIO_BLOB_LIFE_RADIUS_FRACTION + liveActivity * AUDIO_BLOB_ACTIVITY_RADIUS_FRACTION)
-}
+internal fun rangeBlobBaseRadiusFraction(active: Boolean, enabled: Boolean, activity: Float): Float =
+    smallthingz.ui.reverb.rangeBlobBaseRadiusFraction(active, enabled, activity)
 
 internal fun rangeMorphSourceGeometry(
-    rootBoundsInRoot: Rect?,
-    blobBoundsInRoot: Rect?,
-    active: Boolean,
-    enabled: Boolean,
-    activity: Float,
+    rootBoundsInRoot: Rect?, blobBoundsInRoot: Rect?, active: Boolean, enabled: Boolean, activity: Float,
     renderedBaseRadiusFraction: Float? = null,
-): RangeMorphSourceGeometry? {
-    val root = rootBoundsInRoot ?: return null
-    val blob = blobBoundsInRoot ?: return null
-    val viewSize = minOf(blob.width, blob.height)
-    if (viewSize <= 0f || root.width <= 0f || root.height <= 0f) return null
-    val baseRadius = renderedBaseRadiusFraction
-        ?.takeIf { it.isFinite() && it > 0f }
-        ?: rangeBlobBaseRadiusFraction(active, enabled, activity)
-    val bodyDiameter = viewSize * 2f * baseRadius
-    return RangeMorphSourceGeometry(
-        rootLeftInRootPx = root.left,
-        rootTopInRootPx = root.top,
-        centerXInRootPx = blob.center.x,
-        centerYInRootPx = blob.center.y,
-        bodyDiameterPx = bodyDiameter,
-    )
-}
+): RangeMorphSourceGeometry? = smallthingz.ui.reverb.rangeMorphSourceGeometry(
+    rootBoundsInRoot, blobBoundsInRoot, active, enabled, activity, renderedBaseRadiusFraction,
+)
 
 internal fun rangeBlobMorphStartScaleX(blobDiameterPx: Float, timelineWidthPx: Float): Float =
-    (blobDiameterPx / timelineWidthPx.coerceAtLeast(1f)).coerceAtLeast(0f)
+    smallthingz.ui.reverb.rangeBlobMorphStartScaleX(blobDiameterPx, timelineWidthPx)
 
 internal fun rangeBlobMorphStartScaleY(blobDiameterPx: Float, timelineHeightPx: Float): Float =
-    (blobDiameterPx / timelineHeightPx.coerceAtLeast(1f)).coerceAtLeast(0f)
+    smallthingz.ui.reverb.rangeBlobMorphStartScaleY(blobDiameterPx, timelineHeightPx)
 
 internal fun rangeBlobMorphTranslation(progress: Float, sourceCenterPx: Float, targetCenterPx: Float): Float =
-    (sourceCenterPx - targetCenterPx) * (1f - progress.coerceIn(0f, 1f))
+    smallthingz.ui.reverb.rangeBlobMorphTranslation(progress, sourceCenterPx, targetCenterPx)
 
 // At long offsets the 50 ms gap can round to zero. Repair only collapsed results,
 // preserving the intended fixed endpoint where a neighbouring Float is available.
@@ -405,186 +353,39 @@ internal fun resizeRangeSelectionDuration(
     ))
 }
 
-private const val RANGE_FINE_TUNE_HORIZONTAL_SEEK_GAIN = 1f / 0.62f
-private const val RANGE_FINE_TUNE_STATE_UPDATE_NANOS = 33_333_333L
-internal const val RANGE_FINE_TUNE_PUCK_RADIUS_DP = 24f
-internal const val RANGE_FINE_TUNE_PUCK_HIT_RADIUS_DP = 32f
+internal const val RANGE_FINE_TUNE_PUCK_RADIUS_DP = smallthingz.ui.common.RANGE_FINE_TUNE_PUCK_RADIUS_DP
+internal const val RANGE_FINE_TUNE_PUCK_HIT_RADIUS_DP = smallthingz.ui.common.RANGE_FINE_TUNE_PUCK_HIT_RADIUS_DP
 
-internal fun rangeFineTunePuckContains(
-    pointerX: Float,
-    pointerY: Float,
-    puckX: Float,
-    puckY: Float,
-    radius: Float,
-): Boolean {
-    val dx = pointerX - puckX
-    val dy = pointerY - puckY
-    val safeRadius = radius.coerceAtLeast(0f)
-    return dx * dx + dy * dy <= safeRadius * safeRadius
-}
+internal typealias FineSeekInputSession = smallthingz.ui.common.FineSeekInputSession
 
-internal fun rangeFineTuneMovementExceedsSlop(
-    deltaX: Float,
-    deltaY: Float,
-    touchSlop: Float,
-): Boolean {
-    val slop = touchSlop.coerceAtLeast(0f)
-    return deltaX * deltaX + deltaY * deltaY > slop * slop
-}
+internal fun rangeFineTunePuckContains(pointerX: Float, pointerY: Float, puckX: Float, puckY: Float, radius: Float) =
+    smallthingz.ui.common.rangeFineTunePuckContains(pointerX, pointerY, puckX, puckY, radius)
 
-/** The existing clickable occupies a square, independently of the circular drag-start test. */
-internal fun fineSeekPointerTapInsideBounds(
-    pointerX: Float,
-    pointerY: Float,
-    puckX: Float,
-    puckY: Float,
-    halfSize: Float,
-): Boolean = abs(pointerX - puckX) <= halfSize && abs(pointerY - puckY) <= halfSize
+internal fun rangeFineTuneMovementExceedsSlop(deltaX: Float, deltaY: Float, touchSlop: Float) =
+    smallthingz.ui.common.rangeFineTuneMovementExceedsSlop(deltaX, deltaY, touchSlop)
 
-private class FineAdjustCommitAccumulator {
-    var deltaSeconds = 0f
-    var elapsedNanos = 0L
+internal fun fineSeekPointerTapInsideBounds(pointerX: Float, pointerY: Float, puckX: Float, puckY: Float, halfSize: Float) =
+    smallthingz.ui.common.fineSeekPointerTapInsideBounds(pointerX, pointerY, puckX, puckY, halfSize)
 
-    fun reset() {
-        deltaSeconds = 0f
-        elapsedNanos = 0L
-    }
+internal fun rangeFineTuneHorizontalTouchPull(pointerX: Float, width: Float, horizontalTravel: Float) =
+    smallthingz.ui.common.rangeFineTuneHorizontalTouchPull(pointerX, width, horizontalTravel)
 
-    fun add(deltaSeconds: Float, elapsedNanos: Long) {
-        this.deltaSeconds += deltaSeconds
-        this.elapsedNanos += elapsedNanos
-    }
+internal fun rangeFineTuneSeekPull(horizontalVisualPull: Float) = smallthingz.ui.common.rangeFineTuneSeekPull(horizontalVisualPull)
 
-    fun takeDelta(): Float {
-        val delta = deltaSeconds
-        reset()
-        return delta
-    }
-}
+internal fun rangeFineTuneVerticalDragPull(startRawVertical: Float, dragDeltaY: Float, verticalTravel: Float) =
+    smallthingz.ui.common.rangeFineTuneVerticalDragPull(startRawVertical, dragDeltaY, verticalTravel)
 
-/** Pointer, frame and final-delta callbacks share one guard and one private accumulator. */
-internal class FineSeekInputSession(
-    createInputGesture: ((Boolean) -> Unit) -> RangeInputGesture,
-    onCancel: (FineSeekInputSession, Boolean) -> Unit,
-) {
-    private val commits = FineAdjustCommitAccumulator()
-    private var pointerTapAllowed = true
-    private val input = createInputGesture { stillCurrent ->
-        commits.reset()
-        onCancel(this, stillCurrent)
-    }
+internal fun rangeFineTuneConstrainedY(rawVerticalPull: Float, horizontalPull: Float) =
+    smallthingz.ui.common.rangeFineTuneConstrainedY(rawVerticalPull, horizontalPull)
 
-    fun perform(action: () -> Unit): Boolean = input.perform(action)
+internal fun rangeFineTuneTimelineRate(horizontalPull: Float, verticalPull: Float = 0f) =
+    smallthingz.ui.common.rangeFineTuneTimelineRate(horizontalPull, verticalPull)
 
-    fun frame(
-        deltaSeconds: Float,
-        elapsedNanos: Long,
-        onCommit: (Float) -> Unit,
-        onShuttle: (Float) -> Unit,
-    ): Boolean = input.perform {
-        commits.add(deltaSeconds, elapsedNanos)
-        if (commits.elapsedNanos >= RANGE_FINE_TUNE_STATE_UPDATE_NANOS) {
-            val delta = commits.takeDelta()
-            if (delta != 0f) onCommit(delta)
-        }
-        onShuttle(commits.deltaSeconds)
-    }
+internal fun rangeFineTuneDeltaSeconds(horizontalPull: Float, verticalPull: Float, durationSeconds: Float, dtSeconds: Float) =
+    smallthingz.ui.common.rangeFineTuneDeltaSeconds(horizontalPull, verticalPull, durationSeconds, dtSeconds)
 
-    fun finishFineAdjust(onCommit: (Float) -> Unit, onEnd: () -> Unit): Boolean = input.finish {
-        val delta = commits.takeDelta()
-        if (delta != 0f) onCommit(delta)
-        onEnd()
-    }
-
-    fun finish(action: () -> Unit): Boolean = input.finish(action)
-
-    fun observePointerTap(insideBounds: Boolean, consumed: Boolean) {
-        if (!insideBounds || consumed) pointerTapAllowed = false
-    }
-
-    fun finishPointerTap(action: () -> Unit): Boolean = input.finish {
-        if (pointerTapAllowed) action()
-    }
-
-    fun cancel() = input.cancel()
-}
-
-internal fun rangeFineTuneHorizontalTouchPull(
-    pointerX: Float,
-    width: Float,
-    horizontalTravel: Float,
-): Float {
-    val centerX = width * 0.5f
-    return ((pointerX - centerX) / horizontalTravel.coerceAtLeast(1f)).coerceIn(-1f, 1f)
-}
-
-internal fun rangeFineTuneSeekPull(horizontalVisualPull: Float): Float =
-    (horizontalVisualPull * RANGE_FINE_TUNE_HORIZONTAL_SEEK_GAIN).coerceIn(-1f, 1f)
-
-internal fun rangeFineTuneVerticalDragPull(
-    startRawVertical: Float,
-    dragDeltaY: Float,
-    verticalTravel: Float,
-): Float = startRawVertical + dragDeltaY / verticalTravel.coerceAtLeast(1f)
-
-internal fun rangeFineTuneConstrainedY(
-    rawVerticalPull: Float,
-    horizontalPull: Float,
-): Float {
-    val x = abs(horizontalPull.coerceIn(-1f, 1f))
-    val edgeStiffness = cosh(1.65f * x)
-    val localRadius = 0.72f / edgeStiffness.pow(0.28f)
-    val inputScale = localRadius * 1.18f * edgeStiffness.pow(0.72f)
-    return localRadius * tanh(rawVerticalPull / inputScale)
-}
-
-internal fun rangeFineTuneTimelineRate(
-    horizontalPull: Float,
-    verticalPull: Float = 0f,
-): Float {
-    val pull = horizontalPull.coerceIn(-1f, 1f)
-    val magnitude = abs(pull)
-    if (magnitude <= 0.002f) return 0f
-    val normalized = ((magnitude - 0.002f) / 0.998f).coerceIn(0f, 1f)
-    // Fraction of the whole timeline traversed per second. This deliberately
-    // contains no absolute seconds, so gesture feel scales with clip length.
-    val horizontalRate =
-        0.00002f +
-            0.00040f * normalized +
-            0.0040f * normalized.pow(3) +
-            0.055f * normalized.pow(7)
-    val y = verticalPull.coerceIn(-1f, 1f)
-    val speedScale = if (y <= 0f) {
-        1f + 5f * (-y).pow(1.45f)
-    } else {
-        0.018f + 0.982f * (1f - y).pow(3.1f)
-    }
-    return sign(pull) * horizontalRate * speedScale
-}
-
-internal fun rangeFineTuneDeltaSeconds(
-    horizontalPull: Float,
-    verticalPull: Float,
-    durationSeconds: Float,
-    dtSeconds: Float,
-): Float = rangeFineTuneTimelineRate(horizontalPull, verticalPull) *
-    durationSeconds.coerceAtLeast(0f) *
-    dtSeconds.coerceAtLeast(0f)
-
-internal fun rangeFineTuneShuttleRate(
-    horizontalPull: Float,
-    verticalPull: Float,
-    durationSeconds: Float,
-): Float {
-    val duration = durationSeconds.takeIf { it.isFinite() }?.coerceAtLeast(0f) ?: 0f
-    if (duration <= 0f) return 0f
-    // Transport follows actual source seconds traversed per real second, not control percentage.
-    // Audible pitch is compressed separately by the shuttle renderer.
-    return rangeFineTuneTimelineRate(
-        horizontalPull = rangeFineTuneSeekPull(horizontalPull),
-        verticalPull = verticalPull,
-    ) * duration
-}
+internal fun rangeFineTuneShuttleRate(horizontalPull: Float, verticalPull: Float, durationSeconds: Float) =
+    smallthingz.ui.common.rangeFineTuneShuttleRate(horizontalPull, verticalPull, durationSeconds)
 
 internal fun editTargetValue(values: RangeEditValues, target: RangeEditTarget): Float = when (target) {
     RangeEditTarget.START -> values.startSeconds
@@ -771,7 +572,7 @@ internal class RangeExportEditorState(
     fun editEndpointFromAction(
         target: RangeEditTarget,
         requestedSeconds: Double?,
-        gesture: RangeInputGesture,
+        gesture: UiInputGesture,
     ): Boolean = runRangeEndpointAction(
         values = currentEditValues(),
         durationSeconds = durationSeconds,

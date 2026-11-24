@@ -1,145 +1,15 @@
 package app.smallthingz.reverb
 
-import smallthingz.ui.input.phase.NativeAndroidInteropNode
-import smallthingz.ui.input.phase.NativeClickPhaseHost
-import smallthingz.ui.input.phase.NativeClickPhaseNode
-import smallthingz.ui.input.phase.NativeDragPointerEvent
-import smallthingz.ui.input.phase.NativePointerPass
-import smallthingz.ui.input.phase.NativeViewPhasePointerNode
-import smallthingz.ui.input.phase.NativeViewPointerHitLayout
-import smallthingz.ui.input.phase.NativeWindowPointerCoordinates
-import android.view.View
-import android.view.ViewGroup
-import smallthingz.ui.geometry.Offset
-import smallthingz.ui.geometry.Size
-import smallthingz.ui.input.phase.NativePointerLayerShape
-import smallthingz.ui.components.NativeGroupLayout
 import app.smallthingz.reverb.nativeui.ReverbRangeExportContent
-import java.util.IdentityHashMap
+import smallthingz.ui.input.phase.NativeWindowPointerCoordinates
 
-/**
- * Range's source pointer modifiers in Main's ONE window dispatch. The waveform transform affects
- * drawing only: scrub coordinates stay on the untransformed waveformInput container. Endpoints
- * retain their source44dp layout/48dp minimum finger target; endpoint motion is projected into
- * the stationary waveform container through the same event's actual window geometry.
- */
-internal class NativeRangePointerBinding(
-    private val content: ReverbRangeExportContent,
-    private val coordinates: NativeWindowPointerCoordinates,
-    private val density: () -> Float,
-    private val touchSlop: () -> Float,
-) : AutoCloseable {
-    private val layouts = IdentityHashMap<View, Layout>()
-    private var closed = false
-    private val timeline = NativeRangeTimelineInput(content.state, { content.interactionEnabled },
-        content.timeline::timelineWidthPixels, content.timeline::secondsForWaveformX,
-        { change -> coordinates.coordinates(content.timeline.waveformInput)
-            .local(coordinates.rootToScreen(change.originalPosition)).x }, touchSlop)
-    private val waveformNode = GestureNode(content.timeline.waveformInput, timeline.waveform, false)
-    private val startNode = GestureNode(content.timeline.endpointStart, timeline.start, true)
-    private val endNode = GestureNode(content.timeline.endpointEnd, timeline.end, true)
+internal typealias NativeRangePointerBinding = smallthingz.ui.reverb.NativeRangePointerBinding
 
-    val layout: NativeViewPointerHitLayout get() = layoutFor(content)
-
-    init {
-        content.onLeafStructureChanged = ::retireRemovedLeaves
-        content.onGeometryChanged = ::refresh
-        content.onInputBindingChanged = ::refresh
-    }
-
-    /** Called at the rendered binding/layout boundary, like source pointerInput key replacement. */
-    fun refresh() {
-        if (closed) return
-        timeline.refreshKeys()
-        retireRemovedLeaves()
-    }
-    private fun retireRemovedLeaves() {
-        fun belongs(view: View): Boolean {
-            var next: View? = view
-            while (next != null) {
-                if (next === content) return true
-                next = next.parent as? View
-            }
-            return false
-        }
-        layouts.keys.filterNot(::belongs).forEach { layouts.remove(it)?.close() }
-    }
-    private fun layoutFor(view: View): Layout = layouts.getOrPut(view) { Layout(view) }
-
-    private inner class GestureNode(
-        override val view: View,
-        private val gesture: NativeRangeTimelineInput.Gesture,
-        private val endpoint: Boolean,
-    ) : NativeViewPhasePointerNode {
-        override val attached get() = !closed && view.isAttachedToWindow && (!endpoint || content.interactionEnabled)
-        override fun dispatch(event: NativeDragPointerEvent, pass: NativePointerPass) = gesture.dispatch(event, pass)
-        override fun cancel() = gesture.cancel()
-    }
-
-    private fun children(view: View): List<NativeViewPointerHitLayout> {
-        if (view !is ViewGroup || view === content.durationWheel) return emptyList()
-        val sourceOrder = content.timeline.pointerChildrenInHitOrder(view)
-        if (sourceOrder != null) return sourceOrder.map(::layoutFor)
-        return (view.childCount - 1 downTo 0).map { view.getChildAt(it) }
-            .filter { it.visibility == View.VISIBLE }.map(::layoutFor)
-    }
-
-    private inner class Layout(private val view: View) : NativeViewPointerHitLayout, AutoCloseable {
-        private val click = (view as? NativeClickPhaseHost)?.let {
-            NativeClickPhaseNode(view, it.nativeClickEndpoint) { false }
-        }
-        private val wheel = if (view === content.durationWheel)
-            NativeAndroidInteropNode(view, content.nativeInteropRequests) else null
-        private val fixedNodes: List<NativeViewPhasePointerNode> = run {
-            val surfaceShield = if (view is NativeGroupLayout) object : NativeViewPhasePointerNode {
-                override val view get() = this@Layout.view
-                override fun dispatch(event: NativeDragPointerEvent, pass: NativePointerPass) = Unit
-                override fun cancel() = Unit
-            } else null
-            when (view) {
-                content.timeline.waveformInput -> listOf(waveformNode)
-                content.timeline.endpointStart -> listOf(startNode)
-                content.timeline.endpointEnd -> listOf(endNode)
-                content.fine -> listOf(content.fine.fineSeekNode)
-                content.fine.puckClickView -> listOf(content.fine.puckClickNode)
-                else -> wheel?.let(::listOf) ?: click?.let(::listOf) ?: surfaceShield?.let(::listOf) ?: emptyList()
-            }
-        }
-        override val placed get() = !closed && view.isAttachedToWindow && view.isLaidOut &&
-            view.visibility == View.VISIBLE
-        override val size get() = Size(view.width.toFloat(), view.height.toFloat())
-        override val minimumTouchTarget get() = Size(48f * density(), 48f * density())
-        override val childrenInHitOrder get() = children(view)
-        override fun screenToLocal(screen: Offset) = coordinates.coordinates(view).local(screen)
-        override fun withinLayerBounds(local: Offset): Boolean = when (view) {
-            is NativeGroupLayout -> view.containsVisualPoint(local.x, local.y)
-            is NativePointerLayerShape -> view.containsPointerLayer(local.x, local.y)
-            else -> true
-        }
-        override val nodes: List<NativeViewPhasePointerNode> get() = when (view) {
-            content.timeline.endpointStart, content.timeline.endpointEnd ->
-                if (content.interactionEnabled) fixedNodes else emptyList()
-            content.fine -> if (content.fine.fineSeekInputEnabled) fixedNodes else emptyList()
-            // Waveform and disabled puck clickable remain present; only the detectors above gate membership.
-            else -> fixedNodes
-        }
-        override fun close() { try { click?.cancel() } finally { wheel?.close() } }
-    }
-
-    /** Main cancels its retained pointer paths before retiring this binding. */
-    override fun close() {
-        if (closed) return
-        closed = true
-        content.onLeafStructureChanged = {}; content.onGeometryChanged = {}; content.onInputBindingChanged = {}
-        var failure: Throwable? = null
-        fun release(block: () -> Unit) {
-            try { block() } catch (error: Throwable) {
-                if (failure == null) failure = error else if (failure !== error) failure!!.addSuppressed(error)
-            }
-        }
-        release(timeline::close)
-        layouts.values.forEach { release(it::close) }
-        layouts.clear()
-        failure?.let { throw it }
-    }
-}
+internal fun NativeRangePointerBinding(
+    content: ReverbRangeExportContent,
+    coordinates: NativeWindowPointerCoordinates,
+    density: () -> Float,
+    touchSlop: () -> Float,
+): NativeRangePointerBinding = NativeRangePointerBinding(
+    content, content.state.rangeTimelineActions(), coordinates, density, touchSlop,
+)

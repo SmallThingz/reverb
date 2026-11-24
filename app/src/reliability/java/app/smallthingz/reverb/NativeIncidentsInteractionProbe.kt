@@ -11,15 +11,24 @@ import android.os.Process
 import android.os.SystemClock
 import android.view.Choreographer
 import android.view.View
+import android.view.ViewGroup
 import android.view.WindowInsets
 import android.view.inspector.WindowInspector
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
+import androidx.core.view.ViewCompat
 import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getAllSemanticsNodes
 import androidx.compose.ui.semantics.getOrNull
+import smallthingz.ui.reverb.ReverbIncidentActions
+import smallthingz.ui.components.NativeColorScheme
+import smallthingz.ui.reverb.ReverbDesign
+import smallthingz.ui.reverb.ReverbGlyphView
+import smallthingz.ui.reverb.ReverbIncidentCardView
+import smallthingz.ui.reverb.ReverbIncidentsContentView
+import smallthingz.ui.reverb.reverbIncidentSafeInsets
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -301,23 +310,23 @@ internal fun verifyNativeIncidentsObservation(instrumentation: Instrumentation, 
         fun resubmit(stage: String, expected: Map<String, Long>) {
             nativeParityOnMain(instrumentation) {
                 // Exercise the actual View/adapter same-state submission, not a reimplemented ID map.
-                onboardingViewDescendants(content.interactiveContent(false))
-                    .filterIsInstance<app.smallthingz.reverb.nativeui.ReverbIncidentsContentView>().single()
-                    .bind(content.interactiveState(false))
+                val view = onboardingViewDescendants(content.interactiveContent(false))
+                    .filterIsInstance<ReverbIncidentsContentView>().single()
+                view.bind(content.interactiveState(false).nativeHistory)
             }
             awaitNativeParityDraw(instrumentation, activity.fixtureRoot)
             check(snapshot(stage) == expected)
         }
         val initial = snapshot("initial")
         nativeParityOnMain(instrumentation) {
-            verifyIncidentRowFirstPaint(list(), content.interactiveState(false).history.rows)
+            verifyIncidentRowFirstPaint(list(), content.interactiveState(false).history.rows, content.nativeFixturePalette())
         }
         result.put("rebound_occurrence_paints_own_state_before_draw", true)
         resubmit("same-initial-submission", initial)
         reveal(labels[0], "ongoing-initial")
         val incidentsView = nativeParityOnMain(instrumentation) {
             onboardingViewDescendants(content.interactiveContent(false))
-                .filterIsInstance<app.smallthingz.reverb.nativeui.ReverbIncidentsContentView>().single()
+                .filterIsInstance<ReverbIncidentsContentView>().single()
         }
         fun ongoingText() = onboardingViewDescendants(incidentsView)
             .filterIsInstance<smallthingz.ui.text.view.ParagraphView>()
@@ -369,6 +378,9 @@ internal fun verifyNativeIncidentsObservation(instrumentation: Instrumentation, 
         val menu = awaitIncidentMenu(instrumentation, activity, mainWindow, JSONObject().also { result.put("menu_readiness", it) })
         captureIncidentMenu(instrumentation, activity, menu.getInt("window_id"), directory,
             "observation-menu", pictures, result)
+        result.put("menu_toolbar_safe_area", nativeParityOnMain(instrumentation) {
+            verifyIncidentToolbarSafeArea(activity, incidentsView)
+        })
         clickIncidentMenuDelete(instrumentation, activity, menu.getInt("window_id"))
         awaitIncidentCondition(instrumentation, activity, "delete exact observation",
             returningWindows = setOf(mainWindow, menu.getInt("window_id"))) {
@@ -384,7 +396,48 @@ internal fun verifyNativeIncidentsObservation(instrumentation: Instrumentation, 
         }
         fun tapToolbar(label: Int) = incidentAction(instrumentation, activity, content, false,
             activity.getString(label), longClick = false)
+        requireNativeParityHost(instrumentation, activity)
+        val sameTurnSelection = observeIncidentSelectionUpdates(instrumentation, { checkNotNull(list().adapter) }) {
+            nativeParityOnMain(instrumentation) {
+                val view = content.interactiveContent(false)
+                val commands = content.interactiveCommands(false)
+                check(performNativeIncidentAction(view, activity.getString(R.string.multi_select)))
+                check(!performNativeIncidentAction(view, labels[1], longClick = true))
+                check(performNativeIncidentAction(view, labels[1]))
+                check(content.interactiveCommands(false) == commands) { "Entering selection acknowledged an occurrence" }
+            }
+        }
+        check(sameTurnSelection == listOf(1 to 2, 2 to 1)) {
+            "Select mode and the immediate individual check must update the exact rows: $sameTurnSelection"
+        }
+        awaitIncidentCondition(instrumentation, activity, "selection holder has rebound before reverse transition") {
+            val card = list().findViewHolderForAdapterPosition(2)?.itemView ?: return@awaitIncidentCondition false
+            onboardingViewDescendants(card).any { view ->
+                val node = view.createAccessibilityNodeInfo() ?: return@any false
+                try { node.isSelected }
+                finally { @Suppress("DEPRECATION") node.recycle() }
+            }
+        }
+        nativeParityOnMain(instrumentation) {
+            val view = content.interactiveContent(false)
+            val commands = content.interactiveCommands(false)
+            check(performNativeIncidentAction(view, activity.getString(R.string.clear_selection)))
+            check(performNativeIncidentAction(view, labels[1]))
+            check(content.interactiveCommands(false) == commands + "ack:${keys[1]}")
+        }
+        awaitIncidentCondition(instrumentation, activity, "same-turn normal action acknowledges the intended incident") {
+            val state = content.interactiveState(false)
+            state.canMutate && state.history.rows.single { it.key == keys[1] }.incident.acknowledged == false
+        }
+        result.put("same_turn_selection_target_before_rebind", keys[1])
         tapToolbar(R.string.multi_select)
+        val observedSelection = observeIncidentSelectionUpdates(
+            instrumentation, { checkNotNull(list().adapter) },
+        ) {
+            incidentAction(instrumentation, activity, content, false, labels[1], longClick = false)
+        }
+        check(observedSelection == listOf(2 to 1)) { "Single selection updates exactly one occurrence: $observedSelection" }
+        result.put("single_selection_changed_occurrences", observedSelection.single().second)
         tapToolbar(R.string.incidents_select_all)
         tapToolbar(R.string.incidents_deselect_all)
         tapToolbar(R.string.incidents_select_all)
@@ -414,7 +467,8 @@ internal fun verifyNativeIncidentsObservation(instrumentation: Instrumentation, 
             returningWindows = setOf(beforeClear, confirmWindow)) {
             content.interactiveState(false).history.rows.singleOrNull()?.incident == arrival
         }
-        val expected = keys.map { "ack:$it" } + keys.map { "delete:$it" }
+        val expected = keys.map { "ack:$it" } + listOf("delete:${keys[0]}", "ack:${keys[1]}") +
+            keys.drop(1).map { "delete:$it" }
         check(nativeParityOnMain(instrumentation) { content.interactiveCommands(false) } == expected)
         result.put("commands", JSONArray(expected)).put("captures", JSONArray(pictures.keys.toList()))
         completed = true
@@ -444,27 +498,62 @@ internal fun verifyNativeIncidentsObservation(instrumentation: Instrumentation, 
     report.appendLine("PASS native_incidents_observation: native-only distinct IDs, submissions and row actions")
 }
 
+private fun observeIncidentSelectionUpdates(
+    instrumentation: Instrumentation,
+    adapter: () -> androidx.recyclerview.widget.RecyclerView.Adapter<*>,
+    select: () -> Unit,
+): List<Pair<Int, Int>> {
+    val changes = mutableListOf<Pair<Int, Int>>()
+    val observer = object : androidx.recyclerview.widget.RecyclerView.AdapterDataObserver() {
+        override fun onChanged() = error("Selection changed the whole incident list")
+        override fun onItemRangeInserted(positionStart: Int, itemCount: Int) = error("Selection inserted rows")
+        override fun onItemRangeRemoved(positionStart: Int, itemCount: Int) = error("Selection removed rows")
+        override fun onItemRangeMoved(fromPosition: Int, toPosition: Int, itemCount: Int) = error("Selection moved rows")
+        override fun onItemRangeChanged(positionStart: Int, itemCount: Int, payload: Any?) {
+            checkNotNull(payload) { "Selection must use an occurrence update payload" }
+            changes += positionStart to itemCount
+        }
+    }
+    val previous = nativeParityOnMain(instrumentation) { adapter().also { it.registerAdapterDataObserver(observer) } }
+    try { select() }
+    finally { nativeParityOnMain(instrumentation) { previous.unregisterAdapterDataObserver(observer) } }
+    return changes
+}
+
+private fun verifyIncidentToolbarSafeArea(host: NativeParityActivity, incidents: ReverbIncidentsContentView): JSONObject {
+    val safe = reverbIncidentSafeInsets(checkNotNull(ViewCompat.getRootWindowInsets(host.fixtureRoot)))
+    val toolbar = (incidents.getChildAt(0) as ViewGroup).getChildAt(0)
+    val panelOrigin = IntArray(2).also(incidents::getLocationOnScreen)
+    val toolbarOrigin = IntArray(2).also(toolbar::getLocationOnScreen)
+    check(toolbarOrigin[0] >= panelOrigin[0] + safe.left)
+    check(toolbarOrigin[1] >= panelOrigin[1] + safe.top)
+    check(toolbarOrigin[0] + toolbar.width <= panelOrigin[0] + incidents.width - safe.right)
+    return JSONObject().put("required_insets", JSONArray(listOf(safe.left, safe.top, safe.right)))
+        .put("toolbar_origin", JSONArray(toolbarOrigin.toList()))
+}
+
 /** Exercise an attached holder's real bind/unbind path and read its immediate paint state. */
 private fun verifyIncidentRowFirstPaint(
     list: androidx.recyclerview.widget.RecyclerView,
     rows: List<IncidentPresentation>,
+    palette: NativeColorScheme,
 ) {
     val card = checkNotNull(list.findViewHolderForAdapterPosition(1)).itemView
-        as app.smallthingz.reverb.nativeui.ReverbIncidentCardView
+        as ReverbIncidentCardView
     check(card.isAttachedToWindow && card.isShown)
+    val nextCard = checkNotNull(list.findViewHolderForAdapterPosition(2)).itemView
+    check(card.bottom == nextCard.top) { "Occurrences of the same message must share a joined surface" }
     val surface = card.getChildAt(0) as smallthingz.ui.components.NativeGroupLayout
     val views = onboardingViewDescendants(card)
     val labels = views.filterIsInstance<smallthingz.ui.text.view.ParagraphView>()
-    val glyph = views.filterIsInstance<app.smallthingz.reverb.nativeui.OnboardingIconView>().single()
+    val glyph = views.filterIsInstance<ReverbGlyphView>().single()
     val labelColor = labels.first().javaClass.getDeclaredField("textColor").apply { isAccessible = true }
     val glyphColor = glyph.javaClass.getDeclaredField("displayedColor").apply { isAccessible = true }
     val glyphIcon = glyph.javaClass.getDeclaredField("currentIcon").apply { isAccessible = true }
-    val appearance = card.javaClass.getDeclaredField("appearance").apply { isAccessible = true }.get(card)
-        as app.smallthingz.reverb.nativeui.IncidentCardAppearance
-    val palette = appearance.palette
+    val style = ReverbDesign.appearance.listDecorations.alertCard
     val original = rows.first()
     val next = rows[1]
-    val actions = app.smallthingz.reverb.nativeui.IncidentCardActions({}, {}, {}, {}, {})
+    val actions = ReverbIncidentActions({}, {}, {}, {})
     try {
         card.unbind()
         card.bind(original, canMutate = true, selected = true, actions = actions)
@@ -472,11 +561,11 @@ private fun verifyIncidentRowFirstPaint(
         check(glyphColor.getInt(glyph) == palette.onPrimaryContainer)
         card.unbind()
         card.bind(next, canMutate = true, selected = null, actions = actions)
-        check(surface.paintedFillColor == android.graphics.Color.TRANSPARENT)
+        check(surface.paintedFillColor == style.fill(palette, alert = false))
         check(labelColor.getLong(labels.first()) == smallthingz.ui.graphics.Color(palette.ink).value.toLong())
         check(labelColor.getLong(labels[1]) == smallthingz.ui.graphics.Color(palette.muted).value.toLong())
         check(glyphIcon.get(glyph) == app.smallthingz.reverb.nativeui.ReverbIcon.Unchecked)
-        check(glyphColor.getInt(glyph) == appearance.style.statusTint(palette, alert = true))
+        check(glyphColor.getInt(glyph) == style.statusTint(palette, alert = true))
     } finally {
         checkNotNull(list.adapter).notifyItemChanged(1)
     }
@@ -576,23 +665,27 @@ private fun incidentAction(instrumentation: Instrumentation, host: NativeParityA
             check(if (longClick) target.config.getOrNull(SemanticsActions.OnLongClick)!!.action!!.invoke()
                 else target.config.getOrNull(SemanticsActions.OnClick)!!.action!!.invoke())
         } else {
-            val candidates = onboardingViewDescendants(content).filter { view ->
-                val info = view.createAccessibilityNodeInfo() ?: return@filter false
-                try {
-                    info.isVisibleToUser && info.isEnabled &&
-                        (if (longClick) info.isLongClickable else info.isClickable) &&
-                        onboardingViewDescendants(view).any { child ->
-                            val childInfo = child.createAccessibilityNodeInfo() ?: return@any false
-                            try { childInfo.isVisibleToUser &&
-                                (childInfo.text?.toString() == label || childInfo.contentDescription?.toString() == label) }
-                            finally { @Suppress("DEPRECATION") childInfo.recycle() }
-                        }
-                } finally { @Suppress("DEPRECATION") info.recycle() }
-            }
-            check(candidates.single().performAccessibilityAction(
-                if (longClick) AccessibilityNodeInfo.ACTION_LONG_CLICK else AccessibilityNodeInfo.ACTION_CLICK, null))
+            check(performNativeIncidentAction(content, label, longClick))
         }
     }
+}
+
+private fun performNativeIncidentAction(content: View, label: String, longClick: Boolean = false): Boolean {
+    val candidates = onboardingViewDescendants(content).filter { view ->
+        val info = view.createAccessibilityNodeInfo() ?: return@filter false
+        try {
+            info.isVisibleToUser && info.isEnabled &&
+                (if (longClick) info.isLongClickable else info.isClickable) &&
+                onboardingViewDescendants(view).any { child ->
+                    val childInfo = child.createAccessibilityNodeInfo() ?: return@any false
+                    try { childInfo.isVisibleToUser &&
+                        (childInfo.text?.toString() == label || childInfo.contentDescription?.toString() == label) }
+                    finally { @Suppress("DEPRECATION") childInfo.recycle() }
+                }
+        } finally { @Suppress("DEPRECATION") info.recycle() }
+    }
+    return candidates.single().performAccessibilityAction(
+        if (longClick) AccessibilityNodeInfo.ACTION_LONG_CLICK else AccessibilityNodeInfo.ACTION_CLICK, null)
 }
 
 private fun captureIncidentStep(instrumentation: Instrumentation, host: NativeParityActivity,

@@ -247,10 +247,7 @@ internal data class ExportUiConfig(
     val channelCount: Int,
 )
 
-internal data class BufferMetrics(
-    val seconds: Float,
-    val bytes: Long,
-)
+internal typealias BufferMetrics = smallthingz.ui.reverb.home.ReverbHomeBufferMetrics
 
 internal sealed interface CaptureSaveStatus {
     data class Saving(val cancellable: Boolean) : CaptureSaveStatus
@@ -283,10 +280,7 @@ internal fun captureServiceInteractionReady(
     stateHydrated: Boolean,
 ): Boolean = serviceConnected && stateHydrated
 
-internal data class CaptureBufferReadout(
-    val primary: String,
-    val secondary: String?,
-)
+internal typealias CaptureBufferReadout = smallthingz.ui.reverb.home.ReverbHomeReadout
 
 internal data class CaptureResolvedBufferState(
     val oneShotEnabled: Boolean,
@@ -316,15 +310,10 @@ internal fun captureBufferReadout(
     bytes: Long,
     disabledLabel: String,
 ): CaptureBufferReadout {
-    if (disabled) return CaptureBufferReadout(disabledLabel, null)
-    if (retentionMode == null) return CaptureBufferReadout("—", null)
-    val time = formatShortTimer(seconds.coerceAtLeast(0f))
-    val size = formatShortFileSize(bytes.coerceAtLeast(0L))
-    return if (retentionMode == RetentionMode.TIME) {
-        CaptureBufferReadout(time, size)
-    } else {
-        CaptureBufferReadout(size, time)
-    }
+    return smallthingz.ui.reverb.home.reverbHomeReadout(
+        retentionMode, disabled, seconds, bytes, disabledLabel,
+        { it == RetentionMode.TIME }, ::formatShortTimer, ::formatShortFileSize,
+    )
 }
 
 

@@ -34,12 +34,7 @@ internal fun shouldApplyCustomRangeSnapshot(
     pendingBuffer == requestedBuffer &&
     selectedBuffer == requestedBuffer
 
-internal enum class CaptureBufferUiState {
-    READY,
-    RECORDING,
-    FILLED,
-    DISABLED,
-}
+internal typealias CaptureBufferUiState = smallthingz.ui.reverb.home.ReverbHomeCaptureState
 
 internal fun isBufferActivelyRecording(
     bufferSlot: ReverbService.BufferSlot,
@@ -99,54 +94,28 @@ internal fun bufferSwipeProgress(
     source: ReverbService.BufferSlot,
     horizontalDragPx: Float,
     viewportWidthPx: Float,
-): Float {
-    if (viewportWidthPx <= 0f) return 0f
-    val forwardDistance = when (source) {
-        ReverbService.BufferSlot.ONE_SHOT -> -horizontalDragPx
-        ReverbService.BufferSlot.LOOPING -> horizontalDragPx
-    }
-    return (forwardDistance / viewportWidthPx).coerceIn(0f, 1f)
-}
-
-private const val BUFFER_SWIPE_COMMIT_PROGRESS = 0.16f
-private const val BUFFER_FLIP_MIDPOINT_SCALE = 0.94f
+): Float = smallthingz.ui.reverb.home.bufferSwipeProgress(
+    source == ReverbService.BufferSlot.ONE_SHOT, horizontalDragPx, viewportWidthPx,
+)
 
 internal fun shouldCommitBufferSwipe(progress: Float): Boolean =
-    progress.coerceIn(0f, 1f) >= BUFFER_SWIPE_COMMIT_PROGRESS
+    smallthingz.ui.reverb.home.shouldCommitBufferSwipe(progress)
 
 internal fun bufferTransitionDisplayedSlot(
     source: ReverbService.BufferSlot,
     target: ReverbService.BufferSlot,
     progress: Float,
-): ReverbService.BufferSlot = if (progress.coerceIn(0f, 1f) >= 0.5f) target else source
+): ReverbService.BufferSlot = smallthingz.ui.reverb.home.bufferTransitionDisplayedSlot(source, target, progress)
 
 internal fun bufferTransitionFlipDegrees(
     source: ReverbService.BufferSlot,
     target: ReverbService.BufferSlot,
     progress: Float,
-): Float {
-    if (source == target) return 0f
-    val p = progress.coerceIn(0f, 1f)
-    // Opposite navigation directions use opposite rotations. The outgoing face reaches
-    // +/-90 degrees and the incoming face appears from the complementary angle.
-    val direction = when (target) {
-        ReverbService.BufferSlot.LOOPING -> -1f
-        ReverbService.BufferSlot.ONE_SHOT -> 1f
-    }
-    return if (p < 0.5f) {
-        direction * p * 180f
-    } else {
-        // The rendered face switches to the target at the midpoint, so use the
-        // complementary edge-on angle from that exact frame onward.
-        direction * (p - 1f) * 180f
-    }
-}
+): Float = smallthingz.ui.reverb.home.bufferTransitionFlipDegrees(
+    source == target, target == ReverbService.BufferSlot.ONE_SHOT, progress,
+)
 
-internal fun bufferTransitionPivotFractionX(): Float = 0.5f
+internal fun bufferTransitionPivotFractionX(): Float = smallthingz.ui.reverb.home.bufferTransitionPivotFractionX()
 
-internal fun bufferTransitionDepthScale(progress: Float): Float {
-    val p = progress.coerceIn(0f, 1f)
-    val distanceFromMidpoint = kotlin.math.abs(p * 2f - 1f)
-    return BUFFER_FLIP_MIDPOINT_SCALE + (1f - BUFFER_FLIP_MIDPOINT_SCALE) * distanceFromMidpoint
-}
-
+internal fun bufferTransitionDepthScale(progress: Float): Float =
+    smallthingz.ui.reverb.home.bufferTransitionDepthScale(progress)

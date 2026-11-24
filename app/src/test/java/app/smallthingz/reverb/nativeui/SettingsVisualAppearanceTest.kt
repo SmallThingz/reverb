@@ -5,11 +5,14 @@ import android.os.Bundle
 import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
+import app.smallthingz.reverb.R
+import app.smallthingz.reverb.SilenceCurveView
 import app.smallthingz.reverb.SilenceGateConfig
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -17,9 +20,13 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import smallthingz.ui.common.SegmentOption
 import smallthingz.ui.components.NativeArcValueDial
+import smallthingz.ui.components.NativeSegmentedControl
 import smallthingz.ui.components.NativeUiAppearance
+import smallthingz.ui.reverb.settings.ReverbQuickTileEditor
 import smallthingz.ui.runtime.MonotonicFrameClock
+import smallthingz.ui.text.view.ParagraphView
 import kotlin.math.floor
 
 @RunWith(RobolectricTestRunner::class)
@@ -40,7 +47,7 @@ class SettingsVisualAppearanceTest {
         val scope = CoroutineScope(Dispatchers.Unconfined + clock)
         try {
             for ((style, expectedWidth) in listOf(default to 104, alternate to 78)) {
-                val environment = ReverbViewEnvironment(context, false, style).forSettings()
+                val environment = ReverbViewEnvironment.withTestAppearance(context, false, style).forSettings()
                 val initial = SilenceGateConfig(enabled = true)
                 val edits = ArrayList<SilenceGateConfig>()
                 val actions = object : SettingsSilenceActions {
@@ -55,6 +62,11 @@ class SettingsVisualAppearanceTest {
                 try {
                     section.measure(exact(480), unspecified())
                     section.layout(0, 0, 480, section.measuredHeight)
+                    val graph = descendants(section).filterIsInstance<SilenceCurveView>().single()
+                    assertEquals(0, graph.top)
+                    val discardedCaptions = setOf(context.getString(R.string.silence_calibration_heading),
+                        context.getString(R.string.silence_calibration_hint))
+                    assertFalse(descendants(section).filterIsInstance<ParagraphView>().any { it.getText() in discardedCaptions })
                     val dial = descendants(section).filterIsInstance<NativeArcValueDial>().single()
                     assertEquals(expectedWidth, dial.measuredWidth)
                     assertEquals(expectedWidth, dial.width)
@@ -79,6 +91,37 @@ class SettingsVisualAppearanceTest {
             }
         } finally {
             scope.cancel()
+        }
+    }
+
+    @Test fun tileEditorPlacesTheSharedCapsuleAboveTheWheelAndBothActionsAtTheBottom() {
+        val context = RuntimeEnvironment.getApplication()
+        val environment = ReverbViewEnvironment(context, false)
+        val options = listOf(SegmentOption(1, "One-shot"), SegmentOption(2, "Looping"))
+        val wheel = View(context)
+        val editor = object : ReverbQuickTileEditor<Int>(context, environment, options, 2,
+            { null }, { error("Measurement requested a buffer change") }, { error("Unexpected Cancel") },
+            { error("Unexpected Save") }) {
+            init {
+                replaceWheelView(wheel)
+                bindInlineLayout(environment, options, 2, true, null, "Duration warning", null,
+                    "Cancel", true, "Save", true)
+            }
+        }
+        try {
+            editor.measure(exact(360), unspecified())
+            editor.layout(0, 0, editor.measuredWidth, editor.measuredHeight)
+            val capsule = editor.getChildAt(0) as NativeSegmentedControl
+            val actions = descendants(editor).filterIsInstance<SettingsCalibrationActionView>().toList()
+            val cancel = actions.single { it.textView.getText() == "Cancel" }
+            val save = actions.single { it.textView.getText() == "Save" }
+            val inset = environment.appearance.quickTiles.editorInsetDp
+            assertEquals(inset, capsule.top)
+            assertTrue(capsule.bottom < wheel.top)
+            assertTrue(wheel.bottom < minOf(cancel.top, save.top))
+            assertEquals(editor.height - inset, maxOf(cancel.bottom, save.bottom))
+        } finally {
+            editor.close()
         }
     }
 

@@ -35,9 +35,12 @@ internal fun verifyLibraryBoundaryKeyboard(instrumentation: Instrumentation, hos
             nativeParityOnMain(instrumentation) {
                 label = environment.paragraph(host, "QA trim boundary", ReverbTextRole.BODY_MEDIUM,
                     environment.palette.ink)
-                val type = Class.forName("app.smallthingz.reverb.nativeui.PlayerBoundary")
+                val type = Class.forName("smallthingz.ui.reverb.PlayerBoundary")
+                val description = if (target == InlineFineSeekTarget.TRIM_START)
+                    R.string.trim_start_accessibility else R.string.trim_end_accessibility
                 val owner = type.getDeclaredConstructor(ParagraphView::class.java,
-                    InlineFineSeekTarget::class.java).apply { isAccessible = true }.newInstance(label, target)
+                    InlineFineSeekTarget::class.java, Int::class.javaPrimitiveType)
+                    .apply { isAccessible = true }.newInstance(label, target, description)
                 val method = type.getDeclaredMethod("bind", LibraryPlayerUiState::class.java,
                     LibraryPlayerActions::class.java).apply { isAccessible = true }
                 val actions = LibraryPlayerActions({ _, _ -> }, { _, _ -> }, {}, {}, { _, requested ->

@@ -77,9 +77,9 @@ class ReliabilityInstrumentation : Instrumentation() {
             val currentUiBrandGeometry = currentUiSmoke && requestedTest == "brand_geometry"
             if (currentUiSmoke) {
                 check(targetContext.applicationContext.javaClass == android.app.Application::class.java &&
-                    (currentUiBrandGeometry || requestedTest in setOf("current_file_staged_recovery", "native_home_label_height", "native_rename_editor_current", "native_click_ripple_current", "native_retention_input_parity", "native_retention_keyboard", "native_icon_parity", "native_settings_library_selectors", "native_theme_matrix", "native_settings_calibration_current", "current_media_delete_consent",
+                    (currentUiBrandGeometry || requestedTest in nativeOwnerPerformanceSelectors || requestedTest in setOf("current_file_staged_recovery", "native_home_label_height", "native_rename_editor_current", "native_click_ripple_current", "native_retention_input_parity", "native_retention_keyboard", "native_icon_parity", "native_settings_library_selectors", "native_theme_matrix", "native_settings_calibration_current", "current_media_delete_consent",
                         "native_silence_blob_current", "native_silence_diagnostic_current", "native_blob_feel_current", "native_material_progress_current", "native_library_admission", "native_library_expansion_measurement", "native_library_expansion_clipping", "native_segmented_contrast", "native_settings_theme_contrast", "native_restart_permission_ui", "native_settings_ime_bounds",
-                        "native_action_sheet_dismissal_current", "native_incidents_observation", "native_incidents_store",
+                        "native_action_sheet_dismissal_current", "native_about_current", "native_incidents_observation", "native_incidents_store",
                         "native_range_interaction_current", "native_home_hydration_current", "native_library_menu_current",
                         "range_preview_short_end", "range_preview_short_controls", "range_preview_short_retirement", "range_preview_normalization_sampling", "native_ui_consistency_current", "native_settings_hydration_current", "native_settings_folder_pointer"))) {
                     "Current UI smoke accepts only explicit current UI selectors with plain Application"
@@ -97,7 +97,7 @@ class ReliabilityInstrumentation : Instrumentation() {
                 else "MODE current-ui-smoke; isolated current UI only, not released-renderer parity")
             }
             val parityOnly = targetContext.applicationContext.javaClass == android.app.Application::class.java
-            check(!parityOnly || currentUiBrandGeometry || requestedTest in setOf(
+            check(!parityOnly || currentUiBrandGeometry || (currentUiSmoke && requestedTest in nativeOwnerPerformanceSelectors) || requestedTest in setOf(
                 "current_file_staged_recovery",
                 "native_rename_editor_current", "native_click_ripple_current",
                 "native_font_notifications", "native_group_parity", "native_text_parity", "native_icon_parity",
@@ -122,7 +122,7 @@ class ReliabilityInstrumentation : Instrumentation() {
                 "native_transaction_fixture_recovery",
                 "range_preview_short_end", "range_preview_short_controls", "range_preview_short_retirement", "range_preview_normalization_sampling",
                 "native_ui_consistency_current", "native_settings_hydration_current", "native_settings_folder_pointer",
-                "native_action_sheet_dismissal_current", "native_range_interaction_current", "native_home_hydration_current", "native_library_menu_current",
+                "native_action_sheet_dismissal_current", "native_about_current", "native_range_interaction_current", "native_home_hydration_current", "native_library_menu_current",
             )) {
                 "The native-parity APK requires an explicit isolated fixture"
             }
@@ -136,6 +136,9 @@ class ReliabilityInstrumentation : Instrumentation() {
             } else if (requestedTest == "native_incidents_store") {
                 executed++
                 verifyGroupedIncidentDeletion(targetContext, report)
+            } else if (currentUiSmoke && requestedTest in nativeOwnerPerformanceSelectors) {
+                executed++
+                verifyNativeOwnerPerformance(this, report, checkNotNull(requestedTest))
             } else if (requestedTest == "native_range_interaction_current") {
                 executed++
                 verifyNativeRangeInteractionCurrent(this, report)
@@ -447,6 +450,9 @@ class ReliabilityInstrumentation : Instrumentation() {
             } else if (requestedTest == "native_brand_parity") {
                 executed++
                 verifyNativeBrandParity(this, report)
+            } else if (requestedTest == "native_about_current") {
+                executed++
+                verifyNativeAboutCurrent(this, report)
             } else if (requestedTest == "native_about_parity") {
                 executed++
                 verifyNativeAboutParity(this, report, keyboardSessionNonce)

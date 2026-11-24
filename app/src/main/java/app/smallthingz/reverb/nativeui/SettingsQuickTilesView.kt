@@ -16,9 +16,9 @@ import app.smallthingz.reverb.quickSaveTileAddedState
 import app.smallthingz.reverb.quickSaveTileBitmap
 import app.smallthingz.reverb.quickTileRepresentableSeconds
 import app.smallthingz.reverb.quickTileStepSeconds
-import kotlinx.coroutines.CoroutineScope
 import smallthingz.ui.components.NativeInlineContentMorph
-import smallthingz.ui.components.NativeQuickTileInlineLayout
+import smallthingz.ui.common.SegmentOption
+import smallthingz.ui.reverb.settings.ReverbQuickTileEditor
 import smallthingz.ui.components.NativeQuickTileRowView
 import smallthingz.ui.components.NativeQuickTileSectionLayout
 
@@ -80,7 +80,6 @@ internal class SettingsQuickTilesView(
     private val owner: NativeQuickSettingsTilesOwner,
     private var environment: ReverbViewEnvironment,
     private val inputRoot: () -> View?,
-    private val animationScope: CoroutineScope,
     private val editorChanged: () -> Unit,
     private val deleteTargetChanged: (QuickSettingsTileDeleteTarget?) -> Unit,
 ) : NativeQuickTileSectionLayout(context, environment, context.getString(R.string.tiles_ui_title),
@@ -159,8 +158,7 @@ internal class SettingsQuickTilesView(
         val nextOwner = owner.inline
         if (nextOwner != null && inlineOwner !== nextOwner) {
             inlineOwner = nextOwner
-            inline = QuickTileInlineView(context, nextOwner, owner.lifecycle, environment, inputRoot,
-                animationScope)
+            inline = QuickTileInlineView(context, nextOwner, owner.lifecycle, environment, inputRoot)
         }
         inline?.bind(environment, nextOwner != null)
         creation.editor(if (nextOwner != null) inline else null, canShowCreation)
@@ -223,31 +221,24 @@ internal class QuickTileInlineView(
     context: Context,
     private val owner: NativeQuickTileInlineOwner,
     private val lifecycle: androidx.lifecycle.Lifecycle,
-    private var environment: ReverbViewEnvironment,
+    environment: ReverbViewEnvironment,
     inputRoot: () -> View?,
-    animationScope: CoroutineScope,
-) : NativeQuickTileInlineLayout(context), AutoCloseable {
-    private val close = ReverbStandardIconButtonView(context, environment, inputRoot)
-    private val selector = ReverbBufferSelectorView(context, environment, inputRoot, animationScope)
-    private val save = SettingsCalibrationActionView(context, environment, inputRoot) { owner.save() }
+) : ReverbQuickTileEditor<BufferSlot>(context, environment, tileBufferOptions(context), owner.target.buffer,
+    inputRoot, owner::selectBuffer, owner::dismiss, owner::save) {
+    private var optionLocales = resources.configuration.locales
+    private var options = tileBufferOptions(context)
     private var wheel: NativeNotificationDurationWheel? = null
     private var maximum = 1
     private var exiting = false
     private var closed = false
-    init {
-        installInline(environment, close, selector, save)
-    }
     fun bind(next: ReverbViewEnvironment, interactive: Boolean = true) {
         if (closed) return
         val beganExit = !interactive && !exiting
         exiting = !interactive
-        environment = next
-        val iconColor = next.appearance.quickTiles.actionInk(next.palette.onSurface, interactive && !owner.target.busy)
-        close.bind(next, ReverbIcon.Close, context.getString(R.string.cancel), interactive && !owner.target.busy,
-            iconColor, iconColor, owner::dismiss)
-        selector.setEnvironment(next)
-        selector.bind(owner.target.buffer, null, false, owner.capacities?.oneShotSeconds != null,
-            false, owner.capacities?.loopingSeconds != null, interactive && owner.enabled, owner::selectBuffer)
+        if (optionLocales != resources.configuration.locales) {
+            optionLocales = resources.configuration.locales
+            options = tileBufferOptions(context)
+        }
         val capacity = owner.capacity
         val showWheel = owner.durationSubmissionAllowed && capacity != null && capacity.maximumSeconds >= 1
         if (showWheel) {
@@ -271,18 +262,25 @@ internal class QuickTileInlineView(
         }
         val warningText = if (showWheel && owner.target.seconds > maximum)
             context.getString(R.string.tiles_ui_reduce_duration, formatDurationInput(owner.target.seconds)) else null
-        bindInlineLayout(next, loadingText, warningText, owner.message,
+        bindInlineLayout(next, options, owner.target.buffer, interactive && owner.enabled,
+            loadingText, warningText, owner.message, context.getString(R.string.cancel),
+            interactive && !owner.target.busy,
             context.getString(if (owner.shortened == null) R.string.tiles_ui_save else R.string.tiles_ui_save_anyway),
             interactive && owner.saveEnabled)
         if (beganExit) wheel?.cancelInteraction()
-        requestLayout()
     }
     override fun close() {
         if (closed) return
         closed = true
-        close.cancelInput()
-        save.close()
-        wheel?.close()
-        wheel = null
+        try { super.close() } finally {
+            val retired = wheel
+            wheel = null
+            try { retired?.close() } finally { replaceWheelView(null) }
+        }
     }
 }
+
+private fun tileBufferOptions(context: Context) = listOf(
+    SegmentOption(BufferSlot.ONE_SHOT, context.getString(R.string.buffer_one_shot)),
+    SegmentOption(BufferSlot.LOOPING, context.getString(R.string.buffer_loop)),
+)

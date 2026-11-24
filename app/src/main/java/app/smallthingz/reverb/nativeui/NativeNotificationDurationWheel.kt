@@ -14,6 +14,7 @@ import app.smallthingz.reverb.R
 import app.smallthingz.reverb.notificationDurationStepSeconds
 import kotlin.math.roundToInt
 import smallthingz.ui.components.NativeDurationWheelView
+import smallthingz.ui.reverb.settings.ReverbNotificationDurationEditor
 
 /** Mechanical imperative extraction of the released AndroidView update/onRelease binding. */
 internal class NativeNotificationDurationWheel(
@@ -24,8 +25,8 @@ internal class NativeNotificationDurationWheel(
     private val change:(Int)->NotificationDurationCommit?,
     private val stepDuration:(Int,Int,Boolean)->Int=::notificationDurationStepSeconds,
     private val interactionChanged:()->Unit={},
-):AutoCloseable {
-    val view=NativeDurationWheelView(context)
+):ReverbNotificationDurationEditor {
+    override val view=NativeDurationWheelView(context)
     private val binding=NotificationDurationBinding(interactionState)
     private var maximum=1
     private var enabled=false
@@ -82,7 +83,7 @@ internal class NativeNotificationDurationWheel(
             }
         }
     }
-    fun bind(seconds:Int,maximumSeconds:Int,interactionReady:Boolean,editRevision:Long,
+    override fun bind(seconds:Int,maximumSeconds:Int,interactionReady:Boolean,editRevision:Long,
              environment:ReverbViewEnvironment) {
         maximum=maximumSeconds.coerceIn(1,86_400);enabled=interactionReady
         if(interactionReady)interactionRetired=false
@@ -101,7 +102,7 @@ internal class NativeNotificationDurationWheel(
     }
     private fun step(forward:Boolean)=commit(stepDuration(binding.seconds,maximum,forward))
     /** End logical ownership now while the containing surface retains these pixels for its exit. */
-    fun cancelInteraction() {
+    override fun cancelInteraction() {
         if(closed||interactionRetired)return
         interactionRetired=true
         enabled=false

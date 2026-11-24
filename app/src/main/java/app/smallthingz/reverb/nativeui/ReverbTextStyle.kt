@@ -7,12 +7,11 @@ import smallthingz.ui.text.resolveEditorMetrics
 import smallthingz.ui.text.NativeTypographyFontFamily
 import smallthingz.ui.text.NativeTypographyLineHeightAlignment
 import smallthingz.ui.text.NativeTypographyMetrics
-import smallthingz.ui.text.NativeTypographyRole
 
 internal typealias ReverbFontFamily = NativeTypographyFontFamily
 internal typealias ReverbLineHeightAlignment = NativeTypographyLineHeightAlignment
 internal typealias ReverbTextStyle = NativeTypographyMetrics
-internal typealias ReverbTextRole = NativeTypographyRole
+internal typealias ReverbTextRole = smallthingz.ui.reverb.ReverbTextRole
 
 internal typealias ReverbTextScale = NativeEditorTextScale
 internal typealias ReverbLineHeightMetrics = NativeEditorLineHeightMetrics

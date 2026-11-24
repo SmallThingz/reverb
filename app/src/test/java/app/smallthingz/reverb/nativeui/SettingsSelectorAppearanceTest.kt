@@ -21,6 +21,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import smallthingz.ui.components.NativeChoice
+import smallthingz.ui.components.NativeChip
 import smallthingz.ui.components.NativeColorSchemeResolver
 import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.components.NativeSegmentedChoice
@@ -28,6 +29,7 @@ import smallthingz.ui.components.NativeSegmentedControl
 import smallthingz.ui.components.NativeThemeMode
 import smallthingz.ui.components.NativeThemePresentation
 import smallthingz.ui.components.NativeThemeSelector
+import smallthingz.ui.reverb.settings.ReverbThemeSelector
 import smallthingz.ui.components.NativeUiAppearance
 import smallthingz.ui.controls.ControlPalette
 import smallthingz.ui.text.NativeTypography
@@ -116,7 +118,7 @@ class SettingsSelectorAppearanceTest {
         )
         var defaultTitleHeight = 0
         for ((appearance, height) in listOf(default to 42, alternate to 64)) {
-            val environment = if (appearance === alternate) ReverbViewEnvironment(context, false, appearance).forSettings()
+            val environment = if (appearance === alternate) ReverbViewEnvironment.withTestAppearance(context, false, appearance).forSettings()
                 else environment(context, false, appearance)
             assertSame(appearance, environment.appearance)
             val theme = createSettingsThemeSelector(context, environment, NativeThemeMode.SYSTEM, { false }) {
@@ -158,12 +160,11 @@ class SettingsSelectorAppearanceTest {
                 assertSame(dark, themeChoice.choiceView(NativeThemeMode.DARK.name))
                 assertTrue(requireNotNull(dark).isChecked)
                 val retentionChoice = choices(retention)
-                val size = retentionChoice.choiceView("size")
+                val size = retentionChoice.getChildAt(1) as NativeChip
                 retention.bind(RetentionMode.SIZE, null, environment)
-                assertSame(size, retentionChoice.choiceView("size"))
-                assertTrue(requireNotNull(size).isChecked)
+                assertSame(size, retentionChoice.getChildAt(1))
+                assertTrue(size.isChecked)
                 assertEquals(NativeThemeMode.DARK.name, themeChoice.selectedId)
-                assertEquals("size", retentionChoice.selectedId)
             } finally {
                 retention.close()
                 theme.close()
@@ -206,13 +207,13 @@ class SettingsSelectorAppearanceTest {
             { error("Locale changes must not emit selection requests") }, View(context), View(context))
         try {
             val row = choices(retention)
-            val time = requireNotNull(row.choiceView("time"))
-            val size = requireNotNull(row.choiceView("size"))
+            val time = row.getChildAt(0) as NativeChip
+            val size = row.getChildAt(1) as NativeChip
             assertEquals("Time", time.text.toString())
             RuntimeEnvironment.setQualifiers("de-mdpi")
             retention.bind(RetentionMode.SIZE, null, environment)
-            assertSame(time, row.choiceView("time"))
-            assertSame(size, row.choiceView("size"))
+            assertSame(time, row.getChildAt(0))
+            assertSame(size, row.getChildAt(1))
             assertEquals("Zeit", time.text.toString())
             assertEquals("Size", size.text.toString())
             assertEquals("Aufbewahrung", (retention.getChildAt(0) as ParagraphView).getText())
@@ -233,14 +234,14 @@ class SettingsSelectorAppearanceTest {
             { error("Measuring must not request a selection") }, first, second)
         try {
             val row = choices(retention)
-            val size = requireNotNull(row.choiceView("size"))
+            val size = row.getChildAt(1) as NativeChip
             val parent = first.parent
             layout(retention, 150)
             assertTrue(retention.getChildAt(1).top >= retention.getChildAt(0).bottom)
             assertTrue(retention.getChildAt(2).top >= retention.getChildAt(1).bottom)
             assertTrue(size.width > 0 && size.height > 0)
             layout(retention, 480)
-            assertSame(size, row.choiceView("size"))
+            assertSame(size, row.getChildAt(1))
             assertSame(parent, first.parent)
             assertSame(parent, second.parent)
             assertTrue(size.isChecked)
@@ -300,7 +301,7 @@ class SettingsSelectorAppearanceTest {
     }
 
     private fun environment(context: Context, dark: Boolean, appearance: NativeUiAppearance) =
-        ReverbViewEnvironment(Density(context), createFontFamilyResolver(context), ReverbPalette.fallback(dark),
+        ReverbViewEnvironment.withTestAppearance(Density(context), createFontFamilyResolver(context), ReverbPalette.fallback(dark),
             appearance = appearance).forSettings()
 
     private fun layout(view: View, width: Int = 480) {
@@ -320,3 +321,12 @@ class SettingsSelectorAppearanceTest {
         else -> null
     }
 }
+
+private fun createSettingsThemeSelector(
+    context: Context,
+    environment: ReverbViewEnvironment,
+    selected: NativeThemeMode,
+    inputAllowed: () -> Boolean,
+    onSelectionRequest: (NativeThemeMode) -> Boolean,
+): NativeThemeSelector = ReverbThemeSelector(context, environment.theme, selected,
+    inputAllowed, onSelectionRequest).view as NativeThemeSelector

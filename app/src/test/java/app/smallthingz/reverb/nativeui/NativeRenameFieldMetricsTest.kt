@@ -6,6 +6,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import smallthingz.ui.components.NativeUiAppearance
+import smallthingz.ui.reverb.nativeRenameImeContract
 
 class NativeRenameFieldMetricsTest {
     private val recipe = NativeUiAppearance.Default.outlinedField

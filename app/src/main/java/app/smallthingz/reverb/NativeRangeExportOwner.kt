@@ -2,17 +2,13 @@ package app.smallthingz.reverb
 
 import android.content.Context
 import android.util.Log
-import smallthingz.ui.animation.core.AnimationVector1D
-import smallthingz.ui.animation.core.FastOutSlowInEasing
-import smallthingz.ui.animation.core.VectorConverter
-import smallthingz.ui.animation.core.tween
 import smallthingz.ui.runtime.MonotonicFrameClock
 import smallthingz.ui.MotionDurationScale
 import smallthingz.ui.geometry.Rect
+import smallthingz.ui.reverb.ReverbRangeOpeningMotion
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
-import app.smallthingz.reverb.nativeui.LibraryTweenValue
 import app.smallthingz.reverb.nativeui.NativeInlineWaveformMotion
 import smallthingz.ui.components.waveform.ProgressiveWaveformData
 import smallthingz.ui.components.waveform.ProgressiveWaveformFrame
@@ -21,25 +17,10 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
-internal data class NativeRangeExportPresentation(
-    val sourceGeometry: RangeMorphSourceGeometry?,
-    val waveformTargetBoundsInRoot: Rect?,
-    val transitionStarted: Boolean,
-    val interactionReady: Boolean,
-    val backProgress: Float,
-    val visualizerVisible: Boolean,
-    val snapshotPresent: Boolean,
-    val maximumDurationSeconds: Double,
-    val chromeAlpha: Float,
-    val waveformData: ProgressiveWaveformData,
-    val waveformFrame: ProgressiveWaveformFrame,
-    val admissionPending: Boolean = false,
-)
+internal typealias NativeRangeExportPresentation = smallthingz.ui.reverb.NativeRangeExportPresentation
 
 /**
  * RangeExportHomeContent's retained effect/model owner. A new owner is created for a different
@@ -90,12 +71,9 @@ internal class NativeRangeExportOwner(
     private var maximumDurationSeconds = 0.0
     private var currentSnapshot: ReverbService.TimelineSnapshot? = null
     private var waveformJob: Job? = null
-    private var transitionStarted = false
-    private var interactionReady = false
-    private val opening = LibraryTweenValue(0f, Float.VectorConverter,
-        tween<Float>(760, easing = FastOutSlowInEasing), { AnimationVector1D(0f) })
-    private val openingProgress = MutableStateFlow(0f)
-    private var openingJob: Job? = null
+    private val opening = ReverbRangeOpeningMotion(frames, scope, { durationScale }) {
+        if (!closed && waveformData != null) renderCurrent()
+    }
     private var waveformCoarse: FloatArray? = null
     private var waveformDetail: FloatArray? = null
     private var waveformLoading: Boolean? = null
@@ -173,7 +151,7 @@ internal class NativeRangeExportOwner(
         state.resetWaveformConstruction()
         waveformJob = scope.launch {
             // Source starts disk sampling only after its760ms opening reaches .96.
-            openingProgress.first { it >= .96f }
+            opening.awaitWaveformReadiness()
             constructRangeWaveform(
                 build = {
                     buildProgressiveWaveform(
@@ -193,26 +171,7 @@ internal class NativeRangeExportOwner(
     }
 
     private fun startOpeningWhenMeasured() {
-        if (transitionStarted || sourceGeometry == null || targetBounds == null) return
-        transitionStarted = true
-        opening.target(1f, durationScale)
-        lateinit var next: Job
-        next = scope.launch(start = CoroutineStart.LAZY) {
-            try {
-                while (!closed && opening.running) {
-                    frames.withFrameNanos { time ->
-                        if (!closed) {
-                            opening.frame(time, durationScale)
-                            openingProgress.value = opening.value
-                            if (opening.value >= .98f) interactionReady = true
-                            if (waveformData != null) renderCurrent()
-                        }
-                    }
-                }
-            } finally { if (openingJob === next) openingJob = null }
-        }
-        openingJob = next
-        next.start()
+        if (sourceGeometry != null && targetBounds != null) opening.start()
     }
 
     private fun refreshAndRender() {
@@ -247,16 +206,11 @@ internal class NativeRangeExportOwner(
     private fun renderCurrent() {
         if (closed) return
         val data = waveformData ?: return
-        val visual = opening.value * predictiveBackOpenProgress(backProgress)
-        val morph = ((visual - RANGE_BLOB_MORPH_HANDOFF_PROGRESS) /
-            (1f - RANGE_BLOB_MORPH_HANDOFF_PROGRESS)).coerceIn(0f, 1f)
-        onRender(state, NativeRangeExportPresentation(
-            sourceGeometry, targetBounds, transitionStarted, interactionReady, backProgress,
-            visualizerVisible, currentSnapshot != null, maximumDurationSeconds,
-            ((visual - .46f) / .42f).coerceIn(0f, 1f), data,
-            waveformFrame.copy(morphProgress = morph,
-                startFraction = state.startSeconds / state.durationSeconds,
-                endFraction = state.endSeconds / state.durationSeconds, morphFromBlob = true),
+        onRender(state, opening.presentation(
+            sourceGeometry, targetBounds, backProgress, visualizerVisible, currentSnapshot != null,
+            maximumDurationSeconds, data, waveformFrame,
+            startFraction = state.startSeconds / state.durationSeconds,
+            endFraction = state.endSeconds / state.durationSeconds,
         ))
     }
 
@@ -265,6 +219,7 @@ internal class NativeRangeExportOwner(
         closed = true
         lifecycleOwner.lifecycle.removeObserver(lifecycleObserver)
         invalidation?.close(); invalidation = null
+        opening.close()
         waveformMotion.close()
         scope.cancel()
         state.setPlaybackAllowed(false)

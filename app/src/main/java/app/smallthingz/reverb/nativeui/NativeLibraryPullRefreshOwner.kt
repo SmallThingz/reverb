@@ -10,7 +10,8 @@ import smallthingz.ui.scroll.NativeVerticalScrollSource
 import smallthingz.ui.animation.core.Animatable
 import smallthingz.ui.runtime.MonotonicFrameClock
 import smallthingz.ui.unit.Density
-import smallthingz.ui.unit.dp
+import smallthingz.ui.reverb.ReverbLibraryLayout
+import smallthingz.ui.reverb.ReverbPullRefreshState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
@@ -28,16 +29,16 @@ internal class NativeLibraryPullRefreshOwner(
     private val ancestor: NativeVerticalNestedHost,
     private var onRefresh: () -> Unit,
     initialDistanceFraction: Float = 0f,
-) : AutoCloseable {
-    val thresholdPx = with(density) { 80.dp.roundToPx() }
+) : AutoCloseable, ReverbPullRefreshState {
+    override val thresholdPx = ReverbLibraryLayout.refreshThresholdPx(density.density)
     private val drag = NativePullRefreshDrag(thresholdPx)
     private val distance = Animatable(initialDistanceFraction)
     private var attachedScope: CoroutineScope? = null
     private var closed = false
     private var observers: Array<() -> Unit> = emptyArray()
-    var isRefreshing = initialRefreshing
+    override var isRefreshing = initialRefreshing
         private set
-    val distanceFraction get() = distance.value
+    override val distanceFraction get() = distance.value
     val isAnimating get() = distance.isRunning
 
     init { requireNotNull(parentScope.coroutineContext[MonotonicFrameClock]) }
@@ -60,7 +61,7 @@ internal class NativeLibraryPullRefreshOwner(
             ancestor.postFling(consumedY, availableY)
     }
 
-    fun observeVisual(observer: () -> Unit): AutoCloseable {
+    override fun observeVisual(observer: () -> Unit): AutoCloseable {
         check(!closed)
         observers += observer
         var ended = false
@@ -70,7 +71,7 @@ internal class NativeLibraryPullRefreshOwner(
     }
 
     /** Same modifier-node lifetime as the always-present indicator, not the loaded list subtree. */
-    fun attach() {
+    override fun attach() {
         check(!closed)
         if (attachedScope != null) return
         val scope = CoroutineScope(parentScope.coroutineContext + Job(parentScope.coroutineContext[Job]))
@@ -79,7 +80,7 @@ internal class NativeLibraryPullRefreshOwner(
         drag.attach(isRefreshing)
     }
 
-    fun detach() {
+    override fun detach() {
         val scope = attachedScope
         attachedScope = null
         scope?.cancel()

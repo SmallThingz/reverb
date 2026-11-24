@@ -21,7 +21,7 @@ import androidx.lifecycle.LifecycleOwner
 import app.smallthingz.reverb.ReverbService.BufferSlot
 import app.smallthingz.reverb.nativeui.*
 import kotlinx.coroutines.CoroutineScope
-import kotlin.math.roundToInt
+import smallthingz.ui.reverb.home.ReverbCaptureLayout
 
 /**
  * CaptureScreen's released Box: exactly one normal/range body plus the retained save-status overlay.
@@ -199,21 +199,14 @@ internal class NativeCaptureContentView(
 
     override fun onMeasure(w: Int, h: Int) {
         val width = MeasureSpec.getSize(w); val height = MeasureSpec.getSize(h)
-        val side = dp(18)
-        normal?.view?.measure(exact(width), exact(height))
-        rangeView?.measure(exact((width - side * 2).coerceAtLeast(0)), exact(height))
-        transient.statusCard.measure(atMost((width - side * 2).coerceAtLeast(0)),
-            atMost((height - dp(142)).coerceAtLeast(0)))
+        ReverbCaptureLayout.measure(width, height, environment.textDensity.density,
+            normal?.view, rangeView, transient.statusCard)
         setMeasuredDimension(width, height)
     }
 
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
-        normal?.view?.layout(0, 0, width, height)
-        rangeView?.let { it.layout(dp(18), 0, dp(18) + it.measuredWidth, height) }
-        val card = transient.statusCard
-        val x = ((width - card.measuredWidth) * .5f).roundToInt()
-        val bottom = (height - dp(142)).coerceAtLeast(0)
-        card.layout(x, bottom - card.measuredHeight, x + card.measuredWidth, bottom)
+        ReverbCaptureLayout.layout(width, height, environment.textDensity.density,
+            normal?.view, rangeView, transient.statusCard)
     }
 
     override fun close() {
@@ -230,8 +223,4 @@ internal class NativeCaptureContentView(
         release(transient::close)
         failure?.let { throw it }
     }
-
-    private fun dp(value: Int) = (value * environment.textDensity.density).roundToInt()
-    private fun exact(value: Int) = MeasureSpec.makeMeasureSpec(value, MeasureSpec.EXACTLY)
-    private fun atMost(value: Int) = MeasureSpec.makeMeasureSpec(value, MeasureSpec.AT_MOST)
 }

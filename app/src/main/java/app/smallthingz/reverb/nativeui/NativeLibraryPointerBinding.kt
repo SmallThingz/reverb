@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.reverb.ReverbLibraryLayout
+
 import smallthingz.ui.input.phase.NativePointerLayerShape
 import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.scroll.NativeVerticalViewport
@@ -20,6 +22,7 @@ import smallthingz.ui.scroll.NativeVerticalPhaseBinding
 import smallthingz.ui.input.phase.NativeViewPhasePointerNode
 import smallthingz.ui.input.phase.NativeViewPointerHitLayout
 import smallthingz.ui.input.phase.NativeWindowPointerCoordinates
+import smallthingz.ui.reverb.ReverbLibraryPlayerView as LibraryPlayerView
 import kotlinx.coroutines.CoroutineScope
 import java.util.IdentityHashMap
 import kotlin.math.roundToInt
@@ -70,7 +73,7 @@ internal class NativeLibraryPointerBinding(
     val layout: NativeViewPointerHitLayout = object : NativeViewPointerHitLayout {
         override val placed get() = !closed && content.isAttachedToWindow && content.isLaidOut && content.visibility == View.VISIBLE
         override val size get() = Size(content.width.toFloat(), content.height.toFloat())
-        override val minimumTouchTarget get() = Size(48f * density, 48f * density)
+        override val minimumTouchTarget get() = Size(ReverbLibraryLayout.minimumTouchTargetPx(density), ReverbLibraryLayout.minimumTouchTargetPx(density))
         override val nodes = listOf(scaffoldShield)
         override val childrenInHitOrder: List<NativeViewPointerHitLayout>
             get() { refresh(); return children(content) }
@@ -81,7 +84,7 @@ internal class NativeLibraryPointerBinding(
 
     fun refresh() {
         if (closed) return
-        val nextDistance = 64f * density
+        val nextDistance = ReverbLibraryLayout.edgeDismissDistancePx(density)
         if (dismissKey != content.pointerDismissKey || dismissDistance != nextDistance) {
             dismissKey = content.pointerDismissKey
             dismissDistance = nextDistance
@@ -165,7 +168,7 @@ internal class NativeLibraryPointerBinding(
         override val placed get() = view.isAttachedToWindow && view.isLaidOut && view.visibility == View.VISIBLE
         override val size get() = Size(view.width.toFloat(), view.height.toFloat())
         override val minimumTouchTarget get() = (view as? PlayerTimeline)?.minimumTouchTarget
-            ?: Size(48f * density, 48f * density)
+            ?: Size(ReverbLibraryLayout.minimumTouchTargetPx(density), ReverbLibraryLayout.minimumTouchTargetPx(density))
         override val childrenInHitOrder get() = children(view)
         override fun screenToLocal(screen: Offset) = geometry.coordinates(view).local(screen)
         override val nodes: List<NativeViewPhasePointerNode>
@@ -182,10 +185,10 @@ internal class NativeLibraryPointerBinding(
             view is NativeGroupLayout -> view.containsVisualPoint(local.x, local.y)
             view is NativePointerLayerShape -> view.containsPointerLayer(local.x, local.y)
             view === listView || view === emptyView -> {
-                val extra = (30f * density).roundToInt()
+                val extra = ReverbLibraryLayout.horizontalOverflowPx(density)
                 local.x >= -extra && local.x < view.width + extra && local.y >= 0f && local.y < view.height
             }
-            view is LibraryExpansionViewport || view is ReverbLibraryPlayerView || view is ReverbLibraryRecordingRow ->
+            view is LibraryExpansionViewport || view is LibraryPlayerView<*> || view is ReverbLibraryRecordingRow ->
                 local.x >= 0f && local.x < view.width && local.y >= 0f && local.y < view.height
             else -> true // No source graphicsLayer clip on ordinary Column/Row/layout wrappers.
         }

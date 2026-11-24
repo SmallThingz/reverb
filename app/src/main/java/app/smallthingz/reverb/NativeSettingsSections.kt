@@ -1,16 +1,23 @@
 package app.smallthingz.reverb
 
-import smallthingz.ui.components.NativeGroupLayout
+import smallthingz.ui.common.ToggleState
+import smallthingz.ui.common.DropdownContent
 import smallthingz.ui.input.phase.NativeDragPointerChange
 import smallthingz.ui.input.phase.NativeViewPhasePointerNode
 import android.content.Context
+import android.os.LocaleList
 import android.view.View
-import android.view.ViewGroup
 import androidx.lifecycle.Lifecycle
 import app.smallthingz.reverb.nativeui.*
-import smallthingz.ui.components.NativeThemeSelector
+import smallthingz.ui.reverb.settings.ReverbAudioActions
+import smallthingz.ui.reverb.settings.ReverbAudioChoices
+import smallthingz.ui.reverb.settings.ReverbAudioOptions
+import smallthingz.ui.reverb.settings.ReverbAutoStartSettings
+import smallthingz.ui.reverb.settings.ReverbRecordingPresentation
+import smallthingz.ui.reverb.settings.ReverbRecordingSettingsView
+import smallthingz.ui.reverb.settings.ReverbSettingsBackgroundWarningView
+import smallthingz.ui.reverb.settings.ReverbThemeSelector
 import kotlinx.coroutines.CoroutineScope
-import kotlin.math.roundToInt
 
 /** Direct released section bindings; the list owns each keyed section's actual lifetime. */
 internal class NativeSettingsSections(
@@ -47,7 +54,7 @@ internal class NativeSettingsSections(
 
     private fun background(): NativeSettingsSection {
         var activation = owner.state.activation
-        val body = SettingsBackgroundWarningView(context, environment(), inputRoot,
+        val body = ReverbSettingsBackgroundWarningView(context, environment(), inputRoot,
             owner.batteryOptimizationRestricted, owner.resumeNotificationBlocked, owner.restartAccessMissing,
             { owner.reviewBattery(activation) }, { owner.reviewResumeNotifications(activation) },
             { owner.reviewRestartAccess(activation) })
@@ -65,20 +72,16 @@ internal class NativeSettingsSections(
     private fun theme(): NativeSettingsSection {
         val initial = owner.state
         var activation = initial.activation
-        lateinit var body: NativeThemeSelector
-        body = createSettingsThemeSelector(context, environment(), initial.displayed.snapshot.themeMode.toNativeThemeMode(),
-            inputAllowed = { body.settingsInputAllowed(inputRoot) }, onSelectionRequest = {
-                owner.themeChanged(activation, it.toAppThemeMode())
-                true
-            })
+        val body = ReverbThemeSelector(context, environment().theme,
+            initial.displayed.snapshot.themeMode.toNativeThemeMode(),
+            inputAllowed = { inputRoot() != null && owner.acceptsInput(activation) },
+            onSelectionRequest = { owner.themeChanged(activation, it.toAppThemeMode()) })
         return object : NativeSettingsSection {
-            override val view = body
+            override val view = body.view
             override fun bind() {
                 val state = owner.state
                 activation = state.activation
-                val env = environment()
-                body.bind(state.displayed.snapshot.themeMode.toNativeThemeMode(), segmentedPalette(env),
-                    env.textDensity, env.sharedFontResolver)
+                body.bind(state.displayed.snapshot.themeMode.toNativeThemeMode(), environment().theme)
             }
             override fun close() = body.close()
         }
@@ -143,14 +146,17 @@ internal class NativeSettingsSections(
 
     private inner class Recording : NativeSettingsSection {
         private var activation = owner.state.activation
+        private var optionLocales: LocaleList? = null
+        private val translatedAudioLabels = HashMap<Int, String>()
+        private val sampleRateLabels = HashMap<Int, String>()
         private var silenceRaw: String? = null
         private var histogramRaw: String? = null
         private var silence = decodeSilenceGate(owner.snapshot.silenceGate)
         private var histogram: SilenceCalibrationHistogram? = null
-        private val choices = SettingsAudioChoicesSection(
+        private val choices = ReverbAudioChoices(
             context,
-            environment(), audioState(), ::sampleRateLabel,
-            SettingsAudioSelections(
+            environment().theme, audioState(),
+            ReverbAudioActions(
                 { owner.channelChanged(activation, it) },
                 { owner.sampleFormatChanged(activation, it) },
                 { owner.sampleRateChanged(activation, it) },
@@ -163,8 +169,6 @@ internal class NativeSettingsSections(
             context, compressionState(), environment(), inputRoot, animationScope, parentInterested,
             { owner.outputCompressionChanged(activation, it) }, { owner.compressionLevelChanged(activation, it) },
         )
-        private val warning = environment().paragraph(context, context.getString(R.string.flac_pcm_required),
-            ReverbTextRole.BODY_SMALL, environment().palette.error)
         private val skip = SettingsSilenceView(context, silenceState(), environment(), inputRoot,
             animationScope, silenceActions())
         private val notification = SettingsNotificationSaveView(
@@ -172,21 +176,20 @@ internal class NativeSettingsSections(
             { owner.notificationEnabledChanged(activation, it) }, owner::notificationSecondsChanged,
             owner::notificationEditRevision,
         )
-        override val view = SettingsRecordingSection(context, choices, compression, warning, skip, notification, environment())
+        override val view = ReverbRecordingSettingsView(context, choices, compression, skip, notification,
+            recordingPresentation(), environment().theme)
 
         override fun bind() {
             val state = owner.state
             activation = state.activation
             val env = environment()
-            choices.bind(audioState(), env)
+            choices.bind(audioState(), env.theme)
             compression.bind(compressionState(), env)
-            env.bindParagraphStyle(warning, ReverbTextRole.BODY_SMALL, env.palette.error)
             skip.bind(silenceState(), env, silenceActions())
             notification.callbacks(owner::notificationSecondsChanged, owner::notificationEditRevision,
                 owner::childInteractionChanged)
             notification.bind(notificationState(), env)
-            val value = owner.snapshot
-            view.bind(value.format == ExportFormat.FLAC && value.sampleFormat != PcmSampleFormat.PCM_16, env)
+            view.bind(recordingPresentation(), env.theme)
             structureChanged()
         }
 
@@ -198,14 +201,36 @@ internal class NativeSettingsSections(
             return emptyList()
         }
 
-        private fun audioState(): SettingsAudioChoicesState {
+        private fun audioLabel(resource: Int): String =
+            translatedAudioLabels.getOrPut(resource) { context.getString(resource) }
+
+        private fun audioState(): ReverbAudioOptions<ChannelMode, PcmSampleFormat, AudioSourceMode, InputRouteMode> {
+            val locales = context.resources.configuration.locales
+            if (optionLocales != locales) {
+                optionLocales = locales
+                translatedAudioLabels.clear()
+            }
             val value = owner.snapshot
             val options = owner.audioOptions
-            return SettingsAudioChoicesState(
-                requireNotNull(value.channelMode), options.channels, value.sampleFormat, PcmSampleFormat.entries,
-                value.sampleRate, options.rates, requireNotNull(value.source), options.sources,
-                requireNotNull(value.route), options.routes, emptySet(),
+            return ReverbAudioOptions(
+                DropdownContent(audioLabel(R.string.channel_mode_label),
+                    requireNotNull(value.channelMode), options.channels) { audioLabel(it.labelRes) },
+                DropdownContent(audioLabel(R.string.sample_format_label),
+                    value.sampleFormat, PcmSampleFormat.entries) { audioLabel(it.labelRes) },
+                DropdownContent(audioLabel(R.string.sample_rate_label), value.sampleRate, options.rates) {
+                    sampleRateLabels.getOrPut(it) { sampleRateLabel(it) }
+                },
+                DropdownContent(audioLabel(R.string.audio_source_label),
+                    requireNotNull(value.source), options.sources) { audioLabel(it.labelRes) },
+                DropdownContent(audioLabel(R.string.input_route_label),
+                    requireNotNull(value.route), options.routes) { audioLabel(it.labelRes) },
             )
+        }
+        private fun recordingPresentation(): ReverbRecordingPresentation {
+            val value = owner.snapshot
+            return ReverbRecordingPresentation(context.getString(R.string.recording_settings_title),
+                if (value.format == ExportFormat.FLAC && value.sampleFormat != PcmSampleFormat.PCM_16)
+                    context.getString(R.string.flac_pcm_required) else null)
         }
         private fun compressionState(): SettingsOutputCompressionState {
             val state = owner.state
@@ -281,7 +306,7 @@ internal class NativeSettingsSections(
         }
         val controller = NativeQuickSettingsTilesOwner(context, lifecycle, animationScope, owner.quickTileEditorState,
             inputs(), owner::tileActionAdmission, owner::tileActionRevision, owner::tileDraftAdmission, owner::tileDraftRevision)
-        val body = SettingsQuickTilesView(context, controller, environment(), inputRoot, animationScope,
+        val body = SettingsQuickTilesView(context, controller, environment(), inputRoot,
             owner::childInteractionChanged, { deleteTargetChanged(controller, it) })
         return object : NativeSettingsSection {
             override val view = body
@@ -316,79 +341,28 @@ internal class NativeSettingsSections(
 
     private fun autoStart(): NativeSettingsSection {
         var activation = owner.state.activation
-        val body = SettingsAutoStartView(context, environment(), inputRoot) {
+        fun toggleState(): ToggleState {
+            val choice = owner.autoStartChoice
+            val description = when {
+                choice.unavailable -> R.string.auto_start_unavailable
+                choice.permissionPending -> R.string.auto_start_permission_pending
+                choice.enabled && owner.restartAccessMissing -> R.string.auto_start_permission_missing
+                else -> R.string.auto_start_summary
+            }
+            return ToggleState(context.getString(R.string.auto_start_title), choice.permissionPending || choice.enabled,
+                choice.loaded, context.getString(description))
+        }
+        val body = ReverbAutoStartSettings(context, environment().theme, toggleState(), inputRoot) {
             owner.autoStartChanged(activation, it)
         }
         return object : NativeSettingsSection {
-            override val view = body
+            override val view = body.view
             override fun bind() {
                 activation = owner.state.activation
-                val choice = owner.autoStartChoice
-                body.bind(choice.permissionPending || choice.enabled,
-                    choice.loaded, choice.permissionPending, choice.unavailable,
-                    choice.enabled && owner.restartAccessMissing, environment())
+                body.bind(toggleState(), environment().theme)
             }
             override fun close() = body.close()
         }
     }
 
-}
-
-/** Missing background permissions share one compact review surface. */
-private class SettingsBackgroundWarningView(
-    context: Context,
-    private var environment: ReverbViewEnvironment,
-    inputRoot: () -> View?,
-    batteryRestricted: Boolean,
-    notificationBlocked: Boolean,
-    restartAccessMissing: Boolean,
-    reviewBattery: () -> Unit,
-    reviewNotifications: () -> Unit,
-    reviewRestart: () -> Unit,
-) : ViewGroup(context), AutoCloseable {
-    private val battery = SettingsPermissionReviewRow(context, environment, inputRoot,
-        ReverbIcon.BackgroundWarning, R.string.background_use_restricted, R.string.background_review,
-        R.string.background_review, reviewBattery)
-    private val notifications = SettingsPermissionReviewRow(context, environment, inputRoot,
-        ReverbIcon.BackgroundWarning, R.string.settings_resume_notification_blocked, R.string.background_review,
-        R.string.settings_notification_access, reviewNotifications)
-    private val notificationLayout = NativeGroupLayout.LayoutParams(-1, -2)
-    private val restart = SettingsPermissionReviewRow(context, environment, inputRoot,
-        ReverbIcon.BackgroundWarning, R.string.settings_restart_access_missing, R.string.background_review,
-        R.string.settings_restart_access, reviewRestart)
-    private val restartLayout = NativeGroupLayout.LayoutParams(-1, -2)
-    private val groupRecipe = environment.appearance.groupSurfaces.settingsWarning
-    private val group = groupRecipe.create(context, ::invalidateSettingsTextContrast)
-    init {
-        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
-        group.addRow(battery, NativeGroupLayout.LayoutParams(-1, -2))
-        group.addRow(notifications, notificationLayout)
-        group.addRow(restart, restartLayout)
-        addView(group)
-        bind(environment, batteryRestricted, notificationBlocked, restartAccessMissing)
-    }
-    fun bind(next: ReverbViewEnvironment, batteryRestricted: Boolean, notificationBlocked: Boolean,
-        restartAccessMissing: Boolean) {
-        environment = next
-        groupRecipe.bind(group, next.palette)
-        battery.visibility = if (batteryRestricted) VISIBLE else GONE
-        notifications.visibility = if (notificationBlocked) VISIBLE else GONE
-        restart.visibility = if (restartAccessMissing) VISIBLE else GONE
-        notificationLayout.dividerTop = batteryRestricted && notificationBlocked
-        restartLayout.dividerTop = batteryRestricted || notificationBlocked
-        battery.bind(next, batteryRestricted)
-        notifications.bind(next, notificationBlocked)
-        restart.bind(next, restartAccessMissing)
-        requestLayout()
-    }
-    override fun onMeasure(w: Int, h: Int) {
-        val width = MeasureSpec.getSize(w)
-        group.measure(exact((width - 2 * dp(16)).coerceAtLeast(0)), unspecified())
-        setMeasuredDimension(resolveSize(width, w), resolveSize(group.measuredHeight + 2 * dp(12), h))
-    }
-    override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
-        group.layout(dp(16), dp(12), width - dp(16), dp(12) + group.measuredHeight)
-    }
-    override fun close() { battery.close(); notifications.close(); restart.close() }
-    private fun dp(value: Int) = (value * environment.textDensity.density).roundToInt()
 }

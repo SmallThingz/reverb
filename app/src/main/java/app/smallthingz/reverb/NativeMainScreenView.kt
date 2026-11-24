@@ -3,6 +3,8 @@ package app.smallthingz.reverb
 import smallthingz.ui.input.phase.NativePointerLayerShape
 import smallthingz.ui.components.NativeCaptureControlSurface
 import smallthingz.ui.components.NativeGroupLayout
+import smallthingz.ui.reverb.ReverbMainLayout
+import smallthingz.ui.reverb.ReverbMainFeedbackLayer
 import smallthingz.ui.scroll.NativeVerticalNestedHost
 import smallthingz.ui.scroll.NativeVerticalScrollSource
 import smallthingz.ui.input.phase.NativeClickPhaseHost
@@ -123,7 +125,7 @@ internal class NativeMainScreenView private constructor(
     private var orderedLibrary: View? = null
     private var orderedLibraryToolbar: View? = null
     private var orderedLibraryAboveHome = false
-    private var orderedFeedbackZBits = 0
+    private var orderedFeedbackLayer: ReverbMainFeedbackLayer? = null
     private var lastSaveFeedbackVisible: Boolean? = null
     private var measuredFeedbackBottom = Int.MIN_VALUE
     private var captureRestorationAvailable = true
@@ -232,7 +234,7 @@ internal class NativeMainScreenView private constructor(
         visualInsets = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
         statusInsets = insets.getInsets(WindowInsetsCompat.Type.statusBars())
         navigationBottom = insets.getInsets(WindowInsetsCompat.Type.navigationBars()).bottom
-        incidents.setStatusBarInsets(statusInsets)
+        incidents.setWindowInsets(insets)
         updateSettingsBottomInset()
         requestRender()
         requestLayout()
@@ -531,28 +533,21 @@ internal class NativeMainScreenView private constructor(
 
     private fun bindAbout() {
         if (navigation.showAboutDialog) {
-            val typography = environment.appearance.typography
-            val panel = environment.appearance.modals.floating
-            val appearance = AboutContentAppearance(environment.palette,
-                typography[panel.headlineRole], typography[panel.titleRole],
-                typography[panel.summaryRole], typography[panel.detailRole],
-                environment.textDensity, environment.sharedFontResolver, environment.appearance)
             val dismiss = { navigate { closeAbout() } }
             val current = about
             if (current == null) {
-                val created = ReverbAboutDialog(windowRoot, appearance, pendingAboutScrollPosition ?: 0, dismiss)
+                val created = ReverbAboutDialog(windowRoot, environment.theme, pendingAboutScrollPosition ?: 0, dismiss)
                 pendingAboutScrollPosition = null
                 about = created.also { it.show() }
-            } else current.updateAppearance(appearance, dismiss)
+            } else current.updateAppearance(environment.theme, dismiss)
         } else { about?.dismiss(); about = null }
     }
 
     private fun applyMotion(bindToolbar: Boolean) {
         val backIncidentProgress = libraryTopBarCloseMotion.progress(libraryMotion.panelProgress,
             navigation.showLibrary, libraryMotion.backPreviewActive)
-        home.translationY = settingsMotion.panelProgress * height
+        ReverbMainLayout.applySettingsMotion(home, settings, height, settingsMotion.panelProgress, navigation.showSettings)
         home.topBar.setIncidentsSuppressed(navigation.showLibrary || libraryMotion.panelProgress > 0f)
-        settings?.alpha = if (settingsMotion.panelProgress > 0f || navigation.showSettings) 1f else .01f
         libraryLayer?.bind(environment, visualInsets.top, libraryMotion.panelProgress, navigation.showLibrary)
         // Keep the preview's terminal glyph until the navigation owner accepts Home.
         val toolbarVisible = !navigation.showSettings &&
@@ -579,33 +574,26 @@ internal class NativeMainScreenView private constructor(
             retireShellLayouts(old)
         }
         val placement = navigation.feedbackPlacement(libraryMotion.panelProgress)
-        updateDrawOrder(placement.z)
+        updateDrawOrder(placement.layer)
         updateSurfaceAdmission()
-        val bottom = dp(placement.bottomPaddingDp) + if (placement.addNavigationBarBottom) navigationBottom else 0
+        val bottom = ReverbMainLayout.feedbackBottomPx(placement, navigationBottom, environment.textDensity.density)
         if (bottom != measuredFeedbackBottom) { measuredFeedbackBottom = bottom; requestLayout() }
         invalidate()
     }
 
-    private fun updateDrawOrder(feedbackZ: Float) {
+    private fun updateDrawOrder(feedbackLayer: ReverbMainFeedbackLayer) {
         val libraryAboveHome = navigation.showLibrary || libraryMotion.panelProgress > 0f
-        val feedbackZBits = feedbackZ.toRawBits()
         // Home, feedback and incidents are fixed identities; only these child/order keys can change.
         if (drawOrder.isNotEmpty() && orderedSettings === settings && orderedLibrary === libraryLayer &&
             orderedLibraryToolbar === libraryToolbar && orderedLibraryAboveHome == libraryAboveHome &&
-            orderedFeedbackZBits == feedbackZBits) return
-        val entries = ArrayList<Pair<Float, View>>(6)
-        settings?.let { entries += 0f to it }
-        entries += 1f to home
-        entries += feedbackZ to feedback
-        libraryLayer?.let { entries += (if (libraryAboveHome) 3f else -2f) to it }
-        libraryToolbar?.let { entries += 4f to it }
-        entries += 6f to incidents
-        drawOrder = entries.sortedBy { it.first }.map { it.second }
+            orderedFeedbackLayer == feedbackLayer) return
+        drawOrder = ReverbMainLayout.drawOrder(settings, home, feedback, libraryLayer, libraryToolbar,
+            incidents, libraryAboveHome, feedbackLayer)
         orderedSettings = settings
         orderedLibrary = libraryLayer
         orderedLibraryToolbar = libraryToolbar
         orderedLibraryAboveHome = libraryAboveHome
-        orderedFeedbackZBits = feedbackZBits
+        orderedFeedbackLayer = feedbackLayer
     }
 
     override fun getChildDrawingOrder(childCount: Int, drawingPosition: Int): Int =
@@ -669,9 +657,8 @@ internal class NativeMainScreenView private constructor(
         incidents.measure(fullW, fullH)
         libraryToolbar?.measure(fullW, atMost(height))
         val placement = navigation.feedbackPlacement(libraryMotion.panelProgress)
-        val bottom = dp(placement.bottomPaddingDp) + if (placement.addNavigationBarBottom) navigationBottom else 0
-        feedback.measure(atMost((width - dp(placement.horizontalPaddingDp) * 2).coerceAtLeast(0)),
-            atMost((height - bottom).coerceAtLeast(0)))
+        ReverbMainLayout.measureFeedback(feedback, width, height, placement, navigationBottom,
+            environment.textDensity.density)
         setMeasuredDimension(width, height)
     }
 
@@ -684,11 +671,9 @@ internal class NativeMainScreenView private constructor(
         incidents.layout(0, 0, width, height)
         libraryToolbar?.let { it.layout(0, 0, width, it.measuredHeight) }
         val placement = navigation.feedbackPlacement(libraryMotion.panelProgress)
-        val bottom = height - dp(placement.bottomPaddingDp) -
-            if (placement.addNavigationBarBottom) navigationBottom else 0
-        val x = ((width - feedback.measuredWidth) * .5f).roundToInt()
-        feedback.layout(x, bottom - feedback.measuredHeight, x + feedback.measuredWidth, bottom)
-        home.translationY = settingsMotion.panelProgress * height
+        ReverbMainLayout.layoutFeedback(feedback, width, height, placement, navigationBottom,
+            environment.textDensity.density)
+        ReverbMainLayout.applySettingsMotion(home, settings, height, settingsMotion.panelProgress, navigation.showSettings)
     }
 
     private fun homeInsets() = ReverbHomeInsets(visualInsets.top, visualInsets.left, visualInsets.right, visualInsets.bottom)
@@ -823,7 +808,6 @@ internal class NativeMainScreenView private constructor(
     }
     private fun rectangle(view: View) = NativeTextSemanticsClip.Rectangle(Rect(0f, 0f, view.width.toFloat(), view.height.toFloat()))
     private fun dpFloat(value: Int) = value * environment.textDensity.density
-    private fun dp(value: Int) = dpFloat(value).roundToInt()
     private fun exact(value: Int) = MeasureSpec.makeMeasureSpec(value, MeasureSpec.EXACTLY)
     private fun atMost(value: Int) = MeasureSpec.makeMeasureSpec(value, MeasureSpec.AT_MOST)
 

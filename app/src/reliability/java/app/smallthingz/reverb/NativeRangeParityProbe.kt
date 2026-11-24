@@ -73,6 +73,7 @@ import smallthingz.ui.input.phase.NativeDragPointerChange
 import smallthingz.ui.input.phase.NativeDragPointerEvent
 import smallthingz.ui.input.phase.NativePointerPass
 import smallthingz.ui.input.pointer.PointerType
+import smallthingz.ui.reverb.NativeRangeTimelineInput.Gesture
 
 /**
  * Four actual settled Range bodies, plus the existing duration widget's safe discrete action.
@@ -260,12 +261,21 @@ internal fun verifyNativeRangeInteractionCurrent(instrumentation: Instrumentatio
         val hostTrace = RangeHostTrace(instrumentation, activity).also { trace = it }
         awaitNativeParityDraw(instrumentation, activity.fixtureRoot)
         hostTrace.awaitInitialReady()
+        val perf = ownerPerfCycle.get()
+        perf?.opening(activity)
         val current = nativeParityOnMain(instrumentation) {
             val clock = NativeModalWindowRuntime(activity).also { runtime = it; it.setStarted(true) }
-            RangeParityBoard(activity, dark = false, compact = false, referenceSnapshot = null,
+            RangeParityBoard(activity, dark = false, compact = true, referenceSnapshot = null,
                 nativeSnapshot = source, currentScope = clock.scope).also { board = it; it.show(false) }
         }
-        awaitRangeReady(instrumentation, activity, current, false, hostTrace)
+        awaitRangeReady(instrumentation, activity, current, false, hostTrace, settleForParity = perf == null)
+        perf?.openSettled(current.content(false))
+        if (perf == null) {
+            val image = captureNativeParityContent(instrumentation, activity) { current.content(false) }
+            try { saveNativeParityBitmap(directory, "range-settled.png", image) }
+            finally { image.recycle() }
+            result.put("capture", "range-settled.png")
+        }
         result.put("native_range_interactions", nativeParityOnMain(instrumentation) {
             current.verifyInteractionRegressions()
         })
@@ -348,7 +358,8 @@ private class RangeParityBoard(
     } else if (dark) darkColorScheme() else lightColorScheme()
     private val environment = nativeParityEnvironment(context, density,
         ReverbPalette.resolve(context, dark))
-    private val height = if (compact) (420 * density.density).roundToInt() else host.fixtureRoot.height
+    private val height = if (compact && currentScope == null) (420 * density.density).roundToInt()
+        else host.fixtureRoot.height
     private val width = host.fixtureRoot.width
     private val source = RangeMorphSourceGeometry(0f, 0f, width * .5f, height * .5f, 180 * density.density)
     private val referenceHost by lazy { FrameLayout(context) }
@@ -485,7 +496,7 @@ private class RangeParityBoard(
                 frame.waveformFrame.visibleCoarseFraction != 1f || frame.waveformFrame.visibleDetailFraction != 1f) return false
         }
         val wheels = wheels(reference).toList()
-        check(wheels.size == if (compact) 0 else 1)
+        if (currentScope == null) check(wheels.size == if (compact) 0 else 1)
         return wheels.isEmpty() || wheels.single().isEnabled
     }
     fun settleMillis() = maxOf(1_000L, (1_000 * (referenceScope?.coroutineContext?.get(MotionDurationScale)?.scaleFactor ?: 1f)).toLong())
@@ -592,7 +603,7 @@ private class RangeParityBoard(
             check(RecordingPlayback.play(playbackContext, recording))
             NativeRangeTimelineInput(state, { content.interactionEnabled }, timeline::timelineWidthPixels,
                 timeline::secondsForWaveformX, { it.position.x }, { 8f }).use { input ->
-                fun drag(gesture: NativeRangeTimelineInput.Gesture, from: Float, to: Float) {
+                fun drag(gesture: Gesture, from: Float, to: Float) {
                     fun dispatch(x: Float, pressed: Boolean, previousDown: Boolean) {
                         val position = Offset(x, 0f)
                         val change = NativeDragPointerChange(1L, SystemClock.uptimeMillis(), position, position,
@@ -628,6 +639,7 @@ private class RangeParityBoard(
         check(wheel.contentDescription == "0:00:16 1x")
         return JSONObject().put("first_render_prepared_controls", true).put("drag_audition_revoked", false)
             .put("immediate_marker_geometry", true).put("exact_fractional_wheel_limit", true)
+            .put("duration_dial_present_in_viewport", content.durationWheel != null)
     }
 
     override fun close() {
@@ -647,7 +659,8 @@ private class RangeParityBoard(
 }
 
 private fun awaitRangeReady(instrumentation: Instrumentation, host: NativeParityActivity,
-    board: RangeParityBoard, reference: Boolean, trace: RangeHostTrace) {
+    board: RangeParityBoard, reference: Boolean, trace: RangeHostTrace, settleForParity: Boolean = true,
+) {
     val deadline = SystemClock.uptimeMillis() + 15_000
     var completeAt: Long? = null
     var finalFrames = 0
@@ -655,6 +668,7 @@ private fun awaitRangeReady(instrumentation: Instrumentation, host: NativeParity
         trace.guard("${board.name}-range-ready reference=$reference")
         val ready = nativeParityOnMain(instrumentation) { board.ready(reference) }
         if (ready) {
+            if (!settleForParity) return
             if (completeAt == null) completeAt = SystemClock.uptimeMillis()
             finalFrames++
             val delay = nativeParityOnMain(instrumentation) { board.settleMillis() }

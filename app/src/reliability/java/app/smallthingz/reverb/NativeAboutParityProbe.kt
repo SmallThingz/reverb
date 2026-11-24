@@ -49,7 +49,7 @@ import smallthingz.ui.text.font.createFontFamilyResolver
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.window.DialogWindowProvider
-import app.smallthingz.reverb.nativeui.AboutContentAppearance
+import smallthingz.ui.reverb.ReverbDesign
 import smallthingz.ui.scroll.NativeVerticalViewport
 import app.smallthingz.reverb.nativeui.ReverbAboutDialog
 import app.smallthingz.reverb.nativeui.ReverbPalette
@@ -443,11 +443,8 @@ private class AboutFixture private constructor(
                 configuredHost.addView(anchor, FrameLayout.LayoutParams(-1, -1))
             } else {
                 configuredHost.addView(anchor, FrameLayout.LayoutParams(-1, -1))
-                nativeDialog = ReverbAboutDialog(anchor, AboutContentAppearance(
-                    ReverbPalette.resolve(local, case.dark), typography.headlineSmall.nativeParityTextStyle(),
-                    typography.titleSmall.nativeParityTextStyle(), typography.bodyMedium.nativeParityTextStyle(),
-                    typography.bodySmall.nativeParityTextStyle(), density.nativeParityDensity(),
-                    createFontFamilyResolver(local),
+                nativeDialog = ReverbAboutDialog(anchor, ReverbDesign.windowTheme(
+                    density.nativeParityDensity(), createFontFamilyResolver(local), ReverbPalette.resolve(local, case.dark),
                 ), ::ownerDismissed).also { dialog -> dialog.show(); window = checkNotNull(dialog.window) }
             }
         }

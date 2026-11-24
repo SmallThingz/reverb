@@ -5,13 +5,9 @@ import smallthingz.ui.components.NativeStatusBarProtection
 
 import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.text.view.NativePlainTextViewGeometry
-import smallthingz.ui.text.view.NativeSourceAccessibilityNode
 import smallthingz.ui.text.view.NativeTextSemanticsClip
 import smallthingz.ui.text.view.NativeTextSemanticsClipPolicy
 import smallthingz.ui.text.view.NativeTextSemanticsTransformPolicy
-import smallthingz.ui.text.view.ParagraphView
-import smallthingz.ui.text.view.PlainTextAccessibilityGeometry
-import smallthingz.ui.text.view.nativeMergedRoleBoundsInScreen
 import android.content.Context
 import android.graphics.Rect
 import android.net.Uri
@@ -20,16 +16,12 @@ import android.view.View
 import android.view.KeyEvent
 import android.view.ViewGroup
 import androidx.activity.ComponentActivity
-import smallthingz.ui.runtime.MonotonicFrameClock
-import smallthingz.ui.MotionDurationScale
-import smallthingz.ui.geometry.Offset
+import smallthingz.ui.reverb.onboarding.ReverbOnboardingScreenLayout
 import smallthingz.ui.geometry.Rect as ComposeRect
 import smallthingz.ui.platform.AccessibilityManager
 import androidx.core.view.WindowInsetsCompat
 import app.smallthingz.reverb.nativeui.*
 import kotlinx.coroutines.CoroutineScope
-import kotlin.math.min
-import kotlin.math.roundToInt
 
 /**
  * One actual Activity root and background. Branch changes dispose the outgoing native content
@@ -144,11 +136,9 @@ internal class NativeActivityContentView(
             val page = snapshot.page
             if (page == null) {
                 retireOnboarding()
-                if (loading == null) loading = ReverbIncidentLoadingView(context, environment.palette.primary,
-                    requireNotNull(scope.coroutineContext[MonotonicFrameClock]), scope,
-                    { scope.coroutineContext[MotionDurationScale]?.scaleFactor ?: 1f }, strokeWidthDp = 4f
-                ).also { addView(it, 0) }
-                loading?.setColor(environment.palette.primary)
+                if (loading == null) loading = ReverbOnboardingScreenLayout.createLoading(context, environment, scope)
+                    .also { addView(it, 0) }
+                loading?.let { ReverbOnboardingScreenLayout.bindLoading(it, environment) }
             } else {
                 retireLoading()
                 val current = onboarding ?: NativeOnboardingScreenView.create(
@@ -159,15 +149,17 @@ internal class NativeActivityContentView(
                 ).also {
                     onboarding = it
                     remainingOnboardingState = null
+                    it.externalAccessibilityOcclusion = ::feedbackOcclusion
                     addView(it, 0)
                 }
-                current.externalAccessibilityOcclusion = ::feedbackOcclusion
                 current.setPalette(environment.palette)
                 current.bind(page)
             }
             if (feedback == null) {
                 feedback = NativeAppFeedbackHostView(context, environment, this, activity, scope,
-                    accessibilityManager, windowText, ::feedbackSourceNode).also(::addView)
+                    accessibilityManager, windowText, { view ->
+                        ReverbOnboardingScreenLayout.feedbackSourceNode(this, textGeometry, view)
+                    }).also(::addView)
             }
             feedback?.bind(true, environment)
         } else {
@@ -250,12 +242,9 @@ internal class NativeActivityContentView(
         val height = MeasureSpec.getSize(h)
         main?.measure(activityExact(width), activityExact(height))
         onboarding?.measure(activityExact(width), activityExact(height))
-        loading?.measure(activityExact(min(width, dp(40))), activityExact(min(height, dp(40))))
+        loading?.let { ReverbOnboardingScreenLayout.measureLoading(it, width, height, environment.textDensity.density) }
         feedback?.let {
-            val safe = safeDrawing()
-            val maxWidth = (width - safe.left - safe.right - dp(18) - dp(18)).coerceAtLeast(0)
-            val maxHeight = (height - safe.top - safe.bottom - dp(84)).coerceAtLeast(0)
-            it.measure(activityAtMost(maxWidth), activityAtMost(maxHeight))
+            ReverbOnboardingScreenLayout.measureFeedback(it, width, height, environment.textDensity.density, safeDrawing())
         }
         setMeasuredDimension(width, height)
     }
@@ -263,62 +252,13 @@ internal class NativeActivityContentView(
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
         main?.layout(0, 0, width, height)
         onboarding?.layout(0, 0, width, height)
-        loading?.let {
-            val x = ((width - it.measuredWidth) * .5f).roundToInt()
-            val y = ((height - it.measuredHeight) * .5f).roundToInt()
-            it.layout(x, y, x + it.measuredWidth, y + it.measuredHeight)
-        }
+        loading?.let { ReverbOnboardingScreenLayout.layoutLoading(it, width, height) }
         feedback?.let {
-            // Modifier order: BottomCenter -> safeDrawingPadding -> horizontal18 -> bottom84.
-            val safe = safeDrawing()
-            val insideWidth = (width - safe.left - safe.right - dp(18) - dp(18)).coerceAtLeast(0)
-            val x = safe.left + dp(18) + ((insideWidth - it.measuredWidth) * .5f).roundToInt()
-            val y = height - safe.bottom - dp(84) - it.measuredHeight
-            it.layout(x, y, x + it.measuredWidth, y + it.measuredHeight)
+            ReverbOnboardingScreenLayout.layoutFeedback(it, width, height, environment.textDensity.density, safeDrawing())
         }
     }
 
-    /** Passive feedback has one important Text node; its Surface only marks a traversal container. */
-    private fun feedbackOcclusion(): List<Rect> {
-        val current = feedback ?: return emptyList()
-        val bounds = ArrayList<Rect>()
-        fun visit(view: View) {
-            if (view.visibility != VISIBLE) return
-            if (view is ParagraphView) {
-                val facts = feedbackSourceNode(view)
-                if (facts.present && !facts.hidden) {
-                    val mapped = textGeometry.capture(view, Offset.Zero, view.originalAccessibilityBoundsInView())
-                    val rectangle = mapped?.visibleBoundsInRoot?.intersect(
-                        ComposeRect(0f, 0f, width.toFloat(), height.toFloat()))
-                    if (rectangle != null && !rectangle.isEmpty) bounds += Rect(
-                        rectangle.left.roundToInt(), rectangle.top.roundToInt(),
-                        rectangle.right.roundToInt(), rectangle.bottom.roundToInt())
-                }
-            } else if (view is ViewGroup) for (index in 0 until view.childCount) visit(view.getChildAt(index))
-        }
-        visit(current)
-        return bounds // Onboarding is placed at0,0 with identical root size, without a root transform.
-    }
-
-    private fun feedbackSourceNode(view: View): NativeSourceAccessibilityNode {
-        if (!view.isAttachedToWindow || !view.isLaidOut || view.visibility != VISIBLE)
-            return NativeSourceAccessibilityNode.absent()
-        val local = if (view is ParagraphView) view.originalAccessibilityBoundsInView()
-            else ComposeRect(0f, 0f, view.width.toFloat(), view.height.toFloat())
-        val mapped = textGeometry.capture(view, Offset.Zero, local) ?: return NativeSourceAccessibilityNode.absent()
-        val visible = mapped.visibleBoundsInRoot.intersect(ComposeRect(0f, 0f, width.toFloat(), height.toFloat()))
-        if (visible.isEmpty) return NativeSourceAccessibilityNode.absent()
-        var hidden = false
-        var current: View? = view
-        while (current != null) {
-            if (current.alpha <= 0f) hidden = true
-            if (current === this) break
-            current = current.parent as? View
-        }
-        val geometry = PlainTextAccessibilityGeometry(mapped.paragraphPositionInRoot, visible, mapped.rootToScreen)
-        return NativeSourceAccessibilityNode(true, hidden, !hidden,
-            nativeMergedRoleBoundsInScreen(geometry, true))
-    }
+    private fun feedbackOcclusion(): List<Rect> = ReverbOnboardingScreenLayout.feedbackOcclusion(this, textGeometry, feedback)
 
     fun saveMain(): NativeMainScreenSavedState? = main?.saveState() ?: remainingMainState
     fun openSavedRecording(request: RecordingPlaybackRequest, finished: () -> Unit) {
@@ -372,8 +312,6 @@ internal class NativeActivityContentView(
         release { foreground = null }
         failure?.let { throw it }
     }
-    private fun dp(value: Int) = (value * environment.textDensity.density).roundToInt()
 }
 
 private fun activityExact(value: Int) = View.MeasureSpec.makeMeasureSpec(value, View.MeasureSpec.EXACTLY)
-private fun activityAtMost(value: Int) = View.MeasureSpec.makeMeasureSpec(value, View.MeasureSpec.AT_MOST)
