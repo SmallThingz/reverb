@@ -2,11 +2,14 @@ package app.smallthingz.reverb
 
 import android.app.ApplicationExitInfo
 import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.io.DataOutputStream
 import java.io.DataInputStream
 import java.io.IOException
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -324,6 +327,78 @@ class RecordingIncidentStoreTest {
 
         assertTrue(recordingIncidentReferenceMatches(legacy, current))
         assertTrue(recordingIncidentReferenceMatches(current, legacy))
+    }
+
+    @Test
+    fun acknowledgementAndDeletion_preferExactCurrentIdentityOverEqualTimeLegacyRows() {
+        val current = RecordingIncident(10_000L, pid = 42,
+            processStartedAtMillis = 5_000L, captureArmedAtMillis = 9_000L)
+        for (legacyAcknowledged in listOf(0L, Long.MIN_VALUE)) {
+            val legacy = RecordingIncident(10_000L, acknowledgedAtMillis = legacyAcknowledged)
+            for (rows in listOf(listOf(legacy, current), listOf(current, legacy))) {
+                // Mixed legacy/current identity is valid persisted data, not just a synthetic UI list.
+                val bytes = ByteArrayOutputStream()
+                RecordingIncidentStore.writeHistoryPayload(DataOutputStream(bytes), rows)
+                val decoded = DataInputStream(ByteArrayInputStream(bytes.toByteArray())).use {
+                    readIncidentPayloadExact(it, "acknowledgment regression", RecordingIncidentStore::readHistoryPayload)
+                }
+                assertEquals(rows, decoded)
+                val checked = checkNotNull(toggleRecordingIncidentAcknowledgementInHistory(decoded, current, 20_000L))
+                assertEquals(rows.map { if (it == current) it.copy(acknowledgedAtMillis = 20_000L) else it }, checked)
+                assertEquals(rows, toggleRecordingIncidentAcknowledgementInHistory(checked, current, 21_000L))
+                val deleted = checkNotNull(markRecordingIncidentsDeleted(decoded, listOf(current)))
+                assertEquals(rows.map { if (it == current) it.copy(acknowledgedAtMillis = Long.MIN_VALUE) else it }, deleted)
+                assertEquals(rows, decoded) // Neither mutation changes its input snapshot.
+            }
+        }
+    }
+
+    @Test
+    fun acknowledgementAndDeletion_rejectAmbiguousLegacyTargets() {
+        val legacy = RecordingIncident(10_000L)
+        val first = legacy.copy(pid = 42, processStartedAtMillis = 5_000L, captureArmedAtMillis = 9_000L)
+        val second = first.copy(pid = 43)
+        for (rows in listOf(listOf(first, second), listOf(second, first), listOf(first, first))) {
+            assertNull(toggleRecordingIncidentAcknowledgementInHistory(rows, legacy, 20_000L))
+            assertNull(markRecordingIncidentsDeleted(rows, listOf(legacy)))
+        }
+        // Even an exact target is insufficient when two persisted records have that identity.
+        assertNull(toggleRecordingIncidentAcknowledgementInHistory(listOf(first, first), first, 20_000L))
+        assertNull(markRecordingIncidentsDeleted(listOf(first, first), listOf(first)))
+    }
+
+    @Test
+    fun acknowledgementAndDeletion_preserveUniqueLegacyAndEnrichedSessionMatches() {
+        val legacy = RecordingIncident(10_000L)
+        val provisional = legacy.copy(pid = 42, processStartedAtMillis = 5_000L, captureArmedAtMillis = 9_000L)
+        val enriched = provisional.copy(occurredAtMillis = 10_500L, exitReason = ApplicationExitInfo.REASON_CRASH)
+        for ((stored, target) in listOf(provisional to legacy, legacy to provisional, enriched to provisional)) {
+            assertEquals(listOf(stored.copy(acknowledgedAtMillis = 20_000L)),
+                toggleRecordingIncidentAcknowledgementInHistory(listOf(stored), target, 20_000L))
+            assertEquals(listOf(stored.copy(acknowledgedAtMillis = Long.MIN_VALUE)),
+                markRecordingIncidentsDeleted(listOf(stored), listOf(target)))
+        }
+        val tombstone = enriched.copy(acknowledgedAtMillis = Long.MIN_VALUE)
+        assertEquals(listOf(tombstone),
+            toggleRecordingIncidentAcknowledgementInHistory(listOf(tombstone), provisional, 20_000L))
+    }
+
+    @Test
+    fun acknowledgementAndDeletion_rejectConflictingKnownIdentities() {
+        val target = RecordingIncident(10_000L, pid = 42,
+            processStartedAtMillis = 5_000L, captureArmedAtMillis = 9_000L)
+        val observation = target.copy(kind = RecordingIncidentKind.CAPTURE_INPUT_OBSERVATION, observationId = 1L)
+        val cases = listOf(
+            target.copy(pid = 43) to target,
+            target.copy(processStartedAtMillis = 6_000L) to target,
+            target.copy(captureArmedAtMillis = 8_000L) to target,
+            target.copy(kind = RecordingIncidentKind.UNEXPECTED_ERROR) to target,
+            observation.copy(observationId = 2L) to observation,
+        )
+        for ((stored, requested) in cases) {
+            assertNull(toggleRecordingIncidentAcknowledgementInHistory(listOf(stored), requested, 20_000L))
+            assertNull(markRecordingIncidentsDeleted(listOf(stored), listOf(requested)))
+        }
     }
 
     @Test

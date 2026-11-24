@@ -81,6 +81,7 @@ internal class ReverbLibraryListView(
     private val onRetryFailedSaves: () -> Unit,
     private val onRowNodesChanged: () -> Unit = {},
 ) : FrameLayout(context) {
+    private var clearingListComposition = false
     private var disposed = false
     var onPendingRecordingRevealCancelled: (() -> Unit)? = null
     private var rowNodesDirty = false
@@ -189,6 +190,7 @@ internal class ReverbLibraryListView(
 
     /** One main-thread immutable presentation update; no operation, playback or Undo side effects. */
     fun submit(value: LibraryNativeListState) {
+        if (disposed || clearingListComposition) return
         val update = rowUpdates.submit(value.items, NativeLibraryRowState(
             selectedIds = value.selectedIds,
             selectionActive = value.selectionActive,
@@ -262,19 +264,27 @@ internal class ReverbLibraryListView(
 
     /** Mirrors removal of the source LazyColumn branch; a temporary inactive screen does not call this. */
     fun clearListComposition() {
-        var failure: Throwable? = null
-        forEachRecordingHolder { failure = closePreservingPrimaryFailure(failure, it::retire) }
-        forEachPendingHolder { failure = closePreservingPrimaryFailure(failure, it.presentation::close) }
-        failure = closePreservingPrimaryFailure(failure, rowAdapter::clear)
-        rowUpdates.clear()
-        blockedRecordingIds = emptySet()
-        // Old detached holders can survive until the next RV layout. A new source branch must save
-        // its fresh zero state instead of reading those stale positions during that interval.
-        pendingPosition = NativePendingListPosition(NativeListSavedPosition(0, 0))
-        closePreservingPrimaryFailure(failure) { layout.scrollToPositionWithOffset(0, 0) }?.let { throw it }
+        if (clearingListComposition) return
+        clearingListComposition = true
+        try {
+            val holders = (0 until list.childCount).map { list.getChildViewHolder(list.getChildAt(it)) }
+            var failure: Throwable? = null
+            holders.filterIsInstance<RecordingHolder>().forEach { failure = closePreservingPrimaryFailure(failure, it::retire) }
+            holders.filterIsInstance<PendingSaveHolder>().forEach { failure = closePreservingPrimaryFailure(failure, it.presentation::close) }
+            failure = closePreservingPrimaryFailure(failure, rowAdapter::clear)
+            rowUpdates.clear()
+            blockedRecordingIds = emptySet()
+            // Old detached holders can survive until the next RV layout. A new source branch must save
+            // its fresh zero state instead of reading those stale positions during that interval.
+            pendingPosition = NativePendingListPosition(NativeListSavedPosition(0, 0))
+            closePreservingPrimaryFailure(failure) { layout.scrollToPositionWithOffset(0, 0) }?.let { throw it }
+        } finally {
+            clearingListComposition = false
+        }
     }
 
     fun dispose() {
+        if (disposed) return
         disposed = true
         removeCallbacks(publishRowNodes)
         rowNodesPosted = false

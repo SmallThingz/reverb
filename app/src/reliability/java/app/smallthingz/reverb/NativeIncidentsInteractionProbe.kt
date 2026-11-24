@@ -307,6 +307,24 @@ internal fun verifyNativeIncidentsObservation(instrumentation: Instrumentation, 
             }
             captureIncidentStep(instrumentation, activity, content, false, directory, name, pictures)
         }
+        fun visibleRowHas(position: Int, predicate: (AccessibilityNodeInfo) -> Boolean): Boolean {
+            val recycler = list()
+            if (recycler.isLayoutRequested || recycler.isComputingLayout) return false
+            val row = recycler.findViewHolderForAdapterPosition(position)?.itemView ?: return false
+            return onboardingViewDescendants(row).any { view ->
+                val node = view.createAccessibilityNodeInfo() ?: return@any false
+                try { node.isVisibleToUser && predicate(node) }
+                finally { @Suppress("DEPRECATION") node.recycle() }
+            }
+        }
+        fun awaitAcknowledgementNode(key: String, checked: Boolean) {
+            val label = activity.getString(if (checked) smallthingz.ui.R.string.reverb_incident_checked
+                else smallthingz.ui.R.string.reverb_incident_unchecked)
+            awaitIncidentCondition(instrumentation, activity, "visible acknowledgement state: $label") {
+                val index = content.interactiveState(false).history.rows.indexOfFirst { it.key == key }
+                index >= 0 && visibleRowHas(index + 1) { it.isClickable && it.stateDescription?.toString() == label }
+            }
+        }
         fun resubmit(stage: String, expected: Map<String, Long>) {
             nativeParityOnMain(instrumentation) {
                 // Exercise the actual View/adapter same-state submission, not a reimplemented ID map.
@@ -360,6 +378,7 @@ internal fun verifyNativeIncidentsObservation(instrumentation: Instrumentation, 
         for ((index, label) in labels.withIndex()) reveal(label, "initial-$index")
         for ((index, label) in labels.withIndex()) {
             reveal(label, "before-ack-$index")
+            awaitAcknowledgementNode(keys[index], checked = false)
             incidentAction(instrumentation, activity, content, false, label, longClick = false)
             awaitIncidentCondition(instrumentation, activity, "acknowledge exact observation") {
                 val rows = content.interactiveState(false).history.rows
@@ -370,6 +389,7 @@ internal fun verifyNativeIncidentsObservation(instrumentation: Instrumentation, 
             awaitNativeParityDraw(instrumentation, activity.fixtureRoot)
             check(snapshot("ack-$index") == initial)
             reveal(label, "acknowledged-$index")
+            awaitAcknowledgementNode(keys[index], checked = true)
             if (index == 0) resubmit("same-acknowledged-submission", initial)
         }
         reveal(labels[0], "before-delete")
@@ -470,7 +490,85 @@ internal fun verifyNativeIncidentsObservation(instrumentation: Instrumentation, 
         val expected = keys.map { "ack:$it" } + listOf("delete:${keys[0]}", "ack:${keys[1]}") +
             keys.drop(1).map { "delete:$it" }
         check(nativeParityOnMain(instrumentation) { content.interactiveCommands(false) } == expected)
-        result.put("commands", JSONArray(expected)).put("captures", JSONArray(pictures.keys.toList()))
+        val pending = RecordingIncident(1_700_000_060_000L, resumedAtMillis = 0L,
+            pid = 74, processStartedAtMillis = 1_700_000_050_000L, captureArmedAtMillis = 1_700_000_055_000L)
+        val unknown = pending.copy(occurredAtMillis = 1_700_000_040_000L, resumedAtMillis = -1L,
+            pid = 75, processStartedAtMillis = 1_700_000_035_000L, captureArmedAtMillis = 1_700_000_036_000L)
+        val pendingKey = recordingIncidentPresentationKey(pending)
+        fun awaitEndLabel(position: Int, label: String) {
+            nativeParityOnMain(instrumentation) { list().scrollToPosition(position) }
+            awaitIncidentCondition(instrumentation, activity, "visible occurrence end: $label") {
+                visibleRowHas(position) { it.text?.toString() == label }
+            }
+        }
+        nativeParityOnMain(instrumentation) { content.replaceNativeFixtureHistory(listOf(pending, unknown)) }
+        awaitIncidentCondition(instrumentation, activity, "pending and unknown end fixture") {
+            content.interactiveState(false).history.rows.map { it.incident } == listOf(pending, unknown) &&
+                list().adapter?.itemCount == 3 && !list().isComputingLayout
+        }
+        val beforeResume = snapshot("pending-recovery")
+        awaitEndLabel(1, activity.getString(R.string.incident_occurrence_pending_recovery))
+        awaitEndLabel(2, activity.getString(R.string.incident_occurrence_unknown_end))
+        val resumed = pending.copy(resumedAtMillis = 1_700_000_065_000L)
+        nativeParityOnMain(instrumentation) { content.replaceNativeFixtureHistory(listOf(resumed, unknown)) }
+        val resumedLabel = prepareIncidentHistory(listOf(resumed), java.util.Locale.US, java.time.ZoneOffset.UTC)
+            .rows.single().ended ?: error("Fixture recovery needs an end timestamp")
+        awaitEndLabel(1, activity.getString(R.string.incident_occurrence_end, resumedLabel))
+        awaitEndLabel(2, activity.getString(R.string.incident_occurrence_unknown_end))
+        check(snapshot("resumed-recovery") == beforeResume)
+        result.put("pending_recovery_key", pendingKey)
+            .put("pending_recovery_retained_id", beforeResume.getValue(pendingKey))
+
+        val many = List(32) { index ->
+            arrival.copy(occurredAtMillis = arrival.occurredAtMillis + index * 1_000L,
+                resumedAtMillis = arrival.occurredAtMillis + index * 1_000L + 500L,
+                observationId = 100L + index, description = if (index % 2 == 0) message else "Second fixture message")
+        }
+        val manyKeys = many.map(::recordingIncidentPresentationKey).toSet()
+        nativeParityOnMain(instrumentation) { content.replaceNativeFixtureHistory(many) }
+        awaitIncidentCondition(instrumentation, activity, "offscreen select-all fixture") {
+            content.interactiveState(false).history.rows.size == many.size && list().adapter?.itemCount == many.size + 2
+        }
+        fun awaitOffscreenRows() {
+            awaitIncidentCondition(instrumentation, activity, "at least one group has detached occurrence holders") {
+                val recycler = list()
+                val lastPosition = checkNotNull(recycler.adapter).itemCount - 1
+                !recycler.isLayoutRequested && !recycler.isComputingLayout &&
+                    recycler.findViewHolderForAdapterPosition(1) != null &&
+                    recycler.findViewHolderForAdapterPosition(lastPosition) == null
+            }
+        }
+        nativeParityOnMain(instrumentation) { list().scrollToPosition(0) }
+        awaitOffscreenRows()
+        fun awaitSelectedCount(count: Int) {
+            val label = activity.resources.getQuantityString(R.plurals.incidents_selected, count, count)
+            awaitIncidentCondition(instrumentation, activity, "selection count: $label") {
+                onboardingViewDescendants(incidentsView).any { view ->
+                    val node = view.createAccessibilityNodeInfo() ?: return@any false
+                    try { node.isVisibleToUser && node.text?.toString() == label }
+                    finally { @Suppress("DEPRECATION") node.recycle() }
+                }
+            }
+        }
+        tapToolbar(R.string.multi_select)
+        tapToolbar(R.string.incidents_select_all)
+        awaitSelectedCount(many.size)
+        tapToolbar(R.string.incidents_deselect_all)
+        awaitSelectedCount(0)
+        check(nativeParityOnMain(instrumentation) { content.interactiveCommands(false) } == expected)
+        tapToolbar(R.string.incidents_select_all)
+        awaitSelectedCount(many.size)
+        awaitOffscreenRows()
+        tapToolbar(R.string.incidents_delete_selected)
+        awaitIncidentCondition(instrumentation, activity, "offscreen selected rows deleted") {
+            content.interactiveState(false).showEmptyHistory
+        }
+        val commands = nativeParityOnMain(instrumentation) { content.interactiveCommands(false) }
+        val deleted = commands.drop(expected.size)
+        check(commands.take(expected.size) == expected && deleted.size == manyKeys.size &&
+            deleted.toSet() == manyKeys.mapTo(mutableSetOf()) { "delete:$it" })
+        result.put("offscreen_select_all_deleted_occurrences", deleted.size)
+            .put("commands", JSONArray(commands)).put("captures", JSONArray(pictures.keys.toList()))
         completed = true
     } catch (error: Throwable) {
         failure = error

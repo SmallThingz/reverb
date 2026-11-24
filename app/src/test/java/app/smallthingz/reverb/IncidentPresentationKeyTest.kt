@@ -5,8 +5,10 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
+import java.io.IOException
 import java.time.ZoneId
 import java.util.Locale
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -26,13 +28,60 @@ class IncidentPresentationKeyTest {
     private fun prepare(incidents: List<RecordingIncident>): IncidentHistoryPresentation =
         prepareIncidentHistory(incidents, Locale.US, ZoneId.of("UTC"))
 
-    private fun roundTrip(incidents: List<RecordingIncident>): List<RecordingIncident> {
-        val bytes = ByteArrayOutputStream().also { buffer ->
+    private fun encode(incidents: List<RecordingIncident>): ByteArray =
+        ByteArrayOutputStream().also { buffer ->
             DataOutputStream(buffer).use { RecordingIncidentStore.writeHistoryPayload(it, incidents) }
         }.toByteArray()
-        return DataInputStream(ByteArrayInputStream(bytes)).use { input ->
+
+    private fun roundTrip(incidents: List<RecordingIncident>): List<RecordingIncident> =
+        DataInputStream(ByteArrayInputStream(encode(incidents))).use { input ->
             readIncidentPayloadExact(input, "incident history", RecordingIncidentStore::readHistoryPayload)
         }
+
+    @Test
+    fun differentTimeSameSessionRows_rejectPresentationAfterCodecRoundTrip() {
+        val other = session.copy(occurredAtMillis = 11_000L, acknowledgedAtMillis = 20_000L,
+            description = "Different group")
+        for (incidents in listOf(listOf(session, other), listOf(other, session))) {
+            val decoded = roundTrip(incidents)
+            assertEquals(incidents, decoded)
+            assertTrue(runCatching { prepare(decoded) }.exceptionOrNull() is IOException)
+            assertArrayEquals(encode(incidents), encode(decoded)) // Rejection preserves the exact payload.
+        }
+    }
+
+    @Test
+    fun identicalRows_rejectPresentationAfterCodecRoundTrip() {
+        val incidents = listOf(session, session)
+        val decoded = roundTrip(incidents)
+        assertTrue(runCatching { prepare(decoded) }.exceptionOrNull() is IOException)
+        assertArrayEquals(encode(incidents), encode(decoded))
+    }
+
+    @Test
+    fun pendingThenResumedSingleRecord_remainsAllowedAfterCodecRoundTrip() {
+        val resumed = session.copy(resumedAtMillis = 12_000L)
+        val pendingRow = prepare(roundTrip(listOf(session))).rows.single()
+        val resumedRow = prepare(roundTrip(listOf(resumed))).rows.single()
+        assertEquals(session, pendingRow.incident)
+        assertEquals(resumed, resumedRow.incident)
+        assertEquals(pendingRow.key, resumedRow.key)
+        assertTrue(pendingRow.incident.recoveryPending)
+        assertFalse(resumedRow.incident.recoveryPending)
+        // A deleted identity is not a second visible occurrence and stays intact in storage.
+        val withTombstone = roundTrip(listOf(session.copy(acknowledgedAtMillis = Long.MIN_VALUE), resumed))
+        assertEquals(listOf(resumed), prepare(withTombstone).rows.map { it.incident })
+        assertEquals(Long.MIN_VALUE, withTombstone.first().acknowledgedAtMillis)
+    }
+
+    @Test
+    fun visibleCapacityIsBoundedWithoutRejectingItsLastAllowedRow() {
+        val incidents = List(MAX_VISIBLE_RECORDING_INCIDENTS) { index ->
+            session.copy(captureArmedAtMillis = session.captureArmedAtMillis + index)
+        }
+        assertEquals(incidents.size, prepare(incidents).rows.size)
+        val overflow = incidents + session.copy(captureArmedAtMillis = 20_000L)
+        assertTrue(runCatching { prepare(overflow) }.exceptionOrNull() is IOException)
     }
 
     @Test
@@ -51,7 +100,10 @@ class IncidentPresentationKeyTest {
 
         val rows = prepare(roundTrip(incidents)).rows
 
-        assertEquals(incidents.asReversed(), rows.map { it.incident })
+        // Equal timestamps use a stable identity tie-break, independent of storage order.
+        val expected = listOf(incidents[2], incidents[0], incidents[3], incidents[1])
+        assertEquals(expected, rows.map { it.incident })
+        assertEquals(expected, prepare(roundTrip(incidents.asReversed())).rows.map { it.incident })
         assertEquals(incidents.size, rows.map { it.key }.toSet().size)
         assertEquals(rows.map { recordingIncidentPresentationKey(it.incident) }, rows.map { it.key })
     }
@@ -122,7 +174,10 @@ class IncidentPresentationKeyTest {
 
         assertEquals(incidents.size, after.rows.map { it.key }.toSet().size)
         assertEquals(before.rows, after.rows)
-        assertEquals(incidents.asReversed(), after.rows.map { it.incident })
+        // Newest occurrence first, then a deterministic kind/identity tie-break.
+        val expected = listOf(incidents[1], incidents[0], incidents[2])
+        assertEquals(expected, after.rows.map { it.incident })
+        assertEquals(expected, prepare(roundTrip(incidents.asReversed())).rows.map { it.incident })
         assertTrue(after.hasAlert)
     }
 

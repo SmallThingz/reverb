@@ -131,6 +131,9 @@ internal fun verifyNativeLibraryExpansionClipping(instrumentation: Instrumentati
         verifyTrimPlayerDisposal(instrumentation, activity, disposal)
         val retirement = JSONArray().also { result.put("throwing_expansion_retirement", it) }
         verifyThrowingExpansionRetirement(instrumentation, activity, retirement)
+        val controllerRetirement = JSONObject()
+        result.put("throwing_controller_retirement", controllerRetirement)
+        verifyThrowingControllerRetirement(instrumentation, activity, controllerRetirement)
         result.put("passed", true)
     } catch (error: Throwable) { failure = error }
     finally {
@@ -256,6 +259,51 @@ private fun verifyTrimPlayerDisposal(instrumentation: Instrumentation, host: Nat
     evidence.put("passed", true)
 }
 
+/** Exercise the actual controller, not only the fake expansion lease. No playback is started. */
+private fun verifyThrowingControllerRetirement(instrumentation: Instrumentation, host: NativeParityActivity,
+                                              evidence: JSONObject) {
+    requireNativeParityHost(instrumentation, host)
+    nativeParityOnMain(instrumentation) {
+        val lifecycle = host.lifecycle as androidx.lifecycle.LifecycleRegistry
+        // Initialize Lifecycle's shared state-flow observer before measuring this controller's leases.
+        check(lifecycle.currentStateFlow.value == lifecycle.currentState)
+        val observersBefore = lifecycle.observerCount
+        val parent = CoroutineScope(kotlinx.coroutines.Dispatchers.Main.immediate + Job())
+        var controller: NativeRecordingInlinePlayerController? = null
+        val expected = IllegalStateException("busy retirement failed")
+        var busyCalls = 0
+        fun field(owner: Any, name: String): Any? = owner.javaClass.getDeclaredField(name).let {
+            it.isAccessible = true
+            it.get(owner)
+        }
+        try {
+            val recording = RecordingEntity("qa-controller-retirement", "Retirement", "audio/wav", 1, 1_000, 16_044,
+                "PCM", RecordingStorageType.FILE, "/unused", "qa-controller")
+            val callbacks = NativeInlinePlayerCallbacks({}, {}, {}, {}, {}, {}, {
+                busyCalls++
+                checkNotNull(controller).close()
+                throw expected
+            })
+            val current = NativeRecordingInlinePlayerController(host, host.fixtureRoot, host, parent,
+                NativeInlinePlayerInput(recording, false, false, null, { false }, callbacks), {}).also { controller = it }
+            val revision = checkNotNull(field(current, "session"))
+            val revisionJob = checkNotNull((field(revision, "revisionScope") as CoroutineScope).coroutineContext[Job])
+            val rowJob = checkNotNull((field(current, "rowScope") as CoroutineScope).coroutineContext[Job])
+            check(runCatching(current::close).exceptionOrNull() === expected)
+            check(field(revision, "disposed") == true && !revisionJob.isActive && !rowJob.isActive)
+            check(field(current, "deliveryPosted") == false)
+            check(lifecycle.observerCount == observersBefore)
+            current.close()
+            check(busyCalls == 1)
+            evidence.put("passed", true).put("busy_callback_calls", busyCalls)
+                .put("reentrant_close", true).put("revision_and_row_jobs_cancelled", true)
+                .put("delivery_retired", true).put("primary_preserved", true)
+        } finally {
+            try { controller?.close() } finally { parent.cancel() }
+        }
+    }
+}
+
 /** The expansion host may fail after retirement. Actual RecyclerView holders must still unbind. */
 private fun verifyThrowingExpansionRetirement(instrumentation: Instrumentation, host: NativeParityActivity,
                                               evidence: JSONArray) {
@@ -264,7 +312,7 @@ private fun verifyThrowingExpansionRetirement(instrumentation: Instrumentation, 
     val second = first.copy(id = "qa-throwing-expansion-2", displayName = "Second row", fileIdentity = "qa-second")
     val state = LibraryNativeListState(listOf(LibraryListItem.Recording(first), LibraryListItem.Recording(second)),
         emptySet(), false, emptySet(), emptySet(), InlinePlaybackRowOwner(first.id), null, true)
-    for (dispose in listOf(false, true)) {
+    for (dispose in listOf(false, true)) for (reenter in listOf(false, true)) {
         requireNativeParityHost(instrumentation, host)
         val expected = IllegalStateException("Expansion lease retirement failed")
         var closeCalls = 0
@@ -284,7 +332,11 @@ private fun verifyThrowingExpansionRetirement(instrumentation: Instrumentation, 
                                               screenActive: Boolean, trimRequested: Boolean) = Unit
                             override fun setEnvironment(environment: ReverbViewEnvironment) = Unit
                             override fun setPresentationAttached(attached: Boolean) = Unit
-                            override fun closePresentation() { closeCalls++; throw expected }
+                            override fun closePresentation() {
+                                closeCalls++
+                                if (reenter) checkNotNull(list).dispose()
+                                throw expected
+                            }
                         }
                 }
                 ReverbLibraryListView(host, ReverbViewEnvironment(host, false), runtime.scope, host.fixtureRoot,
@@ -306,8 +358,10 @@ private fun verifyThrowingExpansionRetirement(instrumentation: Instrumentation, 
                 check(observed === expected && closeCalls == 1)
                 check(firstRow.visibility == View.INVISIBLE && secondRow.visibility == View.INVISIBLE)
                 check(mounted.attachedRecordingAnchor(first.id) == null && mounted.attachedRecordingAnchor(second.id) == null)
-                check(adapter.itemCount == 0 && (mounted.scrollView.adapter == null) == dispose)
-                evidence.put(JSONObject().put("dispose", dispose).put("lease_close_count", closeCalls)
+                check(adapter.itemCount == 0 && (mounted.scrollView.adapter == null) == (dispose || reenter))
+                mounted.dispose()
+                check(closeCalls == 1 && adapter.itemCount == 0 && mounted.scrollView.adapter == null)
+                evidence.put(JSONObject().put("dispose", dispose).put("reenter_dispose", reenter).put("lease_close_count", closeCalls)
                     .put("both_rows_unbound", true).put("adapter_empty", true).put("primary_preserved", true))
             }
         } catch (error: Throwable) {

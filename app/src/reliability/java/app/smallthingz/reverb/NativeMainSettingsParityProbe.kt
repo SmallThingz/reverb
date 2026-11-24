@@ -6,6 +6,8 @@ import smallthingz.ui.components.NativeWindowInsetsBinding
 import smallthingz.ui.components.NativeDiscreteSliderView
 
 import smallthingz.ui.components.NativeModalWindowRuntime
+import smallthingz.ui.components.NativeBackdropBinding
+import smallthingz.ui.graphics.NoiseDrawable
 
 import smallthingz.ui.text.view.NativeTextSemanticsClip
 import smallthingz.ui.text.view.NativeTextSemanticsClipPolicy
@@ -16,9 +18,11 @@ import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Rect
+import android.graphics.drawable.Drawable
 import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
+import android.view.ContextThemeWrapper
 import android.view.View
 import android.view.KeyEvent
 import android.view.ViewGroup
@@ -973,6 +977,7 @@ internal class MainSettingsParityRender(
     private val syntheticDirectoryRegistration: (((android.net.Uri?) -> Unit) -> NativeDirectoryPickerRegistration)? = null,
     private val productionWindowFocus: Boolean = false,
     private val animatedSurfaceForProbe: Boolean = false,
+    private val productionEnvironmentForProbe: Boolean = false,
 ) : AutoCloseable {
     private var boardFocus: NativeSourceFocusPolicy? = null
     val board = object : FrameLayout(activity) {
@@ -1011,7 +1016,7 @@ internal class MainSettingsParityRender(
         }
     }
     private val density = Density(activity.resources.displayMetrics.density, activity.resources.configuration.fontScale)
-    private val resolver = createFontFamilyResolver(activity)
+    private val resolver = if (productionEnvironmentForProbe) null else createFontFamilyResolver(activity)
     private val previewState = mutableStateOf<AppThemeMode?>(null)
     private val callbacks = JSONArray()
     private var native: NativeMainScreenView? = null
@@ -1035,20 +1040,44 @@ internal class MainSettingsParityRender(
     var forbiddenCalls = 0
         private set
     val effectiveDark: Boolean get() = mainParityDark(previewState.value ?: initialMode, systemDark)
-    private val noise = ReverbNoiseDrawable(activity.resources, palette().surface)
-    private val noiseColor = if (animatedSurfaceForProbe) noise.colorTransition(board, palette().surface) {
+    private var renderedDarkForProbe = effectiveDark
+    private var productionEnvironment: ReverbViewEnvironment? = null
+    private var productionPage: NativeBackdropBinding? = null
+    private var productionWindowBackdrop: NoiseDrawable? = null
+    private var productionWindowPaletteAware = false
+    private var previousWindowBackground: Drawable? = null
+    private var previousWindowAppearance: Pair<Boolean, Boolean>? = null
+    private var windowPaletteDarkForProbe: Boolean? = null
+    private val noise = if (productionEnvironmentForProbe) null else ReverbNoiseDrawable(activity.resources, palette().surface)
+    private val noiseColor = if (animatedSurfaceForProbe) noise?.colorTransition(board, palette().surface) {
         native?.invalidateSettingsTextSurface()
     } else null
 
     init {
         try {
+        require(!productionEnvironmentForProbe || (!reference && !animatedSurfaceForProbe)) {
+            "The production environment is an opt-in native workload, separate from the v1/oracle surface"
+        }
         board.clipChildren = false
         board.clipToPadding = false
         board.isFocusable = true
         board.isFocusableInTouchMode = true
         board.defaultFocusHighlightEnabled = false
         if (Build.VERSION.SDK_INT >= 29) board.isForceDarkAllowed = false
-        board.background = noise
+        if (productionEnvironmentForProbe) {
+            // Allocate once per retained owner, just as MainActivity does. All acquired backdrop
+            // ownership is inside this guarded initialization, before any timed chip action.
+            val initial = ReverbViewEnvironment(activity, effectiveDark)
+            productionEnvironment = initial
+            productionPage = initial.appearance.backdrops.attachPage(board, initial.palette) {
+                if (!closed) native?.invalidateSettingsTextSurface()
+            }
+            installProductionWindowBackdrop(initial)
+            WindowCompat.getInsetsController(activity.window, board).apply {
+                previousWindowAppearance = isAppearanceLightStatusBars to isAppearanceLightNavigationBars
+                isAppearanceLightStatusBars = initial.appearance.modals.statusBar.darkIcons
+            }
+        } else board.background = noise
         activity.fixtureRoot.addView(board, FrameLayout.LayoutParams(-1, -1))
         applyWindowAppearance()
         if (reference) {
@@ -1138,8 +1167,34 @@ internal class MainSettingsParityRender(
         forbiddenCalls++
         error("Fixture tried a permission or picker action; do not launch external UI")
     }
-    private fun palette() = ReverbPalette.resolve(activity, effectiveDark)
-    private fun environment() = ReverbViewEnvironment(density.nativeParityDensity(), resolver, palette())
+    private fun palette() = productionEnvironment?.palette ?: ReverbPalette.resolve(activity, effectiveDark)
+    private fun environment() = productionEnvironment ?: ReverbViewEnvironment(
+        density.nativeParityDensity(), checkNotNull(resolver), palette(),
+    )
+
+    private fun installProductionWindowBackdrop(environment: ReverbViewEnvironment) {
+        // The identical reliability patch must run against the pre-migration baseline too.
+        // Only an absent ReverbDesign selects its framework-theme window background; a broken
+        // candidate factory must fail setup. Resolve reflection once, outside frame timing.
+        val design = try { Class.forName("smallthingz.ui.reverb.ReverbDesign") }
+            catch (_: ClassNotFoundException) { null }
+        val backdrop = if (design == null) {
+            // Baseline MainActivity chooses an explicit initial Light/Dark framework theme.
+            // The QA host's Theme.Reverb follows device night mode; do not inherit that color.
+            val themed = ContextThemeWrapper(activity,
+                if (effectiveDark) R.style.Theme_Reverb_Dark else R.style.Theme_Reverb_Light)
+            checkNotNull(environment.appearance.backdrops.windowBackground(themed)) {
+                "The baseline initial framework theme did not resolve a window backdrop"
+            }
+        } else {
+            productionWindowPaletteAware = true
+            design.getMethod("windowBackdrop", ReverbPalette::class.java)
+                .invoke(design.getField("INSTANCE").get(null), environment.palette) as NoiseDrawable
+        }
+        previousWindowBackground = activity.window.decorView.background
+        productionWindowBackdrop = backdrop
+        activity.window.setBackgroundDrawable(backdrop)
+    }
     fun verifyLibraryAdmission(
         instrumentation: Instrumentation,
         automation: android.app.UiAutomation,
@@ -1156,16 +1211,33 @@ internal class MainSettingsParityRender(
         callbacks.put(mode?.name ?: JSONObject.NULL)
         previewState.value = mode
         if (closed) return
-        if (noiseColor == null) noise.setBackgroundColor(palette().surface)
-        else noiseColor.retarget(palette().surface)
-        applyWindowAppearance()
-        native?.bind(NativeMainScreenInput(false, false), environment())
+        val retained = productionEnvironment
+        if (retained != null) {
+            applyWindowAppearance()
+            if (renderedDarkForProbe != effectiveDark) {
+                renderedDarkForProbe = effectiveDark
+                val next = retained.withPalette(retained.appearance.resolveColorScheme(activity, effectiveDark))
+                productionEnvironment = next
+                // ReverbDesign.bindWindowBackdrop is this color-only setter. The baseline's
+                // framework-theme background intentionally stays unchanged across previews.
+                if (productionWindowPaletteAware) productionWindowBackdrop?.setBackgroundColor(next.palette.background)
+                next.appearance.backdrops.bindPage(checkNotNull(productionPage), next.palette)
+                native?.bind(NativeMainScreenInput(false, false), next)
+            }
+        } else {
+            if (noiseColor == null) checkNotNull(noise).setBackgroundColor(palette().surface)
+            else noiseColor.retarget(palette().surface)
+            applyWindowAppearance()
+            native?.bind(NativeMainScreenInput(false, false), environment())
+        }
     }
     private fun applyWindowAppearance() {
+        if (productionEnvironmentForProbe && windowPaletteDarkForProbe == effectiveDark) return
         WindowCompat.getInsetsController(activity.window, board).apply {
-            isAppearanceLightStatusBars = !effectiveDark
+            if (!productionEnvironmentForProbe) isAppearanceLightStatusBars = !effectiveDark
             isAppearanceLightNavigationBars = !effectiveDark
         }
+        if (productionEnvironmentForProbe) windowPaletteDarkForProbe = effectiveDark
     }
 
     fun click(label: String) {
@@ -1266,7 +1338,40 @@ internal class MainSettingsParityRender(
         release { insetBinding?.close() }
         release { activity.lifecycle.removeObserver(runtimeLifecycle) }
         release { runtime?.close() }
-        release { board.removeAllViews(); (board.parent as? ViewGroup)?.removeView(board) }
+        release { board.removeAllViews() }
+        // NativeBackdropBinding has no close API. Detach cancels its ViewColorTransition frame
+        // callback; do this even when child cleanup fails, and suppress late paint delivery above.
+        release { (board.parent as? ViewGroup)?.removeView(board) }
+        if (productionEnvironmentForProbe) {
+            var stillOwnsWindow = false
+            release {
+                val backdrop = productionWindowBackdrop
+                stillOwnsWindow = backdrop != null && activity.window.decorView.background === backdrop
+            }
+            release {
+                if (stillOwnsWindow && productionWindowBackdrop != null) {
+                    activity.window.setBackgroundDrawable(previousWindowBackground)
+                }
+            }
+            release {
+                if (stillOwnsWindow) previousWindowAppearance?.let { (status, navigation) ->
+                    WindowCompat.getInsetsController(activity.window, board).apply {
+                        if (isAppearanceLightStatusBars == productionEnvironment?.appearance?.modals?.statusBar?.darkIcons) {
+                            isAppearanceLightStatusBars = status
+                        }
+                        if (windowPaletteDarkForProbe?.let { isAppearanceLightNavigationBars == !it } == true) {
+                            isAppearanceLightNavigationBars = navigation
+                        }
+                    }
+                }
+            }
+            release { board.background = null }
+            productionPage = null
+            productionWindowBackdrop = null
+            previousWindowBackground = null
+            previousWindowAppearance = null
+            productionEnvironment = null
+        }
         failure?.let { throw it }
     }
 

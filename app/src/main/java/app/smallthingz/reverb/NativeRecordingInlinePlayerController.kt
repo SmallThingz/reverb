@@ -1,5 +1,6 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.util.closePreservingPrimaryFailure
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
@@ -184,14 +185,17 @@ internal class NativeRecordingInlinePlayerController(
     override fun close() {
         if (closed) return
         closed = true
-        RecordingPlayback.observePosition(positionObservation, false)
-        activeTrimReceiver.getAndSet(null)?.detachUi()
-        input.callbacks.onBusyChange(false)
-        session.close()
-        busyEffect?.cancel()
-        rowScope.cancel()
-        main.removeCallbacks(delivery)
+        val receiver = activeTrimReceiver.getAndSet(null)
+        val previousBusyEffect = busyEffect
+        busyEffect = null
         deliveryPosted = false
+        var failure = closePreservingPrimaryFailure(null) { RecordingPlayback.observePosition(positionObservation, false) }
+        failure = closePreservingPrimaryFailure(failure) { receiver?.detachUi() }
+        failure = closePreservingPrimaryFailure(failure) { input.callbacks.onBusyChange(false) }
+        failure = closePreservingPrimaryFailure(failure, session::close)
+        failure = closePreservingPrimaryFailure(failure) { previousBusyEffect?.cancel() }
+        failure = closePreservingPrimaryFailure(failure) { rowScope.cancel() }
+        closePreservingPrimaryFailure(failure) { main.removeCallbacks(delivery) }?.let { throw it }
     }
 
     private inner class Revision(val recording: RecordingEntity) : AutoCloseable {
@@ -1009,15 +1013,15 @@ internal class NativeRecordingInlinePlayerController(
 
         override fun close() {
             if (disposed) return
-            // Same disposal ordering as the original registered effects.
-            pauseForLifecycle()
-            fineSeekPreviewController.close()
+            // Reentrant callbacks must see the terminal revision before any cleanup calls out.
             disposed = true
-            releasePlayer()
-            lifecycleOwner.lifecycle.removeObserver(lifecycleObserver)
-            playbackBookkeeping.retireExpansion(::pauseForLifecycle)
-            playbackBookkeeping.revokeResume()
-            revisionScope.cancel()
+            var failure = closePreservingPrimaryFailure(null, ::pauseForLifecycle)
+            failure = closePreservingPrimaryFailure(failure, fineSeekPreviewController::close)
+            failure = closePreservingPrimaryFailure(failure, ::releasePlayer)
+            failure = closePreservingPrimaryFailure(failure) { lifecycleOwner.lifecycle.removeObserver(lifecycleObserver) }
+            failure = closePreservingPrimaryFailure(failure) { playbackBookkeeping.retireExpansion(::pauseForLifecycle) }
+            failure = closePreservingPrimaryFailure(failure, playbackBookkeeping::revokeResume)
+            closePreservingPrimaryFailure(failure) { revisionScope.cancel() }?.let { throw it }
         }
     }
 

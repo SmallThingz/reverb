@@ -197,6 +197,7 @@
     <string name="incident_occurrence_end">End · %1$s</string>
     <string name="incident_occurrence_ongoing">Ongoing · %1$s</string>
     <string name="incident_occurrence_instant">Instantaneous</string>
+    <string name="incident_occurrence_pending_recovery">Awaiting capture resume</string>
     <string name="incident_occurrence_unknown_end">End time unknown</string>
     <string name="incident_pid_unknown">PID unknown</string>
     <string name="incident_cause_without_pid">%1$s · PID unknown</string>

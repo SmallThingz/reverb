@@ -21,6 +21,63 @@ import org.junit.Test
 
 /** Proposed tests only; no coroutine-test dependency or wall-clock backoff waits. */
 class IncidentHistoryControllerTest {
+    @Test fun duplicatePreparationUsesUnavailablePathOnInitialLoadAndRefresh() = runBlocking {
+        withTimeout(2_000L) {
+            for (previouslyLoaded in listOf(false, true)) {
+                val pending = RecordingIncident(10_000L, resumedAtMillis = 0L, pid = 42,
+                    processStartedAtMillis = 5_000L, captureArmedAtMillis = 9_000L)
+                val duplicate = listOf(pending, pending.copy(occurredAtMillis = 11_000L))
+                var stored = if (previouslyLoaded) listOf(pending) else duplicate
+                var mutations = 0
+                val access = object : IncidentHistoryAccess {
+                    override val revisions = MutableStateFlow(0L)
+                    override suspend fun readHistory() = prepareIncidentHistory(stored)
+                    override fun toggleAcknowledgedInBackground(incident: RecordingIncident) { mutations++ }
+                    override fun deleteInBackground(incidents: List<RecordingIncident>) { mutations++ }
+                }
+                val retry = ControlledRetry()
+                val controller = IncidentHistoryController(access, retry::wait)
+                val states = Channel<IncidentHistoryUiState>(Channel.UNLIMITED)
+                val observer = launch { controller.observeHistory { states.trySend(it).getOrThrow() } }
+                try {
+                    val retained = if (previouslyLoaded) {
+                        states.awaitStatus(IncidentHistoryLoadStatus.READY).history.also {
+                            stored = duplicate
+                            access.revisions.value++
+                        }
+                    } else controller.state.history
+                    val failed = states.awaitStatus(IncidentHistoryLoadStatus.UNAVAILABLE)
+                    assertSame(retained, failed.history)
+                    assertFalse(failed.canMutate)
+                    assertFalse(failed.showEmptyHistory)
+                    assertEquals(previouslyLoaded, failed.history.hasAlert)
+                    controller.toggleAcknowledged(pending)
+                    controller.delete(pending)
+                    assertEquals(0, mutations)
+                    assertEquals(duplicate, stored)
+                    assertTrue(observer.isActive)
+
+                    val firstRetry = retry.waits.receive()
+                    assertEquals(500L, firstRetry.millis)
+                    firstRetry.release.complete(Unit)
+                    val secondRetry = retry.waits.receive()
+                    assertEquals(1_000L, secondRetry.millis)
+                    assertSame(retained, controller.state.history)
+                    assertEquals(duplicate, stored)
+                    val resumed = pending.copy(resumedAtMillis = 12_000L)
+                    stored = listOf(resumed)
+                    secondRetry.release.complete(Unit)
+                    val recovered = states.awaitStatus(IncidentHistoryLoadStatus.READY)
+                    assertEquals(listOf(resumed), recovered.history.rows.map { it.incident })
+                    assertTrue(recovered.canMutate)
+                    assertTrue(observer.isActive)
+                } finally {
+                    observer.cancelAndJoin()
+                }
+            }
+        }
+    }
+
     @Test fun newerRevisionCancelsOldReadAndCannotPublishItsLateResult() = runBlocking {
         withTimeout(2_000L) {
             val access = ControlledAccess()

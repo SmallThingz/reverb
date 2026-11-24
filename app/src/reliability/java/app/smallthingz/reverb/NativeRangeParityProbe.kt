@@ -9,12 +9,16 @@ import android.content.ContextWrapper
 import android.content.Intent
 import android.content.res.Configuration
 import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
 import android.view.Choreographer
 import android.view.Display
+import android.view.InputDevice
+import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.ViewTreeObserver
 import android.view.inspector.WindowInspector
 import android.view.ViewGroup
@@ -69,11 +73,17 @@ import org.json.JSONArray
 import org.json.JSONObject
 import smallthingz.ui.components.NativeModalWindowRuntime
 import smallthingz.ui.geometry.Offset
+import smallthingz.ui.geometry.Size
 import smallthingz.ui.input.phase.NativeDragPointerChange
 import smallthingz.ui.input.phase.NativeDragPointerEvent
 import smallthingz.ui.input.phase.NativePointerPass
+import smallthingz.ui.input.phase.NativeViewPhasePointerNode
+import smallthingz.ui.input.phase.NativeViewPointerHitLayout
+import smallthingz.ui.input.phase.NativeWindowPointerCoordinates
+import smallthingz.ui.input.phase.PhasePointerRoot
 import smallthingz.ui.input.pointer.PointerType
 import smallthingz.ui.reverb.NativeRangeTimelineInput.Gesture
+import smallthingz.ui.reverb.ReverbIcon
 
 /**
  * Four actual settled Range bodies, plus the existing duration widget's safe discrete action.
@@ -265,8 +275,20 @@ internal fun verifyNativeRangeInteractionCurrent(instrumentation: Instrumentatio
         perf?.opening(activity)
         val current = nativeParityOnMain(instrumentation) {
             val clock = NativeModalWindowRuntime(activity).also { runtime = it; it.setStarted(true) }
-            RangeParityBoard(activity, dark = false, compact = true, referenceSnapshot = null,
-                nativeSnapshot = source, currentScope = clock.scope).also { board = it; it.show(false) }
+            RangeParityBoard(activity, dark = false, compact = perf != null, referenceSnapshot = null,
+                nativeSnapshot = source, currentScope = clock.scope, routedChecks = perf == null)
+                .also { board = it; it.show(false) }
+        }
+        if (perf == null) {
+            result.put("interaction_revision", 2)
+                .put("draw_scope", "Attached View pre-draw and completed draw boundaries; no compositor presentation proof")
+                .put("input_scope", "Owned PhasePointerRoot MotionEvents and production NativeRangePointerBinding; no system input injection")
+            nativeParityOnMain(instrumentation) { result.put("preparation_draws", current.preparationEvidence) }
+            repeat(2) { awaitNativeParityDraw(instrumentation, current.content(false)) }
+            nativeParityOnMain(instrumentation) {
+                current.preparationEvidence.put("completed_draw_boundaries", 2)
+                current.attachPreparedSnapshot()
+            }
         }
         awaitRangeReady(instrumentation, activity, current, false, hostTrace, settleForParity = perf == null)
         perf?.openSettled(current.content(false))
@@ -279,6 +301,13 @@ internal fun verifyNativeRangeInteractionCurrent(instrumentation: Instrumentatio
         result.put("native_range_interactions", nativeParityOnMain(instrumentation) {
             current.verifyInteractionRegressions()
         })
+        if (perf == null) {
+            // Let the original check's newly eligible Export colors finish their ordinary transition.
+            awaitRangeReady(instrumentation, activity, current, false, hostTrace)
+            val routed = JSONObject().put("passed", false)
+            result.put("routed_range_interactions", routed)
+            current.verifyRoutedInteractions(instrumentation, routed)
+        }
     } catch (error: Throwable) {
         failure = error
         try { trace?.recordFailure(error) } catch (traceError: Throwable) { error.addSuppressed(traceError) }
@@ -345,11 +374,16 @@ private class RangeParityBoard(
     referenceSnapshot: ReverbService.TimelineSnapshot?,
     private val nativeSnapshot: ReverbService.TimelineSnapshot,
     private val currentScope: CoroutineScope? = null,
+    private val routedChecks: Boolean = false,
 ) : AutoCloseable {
     val name = (if (dark) "dark" else "light") + (if (compact) "-compact" else "-regular")
     private val configuration = Configuration(host.resources.configuration).apply {
         uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or
             if (dark) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
+        // This QA Activity is manifest-locked landscape. Fit the regular body in its actual
+        // attached viewport using only this context's density; record the override as proof scope.
+        if (routedChecks) densityDpi = minOf(densityDpi,
+            (host.fixtureRoot.height * 160f / 680f).toInt().coerceAtLeast(1))
     }
     private val context = host.createConfigurationContext(configuration)
     private val density = Density(context.resources.displayMetrics.density, configuration.fontScale)
@@ -364,7 +398,20 @@ private class RangeParityBoard(
     private val source = RangeMorphSourceGeometry(0f, 0f, width * .5f, height * .5f, 180 * density.density)
     private val referenceHost by lazy { FrameLayout(context) }
     private val reference by lazy { ComposeView(context) }
-    private val nativeHost = FrameLayout(context).apply {
+    private var pointerBinding: NativeRangePointerBinding? = null
+    private val pointerCoordinates = NativeWindowPointerCoordinates { nativeHost }
+    private val pointerLayout = object : NativeViewPointerHitLayout {
+        override val placed get() = nativeHost.isAttachedToWindow && nativeHost.isShown
+        override val size get() = Size(nativeHost.width.toFloat(), nativeHost.height.toFloat())
+        override val minimumTouchTarget get() = Size.Zero
+        override val nodes: List<NativeViewPhasePointerNode> get() = emptyList()
+        override val childrenInHitOrder get() = listOfNotNull(pointerBinding?.layout)
+        override fun screenToLocal(screen: Offset) = pointerCoordinates.coordinates(nativeHost).local(screen)
+        override fun withinLayerBounds(local: Offset) = true
+    }
+    private val nativeHost: FrameLayout = (if (routedChecks) PhasePointerRoot(context,
+        pointerCoordinates::rootToScreen, pointerCoordinates::coordinates, pointerLayout, pointerCoordinates::begin)
+        else FrameLayout(context)).apply {
         // The released18dp inset is padding inside a full-window ComposeView, not a clip.
         // Match NativeCaptureContentView: child shadows may extend into that inset.
         clipChildren = false
@@ -382,6 +429,35 @@ private class RangeParityBoard(
     private var nativeOwner: NativeRangeExportOwner? = null
     private var native: ReverbRangeExportContent? = null
     private var nativeFrame: NativeRangeExportPresentation? = null
+    val preparationEvidence = JSONObject().put("pre_draws", JSONArray()).put("draw_callbacks", 0)
+    private var preparationObserver: ViewTreeObserver? = null
+    private var preparationFailure: Throwable? = null
+    private val preparationDraw = ViewTreeObserver.OnDrawListener {
+        preparationEvidence.put("draw_callbacks", preparationEvidence.getInt("draw_callbacks") + 1)
+    }
+    private val preparationPreDraw = ViewTreeObserver.OnPreDrawListener {
+        try {
+            val content = checkNotNull(native)
+            val glyph = content.controls.close.visual.glyph
+            val icon = glyph.javaClass.getDeclaredField("currentIcon").apply { isAccessible = true }.get(glyph)
+            val bounds = android.graphics.Rect()
+            val visible = glyph.getGlobalVisibleRect(bounds) && !bounds.isEmpty
+            val sample = JSONObject().put("uptime_ms", SystemClock.uptimeMillis())
+                .put("attached", content.isAttachedToWindow).put("shown", content.isShown)
+                .put("glyph_visible", visible).put("glyph", icon.toString())
+                .put("close_enabled", content.controls.close.visual.isEnabled)
+                .put("export_enabled", content.controls.exportAction.isEnabled)
+                .put("controls_alpha", content.controls.alpha.toDouble())
+                .put("snapshot_present", checkNotNull(nativeFrame).snapshotPresent)
+            preparationEvidence.getJSONArray("pre_draws").put(sample)
+            check(content.isAttachedToWindow && content.isShown && visible && icon == ReverbIcon.Close &&
+                glyph.contentDescription == context.getString(R.string.close) &&
+                content.controls.close.visual.isEnabled && !content.controls.exportAction.isEnabled &&
+                content.controls.alpha == 1f && !checkNotNull(nativeFrame).snapshotPresent) { sample.toString() }
+        } catch (error: Throwable) { if (preparationFailure == null) preparationFailure = error }
+        true
+    }
+    private var exportCallbacks = 0
     private var closed = false
 
     init {
@@ -449,7 +525,8 @@ private class RangeParityBoard(
                 scope, true, ::renderNative)
             nativeOwner = owner
             val content = ReverbRangeExportContent(context, environment, owner.state, host.lifecycle,
-                scope, host.fixtureRoot, { host.fixtureRoot }) { waveform ->
+                scope, if (routedChecks) nativeHost else host.fixtureRoot,
+                { if (routedChecks) nativeHost else host.fixtureRoot }) { waveform ->
                 val rootLocation = IntArray(2).also(host.fixtureRoot::getLocationInWindow)
                 val location = IntArray(2).also(waveform::getLocationInWindow)
                 val left = (location[0] - rootLocation[0]).toFloat()
@@ -460,6 +537,8 @@ private class RangeParityBoard(
             val side = (18 * density.density).roundToInt()
             nativeHost.addView(content, FrameLayout.LayoutParams((width - side - side).coerceAtLeast(0), height)
                 .apply { leftMargin = side; rightMargin = side })
+            if (routedChecks) pointerBinding = NativeRangePointerBinding(content, pointerCoordinates,
+                { density.density }, { ViewConfiguration.get(context).scaledTouchSlop.toFloat() })
             if (currentScope != null) {
                 owner.bind(null, source, 6.0, 0f, true, ::renderNative)
                 val first = checkNotNull(nativeFrame) { "Preparation must bind before the next display frame" }
@@ -467,17 +546,41 @@ private class RangeParityBoard(
                 check(content.controls.close.visual.glyph.contentDescription == context.getString(R.string.close))
                 check(content.controls.close.visual.isEnabled && !content.controls.exportAction.isEnabled)
             }
-            owner.bind(nativeSnapshot, source, 6.0, 0f, true, ::renderNative)
+            if (routedChecks) {
+                preparationObserver = nativeHost.viewTreeObserver.also {
+                    it.addOnPreDrawListener(preparationPreDraw)
+                    it.addOnDrawListener(preparationDraw)
+                }
+            } else owner.bind(nativeSnapshot, source, 6.0, 0f, true, ::renderNative)
         }
         if (currentScope == null) referenceHost.visibility = if (compose) View.VISIBLE else View.GONE
         nativeHost.visibility = if (compose) View.GONE else View.VISIBLE
         return content(compose)
     }
     private fun renderNative(state: RangeExportEditorState, frame: NativeRangeExportPresentation) {
-        check(!state.isPlaying && !state.isScrubbing)
+        check(!state.isPlaying && (routedChecks || !state.isScrubbing))
         nativeFrame = frame
         native?.bind(environment, frame, ReverbService.BufferSlot.ONE_SHOT,
-            { error("No Close action") }, { error("No export action") })
+            { error("No Close action") }, {
+                check(routedChecks) { "No export action" }
+                exportCallbacks++ // Dry callback only. No capture owner or export Service is installed.
+            })
+    }
+    private fun stopPreparationObservation() {
+        preparationObserver?.takeIf { it.isAlive }?.let {
+            it.removeOnPreDrawListener(preparationPreDraw)
+            it.removeOnDrawListener(preparationDraw)
+        }
+        preparationObserver = null
+    }
+    fun attachPreparedSnapshot() {
+        stopPreparationObservation()
+        preparationFailure?.let { throw it }
+        check(preparationEvidence.getInt("completed_draw_boundaries") == 2 &&
+            preparationEvidence.getInt("draw_callbacks") >= 2 &&
+            preparationEvidence.getJSONArray("pre_draws").length() >= 2)
+        preparationEvidence.put("passed", true)
+        checkNotNull(nativeOwner).bind(nativeSnapshot, source, 6.0, 0f, true, ::renderNative)
     }
     fun content(reference: Boolean): View = if (reference) referenceHost else nativeHost
     private fun wheels(reference: Boolean): Sequence<View> = rangeDescendants(content(reference)).filter {
@@ -572,6 +675,230 @@ private class RangeParityBoard(
             .put("before", before).put("after", stateEvidence(reference))
     }
 
+    /** View drawing and the real Range hit tree, with a dry export callback and pending-play token.
+     * The context density is controlled. This does not qualify system input, compositor frames,
+     * acoustic silence, audible fine-seek, or the production Home/Service snapshot handoff.
+     */
+    fun verifyRoutedInteractions(instrumentation: Instrumentation, evidence: JSONObject) {
+        check(routedChecks)
+        val content = checkNotNull(native)
+        val state = checkNotNull(nativeOwner).state
+        val root = nativeHost as PhasePointerRoot
+        val events = JSONArray()
+        val paintSamples = JSONArray()
+        evidence.put("events", events).put("export_paint", paintSamples)
+            .put("device_density_dpi", host.resources.configuration.densityDpi)
+            .put("fixture_density_dpi", configuration.densityDpi)
+            .put("viewport_pixels", JSONArray(listOf(width, height)))
+            .put("paint_scope", "Exact software Canvas pixels of the Export surface subtree at pre-draw, plus parent alpha; hardware/compositor output unqualified")
+            .put("export_callback_scope", "Dry app-binding callback count; no export owner or Service")
+            .put("silent_drag_scope", "Pending saved-playback command survives each routed event; no acoustic measurement")
+        fun <T> main(block: () -> T): T = nativeParityOnMain(instrumentation) {
+            check(!closed && !host.isFinishing && host.hasWindowFocus() && root.hasWindowFocus() &&
+                root.isAttachedToWindow && root.isShown && root.display?.displayId == Display.DEFAULT_DISPLAY)
+            block()
+        }
+        fun point(view: View, x: Float = view.width * .5f, y: Float = view.height * .5f): Offset {
+            val origin = IntArray(2).also(root::getLocationOnScreen)
+            val location = IntArray(2).also(view::getLocationOnScreen)
+            return Offset(location[0] - origin[0] + x, location[1] - origin[1] + y)
+        }
+        var downTime = 0L
+        var expectPendingPlayback = false
+        fun dispatch(action: Int, at: Offset) {
+            check(at.x >= 0 && at.y >= 0 && at.x < root.width && at.y < root.height)
+            val now = SystemClock.uptimeMillis()
+            if (action == MotionEvent.ACTION_DOWN) downTime = now
+            val screen = IntArray(2).also(root::getLocationOnScreen)
+            val properties = arrayOf(MotionEvent.PointerProperties().apply {
+                id = 0; toolType = MotionEvent.TOOL_TYPE_FINGER
+            })
+            val coordinates = arrayOf(MotionEvent.PointerCoords().apply {
+                x = at.x + screen[0]; y = at.y + screen[1]
+                pressure = if (action == MotionEvent.ACTION_UP) 0f else 1f
+                size = 1f
+            })
+            val event = MotionEvent.obtain(downTime, now, action, 1, properties, coordinates,
+                0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0)
+            event.offsetLocation(-screen[0].toFloat(), -screen[1].toFloat())
+            try {
+                val sample = JSONObject().put("action", action).put("uptime_ms", now)
+                    .put("root_xy", JSONArray(listOf(at.x, at.y)))
+                events.put(sample)
+                val handled = root.dispatchTouchEvent(event)
+                sample.put("handled", handled).put("pending_playback", RecordingPlayback.hasPendingStart())
+                    .put("start_seconds", state.startSeconds.toDouble()).put("end_seconds", state.endSeconds.toDouble())
+                check(handled)
+                check(!expectPendingPlayback || RecordingPlayback.hasPendingStart()) { "Routed drag attempted audition" }
+                check(!state.isPlaying)
+            } finally { event.recycle() }
+        }
+        val wheel = main {
+            check(ready(false) && exportCallbacks == 0)
+            checkNotNull(content.durationWheel).also {
+                val bounds = android.graphics.Rect()
+                check(it.isEnabled && it.isShown && it.getGlobalVisibleRect(bounds) &&
+                    bounds.width() == it.width && bounds.height() == it.height) { "Whole duration wheel must be visible" }
+                evidence.put("duration_dial_present_in_viewport", true)
+            }
+        }
+        val export = content.controls.exportAction
+        val surface = main {
+            generateSequence(export.parent as? View) { it.parent as? View }
+                .filterIsInstance<smallthingz.ui.components.NativeGroupLayout>().first()
+        }
+        fun paint(): Bitmap {
+            val image = Bitmap.createBitmap(surface.width, surface.height, Bitmap.Config.ARGB_8888)
+            try { surface.draw(Canvas(image)); return image }
+            catch (error: Throwable) { image.recycle(); throw error }
+        }
+        val before = main {
+            check(export.isEnabled && content.controls.alpha == 1f)
+            paint().also { bitmap ->
+                val pixels = IntArray(bitmap.width * bitmap.height)
+                bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+                check(pixels.any { android.graphics.Color.alpha(it) > 0 } && pixels.toSet().size > 2)
+                evidence.put("export_before_argb_sha256", nativeParityPixelHash(pixels))
+                    .put("export_before_fill", surface.paintedFillColor)
+            }
+        }
+        var phase = "before"
+        var paintFailure: Throwable? = null
+        val observer = main { root.viewTreeObserver }
+        val observePaint = ViewTreeObserver.OnPreDrawListener {
+            try {
+                val image = paint()
+                val difference = try { compareNativeParityPixels(before, image) } finally { image.recycle() }
+                val sample = JSONObject().put("phase", phase).put("uptime_ms", SystemClock.uptimeMillis())
+                    .put("editing", state.selectionDurationEditing).put("export_enabled", export.isEnabled)
+                    .put("callbacks", exportCallbacks).put("fill", surface.paintedFillColor)
+                    .put("controls_alpha", content.controls.alpha.toDouble()).put("difference", difference)
+                paintSamples.put(sample)
+                check(difference.getLong("different_pixels") == 0L && content.controls.alpha == 1f &&
+                    surface.paintedFillColor == evidence.getInt("export_before_fill")) { sample.toString() }
+                if (state.selectionDurationEditing) {
+                    export.performClick()
+                    check(exportCallbacks == 0) { "Export accepted while duration wheel owns the edit" }
+                }
+            } catch (error: Throwable) { if (paintFailure == null) paintFailure = error }
+            true
+        }
+        try {
+            val (down, moved) = main {
+                observer.addOnPreDrawListener(observePaint)
+                val style = environment.appearance.durationWheel
+                val timeWidth = wheel.width * (1f - style.profileWidthFraction) - style.profileGapDp * density.density
+                val down = point(wheel, timeWidth * 5f / 6f, wheel.height * .5f)
+                val moved = Offset(down.x, down.y + style.rowDp * density.density * .37f)
+                check(moved.y - down.y > ViewConfiguration.get(context).scaledTouchSlop)
+                phase = "held"
+                dispatch(MotionEvent.ACTION_DOWN, down)
+                check(state.selectionDurationEditing && export.isEnabled)
+                check(export.performClick() && exportCallbacks == 0) { "Live app guard must reject the stale enabled action" }
+                evidence.put("stale_enabled_callback_rejected", true)
+                dispatch(MotionEvent.ACTION_MOVE, moved)
+                down to moved
+            }
+            repeat(3) { awaitNativeParityDraw(instrumentation, root) }
+            main {
+                paintFailure?.let { throw it }
+                check(state.selectionDurationEditing && !export.isEnabled && exportCallbacks == 0)
+                phase = "settling"
+                dispatch(MotionEvent.ACTION_UP, moved)
+                check(state.selectionDurationEditing) { "Fractional drag must exercise asynchronous snap" }
+                evidence.put("wheel_drag_pixels", (moved.y - down.y).toDouble())
+            }
+            val deadline = SystemClock.uptimeMillis() + 3_000L
+            while (main { state.selectionDurationEditing || !export.isEnabled }) {
+                check(SystemClock.uptimeMillis() < deadline) { "Wheel did not settle and restore Export within 3s" }
+                awaitNativeParityDraw(instrumentation, root)
+                main { paintFailure?.let { throw it } }
+            }
+            main { phase = "settled" }
+            awaitNativeParityDraw(instrumentation, root)
+            main {
+                paintFailure?.let { throw it }
+                val samples = (0 until paintSamples.length()).map(paintSamples::getJSONObject)
+                check(samples.any { it.getString("phase") == "held" && it.getBoolean("editing") && !it.getBoolean("export_enabled") })
+                check(samples.any { it.getString("phase") == "settling" && it.getBoolean("editing") }) {
+                    "No pre-draw sampled the settle lock; coverage incomplete"
+                }
+                check(exportCallbacks == 0 && export.performClick() && exportCallbacks == 1)
+                evidence.put("settled_dry_export_callbacks", exportCallbacks)
+            }
+        } finally {
+            try {
+                nativeParityOnMain(instrumentation) {
+                    if (observer.isAlive) observer.removeOnPreDrawListener(observePaint)
+                    root.cancelPointerInput()
+                }
+            } finally { before.recycle() }
+        }
+
+        var playbackToken = -1L
+        val playbackContext = object : ContextWrapper(context) {
+            override fun getApplicationContext(): Context = this
+            override fun startForegroundService(service: Intent): ComponentName {
+                playbackToken = service.getLongExtra(RecordingPlaybackService.EXTRA_REQUEST, -1L)
+                return checkNotNull(service.component)
+            }
+        }
+        try {
+            main {
+                check(!RecordingPlayback.hasPendingStart())
+                val recording = RecordingEntity(id = "/unused-synthetic/range-routed.wav", displayName = "range-routed.wav",
+                    mimeType = "audio/wav", startedAtMillis = 1L, durationMillis = 8_000L, sizeBytes = 128_044L,
+                    codecSummary = "PCM", storageType = RecordingStorageType.FILE, directoryId = "/unused-synthetic",
+                    fileIdentity = "range-routed-pending-playback", createdAtMillis = 1L, lastSeenAtMillis = 1L)
+                check(RecordingPlayback.play(playbackContext, recording))
+                expectPendingPlayback = true
+                state.setTarget(RangeEditTarget.END, 7f)
+                state.setTarget(RangeEditTarget.START, 3f)
+            }
+            awaitNativeParityDraw(instrumentation, root)
+            val timeline = content.timeline
+            main {
+                val wave = timeline.waveformInput
+                val down = point(wave, timeline.timelineWidthPixels() * .5f)
+                val moved = point(wave, timeline.timelineWidthPixels() * .625f)
+                dispatch(MotionEvent.ACTION_DOWN, down)
+                dispatch(MotionEvent.ACTION_MOVE, moved)
+                dispatch(MotionEvent.ACTION_UP, moved)
+                check(kotlin.math.abs(state.startSeconds - 5f) < .001f && state.endSeconds == 7f && !state.isScrubbing)
+            }
+            // Both markers move twice, with a real owner render between MOVE events. The second
+            // delta is measured from the original DOWN in stationary timeline coordinates.
+            for (target in listOf(RangeEditTarget.START, RangeEditTarget.END)) {
+                awaitNativeParityDraw(instrumentation, root)
+                val marker = if (target == RangeEditTarget.START) timeline.endpointStart else timeline.endpointEnd
+                val (down, origin) = main {
+                    val down = point(marker)
+                    val origin = state.targetSeconds(target)
+                    dispatch(MotionEvent.ACTION_DOWN, down)
+                    dispatch(MotionEvent.ACTION_MOVE, Offset(down.x - timeline.timelineWidthPixels() * .125f, down.y))
+                    check(kotlin.math.abs(state.targetSeconds(target) - (origin - 1f)) < .001f)
+                    down to origin
+                }
+                awaitNativeParityDraw(instrumentation, root)
+                main {
+                    val movedCenter = point(marker)
+                    check(movedCenter.x < down.x - timeline.timelineWidthPixels() * .10f) { "Marker did not relocate before second MOVE" }
+                    val second = Offset(down.x - timeline.timelineWidthPixels() * .25f, down.y)
+                    dispatch(MotionEvent.ACTION_MOVE, second)
+                    dispatch(MotionEvent.ACTION_UP, second)
+                    check(kotlin.math.abs(state.targetSeconds(target) - (origin - 2f)) < .001f && !state.isScrubbing)
+                    evidence.put(target.name.lowercase() + "_marker_relocated_between_moves", true)
+                }
+            }
+            main { check(RecordingPlayback.hasPendingStart() && !state.isPlaying && !state.isScrubbing) }
+            evidence.put("routed_body_and_both_markers_preserved_pending_playback", true).put("passed", true)
+        } finally {
+            nativeParityOnMain(instrumentation) {
+                try { root.cancelPointerInput() } finally { RecordingPlayback.takeStart(playbackToken) }
+            }
+        }
+    }
+
     fun verifyInteractionRegressions(): JSONObject {
         val content = checkNotNull(native)
         val owner = checkNotNull(nativeOwner)
@@ -649,6 +976,9 @@ private class RangeParityBoard(
         fun release(block: () -> Unit) { try { block() } catch (next: Throwable) {
             if (error == null) error = next else if (error !== next) error!!.addSuppressed(next)
         } }
+        release(::stopPreparationObservation)
+        release { (nativeHost as? PhasePointerRoot)?.cancelPointerInput() }
+        release { pointerBinding?.close(); pointerBinding = null }
         release { native?.close() }
         release { nativeOwner?.close() }
         release { nativeScope?.cancel() }

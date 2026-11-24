@@ -10,6 +10,7 @@ import smallthingz.ui.reverb.ReverbIncidentLiveEnd
 import smallthingz.ui.reverb.ReverbIncidentLoadStatus
 import smallthingz.ui.reverb.ReverbIncidentOccurrence
 import smallthingz.ui.reverb.ReverbIncidentTarget
+import java.io.IOException
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -252,13 +253,27 @@ internal fun prepareIncidentHistory(
     zone: ZoneId = ZoneId.systemDefault(),
     resources: Resources? = null,
 ): IncidentHistoryPresentation {
+    // Reject ambiguous visible rows on the history-read path, before a keyed adapter can
+    // redirect their actions. Tombstones remain store-owned and never enter presentation.
+    val visible = ArrayList<RecordingIncident>(minOf(incidents.size, MAX_VISIBLE_RECORDING_INCIDENTS))
+    val keys = HashSet<String>()
+    for (incident in incidents) {
+        if (incident.deleted) continue
+        if (visible.size >= MAX_VISIBLE_RECORDING_INCIDENTS) {
+            throw IOException("Recording incident presentation exceeds its visible capacity")
+        }
+        if (!keys.add(recordingIncidentPresentationKey(incident))) {
+            throw IOException("Duplicate recording incident presentation identity")
+        }
+        visible.add(incident)
+    }
     val dateFormatter = incidentDateFormatter(locale)
     val clockFormatter = incidentClockFormatter(locale)
     fun formatDateTime(millis: Long): String {
         val instant = Instant.ofEpochMilli(millis).atZone(zone)
         return "${dateFormatter.format(instant)} · ${clockFormatter.format(instant)}"
     }
-    val newestFirst = incidents.sortedWith(compareByDescending<RecordingIncident> { it.occurredAtMillis }
+    val newestFirst = visible.sortedWith(compareByDescending<RecordingIncident> { it.occurredAtMillis }
         .thenBy(::recordingIncidentPresentationKey))
     val ongoingPattern = resources?.getString(R.string.incident_occurrence_ongoing)
     return IncidentHistoryPresentation(newestFirst.map { incident ->
@@ -281,6 +296,7 @@ internal fun prepareIncidentHistory(
                 resources == null -> ended.orEmpty()
                 ended != null -> resources.getString(R.string.incident_occurrence_end, ended)
                 incident.kind == RecordingIncidentKind.UNEXPECTED_ERROR -> resources.getString(R.string.incident_occurrence_instant)
+                incident.recoveryPending -> resources.getString(R.string.incident_occurrence_pending_recovery)
                 else -> resources.getString(R.string.incident_occurrence_unknown_end)
             },
             causeLabel = when {

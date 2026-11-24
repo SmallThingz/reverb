@@ -16,40 +16,97 @@ import java.io.File
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** Current contract through Main's real Settings hit path; microphone use is a separate selector. */
+/** Current contract through Main's real Settings hit path; device scale and microphone use are separate opt-ins. */
 internal fun verifyNativeSettingsCalibrationCurrent(
     instrumentation: Instrumentation,
     report: StringBuilder,
     liveCalibration: Boolean = false,
+    currentDeviceScale: Boolean = false,
 ) {
     val context = instrumentation.targetContext
     val currentUi=context.packageName == "app.smallthingz.reverb.uitheme.reliability"
     check(context.packageName == "app.smallthingz.reverb.nativeparity.reliability" || currentUi)
     check(!currentUi || !liveCalibration) { "Current UI calibration probe is synthetic only" }
+    check(!currentDeviceScale || !liveCalibration) { "Device-scale calibration probe is synthetic only" }
     check(context.applicationContext.javaClass == Application::class.java)
     val preferences = getRecorderPreferences(context)
     val original = preferences.all.toMap()
-    val directory = File(context.filesDir, "native-settings-calibration-current-${System.currentTimeMillis()}")
+    val selector = when {
+        currentDeviceScale -> "native_settings_calibration_current_device_scale"
+        liveCalibration -> "native_settings_calibration_live"
+        else -> "native_settings_calibration_current"
+    }
+    val scaleMode = if (currentDeviceScale) "current-device-scale" else "fixed-scale-1"
+    val directoryPrefix = if (currentDeviceScale) "native-settings-calibration-current-device-scale"
+        else "native-settings-calibration-current"
+    val directory = File(context.filesDir, "$directoryPrefix-${System.currentTimeMillis()}")
     check(directory.mkdir())
     val cases = JSONArray()
     val evidence = JSONObject().put("passed", false).put("cases", cases)
+        .put("selector", selector).put("animator_scale_mode", scaleMode)
+        .put("animator_duration_scale", JSONObject.NULL)
+        .put("animator_duration_scale_last_observed", JSONObject.NULL)
         .put("live_microphone_requested", liveCalibration)
         .put("scope", "Own-root synthetic MotionEvents, real Main/Settings pointer binding and draft; explicit synthetic calibration geometry states")
     fun publish() = writeQaEvidenceAtomically(File(directory, "result.json")) {
         it.write(evidence.toString(2).toByteArray(Charsets.UTF_8))
     }
     publish()
-    val host = if(currentUi)launchCurrentUiSmokeActivity(instrumentation) else launchNativeParityActivity(instrumentation)
+    // Keep non-finite observations serializable so admission failures retain the actual scale.
+    fun scaleEvidence(scale: Float): Any = if (scale.isFinite()) scale.toDouble() else scale.toString()
+    fun configuredAnimationScale(): Float = android.provider.Settings.Global.getFloat(context.contentResolver,
+        android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f)
+    fun sampleAnimationScale(): Pair<Float, Boolean> {
+        val scale = if (android.os.Build.VERSION.SDK_INT >= 33) android.animation.ValueAnimator.getDurationScale()
+            else android.provider.Settings.Global.getFloat(context.contentResolver,
+                android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f)
+        evidence.put("animator_duration_scale_last_observed", scaleEvidence(scale))
+        val enabled = android.animation.ValueAnimator.areAnimatorsEnabled()
+        evidence.put("animators_enabled_last_observed", enabled)
+        return scale to enabled
+    }
+    var baselineScale: Float? = null
+    fun requireDeviceAnimationScale() {
+        if (!currentDeviceScale) return
+        val expected = checkNotNull(baselineScale)
+        val (scale, enabled) = sampleAnimationScale()
+        val configured = configuredAnimationScale()
+        evidence.put("configured_animator_duration_scale_last_observed", scaleEvidence(configured))
+        check(enabled && scale.isFinite() && scale > 0f && scale == expected && configured == expected) {
+            "Device-scale probe requires unchanged enabled animator scale; baseline=$expected observed=$scale configured=$configured enabled=$enabled"
+        }
+    }
+    var launchedHost: NativeParityActivity? = null
     var render: MainSettingsParityRender? = null
     var failure: Throwable? = null
     try {
-        val current = nativeParityOnMain(instrumentation) {
-            MainSettingsParityRender(host, false, AppThemeMode.LIGHT, false, null)
-        }.also { render = it }
-        fun main(action: () -> Unit) = nativeParityOnMain(instrumentation, action)
+        if (currentDeviceScale) {
+            nativeParityOnMain(instrumentation) {
+                // ValueAnimator can still hold its process default until the first Activity
+                // connects to WindowManager. Pin the configured scale before that launch;
+                // every subsequent main block checks both the applied and configured values.
+                val scale = configuredAnimationScale()
+                baselineScale = scale
+                evidence.put("animator_duration_scale", scaleEvidence(scale))
+                    .put("animator_scale_baseline_source", "Settings.Global before host launch")
+                check(scale.isFinite() && scale > 0f) {
+                    "Device-scale probe requires a finite positive configured animator scale; observed=$scale"
+                }
+            }
+            publish()
+        }
+        val host = (if(currentUi)launchCurrentUiSmokeActivity(instrumentation) else launchNativeParityActivity(instrumentation))
+            .also { launchedHost = it }
+        fun <T> main(action: () -> T): T = nativeParityOnMain(instrumentation) {
+            requireDeviceAnimationScale()
+            action().also { requireDeviceAnimationScale() }
+        }
+        val current = main {
+            MainSettingsParityRender(host, false, AppThemeMode.LIGHT, false, null).also { render = it }
+        }
         fun await(label: String, timeout: Long = 5_000L, diagnostics: () -> String = { "" }, condition: () -> Boolean) {
             val deadline = SystemClock.uptimeMillis() + timeout
-            while (!nativeParityOnMain(instrumentation, condition)) {
+            while (!main(condition)) {
                 check(SystemClock.uptimeMillis() < deadline) { "Timed out: $label ${diagnostics()}" }
                 try {
                     awaitNativeParityDraw(instrumentation, current.board)
@@ -58,7 +115,11 @@ internal fun verifyNativeSettingsCalibrationCurrent(
                 }
             }
         }
-        fun settle() { awaitNativeParityDraw(instrumentation, current.board); instrumentation.waitForIdleSync() }
+        fun settle() {
+            awaitNativeParityDraw(instrumentation, current.board)
+            instrumentation.waitForIdleSync()
+            if (currentDeviceScale) main { }
+        }
         fun bounds(view: View): Rect {
             val p = IntArray(2); view.getLocationOnScreen(p)
             return Rect(p[0], p[1], p[0] + view.width, p[1] + view.height)
@@ -115,7 +176,7 @@ internal fun verifyNativeSettingsCalibrationCurrent(
             settle()
             main { check(view.getGlobalVisibleRect(Rect())) }
         }
-        val curve = nativeParityOnMain(instrumentation) {
+        val curve = main {
             val graph = calibrationCurrentViews(silence).filterIsInstance<SilenceCurveView>().single()
             val retiredCaptions = setOf(host.getString(R.string.silence_calibration_heading),
                 host.getString(R.string.silence_calibration_hint))
@@ -156,7 +217,7 @@ internal fun verifyNativeSettingsCalibrationCurrent(
             cases.put(JSONObject().put("case", "manual_drag_without_histogram").put("passed", true))
         }
         settle()
-        val button = nativeParityOnMain(instrumentation) { checkNotNull(silence.calibrationPointerNode).view }
+        val button = main { checkNotNull(silence.calibrationPointerNode).view }
         reveal(button)
         main {
             val action = calibrationCurrentViews(button).filterIsInstance<NativeMaterialButtonView>().single()
@@ -200,7 +261,7 @@ internal fun verifyNativeSettingsCalibrationCurrent(
             }
         }
         // Rebind only this real attached section's callback seam: native hit routing remains unchanged.
-        var state = nativeParityOnMain(instrumentation) {
+        var state = main {
             SettingsSilenceState(decodeSilenceGate(settings.owner.snapshot.silenceGate))
         }
         var taps = 0
@@ -225,7 +286,7 @@ internal fun verifyNativeSettingsCalibrationCurrent(
         }
         main { update(state) }
         settle()
-        val initial = nativeParityOnMain(instrumentation) { silence.height to bounds(button) }
+        val initial = main { silence.height to bounds(button) }
         fun stable(label: String) {
             settle()
             main {
@@ -302,7 +363,7 @@ internal fun verifyNativeSettingsCalibrationCurrent(
         }
         main { update(state.copy(calibrationError = null, sampledPeaks = List(SILENCE_GRAPH_BINS) { -70f })) }
         stable("histogram_complete")
-        val dial = nativeParityOnMain(instrumentation) {
+        val dial = main {
             calibrationCurrentViews(silence).filterIsInstance<SettingsCalibrationFitDial>().single()
         }
         reveal(dial)
@@ -402,7 +463,7 @@ internal fun verifyNativeSettingsCalibrationCurrent(
         reveal(dial)
         main { check(dial.requestFocusFromTouch()) }
         settle()
-        val keyboardScroll = nativeParityOnMain(instrumentation) { settings.savePosition() }
+        val keyboardScroll = main { settings.savePosition() }
         for ((key, expected) in listOf(
             android.view.KeyEvent.KEYCODE_MOVE_HOME to -6f,
             android.view.KeyEvent.KEYCODE_MOVE_HOME to -6f,
@@ -431,7 +492,7 @@ internal fun verifyNativeSettingsCalibrationCurrent(
         cases.put(JSONObject().put("case","fit_window_key_down_up_preserves_focus_and_scroll")
             .put("key_pairs",7).put("passed",true))
         reveal(button)
-        val progressBounds=nativeParityOnMain(instrumentation) {bounds(button)}
+        val progressBounds=main {bounds(button)}
         for(progress in listOf(0f,.25f,.75f,1f)) {
             main {update(state.copy(calibrating=true,calibrationProgress=progress))}
             settle()
@@ -445,21 +506,21 @@ internal fun verifyNativeSettingsCalibrationCurrent(
         }
         // Software View.draw evidence, sampled on real frame delivery; not compositor capture.
         fun requireAnimationScale() {
-            val scale = if (android.os.Build.VERSION.SDK_INT >= 33) android.animation.ValueAnimator.getDurationScale()
-                else android.provider.Settings.Global.getFloat(host.contentResolver,
-                    android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f)
-            check(android.animation.ValueAnimator.areAnimatorsEnabled() && scale == 1f) {
+            // The opt-in is checked before/after every main block, including each rendered band.
+            if (currentDeviceScale) return
+            val (scale, enabled) = sampleAnimationScale()
+            evidence.put("animator_duration_scale", scaleEvidence(scale))
+            check(enabled && scale == 1f) {
                 "Rendered-motion probe requires unchanged animator scale1; observed=$scale"
             }
-            evidence.put("animator_duration_scale", scale.toDouble())
         }
         main { requireAnimationScale() }
-        val visual = nativeParityOnMain(instrumentation) {
+        val visual = main {
             calibrationCurrentViews(button).single { it.javaClass.simpleName == "CalibrationActionSurface" }
         }
         val fillField = visual.javaClass.getDeclaredField("fill").apply { isAccessible = true }
         val pulseField = visual.javaClass.getDeclaredField("heldOpacity").apply { isAccessible = true }
-        fun renderedBand(determinate: Boolean): Pair<Float,String> = nativeParityOnMain(instrumentation) {
+        fun renderedBand(determinate: Boolean): Pair<Float,String> = main {
             requireAnimationScale()
             val motionValue = if (determinate)
                 (fillField.get(visual) as smallthingz.ui.animation.SpringValue<*, *>).value as Float
@@ -521,7 +582,7 @@ internal fun verifyNativeSettingsCalibrationCurrent(
         }
         cases.put(JSONObject().put("case","button_progress_inside_stable_bounds").put("passed",true))
         if(!liveCalibration) {
-            val before=nativeParityOnMain(instrumentation) {bounds(button)}
+            val before=main {bounds(button)}
             val down=SystemClock.uptimeMillis()
             main {
                 motion(MotionEvent.ACTION_DOWN,down,before.exactCenterX(),before.exactCenterY(),down)
@@ -534,19 +595,27 @@ internal fun verifyNativeSettingsCalibrationCurrent(
         }
         main { check(current.forbiddenCalls == 0) }
         check(preferences.all == original) { "Probe changed durable QA preferences" }
+        if (currentDeviceScale) main { }
         evidence.put("passed", true)
     } catch (error: Throwable) {
         failure = error; evidence.put("failure", error.stackTraceToString())
     } finally {
         failure = captureNativeParityCleanup(failure) { nativeParityOnMain(instrumentation) { render?.close() } }
-        failure = captureNativeParityCleanup(failure) { nativeParityOnMain(instrumentation) { host.finish() } }
+        failure = captureNativeParityCleanup(failure) { nativeParityOnMain(instrumentation) { launchedHost?.finish() } }
         failure = captureNativeParityCleanup(failure) { check(preferences.all == original) }
+        if (currentDeviceScale && baselineScale != null) {
+            failure = captureNativeParityCleanup(failure) { nativeParityOnMain(instrumentation) { requireDeviceAnimationScale() } }
+        }
         if (failure != null) evidence.put("passed", false).put("failure", failure!!.stackTraceToString())
-        publish()
         report.appendLine("SETTINGS_CALIBRATION_CURRENT_EVIDENCE ${directory.absolutePath}")
+        report.appendLine("SETTINGS_CALIBRATION_ANIMATOR_SCALE selector=$selector mode=$scaleMode " +
+            "scale=${evidence.opt("animator_duration_scale")} last_observed=${evidence.opt("animator_duration_scale_last_observed")} " +
+            "enabled=${evidence.opt("animators_enabled_last_observed")}")
+        publish()
     }
     failure?.let { throw it }
-    report.appendLine("PASS native_settings_calibration_current real Settings root drag and stable calibration geometry; live=$liveCalibration")
+    val passSelector = if (currentDeviceScale) selector else "native_settings_calibration_current"
+    report.appendLine("PASS $passSelector real Settings root drag and stable calibration geometry; live=$liveCalibration")
 }
 
 private fun calibrationCurrentViews(root: View): Sequence<View> = sequence {

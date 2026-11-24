@@ -150,6 +150,7 @@ internal fun verifyNativeHomeHydrationCurrent(instrumentation: Instrumentation, 
         awaitNativeParityDraw(instrumentation, mounted)
         nativeParityOnMain(instrumentation) {
             checkCaptureHydration(mounted, initial, selected, actions, navigation, false, insets)
+            checkRejectedCaptureBinding(host)
             checkReverbToolbarSlots(host, environment, runtime, navigation, insets)
         }
         result.put("capture_hydration_presentation", true).put("shared_toolbar_slots", true).put("passed", true)
@@ -182,10 +183,68 @@ private fun checkCaptureHydration(screen: ReverbHomeScreenView, initial: ReverbH
     check(renderer.visibility == View.VISIBLE)
     check(readout.visibility == View.INVISIBLE)
     check(!control.isEnabled)
+    val message = screen.context.getString(smallthingz.ui.R.string.recorder_connection_unavailable)
+    fun hasStatus(label: String) = homeViewDescendants(screen).any {
+        it.importantForAccessibility == View.IMPORTANT_FOR_ACCESSIBILITY_YES &&
+            if (it is smallthingz.ui.text.view.ParagraphView) it.getText() == label
+            else it.contentDescription == label
+    }
+    val loading = screen.context.getString(smallthingz.ui.R.string.loading_audio_history)
+    check(hasStatus(loading))
+    bind(initial.copy(serviceConnected = false, serviceBindingRejected = true))
+    check(hasStatus(message) && !hasStatus(loading))
+    check(readout.visibility == View.INVISIBLE && !control.isEnabled)
+    bind(initial)
+    check(!hasStatus(message) && hasStatus(loading))
     bind(resolved)
+    check(!hasStatus(message) && !hasStatus(loading))
     check(renderer === homeViewDescendants(screen).filterIsInstance<AudioReactiveBlobView>().single())
     check(readout.visibility == View.VISIBLE)
     check(control.isEnabled)
+}
+
+private fun checkRejectedCaptureBinding(host: NativeParityActivity) {
+    val name = android.content.ComponentName(host, ReverbService::class.java)
+    val candidates = mutableListOf<android.content.ServiceConnection>()
+    val context = object : android.content.ContextWrapper(host) {
+        override fun bindService(intent: android.content.Intent, connection: android.content.ServiceConnection,
+            flags: Int): Boolean {
+            candidates += connection
+            if (candidates.size == 2) throw SecurityException("synthetic recorder bind rejection")
+            return candidates.size == 3
+        }
+
+        override fun unbindService(connection: android.content.ServiceConnection) {
+            check(connection === candidates.last())
+        }
+    }
+    var rejected = 0
+    var accepted = 0
+    val lifecycle = object : androidx.lifecycle.LifecycleOwner {
+        override val lifecycle = androidx.lifecycle.LifecycleRegistry(this)
+    }
+    val binding = CaptureServiceUiOwner().bind(context, lifecycle, View(host), { true },
+        object : CaptureServiceUiOwner.BindingCallbacks {
+            override fun bindingAccepted() { accepted++ }
+            override fun bindingRejected() { rejected++ }
+            override fun unavailable(markSavingAsCancelRequested: Boolean) = error("Unexpected disconnect")
+            override fun connected(connectedService: ReverbService) = error("No service in this fixture")
+            override fun stopped() = Unit
+        })
+    try {
+        repeat(3) { attempt ->
+            lifecycle.lifecycle.currentState = androidx.lifecycle.Lifecycle.State.STARTED
+            check(candidates.size == attempt + 1)
+            check(rejected == minOf(attempt + 1, 2))
+            check(accepted == if (attempt == 2) 1 else 0)
+            if (attempt < 2) {
+                candidates.last().onServiceDisconnected(name)
+                lifecycle.lifecycle.currentState = androidx.lifecycle.Lifecycle.State.CREATED
+            }
+        }
+    } finally {
+        binding.close()
+    }
 }
 
 private fun checkReverbToolbarSlots(host: NativeParityActivity, environment: ReverbViewEnvironment,

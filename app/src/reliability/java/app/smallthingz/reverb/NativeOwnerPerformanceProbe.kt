@@ -34,6 +34,7 @@ private val ART_COUNTER_FIELDS = listOf(
 internal val nativeOwnerPerformanceSelectors = setOf(
     "native_owner_perf_menu", "native_owner_perf_home_mount", "native_owner_perf_retention_mount", "native_owner_perf_range",
     "native_owner_perf_theme", "native_owner_perf_retention",
+    "native_owner_perf_theme_v2", "native_owner_perf_retention_v2",
 )
 
 /** One actual app owner per iteration, reopened inside one instrumentation process. */
@@ -41,12 +42,15 @@ internal fun verifyNativeOwnerPerformance(instrumentation: Instrumentation, repo
     val context = instrumentation.targetContext
     check(context.packageName == "app.smallthingz.reverb.uitheme.reliability")
     check(context.applicationContext.javaClass == Application::class.java && Build.VERSION.SDK_INT >= 31)
-    val retainedSettings = selector == "native_owner_perf_theme" || selector == "native_owner_perf_retention"
+    val productionEnvironmentForProbe = selector == "native_owner_perf_theme_v2" || selector == "native_owner_perf_retention_v2"
+    val retainedSettings = selector == "native_owner_perf_theme" || selector == "native_owner_perf_retention" ||
+        productionEnvironmentForProbe
     val workload: ((Instrumentation, StringBuilder) -> Unit)? = when (selector) {
         "native_owner_perf_menu" -> ::verifyNativeLibraryMenuCurrent
         "native_owner_perf_home_mount" -> ::verifyNativeThemeMatrix
         "native_owner_perf_retention_mount" -> ::verifyNativeRetentionInputParity
-        "native_owner_perf_theme", "native_owner_perf_retention" -> null
+        "native_owner_perf_theme", "native_owner_perf_retention",
+        "native_owner_perf_theme_v2", "native_owner_perf_retention_v2" -> null
         "native_owner_perf_range" -> ::verifyNativeRangeInteractionCurrent
         else -> error("Unknown current owner workload $selector")
     }
@@ -57,6 +61,8 @@ internal fun verifyNativeOwnerPerformance(instrumentation: Instrumentation, repo
         "native_owner_perf_range" -> "range-synthetic-open-v1"
         "native_owner_perf_theme" -> "settings-retained-theme-chip-v1"
         "native_owner_perf_retention" -> "settings-retained-retention-chip-v1"
+        "native_owner_perf_theme_v2" -> "settings-retained-theme-chip-v2-production-environment"
+        "native_owner_perf_retention_v2" -> "settings-retained-retention-chip-v2-production-environment"
         else -> error("Unknown current owner workload $selector")
     }
     val directory = File(context.filesDir, "native-owner-performance-${System.currentTimeMillis()}")
@@ -74,7 +80,11 @@ internal fun verifyNativeOwnerPerformance(instrumentation: Instrumentation, repo
     var failure: Throwable? = null
     var settings: NativeSettingsOwnerPerfSession? = null
     try {
-        if (retainedSettings) settings = NativeSettingsOwnerPerfSession(instrumentation, theme = selector == "native_owner_perf_theme")
+        if (retainedSettings) settings = NativeSettingsOwnerPerfSession(
+            instrumentation,
+            theme = selector == "native_owner_perf_theme" || selector == "native_owner_perf_theme_v2",
+            productionEnvironmentForProbe = productionEnvironmentForProbe,
+        )
         repeat(PERF_CYCLES) { index ->
             val entry = JSONObject().put("cycle", index)
                 .put("phase", if (retainedSettings) {

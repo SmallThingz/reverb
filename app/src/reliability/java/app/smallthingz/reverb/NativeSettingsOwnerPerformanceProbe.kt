@@ -24,6 +24,7 @@ import smallthingz.ui.components.NativeSegmentedChoice
 internal class NativeSettingsOwnerPerfSession(
     private val instrumentation: Instrumentation,
     private val theme: Boolean,
+    productionEnvironmentForProbe: Boolean = false,
 ) : AutoCloseable {
     private val context = instrumentation.targetContext
     private val preferences = getRecorderPreferences(context).all.toMap()
@@ -39,7 +40,11 @@ internal class NativeSettingsOwnerPerfSession(
     init {
         try {
             render = nativeParityOnMain(instrumentation) {
-                MainSettingsParityRender(host, false, AppThemeMode.LIGHT, false, null, animatedSurfaceForProbe = true)
+                MainSettingsParityRender(
+                    host, false, AppThemeMode.LIGHT, false, null,
+                    animatedSurfaceForProbe = !productionEnvironmentForProbe,
+                    productionEnvironmentForProbe = productionEnvironmentForProbe,
+                )
             }
             val openLabel = host.getString(R.string.open_settings)
             await { render.actionCount(openLabel) == 1 }

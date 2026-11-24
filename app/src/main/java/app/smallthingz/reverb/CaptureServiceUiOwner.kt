@@ -37,6 +37,7 @@ internal class CaptureServiceUiOwner {
 
     interface BindingCallbacks {
         fun bindingAccepted() = Unit
+        fun bindingRejected() = unavailable(markSavingAsCancelRequested = false)
         fun connected(connectedService: ReverbService)
         fun unavailable(markSavingAsCancelRequested: Boolean)
         fun stopped()
@@ -137,7 +138,7 @@ internal class CaptureServiceUiOwner {
                 if (connectionGeneration == bindingGeneration[0]) {
                     connectionGeneration++
                 }
-                callbacks.unavailable(markSavingAsCancelRequested = false)
+                callbacks.bindingRejected()
             }
         }
 

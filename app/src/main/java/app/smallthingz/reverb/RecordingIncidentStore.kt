@@ -344,6 +344,30 @@ internal fun recordingIncidentReferenceMatches(
     return candidate.occurredAtMillis == reference.occurredAtMillis
 }
 
+/** Shared mutation authority: retain legacy compatibility, but never choose an arbitrary match. */
+internal fun recordingIncidentMutationIndex(
+    existing: List<RecordingIncident>,
+    target: RecordingIncident,
+): Int? {
+    val matches = existing.indices.filter { recordingIncidentReferenceMatches(existing[it], target) }
+    return matches.singleOrNull() ?: matches.singleOrNull { index ->
+        val candidate = existing[index]
+        candidate.pid == target.pid && candidate.processStartedAtMillis == target.processStartedAtMillis &&
+            candidate.captureArmedAtMillis == target.captureArmedAtMillis && candidate.occurredAtMillis == target.occurredAtMillis
+    }
+}
+
+internal fun toggleRecordingIncidentAcknowledgementInHistory(
+    existing: List<RecordingIncident>,
+    target: RecordingIncident,
+    acknowledgedAtMillis: Long,
+): List<RecordingIncident>? {
+    val index = recordingIncidentMutationIndex(existing, target) ?: return null
+    return existing.toMutableList().apply {
+        this[index] = toggleRecordingIncidentAcknowledgement(this[index], acknowledgedAtMillis)
+    }
+}
+
 /** Targets are captured before background admission. New arrivals, including those with the
  * same message, keep their own identity and survive deletion of this snapshot. */
 internal fun markRecordingIncidentsDeleted(
@@ -351,12 +375,7 @@ internal fun markRecordingIncidentsDeleted(
     targets: List<RecordingIncident>,
 ): List<RecordingIncident>? {
     val indices = targets.mapNotNullTo(mutableSetOf()) { target ->
-        val matches = existing.indices.filter { recordingIncidentReferenceMatches(existing[it], target) }
-        matches.singleOrNull() ?: matches.singleOrNull { index ->
-            val candidate = existing[index]
-            candidate.pid == target.pid && candidate.processStartedAtMillis == target.processStartedAtMillis &&
-                candidate.captureArmedAtMillis == target.captureArmedAtMillis && candidate.occurredAtMillis == target.occurredAtMillis
-        }
+        recordingIncidentMutationIndex(existing, target)
     }
     if (indices.isEmpty()) return null
     return existing.mapIndexed { index, incident ->
@@ -1385,16 +1404,9 @@ internal object RecordingIncidentStore {
         val appContext = context.applicationContext
         val file = historyFile(appContext)
         val existing = readHistory(file)
-        val index = existing.indexOfFirst { candidate ->
-            recordingIncidentReferenceMatches(candidate, incident)
-        }
-        if (index < 0) return existing
-        val updated = existing.toMutableList().apply {
-            this[index] = toggleRecordingIncidentAcknowledgement(
-                incident = this[index],
-                acknowledgedAtMillis = System.currentTimeMillis(),
-            )
-        }
+        val updated = toggleRecordingIncidentAcknowledgementInHistory(
+            existing, incident, System.currentTimeMillis(),
+        ) ?: return existing
         writeHistory(file, updated)
         signalHistoryChanged()
         return updated

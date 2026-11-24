@@ -33,6 +33,7 @@ import smallthingz.ui.text.view.ParagraphView
 import smallthingz.ui.graphics.Color as NativeColor
 import smallthingz.ui.graphics.toArgb
 import smallthingz.ui.unit.Density
+import smallthingz.ui.unit.sp
 
 /** Deterministic colors on the existing mounted Settings owners; no production probe hooks. */
 internal fun verifyNativeSettingsThemeContrast(instrumentation: Instrumentation, report: StringBuilder) {
@@ -254,7 +255,12 @@ private fun verifySettingsBackgroundWarnings(instrumentation: Instrumentation, h
 private fun verifyRetentionEditorPaletteGeometry(host: NativeParityActivity): JSONObject {
     val light = ReverbViewEnvironment(host, false)
     val dark = light.withPalette(ReverbPalette.fallback(true))
-    val editor = ReverbRetentionInputView(host, light)
+    val editor = ReverbRetentionInputView(host, light).apply {
+        // This isolated geometry fixture measures the editor directly. TextView's
+        // later RTL relayout still requires the parameters a real parent supplies.
+        layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT)
+    }
     val draft = "1:23"
     fun bind(environment: ReverbViewEnvironment) {
         editor.bind(draft, ReverbRetentionMode.TIME, host.getString(R.string.buffer_one_shot), environment,
@@ -288,12 +294,29 @@ private fun verifyRetentionEditorPaletteGeometry(host: NativeParityActivity): JS
         check(editor.highlightColor == dark.appearance.editorVisuals.selectionColor(dark.palette.primary))
         check(editor.text.toString() == draft && editor.selectionStart == 1 && editor.selectionEnd == 3)
 
-        val larger = ReverbViewEnvironment(Density(dark.textDensity.density, dark.textDensity.fontScale * 1.4f),
+        // The nonlinear tables leave 34sp unchanged between scales 1 and 1.5. A changed
+        // font scale must invalidate geometry even on that plateau; it need not grow text.
+        val changedScale = ReverbViewEnvironment(Density(dark.textDensity.density, dark.textDensity.fontScale * 1.4f),
             dark.sharedFontResolver, dark.palette)
+        bind(changedScale)
+        measureAndPlace()
+        val changedSpan = lineHeightSpan()
+        val changedSize = editor.textSize
+        val expectedChangedSize = with(changedScale.textDensity) {
+            changedScale.appearance.editorVisuals.largeValueText.fontSizeSp.sp.toPx()
+        }
+        check(changedSpan !== originalSpan && kotlin.math.abs(changedSize - expectedChangedSize) < .001f) {
+            "Changed font scale did not rebind geometry: size=$changedSize expected=$expectedChangedSize"
+        }
+        // Scale 2 crosses the large-text plateau. Keep a real size-change assertion too.
+        val larger = ReverbViewEnvironment(Density(dark.textDensity.density,
+            maxOf(2f, changedScale.textDensity.fontScale * 1.4f)), dark.sharedFontResolver, dark.palette)
         bind(larger)
         measureAndPlace()
         val largerSpan = lineHeightSpan()
-        check(largerSpan !== originalSpan && editor.textSize > originalSize)
+        check(largerSpan !== changedSpan && editor.textSize > changedSize) {
+            "Larger font scale did not replace geometry: size=${editor.textSize} previous=$changedSize"
+        }
 
         editor.layoutDirection = View.LAYOUT_DIRECTION_RTL
         bind(larger)
@@ -303,6 +326,10 @@ private fun verifyRetentionEditorPaletteGeometry(host: NativeParityActivity): JS
         return JSONObject().put("name", "retention_palette_reuses_native_geometry")
             .put("light_ink", originalInk).put("dark_ink", editor.currentTextColor)
             .put("original_text_size_px", originalSize.toDouble()).put("larger_text_size_px", editor.textSize.toDouble())
+            .put("original_font_scale", light.textDensity.fontScale.toDouble())
+            .put("changed_font_scale", changedScale.textDensity.fontScale.toDouble())
+            .put("changed_text_size_px", changedSize.toDouble())
+            .put("larger_font_scale", larger.textDensity.fontScale.toDouble())
             .put("same_measured_layout_and_line_height_span_after_palette", true)
             .put("font_scale_and_rtl_replace_line_height_span", true)
     } finally {
@@ -563,7 +590,8 @@ private class SettingsThemeSamples(
         check(view.isAttachedToWindow && view.hasFocus() && view.text.toString() == editorRaw)
         check((view.selectionStart to view.selectionEnd) == editorSelection)
         val motion = themeEditorMotion(view)
-        val cursor = themeField(view, "cursorDrawable").get(view)
+        val cursor = themeField(smallthingz.ui.components.NativeCaretEditText::class.java, "cursor").get(view)
+        if (android.os.Build.VERSION.SDK_INT >= 29) check(view.textCursorDrawable === cursor)
         val paint = themeField(cursor, "paint").get(cursor) as Paint
         check(paint.color == motion.color(1))
         check(view.highlightColor == ((motion.color(1) and 0x00ffffff) or 0x66000000))

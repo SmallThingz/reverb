@@ -131,6 +131,90 @@ class NativeSpringFineSeekStateTest {
         assertEquals("reopened:begin", h.events.last())
     }
 
+    @Test fun pointerFailureRemainsPrimaryWhenCancelReentersReleaseAndThrows() {
+        val h = Harness()
+        val primary = IllegalStateException("begin failed")
+        val cleanup = IllegalStateException("cancel failed")
+        var cancelled = 0
+        h.state.bind(h.binding("throwing").copy(
+            onBeginFineAdjust = { throw primary },
+            onCancelFineAdjust = {
+                cancelled++
+                h.state.release()
+                throw cleanup
+            },
+        ), 10f)
+        assertSame(primary, runCatching { h.send(event(266f, 60f, true, false)) }.exceptionOrNull())
+        assertEquals(listOf(cleanup), primary.suppressed.toList())
+        assertFalse(h.state.dragging)
+        assertFalse(h.state.needsFrames)
+        h.state.cancel()
+        h.state.release()
+        h.send(event(266f, 60f, false, true))
+        assertEquals(1, cancelled)
+        assertFalse(h.events.any { it.endsWith(":end") || it.endsWith(":toggle") })
+    }
+
+    @Test fun returnInvalidationFailureDoesNotSkipAudioCancellationOrRetainRun() {
+        val h = Harness()
+        val expected = IllegalStateException("return invalidation failed")
+        var failInvalidation = false
+        var cancelled = 0
+        val state = NativeSpringFineSeekState({ if (failInvalidation) throw expected }, {})
+        state.bind(h.binding("throwing").copy(onCancelFineAdjust = { cancelled++ }), 10f)
+        state.pointer(event(266f, 60f, true, false), NativePointerPass.MAIN, geometry)
+        failInvalidation = true
+        assertSame(expected, runCatching(state::cancel).exceptionOrNull())
+        failInvalidation = false
+        state.cancel()
+        state.release()
+        assertEquals(1, cancelled)
+        assertFalse(state.dragging)
+        assertFalse(state.needsFrames)
+    }
+
+    @Test fun normalReleaseKeepsVisualFailurePrimaryWhenEndReentersReleaseAndThrows() {
+        val h = Harness()
+        val visualFailure = IllegalStateException("return invalidation failed")
+        val endFailure = IllegalStateException("host end failed")
+        var failInvalidation = false
+        var ended = 0
+        var cancelled = 0
+        val state = NativeSpringFineSeekState({ if (failInvalidation) throw visualFailure }, {})
+        state.bind(h.binding("normal-up").copy(
+            onEndFineAdjust = {
+                ended++
+                h.events += "normal-up:end"
+                failInvalidation = false
+                state.cancel()
+                state.release()
+                throw endFailure
+            },
+            onCancelFineAdjust = { cancelled++ },
+        ), 10f)
+        state.pointer(event(266f, 60f, true, false), NativePointerPass.MAIN, geometry)
+        state.frame(1_000_000_000L)
+        state.frame(1_010_000_000L)
+        val pending = h.pending.single()
+        assertTrue(pending > 0f)
+        failInvalidation = true
+
+        assertSame(visualFailure, runCatching {
+            state.pointer(event(266f, 60f, false, true), NativePointerPass.MAIN, geometry)
+        }.exceptionOrNull())
+        assertEquals(listOf(endFailure), visualFailure.suppressed.toList())
+        assertEquals(listOf(pending), h.commits)
+        assertEquals(listOf("normal-up:start", "normal-up:begin", "normal-up:commit", "normal-up:end"), h.events)
+        assertFalse(state.dragging)
+        assertFalse(state.needsFrames)
+        assertEquals(0f, state.horizontalPull, 0f)
+        state.cancel()
+        state.release()
+        state.pointer(event(266f, 60f, false, true), NativePointerPass.MAIN, geometry)
+        assertEquals(1, ended)
+        assertEquals(0, cancelled)
+    }
+
     @Test fun elapsedFrameHitchIsCappedToFiftyMillis() {
         val h = Harness()
         h.send(event(266f, 60f, true, false))

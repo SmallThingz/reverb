@@ -39,17 +39,26 @@ internal fun verifyNativeRetentionKeyboardParity(
     instrumentation: Instrumentation,
     report: StringBuilder,
     keyboardSessionNonce: String?,
+    selectedMode: String? = null,
 ) {
     val context = instrumentation.targetContext
     check(context.packageName in setOf("app.smallthingz.reverb.nativeparity.reliability",
         "app.smallthingz.reverb.uitheme.reliability"))
     check(context.applicationContext.javaClass == Application::class.java)
     checkNotNull(keyboardSessionNonce) { "The sole targeted keyboard coordinator is required" }
+    val modes = when (selectedMode) {
+        null, "all" -> listOf(RetentionMode.TIME, RetentionMode.SIZE)
+        "time" -> listOf(RetentionMode.TIME)
+        "size" -> listOf(RetentionMode.SIZE)
+        else -> error("Unknown retention keyboard mode")
+    }
+    val expectedFlows = modes.size * 2
     check(Build.VERSION.SDK_INT >= 30) { "Physical display/IME window evidence requires API30+" }
     val directory = File(context.filesDir, "native-retention-keyboard-${System.currentTimeMillis()}")
     check(directory.mkdir())
     val flows = JSONArray()
     val result = JSONObject().put("schema", 1).put("flows", flows).put("passed", false)
+        .put("selected_mode", selectedMode ?: "all").put("expected_flows", expectedFlows)
         .put("scope", "Actual own-QA focused editing with visible real IME and stage-bound hardware keys")
         .put("not_qualified", JSONArray(listOf("soft-key composition", "drag selection",
             "other IMEs", "production persistence", "cursor animation pixel/frame equality")))
@@ -70,7 +79,7 @@ internal fun verifyNativeRetentionKeyboardParity(
         val typography = Class.forName("app.smallthingz.reverb.ReverbThemeKt")
             .getDeclaredField("ReverbTypography").apply { isAccessible = true }.get(null) as Typography
         val referenceCallbacks = mutableMapOf<RetentionMode, List<String>>()
-        for (mode in listOf(RetentionMode.TIME, RetentionMode.SIZE)) {
+        for (mode in modes) {
             for (reference in listOf(true, false)) {
                 val renderer = if (reference) "compose" else "native"
                 val modeName = if (mode == RetentionMode.TIME) "time" else "size"
@@ -158,7 +167,7 @@ internal fun verifyNativeRetentionKeyboardParity(
                 writeRetentionKeyboardEvidence(directory, result, null)
             }
         }
-        check(completed == 4)
+        check(completed == expectedFlows)
     } catch (error: Throwable) {
         failure = error
         result.put("terminal_error", android.util.Log.getStackTraceString(error))
@@ -174,7 +183,7 @@ internal fun verifyNativeRetentionKeyboardParity(
         mounted = null
         cleanup { host?.let { activity -> nativeParityOnMain(instrumentation) { activity.finish() } } }
         cleanup { interactiveWindows?.close() }
-        result.put("completed_flows", completed).put("passed", failure == null && completed == 4)
+        result.put("completed_flows", completed).put("passed", failure == null && completed == expectedFlows)
         var evidenceWritten = false
         try {
             writeRetentionKeyboardEvidence(directory, result, null)
@@ -193,7 +202,9 @@ internal fun verifyNativeRetentionKeyboardParity(
             .append(directory.name).append("/result.json\n")
     }
     failure?.let { throw it }
-    report.append("PASS native_retention_keyboard flows=4\n")
+    report.append("PASS native_retention_keyboard flows=$expectedFlows")
+    if (expectedFlows != 4) report.append(" mode=$selectedMode")
+    report.append('\n')
 }
 
 private class KeyboardRawOwner(initial: String) : RetentionKeyboardRawOwner {

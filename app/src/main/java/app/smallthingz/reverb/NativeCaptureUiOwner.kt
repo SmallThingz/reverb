@@ -89,6 +89,7 @@ internal class NativeCaptureUiOwner(
     private var captureCommandOwner = CaptureCommandUiOwner<ReverbService.UiCaptureCommandResult>()
     private var service: ReverbService? = null
     private var serviceStateHydrated = false
+    private var serviceBindingRejected = false
     private var isListening = false
     private var activeBuffer: BufferSlot? = null
     private var isSaving = false
@@ -162,7 +163,18 @@ internal class NativeCaptureUiOwner(
         view.viewTreeObserver.addOnWindowFocusChangeListener(focus)
         binding = serviceUiOwner.bind(context, lifecycleOwner, view, screenAlive::get,
             object : CaptureServiceUiOwner.BindingCallbacks {
+                override fun bindingAccepted() {
+                    if (serviceBindingRejected) {
+                        serviceBindingRejected = false
+                        publish()
+                    }
+                }
+                override fun bindingRejected() {
+                    serviceBindingRejected = true
+                    unavailable(markSavingAsCancelRequested = false)
+                }
                 override fun connected(connectedService: ReverbService) {
+                    serviceBindingRejected = false
                     if (service != null && service !== connectedService) clearConnectedServiceState(false)
                     bookkeeping.latestListeningCommandGeneration = Long.MIN_VALUE
                     serviceStateHydrated = false
@@ -230,7 +242,7 @@ internal class NativeCaptureUiOwner(
             BufferMetrics(loopingDurationSeconds, loopingPayloadBytes), oneShotEnabled, oneShotFull,
             loopingEnabled, resolvedRetentionMode, isListening, isSaving, service != null,
             serviceStateHydrated, isPreparingRange, oneShotBlobController, loopingBlobController,
-            visualizerVisible, skipSilenceEnabled),
+            visualizerVisible, skipSilenceEnabled, serviceBindingRejected),
         selectedBuffer, pendingClearBuffer,
         bufferClearStatus?.takeIf { activeClearOperationId == it.operationId },
         showExportClampDialog, clampWarningSeconds, rangeSnapshot, rangeSnapshotBuffer, saveStatus, errorMessage,

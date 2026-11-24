@@ -37,7 +37,7 @@ internal fun verifyNativeLibraryAdmission(
 ): JSONObject {
     requireNativeParityHost(instrumentation, activity)
     val result = JSONObject().put("passed", false)
-        .put("scope", "Library Ready/Empty/Error child advertisement, present and offscreen")
+        .put("scope", "Library Loading/Ready/Empty/Error child advertisement, present and offscreen")
         .put("unqualified", JSONArray(listOf("recordings/catalog", "motion", "TalkBack")))
     val branches = JSONArray()
     result.put("branches", branches)
@@ -45,7 +45,7 @@ internal fun verifyNativeLibraryAdmission(
     var fixture: LibraryAdmissionFixture? = null
     var failure: Throwable? = null
     try {
-        for (branch in listOf("ready", "empty", "error")) {
+        for (branch in listOf("loading", "ready", "empty", "error")) {
             val entry = JSONObject().put("branch", branch).put("passed", false)
             branches.put(entry)
             val current = nativeParityOnMain(instrumentation) {
@@ -140,11 +140,24 @@ internal fun verifyNativeLibraryAdmission(
                         node.optString("text") == current.controlText && node.getBoolean("visible")
                     }) { "Fixture's fixed visible control paragraph is missing" }
                     for (marker in current.markers) {
-                        val present = (0 until raw.length()).any { index ->
+                        val count = (0 until raw.length()).count { index ->
                             val node = raw.getJSONObject(index)
                             node.optString("text") == marker || node.optString("description") == marker
                         }
-                        check(present != offscreen) { "$branch: unexpected platform admission for $marker" }
+                        check(count == if (offscreen) 0 else 1) { "$branch: unexpected platform admission for $marker" }
+                    }
+                    if (branch == "loading" && !offscreen) {
+                        val loader = (0 until raw.length()).map(raw::getJSONObject).single {
+                            it.optString("description") == current.markers.single()
+                        }
+                        check(loader.getBoolean("visible") && loader.getString("class") == "android.widget.ProgressBar")
+                        check(loader.getString("state_description") == activity.getString(smallthingz.ui.R.string.in_progress))
+                        check((0 until raw.length()).none { index ->
+                            val node = raw.getJSONObject(index)
+                            val forbidden = listOf(activity.getString(smallthingz.ui.R.string.reverb_library_empty),
+                                activity.getString(R.string.library_retry))
+                            node.optString("description") in forbidden || node.optString("text") in forbidden
+                        }) { "Loading advertised Empty or Retry" }
                     }
                     evidence.put("raw_nodes", raw.length()).put("markers_present", !offscreen)
                         .put("strict_missing_child_check", true)
@@ -221,7 +234,7 @@ private class LibraryAdmissionFixture(
                 }, onRetryFailedSaves = { error("Admission fixture must not retry durable saves") },
                 onRowNodesChanged = { if (!closed) lease?.refresh() })
         } else ReverbLibraryStatusView(activity, environment, frames, scope, nested, board) { 1f }.apply {
-            bind(if (branch == "empty") LibraryBodyMode.EMPTY else LibraryBodyMode.FAILED) {
+            bind(if (branch == "empty" || branch == "loading") LibraryBodyMode.LOADING else LibraryBodyMode.FAILED) {
                 error("Admission fixture must not invoke Retry")
             }
         }
@@ -243,6 +256,26 @@ private class LibraryAdmissionFixture(
             content.addView(unknown, ViewGroup.LayoutParams(1, 1))
             board.addView(root, FrameLayout.LayoutParams(width, height))
             root.measure(exact(width), exact(height)); root.layout(0, 0, width, height)
+            if (branch == "empty" || branch == "loading") {
+                // View populates class, label and visibility only after window attachment.
+                val status = content as ReverbLibraryStatusView
+                val loading = libraryAdmissionViews(status)
+                    .filterIsInstance<smallthingz.ui.components.NativeCircularProgress>().single()
+                check(loading.isAttachedToWindow && loading.width > 0 && loading.height > 0)
+                check(loading.importantForAccessibility == View.IMPORTANT_FOR_ACCESSIBILITY_YES)
+                val node = checkNotNull(loading.createAccessibilityNodeInfo())
+                try {
+                    check(node.className == "android.widget.ProgressBar")
+                    check(node.contentDescription == activity.getString(smallthingz.ui.R.string.reverb_loading_recordings))
+                    check(node.isVisibleToUser && node.rangeInfo == null)
+                    check(androidx.core.view.accessibility.AccessibilityNodeInfoCompat.wrap(node).stateDescription ==
+                        activity.getString(smallthingz.ui.R.string.in_progress))
+                } finally { @Suppress("DEPRECATION") node.recycle() }
+                if (branch == "empty") {
+                    status.bind(LibraryBodyMode.EMPTY) { error("Admission fixture must not invoke Retry") }
+                    root.measure(exact(width), exact(height)); root.layout(0, 0, width, height)
+                }
+            }
             when (val current = content) {
                 is ReverbLibraryListView -> current.scrollView.let { viewport ->
                     val marker = "QA Library Ready viewport"
@@ -251,13 +284,19 @@ private class LibraryAdmissionFixture(
                     viewport.sourceAccessibilityNode = { source.node(viewport) }
                     markers += marker
                 }
-                is ReverbLibraryStatusView -> if (branch == "empty") {
+                is ReverbLibraryStatusView -> if (branch == "loading") {
+                    val loading = libraryAdmissionViews(current)
+                        .filterIsInstance<smallthingz.ui.components.NativeCircularProgress>().single()
+                    recordSemantic(loading)
+                    markers += activity.getString(smallthingz.ui.R.string.reverb_loading_recordings)
+                } else if (branch == "empty") {
                     val viewport = checkNotNull(current.emptyViewport)
                     val marker = "QA Library Empty viewport"
                     viewport.contentDescription = marker
                     recordSemantic(viewport)
                     viewport.sourceAccessibilityNode = { source.node(viewport) }
                     markers += marker
+                    markers += activity.getString(smallthingz.ui.R.string.reverb_library_empty)
                 } else {
                     val paragraphs = libraryAdmissionViews(current).filterIsInstance<ParagraphView>().toList()
                     check(paragraphs.size == 2)
