@@ -454,17 +454,22 @@ internal fun verifyNativeLibraryMenuCurrent(instrumentation: Instrumentation, re
         }
         current.awaitReady(instrumentation, records.map { it.id }.toSet())
         val timing = JSONObject().also { result.put("menu_open_timing", it) }
+        val perf = ownerPerfCycle.get()
+        perf?.opening(activity)
         current.openMenu(instrumentation, records.first().displayName, timing)
+        perf?.openSettled(current.performanceMenuWindow(instrumentation), timing)
         val expected = listOf(R.string.rename_recording, R.string.recording_info, R.string.share_recording,
             R.string.trim_recording, R.string.delete_recording, R.string.multi_select).map(context::getString)
         val actual = current.clickLabels(instrumentation)
         result.put("menu_labels", JSONArray(expected)).put("actual_menu_labels", JSONArray(actual))
         check(actual == expected) { "Menu label/order/enabled mismatch" }
-        val capture = JSONObject().also { result.put("menu_capture", it) }
-        current.capture(instrumentation, directory, "native-menu", true, capture, observeMenu = true)
-        owned.requireUnchanged()
-        val audioChoice = JSONObject().also { result.put("audio_choice", it) }
-        current.verifyAudioChoiceMenu(instrumentation, directory, audioChoice, requireLandscapeTouch = false)
+        if (perf == null) {
+            val capture = JSONObject().also { result.put("menu_capture", it) }
+            current.capture(instrumentation, directory, "native-menu", true, capture, observeMenu = true)
+            owned.requireUnchanged()
+            val audioChoice = JSONObject().also { result.put("audio_choice", it) }
+            current.verifyAudioChoiceMenu(instrumentation, directory, audioChoice, requireLandscapeTouch = false)
+        }
         owned.requireUnchanged()
     } catch (error: Throwable) {
         failure = error
@@ -488,7 +493,8 @@ internal fun verifyNativeLibraryMenuCurrent(instrumentation: Instrumentation, re
         report.appendLine("PARITY_EVIDENCE ${directory.name}/result.json")
     }
     failure?.let { throw it }
-    report.appendLine("PASS $selector recording_menu_cases=1 audio_choice_cases=1")
+    val audioChoices = if (ownerPerfCycle.get() == null) 1 else 0
+    report.appendLine("PASS $selector recording_menu_cases=1 audio_choice_cases=$audioChoices")
 }
 
 /* Current-only actual Rename sheet; existing transaction ledger owns all fixture media. */
@@ -1090,6 +1096,8 @@ private class TransactionBoard(
     }
     fun hasText(text: String): Boolean = if (compose) nodes(false).any { text in textOf(it) }
         else nativeParagraphs().any { it.getText().toString() == text }
+    fun performanceMenuWindow(i: Instrumentation): View = nativeParityOnMain(i) { guard(); focusRoot() }
+
     fun openMenu(i: Instrumentation, title: String, timing: JSONObject? = null) {
         awaitActivity(i)
         val triggeredAt = nativeParityOnMain(i) {

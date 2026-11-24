@@ -83,6 +83,26 @@ internal fun verifyNativeRetentionInputParity(instrumentation: Instrumentation, 
     check(context.applicationContext.javaClass == Application::class.java)
     val typography = Class.forName("app.smallthingz.reverb.ReverbThemeKt")
         .getDeclaredField("ReverbTypography").apply { isAccessible = true }.get(null) as Typography
+    ownerPerfCycle.get()?.let { perf ->
+        val host = launchCurrentUiSmokeActivity(instrumentation)
+        var content: View? = null
+        try {
+            awaitNativeParityDraw(instrumentation, host.fixtureRoot)
+            perf.opening(host)
+            val render = nativeParityOnMain(instrumentation) {
+                showRetentionCase(host, typography, retentionCases.first(), reference = false)
+                    .also { content = it.content }
+            }
+            perf.openSettled(render.content)
+            report.appendLine("PASS native_retention_input_performance native_case=${retentionCases.first().name}")
+        } finally {
+            nativeParityOnMain(instrumentation) {
+                content?.let(host.fixtureRoot::removeView)
+                host.finish()
+            }
+        }
+        return
+    }
     val directory = File(context.filesDir, "native-retention-input-parity-${System.currentTimeMillis()}")
     check(directory.mkdir())
     val entries = JSONArray()
