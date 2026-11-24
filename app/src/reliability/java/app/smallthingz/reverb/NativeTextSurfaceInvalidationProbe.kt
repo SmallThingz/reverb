@@ -136,6 +136,44 @@ internal fun verifyNativeTextSurfaceInvalidation(instrumentation: Instrumentatio
         result.put("ancestor_callbacks_before_opt_in", scene.targets.size)
             .put("ancestor_callbacks_after_opt_in", conservative.size)
         check(conservative.size < scene.targets.size)
+        // A real negative control for the hardware oracle: keep counting the owner's
+        // notification, but deliberately omit the child's invalidate. Software draw would
+        // recalculate ink regardless, so it must not run during this observation.
+        val negative = JSONObject().put("name", "missed-ink-invalidation-negative-control").put("passed", false)
+        cases.put(negative)
+        val known = scene.targets.getValue("known")
+        val beforeDraws = main {
+            known.inkInvalidations = 0
+            known.suppressInkInvalidation = true
+            known.drawCount.also {
+                scene.groups.getValue("known").setPaletteImmediately(Color.BLACK, Color.TRANSPARENT)
+                check(known.inkInvalidations == 1)
+            }
+        }
+        try {
+            val hardware = captureNativeParityContent(instrumentation, activity) { scene.root }
+            try {
+                saveNativeParityBitmap(directory, "missed-ink-negative-control-hardware.png", hardware)
+                negative.put("hardware_with_stale_ink", main {
+                    scene.verifyPixels(hardware, ink, underlay + ("known" to Color.BLACK))
+                })
+                main {
+                    negative.put("draws_before", beforeDraws).put("draws_after", known.drawCount)
+                    check(known.drawCount == beforeDraws) {
+                        "Hardware capture redrew the deliberately uninvalidated target; negative control is inconclusive"
+                    }
+                }
+                negative.put("passed", true).put("missing_notification_detected", true)
+            } finally { hardware.recycle() }
+        } finally {
+            main {
+                // Restore its original paint without refreshing the child display list. The
+                // next scenario uses the real notification and must produce fresh white ink.
+                scene.groups.getValue("known").setPaletteImmediately(Color.WHITE, Color.TRANSPARENT)
+                known.suppressInkInvalidation = false
+            }
+            persist()
+        }
         scenario("known-own-fill-callback", setOf("known")) {
             scene.groups.getValue("known").setPaletteImmediately(Color.BLACK, Color.TRANSPARENT)
             ink["known"] = Color.WHITE
@@ -191,7 +229,7 @@ internal fun verifyNativeTextSurfaceInvalidation(instrumentation: Instrumentatio
             ink["known"] = Color.BLACK
             underlay["known"] = Color.WHITE
         }
-        scenario("reattached-current-paint-first-draw", emptySet()) {
+        scenario("reattached-current-paint-settled", emptySet()) {
             scene.root.addView(scene.groups.getValue("known"), 1, LinearLayout.LayoutParams(-1, INK_ROW_HEIGHT))
             check(scene.targets.getValue("known").isAttachedToWindow)
         }
@@ -217,10 +255,17 @@ private class TextSurfaceScopeLayout(context: Context) : LinearLayout(context), 
 
 private class TextSurfaceInkProbeView(context: Context) : View(context), ReverbTextSurfaceTarget {
     var inkInvalidations = 0
+    var suppressInkInvalidation = false
+    var drawCount = 0
+        private set
     private val ink = Paint()
     init { if (Build.VERSION.SDK_INT >= 29) isForceDarkAllowed = false }
-    override fun invalidateTextSurfaceInk() { inkInvalidations++; invalidate() }
+    override fun invalidateTextSurfaceInk() {
+        inkInvalidations++
+        if (!suppressInkInvalidation) invalidate()
+    }
     override fun onDraw(canvas: Canvas) {
+        drawCount++
         // Like retained production ink, resolve the actual underlay at draw time, not target palette.
         ink.color = textSurfaceForeground(ReverbTextSurface.sample(this), Color.BLACK)
         canvas.drawRect(4f, 4f, 12f, 20f, ink)
