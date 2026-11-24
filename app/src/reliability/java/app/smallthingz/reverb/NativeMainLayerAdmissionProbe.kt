@@ -585,18 +585,25 @@ internal fun verifyNativeMainMotionAdmission(
             }
             val selections = JSONArray().also { entry.put("neutral_pointer_selections", it) }
             fun exercise(target: NativeChip) {
-                // Clearing an old target can schedule owner invalidation; let that settle before
-                // the ordinary first tap. Never grant the selector focus to make its tap work.
-                ui { render.board.findFocus()?.clearFocus() }
-                awaitNativeParityDraw(instrumentation, render.board)
+                // Observe ordinary focus without clearing it or granting the selector focus.
+                // An unrelated Settings control may legitimately own window focus.
                 val selection = JSONObject().also(selections::put)
                 tap(target) {
                     val focused = render.board.findFocus()
                     selection.put("target_focused_before_down", target.hasFocus())
                         .put("settings_focused_before_down", screen.hasFocus())
                         .put("neutral_owner_before_down", focused == null || focused === render.board)
-                    check(focused == null || focused === render.board) { "First tap did not start from neutral owner focus" }
-                    check(!screen.hasFocus() && !target.hasFocus())
+                    val group = generateSequence(target.parent as? View) { it.parent as? View }
+                        .filterIsInstance<NativeSegmentedChoice>().first()
+                    selection.put("focused_class", focused?.javaClass?.name ?: JSONObject.NULL)
+                        .put("focused_identity", focused?.let(System::identityHashCode) ?: JSONObject.NULL)
+                        .put("focused_description", focused?.contentDescription?.toString() ?: JSONObject.NULL)
+                        .put("selector_focused_before_down", group.hasFocus())
+                        .put("focus_ancestry", JSONArray(generateSequence(focused) { it.parent as? View }
+                            .map { it.javaClass.name }.toList()))
+                    check(!group.hasFocus() && !target.hasFocus()) {
+                        "First tap requires an unfocused selector; see recorded ambient focus"
+                    }
                     check(main.admitsSurfaceInput(target) && screen.inputAllowed)
                 }
                 await("selector changes actual owner") {

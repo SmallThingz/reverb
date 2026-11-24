@@ -51,12 +51,15 @@ internal class NativeLibraryRenamePresentation(
     private fun render() {
         val state=owner.state
         if (state == renderedState && environment === renderedEnvironment) return
-        val geometryChanged = state.error != renderedState?.error || environment !== renderedEnvironment
+        // A text edit can relocate the native caret without changing error or environment.
+        // Reuse the guarded after-layout reveal so reachable actions follow that edit too.
+        val revealChanged = state.name != renderedState?.name || state.error != renderedState?.error ||
+            environment !== renderedEnvironment
         renderedState = state
         renderedEnvironment = environment
         view.bind(environment, state.name, state.error, state.isRenaming)
         if (view.isAttachedToWindow) {
-            if (geometryChanged) revealRequested()
+            if (revealChanged) revealRequested()
             changedNodes()
         }
     }

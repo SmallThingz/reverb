@@ -10,6 +10,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import app.smallthingz.reverb.nativeui.NativeSettingsScreenContent
 import app.smallthingz.reverb.nativeui.SettingsSectionKey
 import smallthingz.ui.components.NativeChip
@@ -17,6 +18,7 @@ import smallthingz.ui.components.NativeInputGate
 import smallthingz.ui.components.NativeSegmentedChoice
 import smallthingz.ui.components.NativeSegmentedControl
 import smallthingz.ui.reverb.settings.ReverbRetentionSection
+import smallthingz.ui.reverb.settings.ReverbSettingsSectionListView
 import smallthingz.ui.scroll.NativeAxisOverscroll
 import java.io.File
 import org.json.JSONArray
@@ -154,11 +156,61 @@ internal fun verifyNativeSettingsPointerCurrent(i: Instrumentation, report: Stri
                     .put("requested", value).put("passed", false); cases.put(entry)
                 pendingEntry = entry
                 pendingTarget = null
+                fun pendingRestoration(): Any? {
+                    val owner = views(settings).filterIsInstance<ReverbSettingsSectionListView>().single()
+                    return field(checkNotNull(field(owner, "pendingPosition")), "pending")
+                }
+                fun listObservation(): JSONObject {
+                    val viewport = checkNotNull(settings.listViewport)
+                    val manager = viewport.layoutManager as LinearLayoutManager
+                    val rows = JSONArray()
+                    for (index in 0 until viewport.childCount) {
+                        val row = viewport.getChildAt(index)
+                        val position = viewport.getChildAdapterPosition(row)
+                        rows.put(geometry(row).put("adapter_position", position)
+                            .put("view_type", if (position == RecyclerView.NO_POSITION) JSONObject.NULL
+                                else checkNotNull(viewport.adapter).getItemViewType(position)))
+                    }
+                    val candidates = JSONArray()
+                    // Record BEFORE filtering: an absent row and a painted-but-unlaid-out
+                    // choice are different failures, including for production hit admission.
+                    views(settings).filterIsInstance<NativeSegmentedChoice>().forEach { choice ->
+                        val matches = if (theme) choice.choiceView(value) != null else
+                            generateSequence(choice.parent as? View) { it.parent as? View }
+                                .any { it is ReverbRetentionSection }
+                        val leaf = if (!matches) null else if (theme) choice.choiceView(value)
+                            else choice.getChildAt(if (value == "TIME") 0 else 1) as? NativeChip
+                        candidates.put(geometry(choice).put("matches_requested", matches)
+                            .put("requested_chip", leaf?.let(::geometry) ?: JSONObject.NULL))
+                    }
+                    return JSONObject().put("viewport", geometry(viewport))
+                        .put("first_visible", manager.findFirstVisibleItemPosition())
+                        .put("last_visible", manager.findLastVisibleItemPosition())
+                        .put("pending_restoration", pendingRestoration()?.toString() ?: JSONObject.NULL)
+                        .put("computing_layout", viewport.isComputingLayout)
+                        .put("pending_adapter_updates", viewport.hasPendingAdapterUpdates())
+                        .put("rows", rows).put("unfiltered_choices", candidates)
+                }
+                val restoration = JSONArray().also { entry.put("restoration_before_reveal", it) }
+                // Hydration/panel motion can finish before RV places savedPosition. Its
+                // onLayoutChildren would overwrite a premature direct manager scroll request.
+                await("production Settings restoration placed before explicit reveal") {
+                    val viewport = checkNotNull(settings.listViewport)
+                    restoration.put(listObservation())
+                    pendingRestoration() == null && viewport.isAttachedToWindow && viewport.isLaidOut &&
+                        !viewport.isLayoutRequested && !viewport.isComputingLayout && !viewport.hasPendingAdapterUpdates() &&
+                        (viewport.layoutManager as LinearLayoutManager).findFirstVisibleItemPosition() != RecyclerView.NO_POSITION
+                }
                 main {
                     val viewport = checkNotNull(settings.listViewport)
+                    check(pendingRestoration() == null && !viewport.isLayoutRequested && !viewport.hasPendingAdapterUpdates()) {
+                        "Restoration changed before explicit reveal; no scroll or input issued"
+                    }
+                    entry.put("before_explicit_reveal", listObservation())
                     val adapter = checkNotNull(viewport.adapter)
                     val type = if (theme) SettingsSectionKey.THEME else SettingsSectionKey.RETENTION
                     val position = (0 until adapter.itemCount).single { adapter.getItemViewType(it) == type.ordinal }
+                    entry.put("explicit_reveal_adapter_position", position).put("explicit_reveal_section", type.name)
                     (viewport.layoutManager as LinearLayoutManager).scrollToPositionWithOffset(position, 0)
                 }
                 fun liveChip(): NativeChip? {
@@ -185,6 +237,7 @@ internal fun verifyNativeSettingsPointerCurrent(i: Instrumentation, report: Stri
                 fun prepareDown(): Rect? {
                     val viewport = checkNotNull(settings.listViewport)
                     val live = liveChip()
+                    val listState = listObservation().also { entry.put("latest_list_readiness", it) }
                     val layoutPending = !viewport.isLaidOut || viewport.isLayoutRequested ||
                         viewport.isComputingLayout || viewport.hasPendingAdapterUpdates()
                     if (live !== candidate) { candidate = live; previous = null; stable = 0 }
@@ -193,7 +246,7 @@ internal fun verifyNativeSettingsPointerCurrent(i: Instrumentation, report: Stri
                         stable = 0
                         readiness.put(JSONObject().put("uptime_ms", SystemClock.uptimeMillis())
                             .put("live_target", live?.let(::geometry) ?: JSONObject.NULL)
-                            .put("viewport_layout_pending", layoutPending))
+                            .put("viewport_layout_pending", layoutPending).put("list_state", listState))
                         return null
                     }
                     val next = bounds(live); val visible = Rect()
@@ -202,7 +255,7 @@ internal fun verifyNativeSettingsPointerCurrent(i: Instrumentation, report: Stri
                     previous = next
                     val visibleResult = live.getGlobalVisibleRect(visible)
                     readiness.put(geometry(live).put("uptime_ms", SystemClock.uptimeMillis()).put("stable_frames", stable)
-                        .put("full_visible_equal_screen", visible == next).put("ancestors", ancestors(live)))
+                        .put("full_visible_equal_screen", visible == next).put("ancestors", ancestors(live)).put("list_state", listState))
                     if (firstObservation) {
                         live.requestRectangleOnScreen(Rect(0, 0, live.width, live.height), true)
                         return null
