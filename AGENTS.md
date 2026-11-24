@@ -96,7 +96,9 @@
   probe is positively `MISSING`; otherwise propagate the read failure and preserve every backing artifact. Incidents group
   identical messages once and present newest-first occurrence rows with start, end or ongoing status, PID, and
   available diagnostic evidence. Tapping an occurrence toggles checked/unchecked outside selection mode, and
-  long-pressing offers Copy/Delete. Selection mode targets occurrences individually and can select every current row.
+  long-pressing offers Copy/Delete at the press location, with the row anchor retained for keyboard/accessibility input.
+  Long-pressing an error title selects all current occurrences of that error across day groups, adding to existing
+  selection. Selection mode targets occurrences individually and can select every current row.
   Delete selected and confirmed Clear all persist one history transaction for the exact accepted occurrence snapshot,
   preserving concurrent arrivals even when their message matches. Deleted occurrences retain identity tombstones while
   evidence can replay. Checked occurrences remain visible and no longer contribute to the alert. Durable history
@@ -244,6 +246,8 @@
   current storage proof and restored only by that session's authoritative storage reconciliation.
 - Library editors, confirmations, errors, and permission prompts use Reverb-styled sheets instead of stock alert
   dialogs; About remains a custom animated top panel.
+- Settings places Auto-start after restart immediately after Save from notification; display order must not change
+  retained section IDs or view types.
 - Settings choice identity is the typed enum/value, never its localized display label; labels are presentation-only so
   duplicate translations or locale changes cannot retarget a setting. Durable Settings commits/recovery fsyncs run off
   the main thread, with concurrent save actions suppressed until the transaction returns.

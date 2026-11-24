@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.components.NativeMenuOrigin
+
 import smallthingz.ui.input.phase.NativePointerLayerShape
 import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.reverb.ReverbActionMenuHost
@@ -84,6 +86,14 @@ internal class ReverbLibraryScreenContent(
     private var spotlight: ReverbRecordingSpotlight? = null
     private var spotlightRecordingId: String? = null
     private val spotlightClipPath = Path()
+    private val spotlightMotionTransform = android.graphics.Matrix()
+    private val spotlightWindowTransform = android.graphics.Matrix()
+    private val spotlightWindowLocation = IntArray(2)
+    private var inlinePointerId: String? = null
+    private var inlinePointerInfo = false
+    private var inlinePointerActive = initial.owner.active
+    var inlinePointerRevision = 0L
+        private set
     private val toolbar = ReverbLibraryToolbarView(context, environment, inputRoot)
     private val body = Body(context)
     private var status: ReverbLibraryStatusView? = null
@@ -95,6 +105,8 @@ internal class ReverbLibraryScreenContent(
     private class MenuLifetime(val id: String, val anchor: View, val identity: Any = Any())
     private val menuLifetimes = mutableListOf<MenuLifetime>()
     private var activeMenu: MenuLifetime? = null
+    private class PointerMenuOrigin(val id: String, val anchor: View, val point: NativeMenuOrigin)
+    private var pointerMenuOrigin: PointerMenuOrigin? = null
     private var menuAwaitingLayout = false
     private var selectionBackActive = false
     private var selectionBackProgress = 0f
@@ -125,7 +137,11 @@ internal class ReverbLibraryScreenContent(
     private val list = ReverbLibraryListView(context, environment, animationScope, inputRoot,
         LibraryRecordingRowActions(
             activate = { id -> currentRecording(id)?.let(owner::activate) },
-            longClick = { id -> currentRecording(id)?.let(owner::longClick) },
+            longClick = { id ->
+                pointerMenuOrigin = null
+                currentRecording(id)?.let(owner::longClick)
+            },
+            pointerLongClick = ::pointerLongClick,
             leadingLongClick = { id -> currentRecording(id)?.let(owner::leadingLongClick) }),
         object : LibraryInlineExpansionHost {
             override fun createInfo(context: Context, recordingId: String): LibraryInlineExpansionLease =
@@ -305,6 +321,17 @@ internal class ReverbLibraryScreenContent(
 
     private fun renderInline(value: NativeLibraryPresentation) {
         val rename = value.renameRecording
+        val pointerId = rename?.id ?: value.infoRecording?.id
+        val pointerInfo = rename == null && value.infoRecording != null
+        if (inlinePointerId != pointerId || inlinePointerInfo != pointerInfo || inlinePointerActive != input.owner.active) {
+            inlinePointerId = pointerId
+            inlinePointerInfo = pointerInfo
+            inlinePointerActive = input.owner.active
+            // Detach this Library generation, preserving the root's pressed-pointer history:
+            // an old finger's next MOVE must not become a fresh DOWN in the new modal.
+            inlinePointerRevision++
+            list.scrollView.sourceStopScroll?.invoke()
+        }
         if (renameHeader?.recordingId != rename?.id) {
             val previous = renameHeader
             renameHeader = null // Retire before focus/terminal callbacks can reenter.
@@ -332,6 +359,36 @@ internal class ReverbLibraryScreenContent(
             val current = spotlight ?: ReverbRecordingSpotlight(context, environment,
                 ::inlineCardPath, animationScope, ::retireSpotlight) { dismissInline() }.also {
                 spotlight = it
+                it.setOnGenericMotionListener { source, event ->
+                    val viewport = listViewport
+                    val axis = when {
+                        event.isFromSource(android.view.InputDevice.SOURCE_CLASS_POINTER) -> android.view.MotionEvent.AXIS_VSCROLL
+                        event.isFromSource(android.view.InputDevice.SOURCE_ROTARY_ENCODER) -> android.view.MotionEvent.AXIS_SCROLL
+                        else -> null
+                    }
+                    if (!inlineInfoActive || viewport == null || event.actionMasked != android.view.MotionEvent.ACTION_SCROLL ||
+                        axis == null || event.getAxisValue(axis) == 0f) {
+                        false
+                    } else {
+                        val transform = spotlightMotionTransform
+                        // Both Views belong to this window. Reuse its pinned SDK28 fallback,
+                        // sampling inverse(viewportToWindow) * sourceToWindow before dispatch.
+                        smallthingz.ui.input.phase.nativeViewMatrixToWindow(viewport,
+                            spotlightWindowLocation, spotlightWindowTransform)
+                        if (!spotlightWindowTransform.invert(transform)) return@setOnGenericMotionListener true
+                        smallthingz.ui.input.phase.nativeViewMatrixToWindow(source,
+                            spotlightWindowLocation, spotlightWindowTransform)
+                        transform.preConcat(spotlightWindowTransform)
+                        val local = android.view.MotionEvent.obtain(event)
+                        try {
+                            local.transform(transform)
+                            viewport.dispatchGenericMotionEvent(local)
+                            // RV can consume pixels and return false. Do not deliver twice to
+                            // the dimmed body underneath this exclusive backdrop.
+                            true
+                        } finally { local.recycle() }
+                    }
+                }
                 it.setShown(true)
                 addView(it)
                 requestLayout()
@@ -364,13 +421,10 @@ internal class ReverbLibraryScreenContent(
         val view = renameHeader?.presentation?.view ?: return
         if (!view.isAttachedToWindow || !view.isLaidOut) return
         startRenamePending = false
-        view.post {
-            if (!closed && input.owner.active && renameHeader?.presentation?.view === view) {
-                view.startEditing()
-                list.revealRenameHeader(view, view.editor,
-                    validation = renameHeader?.presentation?.owner?.state?.error != null)
-            }
-        }
+        // The editor owns its guarded layout/focus admission and single deferred IME request.
+        view.startEditing()
+        list.revealRenameHeader(view, view.editor,
+            validation = renameHeader?.presentation?.owner?.state?.error != null)
     }
     private fun inlineCardPath(out: Path) {
         out.rewind()
@@ -401,6 +455,12 @@ internal class ReverbLibraryScreenContent(
         }
     }
 
+    private fun pointerLongClick(id: String, point: NativeMenuOrigin) {
+        val recording = currentRecording(id) ?: return
+        pointerMenuOrigin = list.attachedRecordingAnchor(id)?.let { PointerMenuOrigin(id, it, point) }
+        owner.longClick(recording)
+    }
+
     private fun renderMenu(value: NativeLibraryPresentation) {
         val iterator = menuLifetimes.iterator()
         while (iterator.hasNext()) {
@@ -408,11 +468,13 @@ internal class ReverbLibraryScreenContent(
             if (!lifetime.anchor.isAttachedToWindow || list.attachedRecordingAnchor(lifetime.id) !== lifetime.anchor) {
                 menus.release(lifetime.identity)
                 if (activeMenu === lifetime) activeMenu = null
+                if (pointerMenuOrigin?.anchor === lifetime.anchor) pointerMenuOrigin = null
                 iterator.remove()
             }
         }
         val recording = value.menuRecording
         if (recording == null) {
+            pointerMenuOrigin = null
             activeMenu?.let { menus.hide(it.identity) }
             activeMenu = null
             menuAwaitingLayout = false
@@ -421,6 +483,7 @@ internal class ReverbLibraryScreenContent(
         val anchor = list.attachedRecordingAnchor(recording.id)
         if (anchor == null || !anchor.isLaidOut) { menuAwaitingLayout = true; return }
         menuAwaitingLayout = false
+        pointerMenuOrigin = pointerMenuOrigin?.takeIf { it.id == recording.id && it.anchor === anchor }
         val lifetime = menuLifetimes.firstOrNull { it.id == recording.id && it.anchor === anchor }
             ?: MenuLifetime(recording.id, anchor).also(menuLifetimes::add)
         if (activeMenu !== lifetime) activeMenu?.let { menus.hide(it.identity) }
@@ -436,7 +499,7 @@ internal class ReverbLibraryScreenContent(
             item(R.string.delete_recording, ReverbIcon.Delete, !busy && value.acceptsDeletions,
                 destructive = true) { owner.deleteRecordings(listOf(recording)) },
             item(R.string.multi_select, ReverbIcon.MultiSelect) { owner.multiSelect(recording) },
-        ), owner::dismissMenu)
+        ), origin = pointerMenuOrigin?.point, onDismissRequest = owner::dismissMenu)
     }
 
     /** Parent source selection predictive owner is registered before lazily created row owners. */
@@ -456,6 +519,9 @@ internal class ReverbLibraryScreenContent(
         return emptyList()
     }
     val inlineModalActive: Boolean get() = presentation?.let { it.infoRecording != null || it.renameRecording != null } == true
+    val pointerInputActive: Boolean get() = input.owner.active && !closed
+    val inlineInfoActive: Boolean get() = pointerInputActive &&
+        presentation?.infoRecording != null && presentation?.renameRecording == null
     /** Native source admission and focus must agree with the modal pointer backdrop. */
     fun inlineInputExcluded(view: View): Boolean {
         if (!inlineModalActive) return false
@@ -549,6 +615,7 @@ internal class ReverbLibraryScreenContent(
         release(menus::close)
         release(pull::close)
         menuLifetimes.clear()
+        pointerMenuOrigin = null
         // Match source rows disposing with screen; accepted mutations retain existing background owners.
         release(list::dispose)
         leases.toList().forEach { release(it::closePresentation) }

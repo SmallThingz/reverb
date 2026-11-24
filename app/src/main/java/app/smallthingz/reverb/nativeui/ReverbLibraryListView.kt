@@ -136,6 +136,28 @@ internal class ReverbLibraryListView(
     private val rowUpdates = NativeLibraryListUpdates<InlinePlaybackRowOwner>()
     private var blockedRecordingIds = emptySet<String>()
     private var pendingPosition = NativePendingListPosition(NativeListSavedPosition(0, 0))
+    private val expansionReveal = LibraryExpansionReveal()
+    private var expansionRevealPosted = false
+    private val revealExpansion = Runnable {
+        expansionRevealPosted = false
+        if (!disposed && isAttachedToWindow) {
+            val id = expansionReveal.requestedId
+            val row = id?.let(::attachedRecordingAnchor)
+            val available = list.height - list.paddingTop - list.paddingBottom
+            if (row != null && expansionReveal.changed(row.height, row.width, available)) {
+                // The whole entry when it fits; otherwise keep the leading viewport accessible.
+                // RV supplies the minimal clamped delta, without a second animation/scroll owner.
+                list.requestChildRectangleOnScreen(row, android.graphics.Rect(0, 0, row.width,
+                    row.height.coerceAtMost(available)), true)
+            }
+        }
+    }
+    private fun scheduleExpansionReveal() {
+        if (!disposed && expansionReveal.requestedId != null && isAttachedToWindow && !expansionRevealPosted) {
+            expansionRevealPosted = true
+            post(revealExpansion)
+        }
+    }
     private val layout = object : LinearLayoutManager(context, RecyclerView.VERTICAL, false) {
         override fun onLayoutChildren(recycler: RecyclerView.Recycler, state: RecyclerView.State) {
             if (!state.isPreLayout) pendingPosition.pendingForPlacement(state.itemCount, recordingIndexForPlacement)?.let { target ->
@@ -148,6 +170,7 @@ internal class ReverbLibraryListView(
             if (!state.isPreLayout) {
                 pendingPosition.placed(placedPosition())
                 onViewportGeometryChanged()
+                scheduleExpansionReveal()
             }
         }
     }
@@ -170,6 +193,9 @@ internal class ReverbLibraryListView(
     private val guardedActions = LibraryRecordingRowActions(
         activate = { id -> if (admit(id)) currentActions.activate?.invoke(id) },
         longClick = { id -> if (admit(id)) currentActions.longClick?.invoke(id) },
+        pointerLongClick = { id, origin ->
+            if (admit(id)) currentActions.pointerLongClick?.invoke(id, origin)
+        },
         leadingLongClick = { id -> if (admit(id)) (currentActions.leadingLongClick ?: currentActions.longClick)?.invoke(id) },
     )
 
@@ -218,6 +244,8 @@ internal class ReverbLibraryListView(
     /** One main-thread immutable presentation update; no operation, playback or Undo side effects. */
     fun submit(value: LibraryNativeListState) {
         if (disposed || clearingListComposition) return
+        expansionReveal.update(if (value.screenActive && value.renameRecordingId == null)
+            value.infoRecordingId ?: value.expandedOwner?.recordingId else null, value.infoRecordingId != null)
         val update = rowUpdates.submit((value.items as? LibraryListSnapshot)?.structure ?: value.items, NativeLibraryRowState(
             selectedIds = value.selectedIds,
             selectionActive = value.selectionActive,
@@ -269,6 +297,9 @@ internal class ReverbLibraryListView(
     val pendingRecordingRevealId: String? get() = pendingPosition.requestedKey
 
     fun cancelPendingRecordingReveal() {
+        expansionReveal.cancel()
+        removeCallbacks(revealExpansion)
+        expansionRevealPosted = false
         pendingPosition.cancelKeyedRequest()
         onPendingRecordingRevealCancelled?.invoke()
     }
@@ -310,6 +341,9 @@ internal class ReverbLibraryListView(
         if (clearingListComposition) return
         clearingListComposition = true
         try {
+            expansionReveal.update(null, false)
+            removeCallbacks(revealExpansion)
+            expansionRevealPosted = false
             val holders = (0 until list.childCount).map { list.getChildViewHolder(list.getChildAt(it)) }
             var failure: Throwable? = null
             holders.filterIsInstance<RecordingHolder>().forEach { failure = closePreservingPrimaryFailure(failure, it::retire) }
@@ -360,6 +394,9 @@ internal class ReverbLibraryListView(
     }
 
     override fun onDetachedFromWindow() {
+        expansionReveal.cancel()
+        removeCallbacks(revealExpansion)
+        expansionRevealPosted = false
         context.contentResolver.unregisterContentObserver(timeFormatObserver)
         context.unregisterReceiver(timeZoneReceiver)
         formattingRevision++
@@ -623,6 +660,8 @@ internal class ReverbLibraryListView(
             row.bind(model, guardedActions.copy(
                 activate = guardedActions.activate.takeIf { currentActions.activate != null },
                 longClick = guardedActions.longClick.takeIf { currentActions.longClick != null && !entry.info },
+                pointerLongClick = guardedActions.pointerLongClick.takeIf {
+                    currentActions.pointerLongClick != null && currentActions.longClick != null && !entry.info },
                 leadingLongClick = guardedActions.leadingLongClick.takeIf {
                     currentActions.leadingLongClick != null && !entry.info }))
             if (model.expanded && expansion == null) {

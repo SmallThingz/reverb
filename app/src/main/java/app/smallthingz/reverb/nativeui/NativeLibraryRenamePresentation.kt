@@ -37,6 +37,7 @@ internal class NativeLibraryRenamePresentation(
         anchor.context.getString(R.string.done), { owner.state.name }, owner::editName,
         owner::requestDismiss, owner::submit)
     init {
+        view.setInputActive(active)
         ready = true
         render()
     }
@@ -44,8 +45,8 @@ internal class NativeLibraryRenamePresentation(
     fun bindEnvironment(next: ReverbViewEnvironment) { environment = next; render() }
     fun bind(recording:RecordingEntity,active:Boolean,callbacks:NativeRecordingRenameCallbacks) {
         if(closed)return
+        view.setInputActive(active)
         owner.bind(recording,active,callbacks)
-        if (!active) view.editor.retireInputSession()
         render()
     }
     private fun render() {

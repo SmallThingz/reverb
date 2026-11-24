@@ -53,6 +53,7 @@ internal class NativeLibraryPointerBinding(
     private var emptyNodes = emptyList<NativeViewPhasePointerNode>()
     private var dismissKey: Any? = null
     private var dismissDistance = Float.NaN
+    private var inputRevision = content.inlinePointerRevision
     private var closed = false
     private val edge = NativeLibraryEdgeDismiss(
         { content.bodyPointerView.width.toFloat() },
@@ -69,16 +70,22 @@ internal class NativeLibraryPointerBinding(
     private val edgeNodes = listOf(edgeNode)
     // FilesScreen's transparent Scaffold still owns Surface's inert pointerInput(Unit) node.
     // It admits empty background so lower Main siblings cannot receive the same DOWN hit.
-    private val scaffoldShield = object : NativeViewPhasePointerNode {
-        override val view get() = content
-        override fun dispatch(event: NativeDragPointerEvent, pass: NativePointerPass) = Unit
-        override fun cancel() = Unit
+    private fun scaffoldNodes(): List<NativeViewPhasePointerNode> {
+        val revision = content.inlinePointerRevision
+        return listOf(object : NativeViewPhasePointerNode {
+            override val view get() = content
+            override val attached get() = !closed && content.pointerInputActive &&
+                revision == content.inlinePointerRevision && content.isAttachedToWindow
+            override fun dispatch(event: NativeDragPointerEvent, pass: NativePointerPass) = Unit
+            override fun cancel() = Unit
+        })
     }
+    private var scaffoldNodes = scaffoldNodes()
     val layout: NativeViewPointerHitLayout = object : NativeViewPointerHitLayout {
-        override val placed get() = !closed && content.isAttachedToWindow && content.isLaidOut && content.visibility == View.VISIBLE
+        override val placed get() = !closed && content.pointerInputActive && content.isAttachedToWindow && content.isLaidOut && content.visibility == View.VISIBLE
         override val size get() = Size(content.width.toFloat(), content.height.toFloat())
         override val minimumTouchTarget get() = Size(ReverbLibraryLayout.minimumTouchTargetPx(density), ReverbLibraryLayout.minimumTouchTargetPx(density))
-        override val nodes = listOf(scaffoldShield)
+        override val nodes get(): List<NativeViewPhasePointerNode> { refresh(); return scaffoldNodes }
         override val childrenInHitOrder: List<NativeViewPointerHitLayout>
             get() { refresh(); return children(content) }
         override fun screenToLocal(screen: Offset) = geometry.coordinates(content).local(screen)
@@ -88,6 +95,14 @@ internal class NativeLibraryPointerBinding(
 
     fun refresh() {
         if (closed) return
+        if (inputRevision != content.inlinePointerRevision) {
+            inputRevision = content.inlinePointerRevision
+            // One retired prefix removes the entire old Library path (including edge, click
+            // and scrim). The root prunes it before adding any newly pressed pointer.
+            scaffoldNodes = scaffoldNodes()
+            layouts.values.forEach { it.cancelInput() }
+            edge.restart()
+        }
         val nextDistance = ReverbLibraryLayout.edgeDismissDistancePx(density)
         if (dismissKey != content.pointerDismissKey || dismissDistance != nextDistance) {
             dismissKey = content.pointerDismissKey
@@ -101,8 +116,7 @@ internal class NativeLibraryPointerBinding(
             listScroll = nextList?.let {
                 NativeLibraryScrollOwner(it, content.pointerEnvironment, frames, scope, content.nestedScroll, parentInterested)
             }
-            listNodes = listScroll?.let { java.util.Collections.unmodifiableList(listOf(it.observerNode, scrollNode(it.dragNode))) }
-                ?: emptyList()
+            rebuildListNodes()
         }
         val nextEmpty = content.emptyViewport
         if (nextEmpty !== emptyView) {
@@ -158,6 +172,11 @@ internal class NativeLibraryPointerBinding(
         override fun cancel() = node.cancel()
     }
 
+    private fun rebuildListNodes() {
+        listNodes = listScroll?.let { listOf(it.observerNode, scrollNode(it.dragNode)) }
+            ?: emptyList()
+    }
+
     private inner class Layout(private val view: View) : NativeViewPointerHitLayout {
         private val click = (view as? NativeClickPhaseHost)?.let {
             NativeClickPhaseNode(view, it.nativeClickEndpoint) { change -> interested(view, change) }
@@ -177,6 +196,8 @@ internal class NativeLibraryPointerBinding(
             // The backdrop must never deliver the same DOWN to the row/toolbar behind it.
             override val shareWithSiblings get() = view !is ReverbRecordingSpotlight
         }) } ?: emptyList()
+        private var scrimScrollSource = emptyList<NativeViewPhasePointerNode>()
+        private var scrimScrollNodes = emptyList<NativeViewPhasePointerNode>()
         private val clickNodes = click?.let(::listOf) ?: emptyList()
         private val shieldNodes = shield?.let(::listOf) ?: emptyList()
         override val placed get() = view.isAttachedToWindow && view.isLaidOut && view.visibility == View.VISIBLE
@@ -188,6 +209,16 @@ internal class NativeLibraryPointerBinding(
         override val nodes: List<NativeViewPhasePointerNode>
             get() {
                 if (view === content.bodyPointerView) return if (content.inlineModalActive) emptyList() else edgeNodes
+                if (view is ReverbRecordingSpotlight && content.inlineInfoActive) {
+                    // Same owner/coordinate-bound nodes as the card's ancestor path. Keep the
+                    // exclusive interop leaf so dimmed rows never receive DOWN; drag consumption
+                    // cancels its Android press through the existing Initial/Main/Final protocol.
+                    if (scrimScrollSource !== listNodes) {
+                        scrimScrollSource = listNodes
+                        scrimScrollNodes = listNodes + interopNodes
+                    }
+                    return scrimScrollNodes
+                }
                 if (interop != null) return interopNodes
                 if (view === listView) return listNodes
                 if (view === emptyView) return emptyNodes
@@ -207,6 +238,7 @@ internal class NativeLibraryPointerBinding(
                 local.x >= 0f && local.x < view.width && local.y >= 0f && local.y < view.height
             else -> true // No source graphicsLayer clip on ordinary Column/Row/layout wrappers.
         }
+        fun cancelInput() { try { click?.cancel() } finally { interop?.cancel() } }
         fun close() { try { click?.cancel() } finally { interop?.close() } }
     }
     override fun close() {
