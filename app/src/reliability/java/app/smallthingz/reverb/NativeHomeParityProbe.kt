@@ -76,12 +76,7 @@ import app.smallthingz.reverb.nativeui.HomeBufferSegment
 import app.smallthingz.reverb.nativeui.NativeWindowTextAccessibilityOwner
 import smallthingz.ui.components.blob.NativeAudioBlobReadout
 import app.smallthingz.reverb.nativeui.ReverbAppTopBarView
-import app.smallthingz.reverb.nativeui.ReverbSettingsTopBarView
-import app.smallthingz.reverb.nativeui.ReverbTopBarIconAction
-import app.smallthingz.reverb.nativeui.SettingsTopBarBinding
 import smallthingz.ui.components.NativeModalWindowRuntime
-import smallthingz.ui.components.NativeTopBarInsets
-import smallthingz.ui.components.NativeTopBarLayout
 import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.components.NativeCaptureControlSurface
 import java.io.File
@@ -151,8 +146,10 @@ internal fun verifyNativeHomeHydrationCurrent(instrumentation: Instrumentation, 
         nativeParityOnMain(instrumentation) {
             checkCaptureHydration(mounted, initial, selected, actions, navigation, false, insets)
             checkRejectedCaptureBinding(host)
-            checkReverbToolbarSlots(host, environment, runtime, navigation, insets)
         }
+        val toolbarCases = JSONArray().also { result.put("toolbar_alignment", it) }
+        result.put("toolbar_alignment_scope", "Attached production Views and parent-routed local MotionEvents; retained old selection layout control")
+        checkReverbToolbarAlignment(instrumentation, host, environment, runtime, toolbarCases)
         result.put("capture_hydration_presentation", true).put("shared_toolbar_slots", true).put("passed", true)
     } catch (error: Throwable) {
         failure = error
@@ -244,49 +241,6 @@ private fun checkRejectedCaptureBinding(host: NativeParityActivity) {
         }
     } finally {
         binding.close()
-    }
-}
-
-private fun checkReverbToolbarSlots(host: NativeParityActivity, environment: ReverbViewEnvironment,
-    runtime: NativeModalWindowRuntime, navigation: ReverbAppTopBarActions, insets: ReverbHomeInsets) {
-    val width = 451
-    val widthSpec = View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY)
-    val heightSpec = View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
-    val settings = ReverbSettingsTopBarView(host, environment, runtime.scope) { host.fixtureRoot }
-    try {
-        settings.bind(environment, SettingsTopBarBinding(false, false, false, false, false,
-            navigation.settings, navigation.settings))
-        settings.setRemainingWindowInsets(NativeTopBarInsets(insets.contentLeft, insets.statusTop, insets.contentRight))
-        for (direction in listOf(View.LAYOUT_DIRECTION_LTR, View.LAYOUT_DIRECTION_RTL)) {
-            fun place(view: View) {
-                view.layoutDirection = direction
-                view.measure(widthSpec, heightSpec)
-                view.layout(0, 0, width, view.measuredHeight)
-            }
-            fun compact(withBack: Boolean) = ReverbAppTopBarView(host, environment, host.fixtureRoot).apply {
-                setActionInsets(insets.contentLeft, insets.contentRight)
-                bind(environment, false, if (withBack) navigation.copy(back = navigation.incidents) else navigation,
-                    insets.statusTop)
-                place(this)
-            }
-            fun bounds(root: ViewGroup, action: ReverbTopBarIconAction) =
-                Rect(0, 0, action.visual.width, action.visual.height).also { root.offsetDescendantRectToMyCoords(action.visual, it) }
-            fun slot(bar: ReverbAppTopBarView, slot: NativeTopBarLayout.Slot) =
-                (0 until bar.childCount).map(bar::getChildAt).filterIsInstance<ReverbTopBarIconAction>().single {
-                    it.visibility == View.VISIBLE && (it.layoutParams as NativeTopBarLayout.ActionLayoutParams).slot == slot
-                }
-            val home = compact(false)
-            val library = compact(true)
-            place(settings)
-            val back = bounds(settings, settings.navigation)
-            val done = bounds(settings, settings.done)
-            check(back == bounds(home, slot(home, NativeTopBarLayout.Slot.START)))
-            check(back == bounds(library, slot(library, NativeTopBarLayout.Slot.START)))
-            check(done == bounds(home, slot(home, NativeTopBarLayout.Slot.END)))
-            check(done == bounds(library, slot(library, NativeTopBarLayout.Slot.END)))
-        }
-    } finally {
-        settings.close()
     }
 }
 
