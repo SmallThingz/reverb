@@ -22,6 +22,7 @@ import app.smallthingz.reverb.nativeui.ReverbViewEnvironment
 import app.smallthingz.reverb.nativeui.SettingsTopBarBinding
 import app.smallthingz.reverb.nativeui.incidentTexts
 import smallthingz.ui.components.NativeModalWindowRuntime
+import smallthingz.ui.common.mergedButtonGroup
 import smallthingz.ui.components.NativeSelectionTopBarLayout
 import smallthingz.ui.components.NativeToolbarActionTone
 import smallthingz.ui.components.NativeTopBarAction
@@ -192,7 +193,8 @@ private fun checkToolbarCase(
         check(startBounds == toolbarBounds(root, libraryClose.visual))
         check(endBounds == toolbarBounds(root, settings.done.visual))
         check(endBounds == toolbarBounds(root, action(library, context.getString(R.string.open_settings)).visual))
-        check(endBounds == toolbarBounds(root, incidentSelect.visual))
+        val endGlyph = toolbarBounds(root, glyph(homeEnd))
+        check(endGlyph == toolbarBounds(root, glyph(incidentSelect)))
         check(toolbarBounds(root, glyph(homeEnd)) == toolbarBounds(root, glyph(libraryDelete)))
         check(home.height == height + safe.top && settings.height == height + safe.top && library.height == height + safe.top)
         check(incidentHeader.height == height && librarySelection.height == height && old.height == height)
@@ -241,7 +243,8 @@ private fun checkToolbarCase(
         click(incidentHeader, incidentSelect, null)
         check(incidents.selectionActive)
         place(incidents)
-        check(startBounds == toolbarBounds(root, incidentBack.visual) && endBounds == toolbarBounds(root, incidentSelect.visual))
+        check(startBounds == toolbarBounds(root, incidentBack.visual) && endGlyph == toolbarBounds(root, glyph(incidentSelect)))
+        click(incidentHeader, incidentDelete, null)
         click(incidentHeader, incidentSelect, null)
         place(incidents)
         check(onboardingViewDescendants(incidentHeader).filterIsInstance<ParagraphView>().single().getText() == texts.selectionCount(2))
@@ -252,6 +255,28 @@ private fun checkToolbarCase(
         click(incidentHeader, incidentBack, null)
         check(!incidents.selectionActive)
         click(incidentHeader, incidentBack, "incident-back")
+
+        if (dpi == 160 && safe == Insets.NONE) {
+            val tapped = mutableListOf<Int>()
+            val buttons = List(3) { index ->
+                ReverbToolbarActionView(context, density, environment.palette, { root }, "Joined $index",
+                    selectionWrapper = true, sharedSurface = true).apply {
+                    bindToolbarAction(density, environment.palette, index != 1, NativeToolbarActionTone.NEUTRAL) {
+                        tapped += index
+                    }
+                }
+            }
+            val group = mergedButtonGroup(context, 15f, buttons)
+            root.addView(group)
+            group.measure(exactToolbar(144), exactToolbar(48))
+            group.layout(0, 0, 144, 48)
+            val expected = if (direction == View.LAYOUT_DIRECTION_LTR) listOf(0, 0, 2, 2) else listOf(2, 2, 0, 0)
+            for (x in listOf(24f, 47.5f, 48.5f, 72f, 95.5f, 96.5f, 120f)) toolbarTap(group, x, 24f)
+            check(tapped == expected) { "Three joined buttons misrouted a touch: $tapped" }
+            check(buttons.all { it.width == 48 })
+            root.removeView(group)
+            result.put("three_joined_cells", true)
+        }
 
     } finally {
         result.put("callbacks", JSONArray(calls)).put("elapsed_ms", SystemClock.uptimeMillis() - started)

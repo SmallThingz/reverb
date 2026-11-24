@@ -1105,11 +1105,14 @@ internal class LibraryParityBoard(
 }
 
 /** The production phase dispatcher and focus hooks on the existing fixture FrameLayout. */
-private class LibraryNativeFocusRoot(
+internal class LibraryNativeFocusRoot(
     context: Context,
     private val pointer: LibraryFixturePointerGeometry = LibraryFixturePointerGeometry(),
 ) : PhasePointerRoot(context, pointer.coordinates::rootToScreen, pointer.coordinates::coordinates,
-    pointer.layout, pointer.coordinates::begin, mouseButtons = true), AutoCloseable {
+    pointer.layout, pointer.coordinates::begin, mouseButtons = true), AutoCloseable,
+    smallthingz.ui.common.NativeSurfaceInputAdmission {
+    var surfaceAdmission: (View) -> Boolean = { true }
+    override fun admitsSurfaceInput(descendant: View) = surfaceAdmission(descendant)
     private var focus: NativeSourceFocusPolicy? = null
     init {
         pointer.root = this
@@ -1161,7 +1164,7 @@ private class LibraryNativeFocusRoot(
 }
 
 /** No independent hit policy: the production Library binding supplies the entire child tree. */
-private class LibraryFixturePointerGeometry {
+internal class LibraryFixturePointerGeometry {
     lateinit var root: View
     var binding: NativeLibraryPointerBinding? = null
     val coordinates = NativeWindowPointerCoordinates { root }

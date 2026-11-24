@@ -109,12 +109,19 @@ internal fun verifyNativeLibraryAdmissionRegression(instrumentation: Instrumenta
             host.window.navigationBarColor = android.graphics.Color.TRANSPARENT
             MainSettingsParityRender(host, false, getConfiguredThemeMode(host),
                 host.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES,
-                commonGrain = null)
+                commonGrain = null, productionWindowFocus = currentUi, productionEnvironmentForProbe = currentUi)
         }
         render = current
         awaitNativeParityDraw(instrumentation, current.board)
         result.put("admission", current.verifyLibraryAdmission(instrumentation, automation) { partial ->
             result.put("admission", partial)
+            writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
+                output.write(result.toString(2).toByteArray(Charsets.UTF_8))
+            }
+        })
+        if (currentUi) result.put("main_motion_admission", verifyNativeMainMotionAdmission(
+            instrumentation, host, current) { partial ->
+            result.put("main_motion_admission", partial)
             writeQaEvidenceAtomically(File(directory, "result.json")) { output ->
                 output.write(result.toString(2).toByteArray(Charsets.UTF_8))
             }
@@ -144,6 +151,7 @@ internal fun verifyNativeLibraryAdmissionRegression(instrumentation: Instrumenta
     }
     failure?.let { throw it }
     report.appendLine("PASS native_library_admission actual Ready/Empty/Error parents; both platform importance paths")
+    if (currentUi) report.appendLine("PASS actual Main drag bind/admission witnesses and Settings selector round trips")
 }
 
 /** Exact current-UI Library entry; historical parity connection admission stays unchanged. */

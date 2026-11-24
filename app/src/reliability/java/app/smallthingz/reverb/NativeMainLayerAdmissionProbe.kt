@@ -3,13 +3,27 @@ package app.smallthingz.reverb
 import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
 import smallthingz.ui.text.view.NativeTextSemanticsClip
 import android.app.Instrumentation
+import android.graphics.Rect
+import android.os.SystemClock
+import android.view.InputDevice
+import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.FrameLayout
 import app.smallthingz.reverb.nativeui.NativeSettingsScreenContent
 import app.smallthingz.reverb.nativeui.ReverbHomeScaffoldView
 import app.smallthingz.reverb.nativeui.ReverbTopBarIconAction
+import app.smallthingz.reverb.nativeui.ReverbLibraryScreenContent
+import androidx.recyclerview.widget.LinearLayoutManager
+import smallthingz.ui.components.NativeChip
+import smallthingz.ui.components.NativeSegmentedChoice
+import smallthingz.ui.reverb.settings.ReverbRetentionSection
+import smallthingz.ui.reverb.settings.ReverbSettingsSectionKey
+import smallthingz.ui.common.NativeAxisDrag
+import smallthingz.ui.input.phase.NativeViewPhasePointerNode
+import smallthingz.ui.input.phase.PhasePointerRoot
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -286,3 +300,352 @@ private fun admissionNodePresent(view: View): Boolean {
     node.recycle()
     return true
 }
+
+/** Current-source regression, not timing evidence: real Main pointer dispatch, no private method
+ * invocation or production counters. Reflection only reads bind witnesses and admission revision. */
+internal fun verifyNativeMainMotionAdmission(
+    instrumentation: Instrumentation,
+    activity: NativeParityActivity,
+    render: MainSettingsParityRender,
+    preserve: (JSONObject) -> Unit,
+): JSONObject {
+    val result = JSONObject().put("passed", false)
+        .put("scope", "Actual Main local finger streams; retained Settings selectors; drag bind/admission witnesses")
+        .put("expected_cases", 6).put("completed_cases", 0)
+        .put("bind_witnesses", JSONArray(listOf("Settings.input", "Library.input", "Home.navigation")))
+        .put("not_qualified", JSONArray(listOf("physical input transport", "frame latency or RAM",
+            "IME composition", "all themes/configurations", "inline recording card interactions")))
+    val cases = JSONArray().also { result.put("cases", it) }
+    fun <T> ui(block: () -> T): T {
+        requireNativeParityHost(instrumentation, activity)
+        return nativeParityOnMain(instrumentation, block)
+    }
+    val main = ui { admissionViews(render.board).filterIsInstance<NativeMainScreenView>().single() }
+    fun field(name: String) = mainAdmissionField(main, name)
+    val navigation = ui { field("navigation") as NativeMainNavigationState }
+    fun settings() = field("settings") as NativeSettingsScreenContent
+    fun library() = field("library") as? ReverbLibraryScreenContent
+    fun motion(panel: NativeMainPanel) = field(if (panel == NativeMainPanel.SETTINGS)
+        "settingsMotion" else "libraryMotion") as NativeMainPanelMotion
+    fun admission() = field("admissionGeneration") as Long
+    fun bindings(): List<Any?> = listOf(
+        (field("settings") as? NativeSettingsScreenContent)?.let { mainAdmissionField(it, "input") },
+        library()?.let { mainAdmissionField(it, "input") },
+        mainAdmissionField(field("home")!!, "navigation"),
+    )
+    fun sameBindings(a: List<Any?>, b: List<Any?>) = a.indices.all { a[it] === b[it] }
+    fun ids(values: List<Any?>) = JSONArray(values.map { it?.let(System::identityHashCode) ?: JSONObject.NULL })
+    fun requireFullBind(entry: JSONObject, phase: String, before: List<Any?>, requireLibrary: Boolean) {
+        val after = bindings()
+        entry.put("${phase}_bind_refs_before", ids(before)).put("${phase}_bind_refs_after", ids(after))
+        check(before[0] != null && before[2] != null) { "$phase missing warmed Settings/Home witnesses" }
+        before.indices.forEach { index ->
+            if (before[index] != null) check(after[index] != null && before[index] !== after[index]) {
+                "$phase did not replace bind witness $index"
+            }
+        }
+        if (requireLibrary) check(after[1] != null) { "$phase did not create/bind Library" }
+        entry.put("${phase}_full_bind", true)
+    }
+    fun await(label: String, predicate: () -> Boolean) {
+        val deadline = SystemClock.uptimeMillis() + 8_000L
+        while (!ui(predicate)) {
+            check(SystemClock.uptimeMillis() < deadline) { "Main motion admission timed out: $label" }
+            awaitNativeParityDraw(instrumentation, render.board)
+        }
+    }
+    fun home() = !navigation.showSettings && !navigation.showLibrary && navigation.dragTarget == null &&
+        motion(NativeMainPanel.SETTINGS).panelProgress == 0f && motion(NativeMainPanel.LIBRARY).panelProgress == 0f
+    // Read the real retained dispatch path, not a second hit test or a substituted input owner.
+    // Only sampled at gesture admission; the measured delta loop remains unchanged.
+    fun startSnapshot(): JSONObject {
+        fun describe(view: View): JSONObject {
+            val origin = IntArray(2).also(view::getLocationOnScreen)
+            val visible = Rect()
+            val hasVisibleBounds = view.getGlobalVisibleRect(visible)
+            return JSONObject().put("class", view.javaClass.name).put("identity", System.identityHashCode(view))
+                .put("attached", view.isAttachedToWindow).put("shown", view.isShown)
+                .put("visibility", view.visibility).put("width", view.width).put("height", view.height)
+                .put("screen_x", origin[0]).put("screen_y", origin[1])
+                .put("translation_y", view.translationY.toDouble()).put("alpha", view.alpha.toDouble())
+                .put("visible_bounds", if (hasVisibleBounds)
+                    JSONArray(listOf(visible.left, visible.top, visible.right, visible.bottom)) else JSONObject.NULL)
+                .put("description", view.contentDescription?.toString() ?: JSONObject.NULL)
+        }
+        val vertical = field("vertical")!!
+        val recognizer = JSONObject()
+        for (name in listOf("state", "pointerId", "accumulated", "threshold", "verifyFinal")) {
+            val value = NativeAxisDrag::class.java.getDeclaredField(name).run {
+                isAccessible = true; get(vertical)
+            }
+            recognizer.put(name, if (value is Enum<*>) value.name else value ?: JSONObject.NULL)
+        }
+        val tree = PhasePointerRoot::class.java.getDeclaredField("paths").run {
+            isAccessible = true; get(main)
+        }
+        fun branch(value: Any): JSONObject {
+            val node = mainAdmissionField(value, "node") as NativeViewPhasePointerNode
+            val children = mainAdmissionField(value, "children") as List<*>
+            return JSONObject().put("node_class", node.javaClass.name)
+                .put("node_identity", System.identityHashCode(node)).put("node_attached", node.attached)
+                .put("view", describe(node.view))
+                .put("pointer_ids", JSONArray((mainAdmissionField(value, "pointers") as Set<*>).toList()))
+                .put("children", JSONArray(children.map { branch(checkNotNull(it)) }))
+        }
+        val roots = mainAdmissionField(tree, "roots") as List<*>
+        return JSONObject().put("home", describe(field("home") as View))
+            .put("settings", (field("settings") as? View)?.let(::describe) ?: JSONObject.NULL)
+            .put("home_gestures_enabled", navigation.homeGesturesEnabled)
+            .put("home_input_admitted", main.admitsSurfaceInput(field("home") as View))
+            .put("drag_target", navigation.dragTarget?.name ?: JSONObject.NULL)
+            .put("recognizer", recognizer).put("retained_path", JSONArray(roots.map { branch(checkNotNull(it)) }))
+    }
+    fun bounds(view: View): Rect = Rect().also { check(view.getGlobalVisibleRect(it)) }
+    val events = JSONArray().also { result.put("pointer_events", it) }
+    fun finger(action: Int, down: Long, x: Float, y: Float) {
+        check(activity.hasWindowFocus() && main.isShown && main.isAttachedToWindow)
+        val origin = IntArray(2).also(main::getLocationOnScreen)
+        val pointer = MotionEvent.PointerProperties().apply { id = 0; toolType = MotionEvent.TOOL_TYPE_FINGER }
+        val coordinate = MotionEvent.PointerCoords().apply {
+            this.x = x + origin[0]; this.y = y + origin[1]
+            pressure = if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) 0f else 1f
+            size = 1f
+        }
+        val event = MotionEvent.obtain(down, SystemClock.uptimeMillis(), action, 1,
+            arrayOf(pointer), arrayOf(coordinate), 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0)
+        try {
+            event.offsetLocation(-origin[0].toFloat(), -origin[1].toFloat())
+            val sample = JSONObject().put("action", action).put("x", x.toDouble()).put("y", y.toDouble())
+                .put("raw_x", event.rawX.toDouble()).put("raw_y", event.rawY.toDouble())
+            events.put(sample)
+            check(kotlin.math.abs(event.x - x) < .01f && kotlin.math.abs(event.y - y) < .01f)
+            check(kotlin.math.abs(event.rawX - coordinate.x) < .01f &&
+                kotlin.math.abs(event.rawY - coordinate.y) < .01f)
+            sample.put("handled", main.dispatchTouchEvent(event))
+            check(sample.getBoolean("handled")) { "Actual Main rejected finger event: $sample" }
+        } finally { event.recycle() }
+    }
+    fun tap(view: View, beforeDown: () -> Unit = {}) = ui {
+        val rectangle = bounds(view)
+        val origin = IntArray(2).also(main::getLocationOnScreen)
+        val x = rectangle.exactCenterX() - origin[0]
+        val y = rectangle.exactCenterY() - origin[1]
+        val down = SystemClock.uptimeMillis()
+        beforeDown()
+        finger(MotionEvent.ACTION_DOWN, down, x, y)
+        finger(MotionEvent.ACTION_UP, down, x, y)
+    }
+    fun openSettings() {
+        ui { render.click(activity.getString(R.string.open_settings)) }
+        await("Settings ready") { settings().owner.state.hydrated && settings().inputAllowed &&
+            motion(NativeMainPanel.SETTINGS).panelProgress == 1f }
+        awaitNativeParityDraw(instrumentation, render.board)
+    }
+    fun closeToHome() {
+        ui { activity.onBackPressedDispatcher.onBackPressed() }
+        await("Home terminal", ::home)
+    }
+    fun case(name: String, body: (JSONObject) -> Unit) {
+        val entry = JSONObject().put("name", name).put("passed", false)
+        cases.put(entry); preserve(result)
+        try { body(entry); entry.put("passed", true); result.put("completed_cases", cases.length()) }
+        catch (failure: Throwable) { entry.put("error", failure.stackTraceToString()); throw failure }
+        finally { preserve(result) }
+    }
+    try {
+        await("initial Home", ::home)
+        openSettings()
+        result.put("existing_layer_admission", verifyNativeMainLayerAdmission(instrumentation, activity, render.board) { partial ->
+            result.put("existing_layer_admission", partial)
+            preserve(result)
+        })
+        closeToHome()
+
+        var retiredToolbar: View? = null
+        for (panel in NativeMainPanel.entries) for (commit in listOf(false, true)) {
+            case("${panel.name.lowercase()}_reverse_${if (commit) "commit" else "cancel"}") { entry ->
+                await("Home before drag", ::home)
+                val height = ui { main.height.toFloat() }
+                val sign = if (panel == NativeMainPanel.SETTINGS) 1f else -1f
+                val x = ui { main.width * .5f }
+                val startY = height * if (sign > 0) .20f else .80f
+                val slop = ui { ViewConfiguration.get(main.context).scaledTouchSlop.toFloat() }
+                val crossedY = startY + sign * (slop * 2f + 2f)
+                val down = SystemClock.uptimeMillis()
+                var lastY = crossedY
+                var streamOpen = true
+                try {
+                    ui {
+                        val before = bindings()
+                        entry.put("before_down", startSnapshot())
+                        finger(MotionEvent.ACTION_DOWN, down, x, startY)
+                        entry.put("after_down", startSnapshot())
+                        finger(MotionEvent.ACTION_MOVE, down, x, crossedY)
+                        entry.put("after_first_move", startSnapshot())
+                        check(navigation.dragTarget == panel) {
+                            "Main did not admit $panel drag; see before_down/after_down/after_first_move"
+                        }
+                        requireFullBind(entry, "start", before, panel == NativeMainPanel.LIBRARY)
+                    }
+                    await("first intermediate pose") { motion(panel).panelProgress > 0f &&
+                        (panel != NativeMainPanel.LIBRARY || field("libraryToolbar") != null) }
+                    val previewToolbar = ui {
+                        (field("libraryToolbar") as? View)?.takeIf { panel == NativeMainPanel.LIBRARY }?.also { toolbar ->
+                            check(toolbar !== retiredToolbar) { "A removed toolbar was silently reused" }
+                            check(!main.admitsSurfaceInput(toolbar))
+                            val action = admissionViews(toolbar).filterIsInstance<ReverbTopBarIconAction>()
+                                .first().accessibilityAction
+                            check(!action.requestFocusFromTouch()) { "New preview toolbar admitted focus before navigation commit" }
+                            entry.put("new_preview_toolbar_blocked", true)
+                        }
+                    }
+                    val samples = JSONArray().also { entry.put("deltas", it) }
+                    fun move(fraction: Float) = ui {
+                        val before = bindings()
+                        val revision = admission()
+                        lastY = startY + sign * height * fraction
+                        finger(MotionEvent.ACTION_MOVE, down, x, lastY)
+                        val after = bindings()
+                        val observation = JSONObject().put("bind_refs_before", ids(before))
+                            .put("bind_refs_after", ids(after)).put("admission_before", revision)
+                            .put("admission_after", admission())
+                        samples.put(observation)
+                        check(sameBindings(before, after)) { "Drag delta fully rebound a retained screen" }
+                        check(admission() == revision) { "Unchanged drag delta repeated admission cleanup" }
+                    }
+                    repeat(12) { move(.06f + .26f * (it + 1) / 12f) }
+                    fun target() = if (panel == NativeMainPanel.SETTINGS)
+                        navigation.settingsDragProgress else navigation.libraryDragProgress
+                    await("outward motion") { kotlin.math.abs(motion(panel).panelProgress - target()) < .005f }
+                    val outward = ui { motion(panel).panelProgress }
+                    check(outward > 0f && outward < 1f)
+                    repeat(12) { move(.32f - .24f * (it + 1) / 12f) }
+                    await("reversed motion") { kotlin.math.abs(motion(panel).panelProgress - target()) < .005f }
+                    val reversed = ui { motion(panel).panelProgress }
+                    check(reversed >= 0f && reversed < outward) { "Pointer reversal did not reverse the displayed panel" }
+                    if (commit) repeat(6) { move(.08f + .16f * (it + 1) / 6f) }
+                    ui {
+                        val before = bindings()
+                        finger(if (commit) MotionEvent.ACTION_UP else MotionEvent.ACTION_CANCEL, down, x, lastY)
+                        streamOpen = false
+                        check(navigation.dragTarget == null)
+                        requireFullBind(entry, "terminal", before, panel == NativeMainPanel.LIBRARY)
+                        check((if (panel == NativeMainPanel.SETTINGS) navigation.showSettings else navigation.showLibrary) == commit)
+                    }
+                    await("panel terminal") { motion(panel).panelProgress == if (commit) 1f else 0f }
+                    entry.put("outward_progress", outward.toDouble()).put("reversed_progress", reversed.toDouble())
+                        .put("terminal_progress", ui { motion(panel).panelProgress }.toDouble())
+                        .put("verified_delta_count", samples.length())
+                    if (commit && previewToolbar != null) ui {
+                        check(field("libraryToolbar") === previewToolbar && main.admitsSurfaceInput(previewToolbar))
+                        val action = admissionViews(previewToolbar).filterIsInstance<ReverbTopBarIconAction>()
+                            .first().accessibilityAction
+                        check(action.requestFocusFromTouch() && main.findFocus() === action)
+                        entry.put("committed_toolbar_admitted", true)
+                    }
+                    if (commit) closeToHome()
+                    if (previewToolbar != null) ui {
+                        check(!previewToolbar.isAttachedToWindow && field("libraryToolbar") == null)
+                        check(main.findFocus()?.let { admissionWithin(it, previewToolbar) } != true)
+                        retiredToolbar = previewToolbar
+                        entry.put("toolbar_retired_and_focus_cleared", true)
+                    }
+                } finally {
+                    if (streamOpen) ui { finger(MotionEvent.ACTION_CANCEL, down, x, lastY) }
+                }
+            }
+        }
+
+        for (theme in listOf(true, false)) case(if (theme) "theme_held_view_roundtrip" else "retention_held_view_roundtrip") { entry ->
+            openSettings()
+            val screen = ui { settings() }
+            val baseline = ui { screen.owner.snapshot }
+            fun revealGroup(): NativeSegmentedChoice {
+                ui {
+                    val viewport = checkNotNull(screen.listViewport)
+                    val adapter = checkNotNull(viewport.adapter)
+                    val key = if (theme) ReverbSettingsSectionKey.THEME else ReverbSettingsSectionKey.RETENTION
+                    val position = (0 until adapter.itemCount).single { adapter.getItemViewType(it) == key.ordinal }
+                    (viewport.layoutManager as LinearLayoutManager).scrollToPositionWithOffset(position, 0)
+                }
+                awaitNativeParityDraw(instrumentation, render.board)
+                var found: NativeSegmentedChoice? = null
+                await("selector attached") {
+                    found = admissionViews(screen).filterIsInstance<NativeSegmentedChoice>().firstOrNull { group ->
+                        if (theme) group.choiceView("LIGHT") != null else
+                            generateSequence(group.parent as? View) { it.parent as? View }.any { it is ReverbRetentionSection }
+                    }
+                    found?.let { it.isShown && it.isLaidOut && it.height > 0 } == true
+                }
+                return checkNotNull(found)
+            }
+            fun choose(group: NativeSegmentedChoice): NativeChip = ui {
+                if (theme) checkNotNull(group.choiceView(if (screen.owner.snapshot.themeMode == AppThemeMode.LIGHT) "DARK" else "LIGHT"))
+                else (0 until group.childCount).map(group::getChildAt).filterIsInstance<NativeChip>().single { !it.isChecked }
+            }
+            val selections = JSONArray().also { entry.put("neutral_pointer_selections", it) }
+            fun exercise(target: NativeChip) {
+                // Clearing an old target can schedule owner invalidation; let that settle before
+                // the ordinary first tap. Never grant the selector focus to make its tap work.
+                ui { render.board.findFocus()?.clearFocus() }
+                awaitNativeParityDraw(instrumentation, render.board)
+                val selection = JSONObject().also(selections::put)
+                tap(target) {
+                    val focused = render.board.findFocus()
+                    selection.put("target_focused_before_down", target.hasFocus())
+                        .put("settings_focused_before_down", screen.hasFocus())
+                        .put("neutral_owner_before_down", focused == null || focused === render.board)
+                    check(focused == null || focused === render.board) { "First tap did not start from neutral owner focus" }
+                    check(!screen.hasFocus() && !target.hasFocus())
+                    check(main.admitsSurfaceInput(target) && screen.inputAllowed)
+                }
+                await("selector changes actual owner") {
+                    target.isChecked && (if (theme) screen.owner.snapshot.themeMode != baseline.themeMode
+                        else screen.owner.snapshot.retentionMode != baseline.retentionMode)
+                }
+                selection.put("pointer_changed_owner", true)
+                // Independent focus assertion only after the unfocused pointer action succeeded.
+                ui {
+                    check(main.admitsSurfaceInput(target) && screen.inputAllowed)
+                    check(target.requestFocusFromTouch() && main.findFocus() === target)
+                }
+                selection.put("separate_focus_admitted", true)
+                ui { render.click(activity.getString(R.string.undo)) }
+                await("Undo restored unsaved state") { screen.owner.snapshot == baseline && !screen.owner.state.hasUnsavedChanges }
+            }
+            val firstGroup = revealGroup()
+            val held = choose(firstGroup)
+            exercise(held)
+            ui { check(held.requestFocusFromTouch()) }
+            closeToHome()
+            ui {
+                check(!main.admitsSurfaceInput(screen))
+                check(main.findFocus() !== held)
+                check(!held.performAccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, null))
+                val acceptedFocus = held.requestFocusFromTouch()
+                check(!held.isAttachedToWindow || !acceptedFocus)
+                check(main.findFocus() !== held && screen.owner.snapshot == baseline)
+                entry.put("held_hidden_action_rejected", true).put("held_hidden_focus_rejected", true)
+            }
+            openSettings()
+            check(ui { settings() === screen }) { "Round trip replaced the retained Settings screen" }
+            val currentGroup = revealGroup()
+            entry.put("same_group_after_roundtrip", currentGroup === firstGroup)
+                .put("held_attached_after_roundtrip", ui { held.isAttachedToWindow })
+            exercise(choose(currentGroup))
+            entry.put("root_pointer_selection_before_and_after", true)
+            closeToHome()
+        }
+        check(cases.length() == 6 && result.getInt("completed_cases") == 6)
+        result.put("restored_home", ui(::home)).put("passed", true)
+        preserve(result)
+        return result
+    } catch (failure: Throwable) {
+        result.put("error", failure.stackTraceToString())
+        try { preserve(result) } catch (write: Throwable) { if (write !== failure) failure.addSuppressed(write) }
+        throw failure
+    }
+}
+
+private fun mainAdmissionField(owner: Any, name: String): Any? =
+    owner.javaClass.getDeclaredField(name).apply { isAccessible = true }.get(owner)

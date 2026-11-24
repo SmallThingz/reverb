@@ -256,7 +256,7 @@ private fun restartUiViews(view: View): Sequence<View> = sequence {
 }
 
 /** Same bounded PixelCopy/late-callback ownership as existing parity captures, for this exact dialog window. */
-private fun captureRestartSheet(instrumentation: Instrumentation, host: NativeParityActivity, window: Window): Bitmap {
+internal fun captureRestartSheet(instrumentation: Instrumentation, host: NativeParityActivity, window: Window): Bitmap {
     fun guardOnMain() {
         val root = window.decorView
         check(!host.isFinishing && host.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))

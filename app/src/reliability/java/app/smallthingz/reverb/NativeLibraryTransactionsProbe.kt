@@ -694,13 +694,14 @@ private class TransactionLifecycle : LifecycleOwner {
 }
 
 @OptIn(ExperimentalComposeViewContextApi::class)
-private class TransactionBoard(
+internal class TransactionBoard(
     private val host: NativeParityActivity,
     private val compose: Boolean,
     private val records: List<RecordingEntity>,
     private val windowTransitions: JSONArray,
     private val commonGrain: NativeParityCommonGrainSession? = null,
     private val fitCurrentWindowInsets: Boolean = false,
+    private val inlineCurrent: Boolean = false,
     onOwned: (TransactionBoard) -> Unit,
 ) : AutoCloseable {
     private val configuration = Configuration(host.resources.configuration).apply {
@@ -732,6 +733,17 @@ private class TransactionBoard(
     }
     private var nativeScope: CoroutineScope? = null
     private var native: ReverbLibraryScreenContent? = null
+    private var inlineRoot: LibraryNativeFocusRoot? = null
+    private var nativeInput: NativeLibraryScreenInput? = null
+    private var inlineText: NativeLibraryAccessibilityBinding? = null
+    private var inlineScrollEvents: smallthingz.ui.scroll.NativeWindowScrollAccessibilityEvents? = null
+    private var inlineSource: NativeMainAccessibility? = null
+    private var inlineInsetsPreDraw: ViewTreeObserver.OnPreDrawListener? = null
+    private var inlineInsetsDispatches = 0
+    private var inlineInsetsBinds = 0
+    private var observedInlineInfoId: String? = null
+    var inlineInfoDismissalTransitions = 0
+        private set
     private var closed = false
     private var pendingWindowTransition: NativeLibraryWindowTransition? = null
     var visibleIds: Set<String> = emptySet()
@@ -790,33 +802,81 @@ private class TransactionBoard(
             } else Insets.NONE
             var input = NativeLibraryScreenInput(NativeLibraryInput(true, records, callbacks),
                 false, true, initialInsets.libraryContent(), {}, {}, {}, {})
+            nativeInput = input
+            val phaseRoot = if (inlineCurrent) LibraryNativeFocusRoot(context).also {
+                inlineRoot = it
+                host.fixtureRoot.addView(it, FrameLayout.LayoutParams(-1, -1))
+            } else null
             val content = ReverbLibraryScreenContent(context, environment, input, lifecycle,
                 host.onBackPressedDispatcher, owned, checkNotNull(owned.coroutineContext[MonotonicFrameClock]),
-                ValueAnimator::getDurationScale, accessibility, host.fixtureRoot, transactionNoNested, {}, {})
+                ValueAnimator::getDurationScale, accessibility, phaseRoot ?: host.fixtureRoot,
+                transactionNoNested, { phaseRoot?.refreshPointerNodes(); inlineText?.refresh() }, { state ->
+                    if (inlineCurrent) {
+                        val next = state.infoRecording?.id
+                        if (observedInlineInfoId != null && next == null) inlineInfoDismissalTransitions++
+                        observedInlineInfoId = next
+                    }
+                })
             native = content // Retain the owner before any attachment callback can fail.
             content.layoutDirection = View.LAYOUT_DIRECTION_LTR
             val layout = FrameLayout.LayoutParams(-1, -1).apply { topMargin = initialInsets.top }
-            if (fitCurrentWindowInsets) ViewCompat.setOnApplyWindowInsetsListener(content) { _, _ ->
+            fun applyFixtureInsets(): Boolean {
+                var changed = false
                 ViewCompat.getRootWindowInsets(host.fixtureRoot)?.let { rootInsets ->
                     val insets = residualVisualInsets(rootInsets)
                     if (layout.topMargin != insets.top) {
                         layout.topMargin = insets.top
                         content.layoutParams = layout
+                        changed = true
                     }
                     val scaffold = insets.libraryContent()
                     if (input.scaffoldInsets != scaffold) {
                         input = input.copy(scaffoldInsets = scaffold)
+                        nativeInput = input
                         content.bind(input)
+                        if (inlineCurrent) inlineInsetsBinds++
+                        changed = true
                     }
                 }
+                return changed
+            }
+            if (fitCurrentWindowInsets) ViewCompat.setOnApplyWindowInsetsListener(content) { _, _ ->
+                if (inlineCurrent) inlineInsetsDispatches++
+                applyFixtureInsets()
                 WindowInsetsCompat.CONSUMED
             }
-            host.fixtureRoot.addView(content, layout)
+            if (fitCurrentWindowInsets && inlineCurrent) {
+                // Like Main, re-evaluate remaining occlusion after pan/resize, even when the
+                // raw window inset did not change. Never draw the obsolete viewport geometry.
+                inlineInsetsPreDraw = ViewTreeObserver.OnPreDrawListener {
+                    closed || !applyFixtureInsets()
+                }.also { host.fixtureRoot.viewTreeObserver.addOnPreDrawListener(it) }
+            }
+            (phaseRoot ?: host.fixtureRoot).addView(content, layout)
+            phaseRoot?.bindPointerContent(content, checkNotNull(owned.coroutineContext[MonotonicFrameClock]), owned)
+            if (phaseRoot != null) {
+                val clips = smallthingz.ui.text.view.NativeTextSemanticsClipPolicy(content::sourceClip)
+                val windowText = NativeWindowTextAccessibilityOwner(host.window.decorView, clips)
+                val source = NativeMainAccessibility(host.window.decorView, phaseRoot, { listOf(content) },
+                    { false }, content::sourceClip, minimumTouch = { view ->
+                        if (view is smallthingz.ui.input.phase.NativeClickPhaseHost &&
+                            (view !is smallthingz.ui.text.view.NativeMergedRowAccessibilityHost || view.mergesAccessibilityDescendants))
+                            48f * environment.textDensity.density else 0f
+                    }, inactiveLayer = content::inlineInputExcluded)
+                inlineSource = source
+                phaseRoot.surfaceAdmission = { !source.inInactiveLayer(it) }
+                val events = windowText.openScrollEvents(owned, { phaseRoot.invalidate() }, {})
+                inlineScrollEvents = events
+                inlineText = NativeLibraryAccessibilityBinding(content, windowText, source, events,
+                    source::retainPresentSemanticChildren)
+                content.publishInitialPresentation()
+                inlineText?.refresh()
+            }
             clockHost.visibility = View.GONE
         }
         awaitVisible(i, ids)
     }
-    /** The standalone fixture has no Main reveal layer. Apply only unconsumed physical insets. */
+    /** Standalone adapter; inline mode supplies Main's IME-aware residual bottom contract. */
     private fun residualVisualInsets(windowInsets: WindowInsetsCompat): Insets {
         val visual = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
         val decor = host.window.decorView
@@ -825,12 +885,51 @@ private class TransactionBoard(
         val windowOrigin = IntArray(2).also(decor::getLocationInWindow)
         val x = origin[0] - windowOrigin[0]
         val y = origin[1] - windowOrigin[1]
+        var bottom = (y + root.height - decor.height + visual.bottom).coerceAtLeast(0)
+        val ime = windowInsets.getInsets(WindowInsetsCompat.Type.ime()).bottom
+        if (inlineCurrent && ime > 0) {
+            check(Build.VERSION.SDK_INT >= 30)
+            val protectedInset = maxOf(visual.bottom, ime)
+            val window = host.windowManager.currentWindowMetrics.bounds
+            val screen = IntArray(2).also(root::getLocationOnScreen)
+            // The root may already have been resized or panned clear of part of the IME.
+            bottom = (screen[1] + root.height - (window.bottom - protectedInset))
+                .coerceIn(0, protectedInset)
+        }
         return Insets.of(
             (visual.left - x).coerceAtLeast(0),
             (visual.top - y).coerceAtLeast(0),
             (x + root.width - decor.width + visual.right).coerceAtLeast(0),
-            (y + root.height - decor.height + visual.bottom).coerceAtLeast(0),
+            bottom,
         )
+    }
+
+    /** Observations only: this must not bind or scroll to make the visibility assertions pass. */
+    private fun inlineInsetEvidence(): JSONObject {
+        check(inlineCurrent)
+        val root = host.fixtureRoot
+        val content = checkNotNull(native)
+        val insets = checkNotNull(ViewCompat.getRootWindowInsets(root))
+        val visual = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
+        val residual = residualVisualInsets(insets)
+        fun bounds(view: View): JSONArray {
+            val xy = IntArray(2).also(view::getLocationOnScreen)
+            return JSONArray(listOf(xy[0], xy[1], xy[0] + view.width, xy[1] + view.height))
+        }
+        val window = host.windowManager.currentWindowMetrics.bounds
+        val viewport = transactionViews(content).filterIsInstance<ReverbLibraryListView>()
+            .singleOrNull()?.scrollView
+        return JSONObject().put("adapter", "inline-only IME residual; window metrics and pre-draw pan/resize")
+            .put("inset_dispatches", inlineInsetsDispatches).put("scaffold_rebinds", inlineInsetsBinds)
+            .put("window_bounds", JSONArray(listOf(window.left, window.top, window.right, window.bottom)))
+            .put("decor_bounds", bounds(host.window.decorView)).put("fixture_root_bounds", bounds(root))
+            .put("phase_root_bounds", inlineRoot?.let(::bounds) ?: JSONObject.NULL)
+            .put("content_bounds", bounds(content)).put("viewport_bounds", viewport?.let(::bounds) ?: JSONObject.NULL)
+            .put("raw_visual_bottom", visual.bottom)
+            .put("raw_ime_bottom", insets.getInsets(WindowInsetsCompat.Type.ime()).bottom)
+            .put("ime_visible", insets.isVisible(WindowInsetsCompat.Type.ime()))
+            .put("calculated_residual", JSONArray(listOf(residual.left, residual.top, residual.right, residual.bottom)))
+            .put("bound_scaffold_bottom", checkNotNull(nativeInput).scaffoldInsets.bottom)
     }
 
     private fun Insets.libraryContent() = LibraryScaffoldInsets(left, right, bottom)
@@ -950,7 +1049,7 @@ private class TransactionBoard(
         windowTransitions.put(evidence)
         val infoAction = action in listOf(R.string.recording_info, R.string.close).map(context::getString)
         val renameAction = action in listOf(R.string.rename_recording, R.string.cancel).map(context::getString)
-        val tooltip = if (infoAction || renameAction) NativeLibrarySheetTooltip(
+        val tooltip = if (!inlineCurrent && (infoAction || renameAction)) NativeLibrarySheetTooltip(
             compose,
             context.getString(androidx.compose.material3.R.string.m3c_bottom_sheet_drag_handle_description),
             if (infoAction) NativeLibrarySheetScene.INFO else NativeLibrarySheetScene.RENAME,
@@ -965,10 +1064,10 @@ private class TransactionBoard(
             if (renameAction) context.getString(R.string.rename_recording) else null,
         ) else null
         pendingWindowTransition = NativeLibraryWindowTransition(host, focusRoot(), evidence,
-            observeSheetAuxiliaryOverlap = action in listOf(R.string.recording_info, R.string.rename_recording)
+            observeSheetAuxiliaryOverlap = !inlineCurrent && action in listOf(R.string.recording_info, R.string.rename_recording)
                 .map(context::getString),
             sheetTooltip = tooltip,
-            allowInitialTooltipReadiness = action == context.getString(R.string.rename_recording))
+            allowInitialTooltipReadiness = !inlineCurrent && action == context.getString(R.string.rename_recording))
         return evidence
     }
     /** Actual Settings choice owner on this QA window; typed callbacks never write preferences. */
@@ -1348,11 +1447,23 @@ private class TransactionBoard(
         }
     }
     fun selectRenameDraft(i: Instrumentation, start: Int, end: Int, evidence: JSONObject) {
+        val readiness = JSONArray().also { evidence.put("selection_layout_readiness", it) }
         await(i, "laid-out Rename editor before single click") {
             val editor = transactionViews(focusRoot()).filterIsInstance<android.widget.EditText>()
-                .filter { it.isShown && it.isEnabled }.single()
-            editor.isLaidOut && editor.width > 0 && editor.height > 0 &&
-                editor.getGlobalVisibleRect(Rect())
+                .filter { it.isShown && it.isEnabled }.singleOrNull()
+            val visible = Rect()
+            val hasVisible = editor?.getGlobalVisibleRect(visible) == true
+            val xy = IntArray(2).also { editor?.getLocationOnScreen(it) }
+            readiness.put(JSONObject().put("uptime_ms", SystemClock.uptimeMillis())
+                .put("editor_identity", editor?.let(System::identityHashCode) ?: JSONObject.NULL)
+                .put("attached", editor?.isAttachedToWindow ?: false)
+                .put("shown", editor?.isShown ?: false).put("laid_out", editor?.isLaidOut ?: false)
+                .put("layout_requested", editor?.isLayoutRequested ?: false)
+                .put("window_focused", editor?.hasWindowFocus() ?: false)
+                .put("bounds_screen", Rect(xy[0], xy[1], xy[0] + (editor?.width ?: 0),
+                    xy[1] + (editor?.height ?: 0)).flattenToString())
+                .put("visible_result", hasVisible).put("visible_global", visible.flattenToString()))
+            editor != null && editor.isLaidOut && editor.width > 0 && editor.height > 0 && hasVisible
         }
         nativeParityOnMain(i) {
             guard(); check(!compose)
@@ -1438,6 +1549,7 @@ private class TransactionBoard(
                         .put("ime_accepting_text", accepting).put("ime_window", ime ?: JSONObject.NULL)
                         .put("positive_ime", editor.isFocused && editor.hasWindowFocus() && visible && accepting && ime != null)
                         .put("application_window_id", focused.id))
+                    .also { if (inlineCurrent) it.put("fixture_insets", inlineInsetEvidence()) }
             }
         } finally { windows.forEach { it.recycle() } }
     }
@@ -1558,6 +1670,26 @@ private class TransactionBoard(
         } finally { first?.recycle(); firstFull?.recycle() }
     }
     fun checkAsync() { asyncFailure.get()?.let { throw it } }
+    /** Only the new current-inline fixture exposes its actual screen/root to bounded assertions. */
+    fun inlineScreen(): ReverbLibraryScreenContent {
+        guard(); check(inlineCurrent && !compose)
+        return checkNotNull(native)
+    }
+    fun inlineInputRoot(): LibraryNativeFocusRoot { inlineScreen(); return checkNotNull(inlineRoot) }
+    fun inlineRebind() { inlineScreen().bind(checkNotNull(nativeInput)) }
+    /** QA-only observation of the retained production owner, without adding a production test API. */
+    fun inlineRenameOwner(): NativeRecordingRenameOwner {
+        val screen = inlineScreen()
+        val lifetime = checkNotNull(screen.javaClass.getDeclaredField("renameHeader").run {
+            isAccessible = true; get(screen)
+        })
+        val presentation = lifetime.javaClass.getDeclaredField("presentation").run {
+            isAccessible = true; get(lifetime)
+        } as NativeLibraryRenamePresentation
+        return presentation.owner
+    }
+    fun inlineAccessibilityNode(view: View): smallthingz.ui.text.view.NativeSourceAccessibilityNode =
+        checkNotNull(inlineSource)(view)
     fun awaitClosed() {
         check(closed)
         runBlocking { withTimeout(5_000L) { checkNotNull(runtime.scope.coroutineContext[Job]).join() } }
@@ -1570,6 +1702,15 @@ private class TransactionBoard(
         fun release(block: () -> Unit) { try { block() } catch (error: Throwable) {
             if (primary == null) primary = error else if (primary !== error) primary!!.addSuppressed(error)
         } }
+        release {
+            inlineInsetsPreDraw?.let { host.fixtureRoot.viewTreeObserver.removeOnPreDrawListener(it) }
+            inlineInsetsPreDraw = null
+        }
+        release {
+            inlineRoot?.close()
+        }
+        release { inlineText?.close() }
+        release { inlineScrollEvents?.close() }
         release {
             native?.let {
                 if (fitCurrentWindowInsets) ViewCompat.setOnApplyWindowInsetsListener(it, null)
@@ -1728,7 +1869,7 @@ private fun requireTransactionIdentity(context: Context, currentUi: Boolean = fa
 }
 
 /** Per-renderer authority ledger; never adopts an entry found by a scan. */
-private class TransactionFixtures(
+internal class TransactionFixtures(
     private val context: Context,
     private val evidence: File,
     private val renderer: String,
@@ -1763,10 +1904,11 @@ private class TransactionFixtures(
         manifest.put("baseline_empty", true)
         save()
     }
-    fun create(): List<RecordingEntity> {
+    fun create(count: Int = 2): List<RecordingEntity> {
         check(admitted && owned.isEmpty() && !closed)
-        for (index in 0..1) {
-            val displayName = "$namePrefix ${if (index == 0) "A" else "B"}.wav"
+        require(count in 2..12)
+        for (index in 0 until count) {
+            val displayName = "$namePrefix ${'A' + index}.wav"
             val started = 1_792_497_600_000L - index * 60_000L
             // A provider insert may succeed before the factory throws; never call that empty.
             manifest.put("creation_attempts", ++creationAttempts)
