@@ -3,10 +3,19 @@ package app.smallthingz.reverb
 import android.app.Application
 import android.app.Instrumentation
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Outline
+import android.graphics.Rect
 import android.graphics.drawable.ColorDrawable
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
+import android.view.Choreographer
+import android.view.PixelCopy
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewTreeObserver
 import androidx.activity.BackEventCompat
 import app.smallthingz.reverb.nativeui.NativeSettingsScreenContent
 import app.smallthingz.reverb.nativeui.ReverbIncidentLoadingView
@@ -16,8 +25,14 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import java.io.File
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import org.json.JSONArray
 import org.json.JSONObject
+import smallthingz.ui.components.NativeGroupLayout
+import smallthingz.ui.reverb.settings.ReverbSettingsBackgroundWarningView
+import smallthingz.ui.scroll.NativeSourceRecyclerView
+import smallthingz.ui.text.view.ParagraphView
 
 /** Current requested behavior, deliberately not compared with the unchanged released oracle. */
 internal fun verifyNativeSettingsBackGuard(
@@ -40,6 +55,7 @@ internal fun verifyNativeSettingsBackGuard(
         .put("unqualified", JSONArray(listOf("OS predictive gesture", "physical keyboard", "TalkBack delivery", "production capture")))
     if (hydrationOnly) evidence.put("selector", "native_settings_hydration_current")
         .put("historical_parity_claim", false)
+        .put("visual_review_required", "Original hardware toolbar/card pixels; functional PASS is not visual closure")
         .put("unqualified", JSONArray(listOf("physical touch", "TalkBack delivery", "OS picker launch", "settled-idle folder tap")))
     fun publish() = writeQaEvidenceAtomically(File(directory, "result.json")) { stream ->
         stream.write(evidence.toString(2).toByteArray(Charsets.UTF_8))
@@ -79,22 +95,56 @@ internal fun verifyNativeSettingsBackGuard(
                     try { saveNativeParityBitmap(directory, "${mode.name}-$label.png", bitmap) }
                     finally { bitmap.recycle() }
                 }
+                lateinit var settings: NativeSettingsScreenContent
+                fun saveHydrationCapture(label: String, bitmap: Bitmap): JSONObject {
+                    val name = "${mode.name}-$label.png"
+                    try { saveNativeParityBitmap(directory, name, bitmap) }
+                    finally { bitmap.recycle() }
+                    val digest = File(directory, name).inputStream().use { sha256(it) }
+                    check(digest.byteCount > 0L)
+                    return JSONObject().put("png", name).put("bytes", digest.byteCount)
+                        .put("sha256", digest.sha256.joinToString("") { "%02x".format(it.toInt() and 0xff) })
+                }
                 fun captureHydration(label: String): JSONObject {
                     await("Settings fully revealed for $label") {
                         val home = backGuardViews(current.board).filterIsInstance<ReverbHomeScaffoldView>().single()
                         val parentHeight = (home.parent as View).height
                         parentHeight > 0 && home.translationY >= parentHeight.toFloat()
                     }
-                    capture(label)
-                    val name = "${mode.name}-$label.png"
-                    val digest = File(directory, name).inputStream().use { sha256(it) }
-                    check(digest.byteCount > 0L)
-                    return JSONObject().put("png", name).put("bytes", digest.byteCount)
-                        .put("sha256", digest.sha256.joinToString("") { "%02x".format(it.toInt() and 0xff) })
+                    val diagnostic = JSONObject().put("kind", "original_hardware_two_draw_boundaries")
+                    checkNotNull(hydrationEvidence).put("${label}_capture", diagnostic)
+                    publish()
+                    val bitmap = captureHydrationHardware(instrumentation, host, current.board,
+                        settings, diagnostic, later = false, publish = ::publish)
+                    return saveHydrationCapture(label, bitmap)
+                }
+                fun captureRestoredSupplements() {
+                    val hydration = checkNotNull(hydrationEvidence)
+                    val later = JSONObject().put("kind", "later_hardware_observation_not_guaranteed_new_buffer")
+                    hydration.put("restored_later_hardware", later)
+                    publish()
+                    val hardware = captureHydrationHardware(instrumentation, host, current.board,
+                        settings, later, later = true, publish = ::publish)
+                    later.put("screenshot", saveHydrationCapture("restored-later-hardware", hardware))
+                    publish()
+                    // Software can finish overscroll effects and alter caches: it must be LAST.
+                    val software = JSONObject().put("kind", "supplemental_software_may_mutate_render_state")
+                    hydration.put("restored_software", software)
+                    requireNativeParityHost(instrumentation, host, phase = "hydration-before-software")
+                    val bitmap = nativeParityOnMain(instrumentation) {
+                        software.put("before_draw", hydrationGeometry(current.board, settings))
+                        val image = Bitmap.createBitmap(current.board.width, current.board.height, Bitmap.Config.ARGB_8888)
+                        try {
+                            current.board.draw(Canvas(image))
+                            software.put("after_draw", hydrationGeometry(current.board, settings))
+                            image
+                        } catch (error: Throwable) { image.recycle(); throw error }
+                    }
+                    software.put("screenshot", saveHydrationCapture("restored-software", bitmap))
+                    publish()
                 }
                 await("Settings action") { current.actionCount(host.getString(R.string.open_settings)) == 1 }
                 main { current.click(host.getString(R.string.open_settings)) }
-                lateinit var settings: NativeSettingsScreenContent
                 await("Settings hydration") {
                     val found = backGuardViews(current.board).filterIsInstance<NativeSettingsScreenContent>()
                         .firstOrNull { it.inputAllowed }
@@ -229,6 +279,7 @@ internal fun verifyNativeSettingsBackGuard(
                     main { check(settings.inputAllowed && !settings.owner.state.hydrationPending) }
                     check(preferences.all == original) { "Hydration changed durable QA preferences" }
                     check(current.forbiddenCalls == 0)
+                    captureRestoredSupplements()
                     hydration.put("case_passed", true).put("stage", "complete")
                         .put("durable_preferences_unchanged", true)
                     publish()
@@ -343,4 +394,275 @@ internal fun verifyNativeSettingsBackGuard(
 private fun backGuardViews(root: View): Sequence<View> = sequence {
     yield(root)
     if (root is ViewGroup) for (index in 0 until root.childCount) yieldAll(backGuardViews(root.getChildAt(index)))
+}
+
+/** Same guarded window crop/PixelCopy ownership as the shared helper; scoped diagnostics only. */
+private fun captureHydrationHardware(
+    instrumentation: Instrumentation,
+    host: NativeParityActivity,
+    board: View,
+    settings: NativeSettingsScreenContent,
+    evidence: JSONObject,
+    later: Boolean,
+    publish: () -> Unit,
+): Bitmap {
+    requireNativeParityHost(instrumentation, host, phase = "hydration-hardware-before", beginCapture = true)
+    var drawCount = 0
+    var lastDrawUptime = 0L
+    val drawListener = ViewTreeObserver.OnDrawListener {
+        drawCount++
+        lastDrawUptime = SystemClock.uptimeMillis()
+    }
+    val rectangle = Rect()
+    var bitmap: Bitmap? = null
+    val copied = CountDownLatch(1)
+    var status = Int.MIN_VALUE
+    var submitted = false
+    var recycleOnCompletion = false
+    var captureFailure: Throwable? = null
+    fun releaseDestination() {
+        nativeParityOnMain(instrumentation) {
+            if (!submitted || copied.count == 0L) bitmap?.recycle() else recycleOnCompletion = true
+        }
+    }
+    fun sample(key: String) {
+        evidence.put(key, hydrationGeometry(board, settings)
+            .put("observed_draw_count", drawCount).put("last_draw_uptime_ms", lastDrawUptime))
+    }
+    nativeParityOnMain(instrumentation) {
+        board.viewTreeObserver.addOnDrawListener(drawListener)
+    }
+    try {
+        nativeParityOnMain(instrumentation) { sample("before_settle") }
+        publish()
+        if (later) {
+            // Observe time passing without invalidate/requestLayout/scroll/software draw.
+            // Two callbacks do NOT prove the window submitted a new buffer.
+            val advanced = CountDownLatch(1)
+            val callbacks = JSONArray()
+            var active = true
+            lateinit var callback: Choreographer.FrameCallback
+            nativeParityOnMain(instrumentation) {
+                callback = Choreographer.FrameCallback { frameTime ->
+                    if (active) {
+                        callbacks.put(JSONObject().put("frame_time_nanos", frameTime)
+                            .put("uptime_ms", SystemClock.uptimeMillis()))
+                        if (callbacks.length() == 2) advanced.countDown()
+                        else Choreographer.getInstance().postFrameCallback(callback)
+                    }
+                }
+                Choreographer.getInstance().postFrameCallback(callback)
+            }
+            var boundaryFailure: Throwable? = null
+            try { check(advanced.await(5, TimeUnit.SECONDS)) { "Hydration later-hardware callbacks timed out" } }
+            catch (error: Throwable) { boundaryFailure = error; throw error }
+            finally {
+                try {
+                    nativeParityOnMain(instrumentation) {
+                        active = false
+                        Choreographer.getInstance().removeFrameCallback(callback)
+                        evidence.put("choreographer_callbacks", callbacks)
+                    }
+                } catch (cleanup: Throwable) {
+                    val primary = boundaryFailure
+                    if (primary == null) throw cleanup
+                    if (primary !== cleanup) primary.addSuppressed(cleanup)
+                }
+            }
+        } else {
+            instrumentation.waitForIdleSync()
+            awaitNativeParityDraw(instrumentation, board)
+            awaitNativeParityDraw(instrumentation, board)
+        }
+        requireNativeParityHost(instrumentation, host, phase = "hydration-hardware-after-boundaries")
+        nativeParityOnMain(instrumentation) {
+            check(board.isLaidOut && !board.isLayoutRequested && board.isShown && board.isHardwareAccelerated)
+            val location = IntArray(2)
+            board.getLocationInWindow(location)
+            rectangle.set(location[0], location[1], location[0] + board.width, location[1] + board.height)
+            check(rectangle.width() > 0 && rectangle.height() > 0)
+        }
+        val destination = Bitmap.createBitmap(rectangle.width(), rectangle.height(), Bitmap.Config.ARGB_8888)
+        bitmap = destination
+        nativeParityOnMain(instrumentation) {
+            sample("before_pixelcopy_request")
+            evidence.put("crop_in_window", hydrationRect(rectangle))
+                .put("request_uptime_ms", SystemClock.uptimeMillis())
+            PixelCopy.request(host.window, rectangle, destination, { result ->
+                status = result
+                evidence.put("pixelcopy_status", result).put("copy_callback_uptime_ms", SystemClock.uptimeMillis())
+                copied.countDown()
+                if (recycleOnCompletion) destination.recycle()
+            }, Handler(Looper.getMainLooper()))
+            submitted = true
+        }
+        check(copied.await(5, TimeUnit.SECONDS)) { "Hydration PixelCopy timed out" }
+        check(status == PixelCopy.SUCCESS) { "Hydration PixelCopy failed: $status" }
+        requireNativeParityHost(instrumentation, host, phase = "hydration-hardware-after-pixelcopy")
+        nativeParityOnMain(instrumentation) { sample("after_pixelcopy") }
+        publish()
+        return destination
+    } catch (error: Throwable) {
+        captureFailure = error
+        try { releaseDestination() }
+        catch (cleanup: Throwable) { if (cleanup !== error) error.addSuppressed(cleanup) }
+        try {
+            nativeParityOnMain(instrumentation) {
+                evidence.put("capture_failure", error.stackTraceToString())
+            }
+        } catch (cleanup: Throwable) { if (cleanup !== error) error.addSuppressed(cleanup) }
+        throw error
+    } finally {
+        try {
+            nativeParityOnMain(instrumentation) {
+                if (board.viewTreeObserver.isAlive) board.viewTreeObserver.removeOnDrawListener(drawListener)
+            }
+        } catch (cleanup: Throwable) {
+            val primary = captureFailure
+            if (primary != null) {
+                if (primary !== cleanup) primary.addSuppressed(cleanup)
+            } else {
+                // The successful return has not transferred the bitmap to its caller yet.
+                try { releaseDestination() }
+                catch (recycleFailure: Throwable) {
+                    if (recycleFailure !== cleanup) cleanup.addSuppressed(recycleFailure)
+                }
+                throw cleanup
+            }
+        }
+    }
+}
+
+private fun hydrationRect(rect: Rect): JSONArray = JSONArray(listOf(rect.left, rect.top, rect.right, rect.bottom))
+
+/** Read-only View facts, not an occlusion oracle or a claim about private RenderNode state. */
+private fun hydrationGeometry(board: View, settings: NativeSettingsScreenContent): JSONObject {
+    val targets = linkedMapOf<View, MutableList<String>>()
+    fun add(role: String, view: View?) {
+        if (view == null) return
+        targets.getOrPut(view) { mutableListOf() }.add(role)
+        var ancestor = view.parent as? View
+        while (ancestor != null) {
+            targets.getOrPut(ancestor) { mutableListOf("ancestor") }
+            ancestor = ancestor.parent as? View
+        }
+    }
+    fun identity(view: View?) = view?.let { "${it.javaClass.name}@${System.identityHashCode(it).toString(16)}" }
+    add("capture_board", board)
+    add("settings", settings)
+    add("toolbar", settings.topBar)
+    add("toolbar_content", settings.topBar.contentClipView)
+    add("toolbar_title", settings.topBar.title)
+    add("navigation_wrapper", settings.topBar.navigation)
+    add("done_wrapper", settings.topBar.done)
+    add("navigation_visual", settings.topBar.navigation.visual)
+    add("done_visual", settings.topBar.done.visual)
+    add("list_container", settings.sectionContent)
+    val viewport = settings.listViewport
+    add("list_viewport", viewport)
+    if (viewport != null) for (index in 0 until minOf(3, viewport.childCount)) {
+        add("attached_section_$index", viewport.getChildAt(index))
+    }
+    backGuardViews(settings).filterIsInstance<ReverbSettingsBackgroundWarningView>().forEachIndexed { index, warning ->
+        add("warning_section_$index", warning)
+        for (child in 0 until warning.childCount) {
+            val group = warning.getChildAt(child) as? NativeGroupLayout ?: continue
+            add("warning_group_$index", group)
+            val content = group.pointerContent
+            add("warning_content_$index", content)
+            for (rowIndex in 0 until content.childCount) {
+                val row = content.getChildAt(rowIndex)
+                add("warning_${index}_row_$rowIndex", row)
+                if (row is ViewGroup) for (childIndex in 0 until row.childCount) {
+                    add("warning_${index}_row_${rowIndex}_child_$childIndex", row.getChildAt(childIndex))
+                }
+                backGuardViews(row).filterIsInstance<ParagraphView>().forEachIndexed { labelIndex, label ->
+                    add("warning_${index}_row_${rowIndex}_label_$labelIndex", label)
+                }
+            }
+        }
+    }
+    val entries = JSONArray()
+    val boardLocation = IntArray(2); board.getLocationInWindow(boardLocation)
+    for ((view, roles) in targets) {
+        val window = IntArray(2); view.getLocationInWindow(window)
+        val screen = IntArray(2); view.getLocationOnScreen(screen)
+        val visible = Rect()
+        val globalVisible = view.getGlobalVisibleRect(visible)
+        val matrix = FloatArray(9); view.matrix.getValues(matrix)
+        val outline = Outline()
+        view.outlineProvider?.getOutline(view, outline)
+        val outlineRect = Rect()
+        val rectOutline = outline.getRect(outlineRect)
+        val outlineRadius = outline.radius
+        val parent = view.parent as? ViewGroup
+        val entry = JSONObject().put("roles", JSONArray(roles)).put("identity", identity(view))
+            .put("parent", identity(parent)).put("index_in_parent", parent?.indexOfChild(view))
+            .put("bounds_in_parent", JSONArray(listOf(view.left, view.top, view.right, view.bottom)))
+            .put("measured_size", JSONArray(listOf(view.measuredWidth, view.measuredHeight)))
+            .put("location_in_window", JSONArray(window.toList())).put("location_on_screen", JSONArray(screen.toList()))
+            .put("location_in_capture", JSONArray(listOf(window[0] - boardLocation[0], window[1] - boardLocation[1])))
+            .put("translation", JSONArray(listOf(view.translationX, view.translationY, view.translationZ)))
+            .put("scale", JSONArray(listOf(view.scaleX, view.scaleY))).put("matrix", JSONArray(matrix.toList()))
+            .put("pivot", JSONArray(listOf(view.pivotX, view.pivotY)))
+            .put("rotation", JSONArray(listOf(view.rotation, view.rotationX, view.rotationY)))
+            .put("scroll", JSONArray(listOf(view.scrollX, view.scrollY))).put("alpha", view.alpha)
+            .put("z", view.z).put("elevation", view.elevation).put("visibility", view.visibility)
+            .put("shown", view.isShown).put("attached", view.isAttachedToWindow)
+            .put("laid_out", view.isLaidOut).put("hardware_accelerated", view.isHardwareAccelerated)
+            .put("layout_requested", view.isLayoutRequested).put("layer_type", view.layerType)
+            .put("has_overlapping_rendering", view.hasOverlappingRendering())
+            .put("padding", JSONArray(listOf(view.paddingLeft, view.paddingTop, view.paddingRight, view.paddingBottom)))
+            .put("clip_bounds", view.clipBounds?.let(::hydrationRect) ?: JSONObject.NULL)
+            .put("clip_to_outline", view.clipToOutline).put("outline_provider", view.outlineProvider?.javaClass?.name)
+            .put("outline_empty", outline.isEmpty).put("outline_can_clip", outline.canClip())
+            .put("outline_rect", if (rectOutline) hydrationRect(outlineRect) else JSONObject.NULL)
+            .put("outline_radius", if (outlineRadius.isFinite()) outlineRadius else JSONObject.NULL)
+            .put("outline_radius_defined", outlineRadius.isFinite()).put("outline_radius_raw", outlineRadius.toString())
+            .put("outline_alpha", outline.alpha)
+            .put("global_visible_rect_nonempty", globalVisible).put("global_visible_rect_not_occlusion", hydrationRect(visible))
+        if (view is ViewGroup) {
+            val children = JSONArray()
+            for (index in 0 until view.childCount) {
+                val child = view.getChildAt(index)
+                children.put(JSONObject().put("index", index).put("identity", identity(child))
+                    .put("z", child.z).put("elevation", child.elevation)
+                    .put("translation", JSONArray(listOf(child.translationX, child.translationY, child.translationZ)))
+                    .put("bounds_in_parent", JSONArray(listOf(child.left, child.top, child.right, child.bottom)))
+                    .put("alpha", child.alpha).put("visibility", child.visibility))
+            }
+            entry.put("clip_children", view.clipChildren).put("clip_to_padding", view.clipToPadding)
+                .put("children_in_index_order", children)
+            if (Build.VERSION.SDK_INT >= 29) entry.put("drawing_order_before_z", JSONArray(
+                (0 until view.childCount).map { view.getChildDrawingOrder(it) }))
+        }
+        if (view is NativeSourceRecyclerView) {
+            val items = JSONArray()
+            for (index in 0 until minOf(3, view.childCount)) {
+                val child = view.getChildAt(index)
+                val decorated = Rect()
+                view.layoutManager?.getDecoratedBoundsWithMargins(child, decorated)
+                items.put(JSONObject().put("identity", identity(child)).put("child_index", index)
+                    .put("adapter_position", view.getChildAdapterPosition(child)).put("item_id", view.getChildItemId(child))
+                    .put("decorated_bounds", hydrationRect(decorated)))
+            }
+            entry.put("scroll_state", view.scrollState).put("computing_layout", view.isComputingLayout)
+                .put("layout_suppressed", view.isLayoutSuppressed)
+                .put("layout_manager", view.layoutManager?.javaClass?.name)
+                .put("adapter", view.adapter?.javaClass?.name).put("adapter_count", view.adapter?.itemCount)
+                .put("pending_adapter_updates", view.hasPendingAdapterUpdates()).put("first_attached_items", items)
+                .put("item_animator", view.itemAnimator?.javaClass?.name ?: JSONObject.NULL)
+                .put("item_animator_running", view.itemAnimator?.isRunning ?: false)
+                .put("overscroll_present", view.sourceOverscroll != null)
+                .put("overscroll_near_far_in_progress_only", view.sourceOverscroll?.isInProgress ?: false)
+                .put("overscroll_backend_or_negation_idle_proven", false)
+        }
+        entries.put(entry)
+    }
+    val windowFrame = Rect(); board.getWindowVisibleDisplayFrame(windowFrame)
+    return JSONObject().put("uptime_ms", SystemClock.uptimeMillis()).put("views", entries)
+        .put("window_visible_display_frame", hydrationRect(windowFrame))
+        .put("root_identity", identity(board.rootView)).put("display_id", board.display?.displayId)
+        .put("active", settings.owner.state.active).put("hydration_pending", settings.owner.state.hydrationPending)
+        .put("input_allowed", settings.inputAllowed).put("saved_position", settings.savePosition().toString())
 }

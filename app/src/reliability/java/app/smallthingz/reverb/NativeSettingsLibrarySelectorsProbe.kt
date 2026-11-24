@@ -469,6 +469,94 @@ private fun selectorViews(view: View): Sequence<View> = sequence {
     if (view is ViewGroup) for (index in 0 until view.childCount) yieldAll(selectorViews(view.getChildAt(index)))
 }
 
+/** Real Android measurement only: no window input, screenshot, or animation claim. */
+internal fun verifyNativeSegmentedPadding(instrumentation: Instrumentation, report: StringBuilder) {
+    val context = instrumentation.targetContext
+    check(context.packageName == "app.smallthingz.reverb.uitheme.reliability")
+    check(context.applicationContext.javaClass == Application::class.java)
+    val directory = File(context.filesDir, "native-segmented-padding-current-${System.currentTimeMillis()}")
+    check(directory.mkdir())
+    val cases = JSONArray()
+    val result = JSONObject().put("selector", "native_segmented_padding_current").put("passed", false)
+        .put("scope", "Unattached real Views; minimum horizontal content inset, text fit, reflow and retained selection")
+        .put("cases", cases)
+    try {
+        nativeParityOnMain(instrumentation) {
+            val palette = smallthingz.ui.controls.ControlPalette(-1, -1, 0xff202020.toInt(), 0xff606060.toInt(),
+                0xff3458a0.toInt(), -1, 0xff3458a0.toInt(), 0xffaaaaaa.toInt())
+            val default = smallthingz.ui.components.NativeSegmentedStyle.Default
+            val styles = mapOf("default" to default, "undersized-overrides" to default.copy(
+                choiceStyle = default.choiceStyle.copy(horizontalPaddingDp = 2f, startPaddingDp = 0f, endPaddingDp = 1f)),
+                "larger-overrides" to default.copy(choiceStyle = default.choiceStyle.copy(
+                    horizontalPaddingDp = 18f, startPaddingDp = 20f, endPaddingDp = 16f)))
+            val unconstrained = View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+            for (dpi in listOf(160, 421)) for (scale in listOf(1f, 2f))
+                for (direction in listOf(View.LAYOUT_DIRECTION_LTR, View.LAYOUT_DIRECTION_RTL)) {
+                val configured = context.createConfigurationContext(android.content.res.Configuration(context.resources.configuration).apply {
+                    densityDpi = dpi; fontScale = scale
+                    setLocales(android.os.LocaleList(if (scale == 1f) java.util.Locale.ENGLISH else java.util.Locale.GERMAN))
+                })
+                val density = smallthingz.ui.unit.Density(configured)
+                fun dp(value: Int) = (value * density.density).roundToInt()
+                val resolver = smallthingz.ui.text.font.createFontFamilyResolver(configured)
+                for ((name, style) in styles) {
+                    val selector = smallthingz.ui.components.NativeSettingsSelectorStyle(segmented = style).createThemeSelector(
+                        configured, palette, smallthingz.ui.components.NativeThemeMode.SYSTEM, density, resolver,
+                    ) { error("Measurement must not request selection") }
+                    try {
+                        // Unattached Views have no ViewRoot to resolve inherited direction.
+                        selectorViews(selector).forEach { it.layoutDirection = direction }
+                        val group = selectorViews(selector).filterIsInstance<NativeSegmentedChoice>().single()
+                        val children = (0 until group.childCount).map { group.getChildAt(it) as NativeChip }
+                        for (widthDp in listOf(120, 360, 600)) {
+                            val entry = JSONObject().put("dpi", dpi).put("font_scale", scale).put("direction", direction)
+                                .put("style", name).put("width_dp", widthDp).put("passed", false)
+                            cases.put(entry)
+                            selector.measure(View.MeasureSpec.makeMeasureSpec(dp(widthDp), View.MeasureSpec.EXACTLY), unconstrained)
+                            selector.layout(0, 0, selector.measuredWidth, selector.measuredHeight)
+                            val geometry = JSONArray()
+                            entry.put("cells", geometry)
+                            for (child in children) {
+                                val text = checkNotNull(child.layout)
+                                geometry.put(JSONObject().put("text", child.text).put("width", child.width).put("height", child.height)
+                                    .put("left_padding", child.paddingLeft).put("right_padding", child.paddingRight)
+                                    .put("text_width", text.width).put("lines", text.lineCount))
+                                check(child.paddingLeft >= dp(12) && child.paddingRight >= dp(12))
+                                if (name == "larger-overrides") check(child.paddingStart == dp(20) && child.paddingEnd == dp(16))
+                                check(child.paddingTop == 0 && child.paddingBottom == 0)
+                                val available = child.width - child.compoundPaddingLeft - child.compoundPaddingRight
+                                check(available > 0 && text.width <= available)
+                                check((0 until text.lineCount).all { text.getLineWidth(it) <= available + 1 && text.getEllipsisCount(it) == 0 })
+                                check(text.getLineEnd(text.lineCount - 1) == child.text.length)
+                                check(text.height <= child.height - child.compoundPaddingTop - child.compoundPaddingBottom)
+                            }
+                            if (widthDp == 120) check(children.map { it.top }.distinct().size > 1)
+                            entry.put("passed", true)
+                        }
+                        selector.bind(smallthingz.ui.components.NativeThemeMode.DARK, palette, density, resolver)
+                        check(children.indices.all { children[it] === group.getChildAt(it) })
+                        check(children.last().isChecked)
+                    } finally { selector.close() }
+                }
+                // Recreate the previous zero-padding cell without the capsule's new floor.
+                val old = NativeChip(configured, palette, default.choiceStyle.copy(horizontalPaddingDp = 0f))
+                try {
+                    old.bind("WWWWWW", true)
+                    old.measure(unconstrained, unconstrained)
+                    check(old.paddingLeft < dp(12) && old.paddingRight < dp(12))
+                    check(old.measuredWidth < checkNotNull(old.layout).getLineWidth(0) + 2 * dp(12))
+                } finally { old.close() }
+            }
+        }
+        result.put("passed", true).put("old_zero_padding_counterexamples_rejected", 8)
+    } catch (error: Throwable) {
+        result.put("failure", error.stackTraceToString()); throw error
+    } finally {
+        writeQaEvidenceAtomically(File(directory, "result.json")) { it.write(result.toString(2).toByteArray()) }
+    }
+    report.appendLine("PASS native_segmented_padding_current ${cases.length()} geometry cases; evidence ${directory.absolutePath}")
+}
+
 /** Exact current-UI route; the historical parity launch helper remains unchanged. */
 internal fun launchCurrentUiSmokeActivity(instrumentation: Instrumentation): NativeParityActivity {
     val context = instrumentation.targetContext
