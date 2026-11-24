@@ -1,7 +1,10 @@
 package app.smallthingz.reverb.nativeui
 
 import android.app.Application
+import android.app.Activity
 import android.content.Context
+import android.content.Intent
+import android.os.Looper
 import android.view.Choreographer
 import android.view.View
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -20,6 +23,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Robolectric
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
@@ -31,6 +36,33 @@ import smallthingz.ui.unit.Density
 @Config(sdk = [35], application = Application::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class NativeLibraryRecyclerPlacementTest {
+    @Test fun timeZoneChangeInvalidatesDayGroupsWhileAttachedAndAfterMissedBroadcast() {
+        val original = java.util.TimeZone.getDefault()
+        java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("UTC"))
+        try {
+            Fixture().use { fixture ->
+                val host = Robolectric.buildActivity(Activity::class.java).setup()
+                var changes = 0
+                fixture.view.onDateFormattingChanged = { changes++ }
+                try {
+                    host.get().setContentView(fixture.view)
+                    shadowOf(Looper.getMainLooper()).idle()
+                    assertEquals(0, changes)
+                    java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("America/Los_Angeles"))
+                    RuntimeEnvironment.getApplication().sendBroadcast(Intent(Intent.ACTION_TIMEZONE_CHANGED))
+                    shadowOf(Looper.getMainLooper()).idle()
+                    assertEquals(1, changes)
+
+                    host.get().setContentView(View(host.get()))
+                    java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("Asia/Tokyo"))
+                    host.get().setContentView(fixture.view)
+                    shadowOf(Looper.getMainLooper()).idle()
+                    assertEquals(2, changes)
+                } finally { host.pause().stop().destroy() }
+            }
+        } finally { java.util.TimeZone.setDefault(original) }
+    }
+
     @Test fun prependedPendingSaveAndRecordingKeepThePlacedViewportAtAbsoluteTop() = Fixture().use { fixture ->
         val before = fixture.place()
         assertEquals(Anchor(fixture.stableIdAt(0), 0, 0), before)

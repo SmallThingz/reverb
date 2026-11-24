@@ -101,7 +101,7 @@ internal class ReverbLibraryScreenContent(
     private var selectionBackDirection = 1f
 
     val owner = NativeLibraryController(context, this, lifecycleOwner, scope, frames,
-        accessibilityManager, initial.owner, ::publish)
+        accessibilityManager, initial.owner, publish = ::publish)
 
     private val pull = NativeLibraryPullRefreshOwner(animationScope, environment.textDensity,
         initialRefreshing = false, ancestor = nested, onRefresh = { owner.refresh(showSpinner = true, userInitiated = true) })
@@ -158,6 +158,7 @@ internal class ReverbLibraryScreenContent(
         addView(body)
         body.addView(refreshIndicator)
         list.onViewportGeometryChanged = { spotlight?.invalidate() }
+        list.onDateFormattingChanged = owner::dateFormattingChanged
         list.onPendingRecordingRevealCancelled = {
             playbackReveal.cancel()
             pendingRevealNeedsReconciliation = false

@@ -17,7 +17,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -95,19 +94,12 @@ internal class ConfiguredRecordingDirectoryUnavailableException(
 object RecordingRepository {
     private val mutex = Mutex()
     private val cleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val backgroundDeleteLock = Any()
-    private var backgroundDeleteJob: Job? = null
+    private val backgroundDeletes = RecordingBackgroundDeletionQueue(cleanupScope)
 
     private fun dao(context: Context): RecordingDao =
         RecordingDatabase.getInstance(context).recordingDao()
 
-    private suspend fun awaitBackgroundDeletes() {
-        while (true) {
-            val pending = synchronized(backgroundDeleteLock) { backgroundDeleteJob } ?: return
-            pending.join()
-            if (synchronized(backgroundDeleteLock) { backgroundDeleteJob === pending }) return
-        }
-    }
+    private suspend fun awaitBackgroundDeletes() = backgroundDeletes.awaitIdle()
 
     suspend fun refresh(context: Context): List<RecordingEntity> {
         return withContext(Dispatchers.IO) {
@@ -187,22 +179,16 @@ object RecordingRepository {
         recordings: List<RecordingEntity>,
     ): Deferred<RecordingDeletionBatchResult> {
         val appContext = context.applicationContext
-        return synchronized(backgroundDeleteLock) {
-            val previous = backgroundDeleteJob
-            val receipt = cleanupScope.launchRecordingBackgroundDeletion(
-                previous = previous,
-                recordings = recordings,
-                deleteBatch = { targets -> deleteBatch(appContext, targets) },
-                reportFailure = { result ->
-                    AppFeedbackCenter.post(
-                        recordingDeletionBatchFailureMessage(appContext, recordings, result),
-                        FeedbackTone.ERROR,
-                    )
-                },
-            )
-            backgroundDeleteJob = receipt
-            receipt
-        }
+        return backgroundDeletes.enqueue(
+            recordings = recordings,
+            deleteBatch = { targets -> deleteBatch(appContext, targets) },
+            reportFailure = { result ->
+                AppFeedbackCenter.post(
+                    recordingDeletionBatchFailureMessage(appContext, recordings, result),
+                    FeedbackTone.ERROR,
+                )
+            },
+        )
     }
 
     suspend fun hasMovableKnownRecordings(
@@ -281,7 +267,7 @@ object RecordingRepository {
                     if (copied != null && !finishCopiedFileSourceLocked(context, copied, presentRecording, owner) &&
                         owner == FileCopyCleanupOwner.LIVE_ACCEPTED_OPERATION) {
                         val pending = FileCopyCleanupPendingException("Saved copy is cataloged; staging cleanup remains pending")
-                        reportFileCopyRecoveryIncident(context, copied.token, pending)
+                        reportFileCopyRecoveryIncident(context, copied, pending)
                         throw pending
                     }
                     presentRecording
@@ -880,7 +866,7 @@ object RecordingRepository {
                     if (copied != null && !finishCopiedFileSourceLocked(context, copied, renamed,
                             FileCopyCleanupOwner.LIVE_ACCEPTED_OPERATION)) {
                         val pending = FileCopyCleanupPendingException("Renamed copy saved; original cleanup remains pending")
-                        reportFileCopyRecoveryIncident(context, copied.token, pending)
+                        reportFileCopyRecoveryIncident(context, copied, pending)
                         throw RecordingRenameStateUncertainException(pending.message.orEmpty(), pending)
                     }
                     renamed
@@ -1068,7 +1054,7 @@ object RecordingRepository {
                 targetStillCurrent = { recordingContentIdentityMatches(context, target) },
             )
             if (intermediate != VerifiedMoveCommitResult.MOVED) {
-                reportFileCopyRecoveryIncident(context, copied.token,
+                reportFileCopyRecoveryIncident(context, copied,
                     FileCopyCleanupPendingException("Moved copy saved; intermediate staging cleanup remains pending"))
                 return intermediate
             }
@@ -1236,7 +1222,7 @@ object RecordingRepository {
             copies.forEach { copy ->
                 val target = imported.single { it.id == copy.targetId }
                 if (!finishCopiedFileSourceLocked(context, copy, target, FileCopyCleanupOwner.RECONCILIATION)) {
-                    reportFileCopyRecoveryIncident(context, copy.token,
+                    reportFileCopyRecoveryIncident(context, copy,
                         FileCopyCleanupPendingException("Recovered copy is cataloged; original cleanup requires its accepted owner"))
                 }
             }

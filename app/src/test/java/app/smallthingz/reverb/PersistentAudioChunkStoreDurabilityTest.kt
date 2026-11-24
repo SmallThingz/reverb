@@ -1501,6 +1501,164 @@ class PersistentAudioChunkStoreDurabilityTest {
     }
 
     @Test
+    fun retiredLeaseChunk_preservesByteIdenticalReplacementObjectBeforeDelayedDeletion() {
+        for (deferred in listOf(false, true)) withStoreRoot { root ->
+            PersistentAudioChunkStore(root).use { store ->
+                configure(store, Long.MAX_VALUE)
+                val expected = pcmBytes(160)
+                assertEquals(expected.size, store.append(expected, 0, expected.size))
+                store.sealActiveChunk()
+                if (deferred) store.enableDeferredRetentionCleanup()
+                val lease = requireNotNull(store.acquireRange(0.0, store.durationSeconds()))
+                try {
+                    store.clear()
+                    val chunk = File(File(root, BUFFER_CHUNKS_FOLDER_NAME), "0")
+                    val originalBytes = chunk.readBytes()
+                    val originalIdentity = resolveFileIdentity(chunk)
+                    // Keep the original inode allocated: an unlink/recreate fixture could reuse it.
+                    val original = File(root, "original-retired-object")
+                    Files.move(chunk.toPath(), original.toPath())
+                    chunk.writeBytes(originalBytes)
+                    assertFalse(sameFileObjectAcrossRename(originalIdentity, resolveFileIdentity(chunk)))
+
+                    lease.close()
+                    if (deferred) assertTrue(store.performRetentionMaintenanceStep().progressed)
+
+                    assertFalse(store.hasData())
+                    assertArrayEquals(originalBytes, original.readBytes())
+                    assertTrue(
+                        "Equal bytes do not authorize deleting a replacement object (deferred=$deferred)",
+                        (chunk.isFile && chunk.readBytes().contentEquals(originalBytes)) ||
+                            File(root, "preserved").listFiles().orEmpty().any {
+                                it.readBytes().contentEquals(originalBytes)
+                            },
+                    )
+                } finally {
+                    lease.close()
+                }
+            }
+        }
+    }
+
+    @Test
+    fun deferredRetirement_preservesByteIdenticalReplacementBeforeAndAfterRecovery() {
+        for (replaceBeforeRecovery in listOf(true, false)) withStoreRoot { root ->
+            val crashed = PersistentAudioChunkStore(root)
+            configure(crashed, Long.MAX_VALUE)
+            val pcm = pcmBytes(160)
+            assertEquals(pcm.size, crashed.append(pcm, 0, pcm.size))
+            crashed.sealActiveChunk()
+            // This lease dies with the simulated process, without a release callback.
+            requireNotNull(crashed.acquireRange(0.0, crashed.durationSeconds()))
+            crashed.clear()
+            crashed.close()
+
+            val chunk = File(File(root, BUFFER_CHUNKS_FOLDER_NAME), "0")
+            val bytes = chunk.readBytes()
+            val originalIdentity = resolveFileIdentity(chunk)
+            val original = File(root, "original-retired-object")
+            fun replaceObject() {
+                Files.move(chunk.toPath(), original.toPath())
+                chunk.writeBytes(bytes)
+                assertFalse(sameFileObjectAcrossRename(originalIdentity, resolveFileIdentity(chunk)))
+            }
+            if (replaceBeforeRecovery) replaceObject()
+            PersistentAudioChunkStore(root).use { recovered ->
+                recovered.configure(RetentionMode.SIZE, Long.MAX_VALUE, 8_000, 1, deferRetentionCleanup = true)
+                assertFalse(recovered.hasData())
+                if (!replaceBeforeRecovery) {
+                    assertTrue(recovered.retentionMaintenanceNeeded())
+                    replaceObject()
+                    assertTrue(recovered.performRetentionMaintenanceStep().progressed)
+                }
+                assertArrayEquals(bytes, original.readBytes())
+                assertTrue(
+                    "Recovered retirement must keep its original object authority (before=$replaceBeforeRecovery)",
+                    (chunk.isFile && chunk.readBytes().contentEquals(bytes)) ||
+                        File(root, "preserved").listFiles().orEmpty().any { it.readBytes().contentEquals(bytes) },
+                )
+            }
+        }
+    }
+
+    @Test
+    fun retirementIdentity_survivesFailedMarkerBarrierWithoutRebindingReplacement() {
+        for (replaceObject in listOf(false, true)) withStoreRoot { root ->
+            var failMarkerSync = false
+            PersistentAudioChunkStore(root, directorySync = { directory ->
+                if (failMarkerSync && directory.name == "retired") throw IOException("Injected marker barrier failure")
+            }).use { store ->
+                configure(store, Long.MAX_VALUE)
+                val pcm = pcmBytes(160)
+                assertEquals(pcm.size, store.append(pcm, 0, pcm.size))
+                store.sealActiveChunk()
+                val chunk = File(root, "$BUFFER_CHUNKS_FOLDER_NAME/0")
+                val bytes = chunk.readBytes()
+                val originalIdentity = resolveFileIdentity(chunk)
+                failMarkerSync = true
+                assertThrows(IOException::class.java) { store.clear() }
+                assertFalse(store.hasData())
+                assertTrue(File(root, "retired/0").isFile)
+                assertArrayEquals(bytes, chunk.readBytes())
+                if (replaceObject) {
+                    Files.move(chunk.toPath(), File(root, "original-retired-object").toPath())
+                    chunk.writeBytes(bytes)
+                    assertFalse(sameFileObjectAcrossRename(originalIdentity, resolveFileIdentity(chunk)))
+                }
+                failMarkerSync = false
+                store.checkpoint()
+                assertFalse(chunk.exists())
+                assertFalse(File(root, "retired/0").exists())
+                val preserved = File(root, "preserved").listFiles().orEmpty()
+                if (replaceObject) {
+                    assertTrue("Barrier retry rebound deletion to a replacement", preserved.any {
+                        it.readBytes().contentEquals(bytes)
+                    })
+                } else {
+                    assertTrue("Unchanged original lost its retirement authority", preserved.isEmpty())
+                }
+            }
+        }
+    }
+
+    @Test
+    fun legacyRetirementMarkers_preserveNumericAndHiddenChunksWithoutObjectAuthority() {
+        for (version in listOf("v1", "v2")) {
+            for (deferred in listOf(false, true)) {
+                for (hiddenClaim in listOf(false, true)) withStoreRoot { root ->
+                    val crashed = PersistentAudioChunkStore(root)
+                    configure(crashed, Long.MAX_VALUE)
+                    val pcm = pcmBytes(160)
+                    assertEquals(pcm.size, crashed.append(pcm, 0, pcm.size))
+                    crashed.sealActiveChunk()
+                    requireNotNull(crashed.acquireRange(0.0, crashed.durationSeconds())) // Abandoned on process death.
+                    crashed.clear()
+                    crashed.close()
+                    val marker = File(root, "retired/0")
+                    val fields = marker.readText().split('|').take(6).toMutableList()
+                    fields[0] = version
+                    if (version == "v1") fields[5] = PcmSampleFormat.PCM_16.name
+                    marker.writeText(fields.joinToString("|"))
+                    val chunk = File(root, "$BUFFER_CHUNKS_FOLDER_NAME/0")
+                    val bytes = chunk.readBytes()
+                    if (hiddenClaim) Files.move(chunk.toPath(), File(chunk.parentFile,
+                        ".reverb-retired-delete-${java.util.UUID.randomUUID()}.pending").toPath())
+
+                    PersistentAudioChunkStore(root).use { recovered ->
+                        recovered.configure(RetentionMode.SIZE, Long.MAX_VALUE, 8_000, 1,
+                            deferRetentionCleanup = deferred)
+                        assertFalse(recovered.hasData())
+                        assertFalse(recovered.retentionMaintenanceNeeded())
+                        assertFalse(marker.exists())
+                        assertTrue("Legacy $version retirement lost bytes (deferred=$deferred, hidden=$hiddenClaim)",
+                            File(root, "preserved").listFiles().orEmpty().any { it.readBytes().contentEquals(bytes) })
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
     fun preservation_neverDeletesSourceReplacedAtPreservationCommit() = withStoreRoot { root ->
         val expected = pcmBytes(32_000)
         val firstReplacement = ByteArray(257) { index -> ((index * 31 + 5) and 0xff).toByte() }

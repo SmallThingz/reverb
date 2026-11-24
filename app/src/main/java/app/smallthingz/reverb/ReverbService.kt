@@ -1953,6 +1953,9 @@ open class ReverbService : Service() {
             lastDurabilitySyncRequestNanos = 0L
             val record = audioRecord
             audioRecord = null
+            // A failed native creation/start never transfers this allocation to CaptureIo.
+            // Retire it with its input attempt; installed PCM remains owned by the drained input.
+            preparedCaptureStorage = null
             audioRecordGeneration = Long.MIN_VALUE
             val releasedGeneration = audioRecordReleaseGeneration.incrementAndGet()
             owner?.apply {

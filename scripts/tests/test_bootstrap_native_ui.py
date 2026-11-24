@@ -1,5 +1,6 @@
 """Offline integration tests for the committed native-ui bundle and bootstrap."""
 import json
+import hashlib
 from pathlib import Path
 import shutil
 import subprocess
@@ -19,6 +20,15 @@ class NativeUiBootstrapTest(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.pin = json.loads((ROOT / 'third_party/native-ui.json').read_text())
+
+    def test_repository_gitlink_matches_offline_pin(self):
+        # Fixture repositories below use the JSON pin, so they cannot detect a
+        # real submodule update that forgot to refresh the source-archive bundle.
+        if not (ROOT / '.git').exists():
+            self.skipTest('Source archive has no Git index')
+        entry = self.git(ROOT, 'ls-files', '--stage', '--', 'native-ui')
+        self.assertEqual(f'160000 {self.pin["commit"]} 0\tnative-ui', entry,
+                         'Refresh the offline bundle and pin with the gitlink')
 
     def git(self, root, *args):
         result = subprocess.run(['git', *args], cwd=root, text=True, capture_output=True)
@@ -133,6 +143,43 @@ class NativeUiBootstrapTest(unittest.TestCase):
             stream.write(b'changed')
         self.assertIn('digest mismatch', self.bootstrap(root, success=False))
         self.assertFalse((root / 'native-ui').exists())
+
+    def bundle_fixture(self, root, incremental=False):
+        source = self.root / 'bundle-source'
+        source.mkdir()
+        self.git(source, 'init', '--quiet')
+        for value in ['base', 'next']:
+            (source / 'value.txt').write_text(value)
+            self.git(source, 'add', '.')
+            self.git(source, '-c', 'user.name=Bootstrap test', '-c',
+                     'user.email=bootstrap-test@example.invalid', 'commit', '--quiet', '-m', value)
+        bundle = root / 'third_party/native-ui.bundle'
+        bundle.unlink()
+        revisions = ['HEAD', '^HEAD^'] if incremental else ['HEAD']
+        self.git(source, 'bundle', 'create', str(bundle), *revisions)
+        return self.git(source, 'rev-parse', 'HEAD'), hashlib.sha256(bundle.read_bytes()).hexdigest()
+
+    def test_rehashed_bundle_must_advertise_pinned_commit(self):
+        root = self.project()
+        _, checksum = self.bundle_fixture(root)
+        (root / 'third_party/native-ui.json').write_text(json.dumps(
+            {**self.pin, 'bundle_sha256': checksum}))
+        self.assertIn('not advertised', self.bootstrap(root, success=False))
+        self.assertFalse((root / 'native-ui').exists())
+        self.assertEqual([], list(root.glob('.native-ui-bootstrap-*')))
+
+    def test_incremental_bundle_without_prerequisites_preserves_destination(self):
+        root = self.project()
+        commit, checksum = self.bundle_fixture(root, incremental=True)
+        (root / 'third_party/native-ui.json').write_text(json.dumps(
+            {**self.pin, 'commit': commit, 'bundle_sha256': checksum}))
+        child = root / 'native-ui'
+        child.mkdir()
+        identity = child.stat().st_ino
+        self.assertIn('prerequisite', self.bootstrap(root, success=False))
+        self.assertEqual(identity, child.stat().st_ino)
+        self.assertEqual([], list(child.iterdir()))
+        self.assertEqual([], list(root.glob('.native-ui-bootstrap-*')))
 
     def test_parent_gitlink_mismatch_cannot_initialize(self):
         root = self.project(repository=True)

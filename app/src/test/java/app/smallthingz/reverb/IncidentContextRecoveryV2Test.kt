@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.os.Process
 import android.provider.Settings
+import app.smallthingz.reverb.incidentcontextisolated.IncidentContextSandboxMarker
 import java.io.File
 import java.io.IOException
 import java.nio.ByteBuffer
@@ -17,6 +18,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.*
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RuntimeEnvironment
@@ -27,8 +29,18 @@ import org.robolectric.shadows.ShadowProcess
 
 /** Actual persistent recovery with Android exit evidence controlled only at ActivityManager. */
 @RunWith(org.robolectric.RobolectricTestRunner::class)
-@Config(sdk = [35], application = Application::class, shadows = [JournalHostIoShadow::class])
+@Config(sdk = [35], application = Application::class, shadows = [JournalHostIoShadow::class],
+    // The process marker is cached for the app lifetime, while Robolectric resets shadow PID.
+    // Give this fixture's borrowed PID its own sandbox instead of resetting production state.
+    instrumentedPackages = ["app.smallthingz.reverb.incidentcontextisolated"])
 class IncidentContextRecoveryV2Test {
+    @Before fun verifySandboxOwnership() {
+        val loader = IncidentContextSandboxMarker::class.java.classLoader
+        assertSame(loader, javaClass.classLoader)
+        assertSame(loader, ReverbService::class.java.classLoader)
+        assertSame(loader, RecordingIncidentStore::class.java.classLoader)
+    }
+
     @Test fun bufferedPreparationFailureHasOnlyItsTerminalIncident() = fixture { context, root ->
         withReportingService(context) { service ->
             val failure = IllegalStateException("Save preparation failed")

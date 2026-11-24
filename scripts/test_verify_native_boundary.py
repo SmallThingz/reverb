@@ -5,6 +5,8 @@ from pathlib import Path
 import struct
 import tempfile
 import unittest
+from unittest.mock import patch
+import warnings
 import zipfile
 import zlib
 
@@ -109,6 +111,83 @@ class NativeBoundaryTests(unittest.TestCase):
         result = gate.inspect_apk(path)
         self.assertEqual({"classes.dex", "classes10.dex"}, set(result["dex"]))
         self.assertEqual(1, len(result["dex"]["classes10.dex"]["forbidden_types"]))
+
+    def test_missing_primary_and_duplicate_dex_are_rejected_before_payload_reads(self):
+        for names, message in ((["classes2.dex"], "no primary DEX"),
+                               (["classes.dex", "classes.dex"], "duplicate DEX")):
+            with self.subTest(names=names):
+                path = self.root / "invalid.apk"
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", UserWarning)
+                    with zipfile.ZipFile(path, "w") as archive:
+                        for name in names:
+                            archive.writestr(name, dex(["Landroid/view/View;"]))
+                with patch.object(zipfile.ZipFile, "read", side_effect=AssertionError("Payload read")):
+                    with self.assertRaisesRegex(ValueError, message):
+                        gate.inspect_apk(path)
+
+    def test_oversized_dex_is_rejected_before_reading_or_parsing_payload(self):
+        info = zipfile.ZipInfo("classes.dex")
+        info.file_size = 256 * 1024 * 1024 + 1
+        with patch.object(gate.zipfile, "ZipFile") as archive_type:
+            archive = archive_type.return_value.__enter__.return_value
+            archive.infolist.return_value = [info]
+            archive.read.side_effect = AssertionError("Oversized payload was read")
+            with patch.object(gate, "inspect_dex", side_effect=AssertionError("Payload parsed")):
+                with self.assertRaisesRegex(ValueError, "DEX exceeds"):
+                    gate.inspect_apk(self.root / "advertised-oversize.apk")
+            archive.read.assert_not_called()
+
+    def test_exact_dex_size_limit_reaches_the_real_parser(self):
+        # Only the ZIP size admission is simulated; no 256 MiB allocation is needed.
+        info = zipfile.ZipInfo("classes.dex")
+        info.file_size = 256 * 1024 * 1024
+        with patch.object(gate.zipfile, "ZipFile") as archive_type:
+            archive = archive_type.return_value.__enter__.return_value
+            archive.infolist.return_value = [info]
+            archive.read.return_value = b"malformed DEX"
+            with self.assertRaisesRegex(ValueError, "Unsupported or truncated standard DEX"):
+                gate.inspect_apk(self.root / "advertised-limit.apk")
+            archive.read.assert_called_once_with(info)
+
+    def test_whole_apk_digest_uses_bounded_reads_and_includes_non_dex_bytes(self):
+        path = self.root / "hash.apk"
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr("classes.dex", dex(["Landroid/view/View;"]))
+            archive.writestr("assets/payload", b"x" * (2 * 1024 * 1024 + 17))
+        expected = hashlib.sha256(path.read_bytes()).hexdigest()
+        original_open = Path.open
+        reads = []
+        sizes = []
+        case = self
+
+        class BoundedReader:
+            def __init__(self, source):
+                self.source = source
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                self.source.close()
+
+            def read(self, size=-1):
+                case.assertGreater(size, 0, "Whole APK digest requested an unbounded read")
+                case.assertLessEqual(size, 1024 * 1024)
+                data = self.source.read(size)
+                reads.append(size)
+                sizes.append(len(data))
+                return data
+
+        def open_bounded(file, *args, **kwargs):
+            source = original_open(file, *args, **kwargs)
+            return BoundedReader(source) if file == path else source
+
+        with patch.object(Path, "open", open_bounded):
+            result = gate.inspect_apk(path)
+        self.assertEqual(expected, result["sha256"])
+        self.assertEqual(path.stat().st_size, sum(sizes))
+        self.assertGreaterEqual(len(reads), 4)  # Three data reads and EOF.
 
     def test_four_real_graphs_required_and_module_groups_rejected(self):
         path = self.root / "graph.json"

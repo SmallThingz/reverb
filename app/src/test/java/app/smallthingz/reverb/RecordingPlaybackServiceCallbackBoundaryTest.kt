@@ -18,9 +18,6 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.file.Files
 import java.nio.file.Path
-import java.util.Collections
-import java.util.IdentityHashMap
-import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -38,7 +35,6 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.Implementation
 import org.robolectric.annotation.Implements
 import org.robolectric.annotation.LooperMode
-import org.robolectric.annotation.RealObject
 import org.robolectric.shadow.api.Shadow
 import org.robolectric.shadows.ShadowLooper
 import org.robolectric.shadows.ShadowMediaPlayer
@@ -49,36 +45,35 @@ import org.robolectric.shadows.ShadowPausedMessageQueue
 @Config(
     sdk = [35],
     application = Application::class,
-    shadows = [PlaybackSessionOsShadow::class, PlaybackSessionHandlerShadow::class],
+    shadows = [PlaybackSessionOsShadow::class],
 )
 @LooperMode(LooperMode.Mode.PAUSED)
 class RecordingPlaybackServiceCallbackBoundaryTest {
     @Test
-    fun registeredCallbacksPauseBeforeQueuedSeekAndDelayedPrepare() = withPlaybackService { media, handler, callback ->
+    fun registeredCallbacksPauseBeforeQueuedSeekAndDelayedPrepare() = withPlaybackService { media, handler, callback, commandHandler ->
         val initialRevision = RecordingPlayback.state.value.transportIntentRevision
-        val baseline = PlaybackSessionHandlerShadow.mainPosts.size
-        PlaybackSessionHandlerShadow.stateProbe = { RecordingPlayback.state.value }
 
-        // Queue the registered production callbacks through their configured Handler, in order.
-        handler.post { callback.onSeekTo(900L) }
-        handler.post { callback.onPause() }
-        ShadowLooper.idleMainLooper()
-        val stagedSeek = PlaybackSessionHandlerShadow.mainPosts.drop(baseline).firstOrNull { post ->
-            post.postingStack.any {
-                it.className == RecordingPlaybackService::class.java.name &&
-                    it.methodName == "queueExternalTransport"
-            }
-        }
-        assertNotNull("The registered seek callback must enqueue the real service command", stagedSeek)
-        val deliveredSeek = checkNotNull(stagedSeek)
-        assertTrue("The actual queued service Runnable must dispatch", deliveredSeek.delivered)
+        // Observe real queue entries, without globally replacing Handler (including the
+        // Handler cached by Dispatchers.Main before this Robolectric configuration).
+        val seek = Runnable { callback.onSeekTo(900L) }
+        val pause = Runnable { callback.onPause() }
+        assertTrue(handler.post(seek))
+        assertTrue(handler.post(pause))
+        assertSame(seek, checkNotNull(queueHead()).callback)
+        ShadowLooper.runMainLooperOneTask()
+        val stagedSeek = queuedMessages().filter { it.target === commandHandler && it.callback != null }
+        assertEquals("The registered seek callback must enqueue exactly one real service command", 1, stagedSeek.size)
+        val queuedSeek = stagedSeek.single()
+        assertSame(pause, checkNotNull(queueHead()).callback)
+        ShadowLooper.runMainLooperOneTask()
         val pausedBeforeStaleDelivery = RecordingPlayback.state.value
         assertFalse(pausedBeforeStaleDelivery.wantsPlayback)
         assertTrue("Both registered callbacks must supersede the initial intent",
             pausedBeforeStaleDelivery.transportIntentRevision >= initialRevision + 2)
-        assertEquals("Pause must run before the queued seek Runnable",
-            pausedBeforeStaleDelivery, deliveredSeek.stateBeforeDispatch)
-        assertEquals("A stale queued seek cannot mutate service state", pausedBeforeStaleDelivery, deliveredSeek.stateAfterDispatch)
+        assertSame("Pause must leave the exact queued seek as the next dispatch", queuedSeek, queueHead())
+        ShadowLooper.runMainLooperOneTask()
+        assertFalse("The actual queued service message must dispatch", queuedMessages().any { it === queuedSeek })
+        assertEquals("A stale queued seek cannot mutate service state", pausedBeforeStaleDelivery, RecordingPlayback.state.value)
 
         media.invokePreparedListener()
         ShadowLooper.idleMainLooper()
@@ -92,7 +87,7 @@ class RecordingPlaybackServiceCallbackBoundaryTest {
 
     @Test
     fun preparedServiceSeeksOnlyToLatestTargetAndPauseRevokesResume() =
-        withPlaybackService(startPosition = 300) { media, handler, callback ->
+        withPlaybackService(startPosition = 300) { media, handler, callback, _ ->
             fun assertQuiet() {
                 val state = RecordingPlayback.state.value
                 assertFalse(state.playing)
@@ -135,7 +130,7 @@ class RecordingPlaybackServiceCallbackBoundaryTest {
 
     @Test
     fun preparedServiceResumesOnlyAfterLatestSeekCompletes() =
-        withPlaybackService(startPosition = 300) { media, handler, callback ->
+        withPlaybackService(startPosition = 300) { media, handler, callback, _ ->
             val audio = checkNotNull(RuntimeEnvironment.getApplication().getSystemService(AudioManager::class.java))
             val audioShadow = Shadows.shadowOf(audio)
             audioShadow.setNextFocusRequestResponse(AudioManager.AUDIOFOCUS_REQUEST_GRANTED)
@@ -172,11 +167,10 @@ class RecordingPlaybackServiceCallbackBoundaryTest {
 
     private fun withPlaybackService(
         startPosition: Int? = null,
-        exercise: (ShadowMediaPlayer, Handler, MediaSession.Callback) -> Unit,
+        exercise: (ShadowMediaPlayer, Handler, MediaSession.Callback, Handler) -> Unit,
     ) {
         val app = RuntimeEnvironment.getApplication()
         val source = File(app.cacheDir, "playback-session-${System.nanoTime()}.wav")
-        PlaybackSessionHandlerShadow.reset()
         var recording: RecordingEntity? = null
         var serviceJob: Job? = null
         var failure: Throwable? = null
@@ -220,7 +214,7 @@ class RecordingPlaybackServiceCallbackBoundaryTest {
             val callback = readField(callbackHandler, "mCallback") as MediaSession.Callback
             assertSame("The registered MediaSession callback must use the main looper",
                 Looper.getMainLooper(), callbackHandler.looper)
-            exercise(mediaShadow, callbackHandler, callback)
+            exercise(mediaShadow, callbackHandler, callback, readField(service, "main") as Handler)
         } catch (error: Throwable) {
             failure = error
             throw error
@@ -242,7 +236,6 @@ class RecordingPlaybackServiceCallbackBoundaryTest {
                 cleanup { ShadowLooper.idleMainLooper() }
                 cleanup { ShadowMediaPlayer.resetStaticState() }
                 cleanup { PlaybackSessionOsShadow.targetPath = "" }
-                cleanup { PlaybackSessionHandlerShadow.reset() }
                 cleanup { check(!source.exists() || source.delete()) { "Cannot delete owned playback fixture" } }
             }
             failure?.let { throw it }
@@ -276,6 +269,19 @@ class RecordingPlaybackServiceCallbackBoundaryTest {
 
     private fun mainQueueSize(): Int = mainQueue().internalGetSize()
 
+    // ShadowPausedMessageQueue.getHead() explicitly rejects PAUSED mode. Inspect the
+    // actual platform queue field that the paused shadow itself uses; never replace it.
+    private fun queueHead(): Message? = readField(Looper.getMainLooper().queue, "mMessages") as? Message
+
+    private fun queuedMessages(): List<Message> = buildList {
+        var next: Message? = queueHead()
+        while (next != null) {
+            val message = next
+            add(message)
+            next = readField(message, "next") as? Message
+        }
+    }
+
     private fun readField(instance: Any, name: String): Any? =
         instance.javaClass.getDeclaredField(name).apply { isAccessible = true }.get(instance)
 
@@ -290,66 +296,6 @@ class RecordingPlaybackServiceCallbackBoundaryTest {
         tag("data"); buffer.putInt(payloadBytes)
         repeat(frames) { buffer.putShort(1_000) }
         file.writeBytes(buffer.array())
-    }
-}
-
-data class ObservedHandlerPost(
-    val runnable: Runnable,
-    val postingStack: List<StackTraceElement>,
-    @Volatile var delivered: Boolean = false,
-    @Volatile var stateBeforeDispatch: Any? = null,
-    @Volatile var stateAfterDispatch: Any? = null,
-)
-
-/** Records the actual Handler Runnable and its actual dispatch without replacing its identity. */
-@Implements(Handler::class)
-class PlaybackSessionHandlerShadow {
-    @RealObject lateinit var realHandler: Handler
-
-    @Implementation
-    fun post(runnable: Runnable): Boolean {
-        if (realHandler.looper === Looper.getMainLooper()) {
-            val post = ObservedHandlerPost(runnable, Thread.currentThread().stackTrace.toList())
-            synchronized(postsByRunnable) { postsByRunnable[runnable] = post }
-            mainPosts.add(post)
-        }
-        return Shadow.directlyOn(
-            realHandler,
-            Handler::class.java,
-            "post",
-            org.robolectric.util.ReflectionHelpers.ClassParameter.from(Runnable::class.java, runnable),
-        )
-    }
-
-    @Implementation
-    fun dispatchMessage(message: Message) {
-        val post = if (realHandler.looper === Looper.getMainLooper()) {
-            message.callback?.let { synchronized(postsByRunnable) { postsByRunnable[it] } }
-        } else null
-        val serviceTransport = post?.postingStack?.any {
-            it.className == RecordingPlaybackService::class.java.name && it.methodName == "queueExternalTransport"
-        } == true
-        if (serviceTransport) post?.stateBeforeDispatch = stateProbe?.invoke()
-        Shadow.directlyOn<Any?, Handler>(
-            realHandler,
-            Handler::class.java,
-            "dispatchMessage",
-            org.robolectric.util.ReflectionHelpers.ClassParameter.from(Message::class.java, message),
-        )
-        if (post != null) post.delivered = true
-        if (serviceTransport) post?.stateAfterDispatch = stateProbe?.invoke()
-    }
-
-    companion object {
-        val mainPosts = CopyOnWriteArrayList<ObservedHandlerPost>()
-        private val postsByRunnable = Collections.synchronizedMap(IdentityHashMap<Runnable, ObservedHandlerPost>())
-        @Volatile var stateProbe: (() -> Any?)? = null
-
-        fun reset() {
-            synchronized(postsByRunnable) { postsByRunnable.clear() }
-            mainPosts.clear()
-            stateProbe = null
-        }
     }
 }
 

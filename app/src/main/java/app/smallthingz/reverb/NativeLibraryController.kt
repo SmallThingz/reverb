@@ -7,6 +7,7 @@ import android.os.Looper
 import android.view.View
 import smallthingz.ui.runtime.MonotonicFrameClock
 import smallthingz.ui.platform.AccessibilityManager
+import smallthingz.ui.util.closePreservingPrimaryFailure
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
@@ -67,6 +68,8 @@ internal class NativeLibraryController(
     private val frames: MonotonicFrameClock,
     private val accessibilityManager: AccessibilityManager?,
     initial: NativeLibraryInput,
+    private val submitBackgroundDeletion: (Context, List<RecordingEntity>) -> Deferred<RecordingDeletionBatchResult> =
+        RecordingRepository::deleteInBackground,
     private val publish: (NativeLibraryPresentation) -> Unit,
 ) : AutoCloseable {
     private val scope = CoroutineScope(parentScope.coroutineContext + Job(parentScope.coroutineContext[Job]))
@@ -117,6 +120,7 @@ internal class NativeLibraryController(
     private var lastVisible: List<RecordingEntity>? = null
     private var lastListItems: List<LibraryListItem> = emptyList()
     private var finishedListItems: List<LibraryListItem> = emptyList()
+    private var dateHeadersDirty = true
     private var visibleRecordingIdentities = emptyMap<String, String>()
     private var pendingSaves = DurableSaveJobs.state.value
     private var pendingOutputIdentities = pendingSaveOutputIdentities(pendingSaves)
@@ -178,6 +182,11 @@ internal class NativeLibraryController(
         }
     }
     private fun visibleChanged() { visibleDirty = true; invalidate() }
+    fun dateFormattingChanged() {
+        if (closed) return
+        dateHeadersDirty = true
+        invalidate()
+    }
     private fun invalidate() {
         if (closed || deliveryPosted) return
         deliveryPosted = true
@@ -197,15 +206,22 @@ internal class NativeLibraryController(
         // rememberUpdatedState already exposes the new active/callback values during effect cleanup.
         input = next
         if (previous.active != next.active) {
-            if (!next.active) finishPlaybackRequest(null)
+            var failure = if (!next.active) closePreservingPrimaryFailure(null) { finishPlaybackRequest(null) } else null
             // Source active-keyed DisposableEffect is disposed before its successor effects.
-            removeLifecycle(previous.active, previous.callbacks)
+            // Finish old accepted handoffs even if a callback closes the new UI lifetime.
+            failure = closePreservingPrimaryFailure(failure) { removeLifecycle(previous.active, previous.callbacks) }
+            failure?.let { throw it }
+            if (closed) return
             input.callbacks.onUndoVisibleChange(false)
+            if (closed) return
         }
         if (previous.initialRecordings != next.initialRecordings) launchInitialEffect(next.initialRecordings)
+        if (closed) return
         if (previous.active != next.active) {
             installLifecycle(next.active)
+            if (closed) return
             launchActiveEffect(next.active)
+            if (closed) return
             next.callbacks.onUndoVisibleChange(next.active && undoNotice != null)
         }
         invalidate()
@@ -289,8 +305,10 @@ internal class NativeLibraryController(
         }
     }
     private fun installLifecycle(active: Boolean) {
+        if (closed) return
         var observerInstalled = false
         val observer = LifecycleEventObserver { _, event ->
+            if (closed) return@LifecycleEventObserver
             if (event == Lifecycle.Event.ON_PAUSE) {
                 retireShareRequest()
                 playbackRoute.invalidateProof()
@@ -298,8 +316,8 @@ internal class NativeLibraryController(
             if (event == Lifecycle.Event.ON_RESUME) shareDelivery[0]?.foregroundChanged()
             if (active && observerInstalled && event == Lifecycle.Event.ON_RESUME) refresh(showSpinner = false)
             if (event == Lifecycle.Event.ON_STOP && pendingDeletions.isNotEmpty()) {
-                clearUndoNotice()
-                commitPendingDeletionsInBackground()
+                val failure = closePreservingPrimaryFailure(null) { clearUndoNotice() }
+                closePreservingPrimaryFailure(failure, ::commitPendingDeletionsInBackground)?.let { throw it }
             }
         }
         installedLifecycle = observer
@@ -307,14 +325,17 @@ internal class NativeLibraryController(
         observerInstalled = true
     }
     private fun removeLifecycle(wasActive: Boolean, callbacks: NativeLibraryCallbacks) {
-        installedLifecycle?.let(lifecycleOwner.lifecycle::removeObserver)
+        val observer = installedLifecycle
         installedLifecycle = null
+        var failure = closePreservingPrimaryFailure(null) { observer?.let(lifecycleOwner.lifecycle::removeObserver) }
         if (wasActive) {
-            clearUndoNotice()
-            deletionJob[0]?.cancel()
-            commitPendingDeletionsInBackground()
-            callbacks.onParentRefreshRequested()
+            // A renderer failure cannot strand an already accepted deletion at UI teardown.
+            failure = closePreservingPrimaryFailure(failure, ::clearUndoNotice)
+            failure = closePreservingPrimaryFailure(failure) { deletionJob[0]?.cancel() }
+            failure = closePreservingPrimaryFailure(failure, ::commitPendingDeletionsInBackground)
+            failure = closePreservingPrimaryFailure(failure, callbacks.onParentRefreshRequested)
         }
+        failure?.let { throw it }
     }
 
     private fun deliver() {
@@ -329,7 +350,7 @@ internal class NativeLibraryController(
         if (visible != lastVisible) {
             val previous = lastVisible
             lastVisible = visible
-            finishedListItems = buildLibraryListItems(context, visible)
+            dateHeadersDirty = true
             val visibleById = visible.associateBy { it.id }
             reconcileSelection(visibleById)
             if (previous != null) reconcileTransientRecordings(previous.associateBy { it.id }, visibleById)
@@ -338,6 +359,11 @@ internal class NativeLibraryController(
             val callback = input.callbacks.onVisibleRecordingsChanged
             visibleEffect = scope.launch { callback(visible) }
         }
+        if (dateHeadersDirty) {
+            dateHeadersDirty = false
+            finishedListItems = buildLibraryListItems(context, visible)
+            pendingItemsDirty = true
+        }
         if (pendingItemsDirty) {
             pendingItemsDirty = false
             val recoveryStatus = when {
@@ -345,9 +371,10 @@ internal class NativeLibraryController(
                 !saveJobsReadiness.loaded -> resources.getString(R.string.save_jobs_recovering)
                 else -> null
             }
-            lastListItems = listOfNotNull(recoveryStatus?.let { LibraryListItem.SaveRecoveryStatus(it) }) +
+            val pendingItems = listOfNotNull(recoveryStatus?.let { LibraryListItem.SaveRecoveryStatus(it) }) +
                 buildPendingSaveSection(pendingSaves, visibleRecordingIdentities, saveJobsReadiness,
-                    if (loadFailed) resources.getString(R.string.recordings_refresh_failed) else null) + finishedListItems
+                    if (loadFailed) resources.getString(R.string.recordings_refresh_failed) else null)
+            lastListItems = LibraryListSnapshot.publish(lastListItems, pendingItems, finishedListItems)
             DurableSaveJobs.acknowledgePublished(visibleRecordingIdentities)
         }
         val selected = selectedIds.isNotEmpty()
@@ -810,7 +837,7 @@ internal class NativeLibraryController(
         deletionJob[0]?.cancel()
         deletionJob[0] = null
         val pending = pendingDeletions.values.toList()
-        val receipt = RecordingRepository.deleteInBackground(context, pending)
+        val receipt = submitBackgroundDeletion(context, pending)
         backgroundDeletionReceipt[0] = receipt
         // The retained Library scope survives panel close. Actual disposal only cancels this
         // waiter: the process-owned receipt and its failure feedback continue independently.
@@ -961,16 +988,19 @@ internal class NativeLibraryController(
         beforeRequestedPlayback = null
         playbackRequestFinished = null
         // Accepted background/foreground deletion owners survive actual UI disposal.
-        removeLifecycle(input.active, input.callbacks)
-        input.callbacks.onUndoVisibleChange(false)
-        val currentObserver = if (focusObserver.isAlive) focusObserver else hostView.viewTreeObserver
-        if (currentObserver.isAlive) currentObserver.removeOnWindowFocusChangeListener(focusListener)
-        retireShareRequest()
-        input.callbacks.onSelectionActiveChange(false)
-        input.callbacks.onExpandedRecordingActiveChange(false)
-        scope.cancel()
-        main.removeCallbacks(delivery)
+        var failure = closePreservingPrimaryFailure(null) { removeLifecycle(input.active, input.callbacks) }
+        failure = closePreservingPrimaryFailure(failure) { input.callbacks.onUndoVisibleChange(false) }
+        failure = closePreservingPrimaryFailure(failure) {
+            val currentObserver = if (focusObserver.isAlive) focusObserver else hostView.viewTreeObserver
+            if (currentObserver.isAlive) currentObserver.removeOnWindowFocusChangeListener(focusListener)
+        }
+        failure = closePreservingPrimaryFailure(failure, ::retireShareRequest)
+        failure = closePreservingPrimaryFailure(failure) { input.callbacks.onSelectionActiveChange(false) }
+        failure = closePreservingPrimaryFailure(failure) { input.callbacks.onExpandedRecordingActiveChange(false) }
+        failure = closePreservingPrimaryFailure(failure) { scope.cancel() }
+        failure = closePreservingPrimaryFailure(failure) { main.removeCallbacks(delivery) }
         deliveryPosted = false
+        failure?.let { throw it }
     }
 
     private class ObservedRecordingMap(private val changed: () -> Unit) : LinkedHashMap<String, RecordingEntity>() {

@@ -21,6 +21,7 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import app.smallthingz.reverb.InlinePlaybackRowOwner
 import app.smallthingz.reverb.LibraryListItem
+import app.smallthingz.reverb.LibraryListSnapshot
 import app.smallthingz.reverb.RecordingEntity
 import app.smallthingz.reverb.PendingSave
 import app.smallthingz.reverb.R
@@ -43,6 +44,13 @@ internal data class LibraryNativeListState(
     val infoRecordingId: String? = null,
     val renameRecordingId: String? = null,
 )
+
+/** Optional fixture work witness; normal screens do not install one. */
+internal interface LibraryListWorkObserver {
+    fun finishedEntryCreated()
+    fun catalogDiff()
+    fun rowBound(key: String)
+}
 
 /**
  * Existing inline player/trim presentation bridge. Its View is inserted inside the native card's
@@ -87,7 +95,9 @@ internal class ReverbLibraryListView(
 ) : FrameLayout(context) {
     private var clearingListComposition = false
     private var disposed = false
+    var workObserver: LibraryListWorkObserver? = null
     var onViewportGeometryChanged: () -> Unit = {}
+    var onDateFormattingChanged: () -> Unit = {}
     var onPendingRecordingRevealCancelled: (() -> Unit)? = null
     private var rowNodesDirty = false
     private var rowNodesPosted = false
@@ -110,12 +120,17 @@ internal class ReverbLibraryListView(
     }
     private var environment = initialEnvironment
     private var formattingLocales = resources.configuration.locales
+    private var formattingTimeZone = java.util.TimeZone.getDefault().id
     private var formattingRevision = 0L
     private val timeFormatObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
         override fun onChange(selfChange: Boolean) = invalidateRecordingFormatting()
     }
     private val timeZoneReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) = invalidateRecordingFormatting()
+        override fun onReceive(context: Context, intent: Intent) {
+            formattingTimeZone = java.util.TimeZone.getDefault().id
+            onDateFormattingChanged()
+            invalidateRecordingFormatting()
+        }
     }
     private val currentActions = actions
     private val rowUpdates = NativeLibraryListUpdates<InlinePlaybackRowOwner>()
@@ -195,6 +210,7 @@ internal class ReverbLibraryListView(
         super.onConfigurationChanged(newConfig)
         if (formattingLocales != newConfig.locales) {
             formattingLocales = newConfig.locales
+            onDateFormattingChanged()
             invalidateRecordingFormatting()
         }
     }
@@ -202,7 +218,7 @@ internal class ReverbLibraryListView(
     /** One main-thread immutable presentation update; no operation, playback or Undo side effects. */
     fun submit(value: LibraryNativeListState) {
         if (disposed || clearingListComposition) return
-        val update = rowUpdates.submit(value.items, NativeLibraryRowState(
+        val update = rowUpdates.submit((value.items as? LibraryListSnapshot)?.structure ?: value.items, NativeLibraryRowState(
             selectedIds = value.selectedIds,
             selectionActive = value.selectionActive,
             blockedIds = value.activeMutationIds + value.localOperationBusyIds,
@@ -212,8 +228,8 @@ internal class ReverbLibraryListView(
             screenActive = value.screenActive,
             infoRecordingId = value.infoRecordingId,
             renameRecordingId = value.renameRecordingId,
-        )) ?: return
-        val preserveTop = update.catalogChanged && !pendingPosition.hasKeyedRequest &&
+        ))
+        val preserveTop = update?.catalogChanged == true && !pendingPosition.hasKeyedRequest &&
             savePosition() == NativeListSavedPosition(0, 0)
         blockedRecordingIds = checkNotNull(rowUpdates.current).blockedIds
         rowAdapter.submit(value.items, update)
@@ -318,12 +334,23 @@ internal class ReverbLibraryListView(
         rowNodesDirty = false
         val failure = closePreservingPrimaryFailure(null, ::clearListComposition)
         list.sourceOnUserScroll = null
+        workObserver = null
+        onDateFormattingChanged = {}
         onPendingRecordingRevealCancelled = null
         closePreservingPrimaryFailure(failure) { list.adapter = null }?.let { throw it }
     }
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
+        // Changes while detached have no receiver; refresh the retained day groups on return.
+        val zone = java.util.TimeZone.getDefault().id
+        val locales = resources.configuration.locales
+        if (formattingTimeZone != zone || formattingLocales != locales) {
+            formattingTimeZone = zone
+            formattingLocales = locales
+            onDateFormattingChanged()
+            invalidateRecordingFormatting()
+        }
         context.contentResolver.registerContentObserver(
             Settings.System.getUriFor(Settings.System.TIME_12_24), false, timeFormatObserver,
         )
@@ -378,16 +405,27 @@ internal class ReverbLibraryListView(
     )
 
     private inner class LibraryRowsAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
-        private var entries = emptyList<Entry>()
+        private var entries = ArrayList<Entry>()
         private var recordingsById = emptyMap<String, Entry>()
+        private var snapshot: LibraryListSnapshot? = null
         private var nextStableId = 0L
         init { setHasStableIds(true) }
 
         fun containsRecording(id: String): Boolean = id in recordingsById
         fun recordingIndex(id: String): Int = entries.indexOfFirst { it.recording?.id == id }
 
-        fun submit(items: List<LibraryListItem>, update: NativeLibraryListUpdate) {
-            if (update.catalogChanged) submitCatalog(items)
+        fun submit(items: List<LibraryListItem>, update: NativeLibraryListUpdate?) {
+            if (update?.catalogChanged == true) submitCatalog(items)
+            else (items as? LibraryListSnapshot)?.let { next ->
+                if (snapshot !== next) next.pending.forEachIndexed { index, item ->
+                    if (item is LibraryListItem.Pending && entries[index].pendingSave != item.save) {
+                        entries[index] = entries[index].copy(pendingSave = item.save)
+                        notifyItemChanged(index)
+                    }
+                }
+            }
+            snapshot = items as? LibraryListSnapshot
+            if (update == null) return
             forEachPendingHolder { it.presentation.setPresentationActive(rowUpdates.current?.screenActive == true) }
             // Only bound visible rows need a transient update. Cached/prefetched holders sample the
             // latest state when attached, so selection-mode changes never invalidate the full catalog.
@@ -418,11 +456,15 @@ internal class ReverbLibraryListView(
                         edges = NativeGroupEdges(
                             first = items.getOrNull(index - 1) !is LibraryListItem.Recording,
                             last = items.getOrNull(index + 1) !is LibraryListItem.Recording))
-                        .also { nextRecordings[item.recording.id] = it }
+                        .also {
+                            nextRecordings[item.recording.id] = it
+                            workObserver?.finishedEntryCreated()
+                        }
                 })
             }
             // Released LazyColumn always appends item { Spacer(Modifier.height(84.dp)) }.
             next.add(Entry("library-footer", previousByKey["library-footer"]?.stableId ?: nextStableId++, footer = true))
+            workObserver?.catalogDiff()
             val diff = DiffUtil.calculateDiff(object : DiffUtil.Callback() {
                 override fun getOldListSize() = previous.size
                 override fun getNewListSize() = next.size
@@ -479,8 +521,9 @@ internal class ReverbLibraryListView(
         fun rebindAll() { notifyItemRangeChanged(0, itemCount) }
         fun clear() {
             val count = entries.size
-            entries = emptyList()
+            entries = ArrayList()
             recordingsById = emptyMap()
+            snapshot = null
             if (count > 0) notifyItemRangeRemoved(0, count)
         }
         override fun getItemCount() = entries.size
@@ -507,6 +550,7 @@ internal class ReverbLibraryListView(
         }
         override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
             val entry = entries[position]
+            if (holder !is RecordingHolder) workObserver?.rowBound(entry.key)
             if (entry.footer) {
                 holder.itemView.layoutParams = RecyclerView.LayoutParams(LayoutParams.MATCH_PARENT,
                     ReverbLibraryLayout.pendingRecoveryHeightPx(environment.textDensity.density))
@@ -565,6 +609,7 @@ internal class ReverbLibraryListView(
         init { row.parentInterestedInDown = { true } }
 
         fun bind(entry: Entry) {
+            workObserver?.rowBound(entry.key)
             if (binding?.key != entry.key) retire()
             if (expansion != null && entry.row?.expanded == true && binding?.info != entry.info) releaseExpansion()
             binding = entry

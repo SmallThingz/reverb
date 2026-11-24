@@ -222,7 +222,8 @@ class MediaStoreCatalogObservationTest {
         fun created() = query.invoke(null, app, tree, document) as NewlyCreatedOutputObservation
         fun writable(observation: NewlyCreatedOutputObservation) =
             newlyCreatedOutputMayBeWritten("clip.wav", requirePending = false, observation)
-        check(PlaybackSessionOsShadow.targetPath.isEmpty())
+        // This shared shadow can outlive another test in Robolectric's reused sandbox.
+        val previousShadowPath = PlaybackSessionOsShadow.targetPath
         val source = Files.createTempFile(app.cacheDir.toPath(), "document-identity-", ".bin").toFile()
         var bodyFailure: Throwable? = null
         try {
@@ -290,7 +291,7 @@ class MediaStoreCatalogObservationTest {
                 }
             }
             CatalogRowProvider.descriptorSource = null
-            PlaybackSessionOsShadow.targetPath = ""
+            PlaybackSessionOsShadow.targetPath = previousShadowPath
             cleanupFailure?.let { if (bodyFailure == null) throw it else bodyFailure.addSuppressed(it) }
         }
     }

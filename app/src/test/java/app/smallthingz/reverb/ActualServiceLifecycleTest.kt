@@ -7,6 +7,7 @@ import android.content.Intent
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.PowerManager
+import app.smallthingz.reverb.actualserviceisolated.ActualServiceSandboxMarker
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -21,6 +22,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.*
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
@@ -39,9 +41,19 @@ import org.robolectric.shadow.api.Shadow
 /** Actual stopped-Service lifecycle, terminal snapshot delivery, and owned PCM recovery. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], application = Application::class, shadows = [JournalHostIoShadow::class,
-    ProbeAudioRecordShadow::class, ProbeAudioRecordBuilderShadow::class])
+    ProbeAudioRecordShadow::class, ProbeAudioRecordBuilderShadow::class],
+    // Android shadow targets normalize into the shared android.* instrumentation package.
+    // Use a real test-only package to isolate this fixture's borrowed process identity.
+    instrumentedPackages = ["app.smallthingz.reverb.actualserviceisolated"])
 @LooperMode(LooperMode.Mode.PAUSED)
 class ActualServiceLifecycleTest {
+    @Before fun verifySandboxOwnership() {
+        val loader = ActualServiceSandboxMarker::class.java.classLoader
+        assertSame(loader, javaClass.classLoader)
+        assertSame(loader, ReverbService::class.java.classLoader)
+        assertSame(loader, RecordingIncidentStore::class.java.classLoader)
+    }
+
     class NoMicService : ReverbService() {
         val inputAttempts = AtomicInteger()
         @Volatile internal var syntheticInput: CaptureAudioInput? = null

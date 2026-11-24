@@ -7,6 +7,7 @@ import java.util.LinkedList
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -20,6 +21,79 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RecordingBackgroundDeletionTest {
+    @Test
+    fun completedBatchReleasesQueueReferenceButKeepsCallerReceipt() = runBlocking {
+        // Unconfined also exercises completion before the completion handler is installed.
+        val queue = RecordingBackgroundDeletionQueue(CoroutineScope(coroutineContext + Dispatchers.Unconfined))
+        val cause = IOException("provider rejected row")
+        val expected = RecordingDeletionBatchResult(listOf(false), false,
+            failures = mapOf(0 to RecordingDeletionFailure(RecordingDeletionFailureReason.PROVIDER_REJECTED, cause)))
+        var reports = 0
+        val receipt = queue.enqueue(listOf(recording("/a")), { expected }, { reports++ })
+
+        assertTrue(receipt.isCompleted)
+        assertNull(queue.pending())
+        queue.awaitIdle()
+        assertTrue(receipt.await() === expected)
+        assertTrue(receipt.await().failures[0]?.cause === cause)
+        assertEquals(1, reports)
+    }
+
+    @Test
+    fun failedBatchReleasesQueueReferenceAndDoesNotBlockNextBatch() = runBlocking {
+        val process = CoroutineScope(coroutineContext + SupervisorJob() + Dispatchers.Unconfined)
+        try {
+            val queue = RecordingBackgroundDeletionQueue(process)
+            var reports = 0
+            val failed = queue.enqueue(listOf(recording("/a")), { throw IOException("storage offline") }, { reports++ })
+            assertTrue(runCatching { failed.await() }.exceptionOrNull() is IOException)
+            assertNull(queue.pending())
+            val next = queue.enqueue(emptyList(), { RecordingDeletionBatchResult(emptyList(), false) }, { reports++ })
+            assertEquals(emptyList<Boolean>(), next.await().outcomes)
+            assertNull(queue.pending())
+            assertEquals(1, reports)
+        } finally {
+            process.cancel()
+        }
+    }
+
+    @Test
+    fun olderCompletionCannotReleaseNewerBatchOrRefreshWaiter() = runBlocking {
+        val process = CoroutineScope(coroutineContext + SupervisorJob() + Dispatchers.Unconfined)
+        try {
+            val queue = RecordingBackgroundDeletionQueue(process)
+            val firstRelease = CompletableDeferred<Unit>()
+            val secondRelease = CompletableDeferred<Unit>()
+            val started = mutableListOf<Int>()
+            val first = queue.enqueue(emptyList(), {
+                started += 1
+                firstRelease.await()
+                RecordingDeletionBatchResult(emptyList(), false)
+            }, { error("unexpected failure") })
+            val second = queue.enqueue(emptyList(), {
+                started += 2
+                secondRelease.await()
+                RecordingDeletionBatchResult(emptyList(), false)
+            }, { error("unexpected failure") })
+            var idle = false
+            val waiter = launch(start = CoroutineStart.UNDISPATCHED) { queue.awaitIdle(); idle = true }
+            assertEquals(listOf(1), started)
+            assertTrue(queue.pending() === second)
+            firstRelease.complete(Unit)
+            first.join()
+            assertEquals(listOf(1, 2), started)
+            assertTrue(queue.pending() === second)
+            assertFalse(idle)
+            secondRelease.complete(Unit)
+            waiter.join()
+            assertNull(queue.pending())
+            assertTrue(idle)
+            assertTrue(second.isCompleted)
+        } finally {
+            process.cancel()
+        }
+    }
+
     @Test
     fun backgroundFeedbackReceivesExactPerRowFailureWithoutChangingSuccess() = runBlocking {
         val cause = IOException("provider failure")

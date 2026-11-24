@@ -1,6 +1,8 @@
 package app.smallthingz.reverb
 
 import android.content.Context
+import java.text.DateFormat
+import java.util.Calendar
 import java.util.Date
 
 /** Mechanical extraction of FilesScreen's released section model; input order remains authoritative. */
@@ -12,13 +14,32 @@ internal sealed class LibraryListItem {
     object RetryFailedSaves : LibraryListItem()
 }
 
-internal fun buildLibraryListItems(context: Context, recordings: List<RecordingEntity>): List<LibraryListItem> {
+internal fun buildLibraryListItems(context: Context, recordings: List<RecordingEntity>): List<LibraryListItem> =
+    if (recordings.isEmpty()) emptyList()
+    else buildLibraryListItems(recordings, android.text.format.DateFormat.getLongDateFormat(context))
+
+internal fun buildLibraryListItems(recordings: List<RecordingEntity>, dateFormat: DateFormat): List<LibraryListItem> {
     if (recordings.isEmpty()) return emptyList()
-    val dateFormat = android.text.format.DateFormat.getLongDateFormat(context)
     val items = mutableListOf<LibraryListItem>()
+    val calendar = dateFormat.calendar.clone() as Calendar
+    val date = Date()
+    var previousEra = -1
+    var previousYear = -1
+    var previousDay = -1
+    var dateHeader = ""
     var currentDateHeader = ""
     recordings.forEach { recording ->
-        val dateHeader = dateFormat.format(Date(recording.startedAtMillis))
+        calendar.timeInMillis = recording.startedAtMillis
+        val era = calendar.get(Calendar.ERA)
+        val year = calendar.get(Calendar.YEAR)
+        val day = calendar.get(Calendar.DAY_OF_YEAR)
+        if (era != previousEra || year != previousYear || day != previousDay) {
+            previousEra = era
+            previousYear = year
+            previousDay = day
+            date.time = recording.startedAtMillis
+            dateHeader = dateFormat.format(date)
+        }
         if (dateHeader != currentDateHeader) {
             currentDateHeader = dateHeader
             items.add(LibraryListItem.Header(dateHeader))

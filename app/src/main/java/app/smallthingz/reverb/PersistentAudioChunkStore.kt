@@ -1534,6 +1534,9 @@ internal class PersistentAudioChunkStore internal constructor(
         var pendingDelete: Boolean = false,
         var continuesPreviousChunk: Boolean = false,
     ) {
+        // Numeric retirement authority belongs to this owner, not geometry-only copies.
+        var retirementFileIdentity: String? = null
+
         val frameBytes: Int
             get() = channelCount * sampleFormat.bytesPerSample
 
@@ -1748,6 +1751,9 @@ internal class PersistentAudioChunkStore internal constructor(
             output.fd.sync()
         }
         publishRetirementTombstoneAtomically(temp, target)
+        // The marker is visible even if its directory barrier fails. Keep the exact
+        // published object binding while the existing pending-barrier owner retries.
+        record.retirementFileIdentity = identity
         return try {
             forceDirectoryDurable(retiredDirectory)
             null
@@ -2093,11 +2099,12 @@ internal class PersistentAudioChunkStore internal constructor(
             }
             if (retirementTombstones.containsKey(id)) {
                 val retiredIdentity = retirementTombstones[id]
+                val retiredFileIdentity = retiredIdentity?.fileIdentity
                 if (retiredIdentity?.matches(record) == true &&
-                    (retiredIdentity.fileIdentity == null || sameFileObjectAcrossRename(
-                        retiredIdentity.fileIdentity, resolveFileIdentity(file),
-                    ))
+                    retiredFileIdentity != null &&
+                    sameFileObjectAcrossRename(retiredFileIdentity, resolveFileIdentity(file))
                 ) {
+                    record.retirementFileIdentity = retiredFileIdentity
                     if (durableSaveProtectsLocked(file)) {
                         record.pendingDelete = true
                         deferDurablyPinnedRetirementLocked(record)
@@ -2114,7 +2121,10 @@ internal class PersistentAudioChunkStore internal constructor(
                     val claimed = claimChunkPathForDeletionLocked(file, "retired-delete", syncDirectory = false)
                         ?: throw IOException("Unable to claim recovered retirement")
                     val claimedIdentity = verifiedRetiredChunkIdentityLocked(record, claimed.file)
-                    if (claimedIdentity != null && sameFileObjectAcrossRename(beforeIdentity, claimedIdentity)) {
+                    if (claimedIdentity != null &&
+                        sameFileObjectAcrossRename(retiredFileIdentity, claimedIdentity) &&
+                        sameFileObjectAcrossRename(beforeIdentity, claimedIdentity)
+                    ) {
                         synchronized(DurablePcmPins.mutationLock) {
                             requireUnpinnedMutationLocked(file)
                             Files.delete(claimed.file.toPath())
@@ -2130,7 +2140,8 @@ internal class PersistentAudioChunkStore internal constructor(
                     return@forEachOrderedStartupRead
                 }
                 // A numeric tombstone is durable evidence that this id was retired. If its
-                // payload is malformed or no longer matches the chunk, recovery is ambiguous:
+                // payload is malformed, lacks original object identity (legacy), or no longer
+                // matches the chunk, recovery is ambiguous:
                 // preserve the bytes outside the live timeline rather than resurrecting data
                 // the user explicitly cleared. Legitimate id reuse clears stale markers before
                 // creating the replacement chunk.
@@ -3439,7 +3450,10 @@ internal class PersistentAudioChunkStore internal constructor(
             rememberRetiredRecordLocked(record)
             return retiredCleanupFailed(error, failOnCleanupError)
         }
-        if (verifiedIdentity == null) {
+        val retirementIdentity = record.retirementFileIdentity
+        if (verifiedIdentity == null || retirementIdentity == null ||
+            !sameFileObjectAcrossRename(retirementIdentity, verifiedIdentity)
+        ) {
             return preserveChangedRetiredChunkLocked(record, failOnCleanupError)
         }
         val claimed = claimChunkPathForDeletionLocked(

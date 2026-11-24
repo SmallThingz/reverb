@@ -3,17 +3,56 @@ package app.smallthingz.reverb
 import android.content.Context
 import android.util.Log
 import java.io.File
-import java.util.concurrent.ConcurrentHashMap
 
-private val reportedFileCopyRecovery = ConcurrentHashMap.newKeySet<String>()
+/** A stale snapshot keeps this small retired owner, never a process-global token tombstone. */
+internal class FileCopyRecoveryIncidentOwner {
+    private var reported = false
+    private var retired = false
 
-internal fun reportFileCopyRecoveryIncident(context: Context, token: String, failure: Exception) {
+    @Synchronized fun claim(): Boolean {
+        if (reported || retired) return false
+        reported = true
+        return true
+    }
+
+    @Synchronized fun retire(withIncident: Boolean): Boolean {
+        val report = withIncident && !reported && !retired
+        retired = true
+        return report
+    }
+}
+
+/** Accessed under the FILE-copy journal mutex; members exist only for live journal tokens. */
+internal class FileCopyRecoveryIncidentOwners {
+    private val owners = HashMap<String, FileCopyRecoveryIncidentOwner>()
+    val size: Int get() = owners.size
+
+    fun bind(record: FileCopyPublication): FileCopyPublication = record.also {
+        it.recoveryIncidentOwner = owners.getOrPut(it.token) { FileCopyRecoveryIncidentOwner() }
+    }
+
+    fun retire(record: FileCopyPublication, withIncident: Boolean): Boolean {
+        val owner = owners.remove(record.token) ?: record.recoveryIncidentOwner ?: FileCopyRecoveryIncidentOwner()
+        record.recoveryIncidentOwner = owner
+        return owner.retire(withIncident)
+    }
+}
+
+private val unavailableJournalIncident = FileCopyRecoveryIncidentOwner()
+
+internal fun enqueueFileCopyRecoveryIncident(context: Context, failure: Exception) {
+    RecordingIncidentStore.recordUnexpectedErrorInBackground(context,
+        "File publication preserved for recovery", failure)
+}
+
+internal fun reportFileCopyJournalUnavailableIncident(context: Context, failure: Exception) {
+    if (unavailableJournalIncident.claim()) enqueueFileCopyRecoveryIncident(context, failure)
+}
+
+internal fun reportFileCopyRecoveryIncident(context: Context, record: FileCopyPublication, failure: Exception) {
     // Token ownership also covers repeated recovery attempts whose incident was already queued.
     if (failure is FileCopyIncidentException) failure.incidentOwnedByRecovery = true
-    if (reportedFileCopyRecovery.add(token)) {
-        RecordingIncidentStore.recordUnexpectedErrorInBackground(context,
-            "File publication preserved for recovery", failure)
-    }
+    if (checkNotNull(record.recoveryIncidentOwner).claim()) enqueueFileCopyRecoveryIncident(context, failure)
 }
 
 internal fun recoverPendingFileCopyPublications(context: Context) {
@@ -29,7 +68,7 @@ internal fun recoverPendingFileCopyPublications(context: Context) {
                 } else recoverCopiedFileRecord(context, File(record.sourceId), record.requestedName, record.sourceFingerprint())
             }
         } catch (failure: Exception) {
-            reportFileCopyRecoveryIncident(context, record.token, failure)
+            reportFileCopyRecoveryIncident(context, record, failure)
             Log.w("FileCopyPublication", "Copied publication remains preserved: ${record.token}", failure)
         }
     }
@@ -56,7 +95,7 @@ internal fun recoverCopiedFileRecord(
 } catch (failure: FileCopyRecoveryRequired) {
     val records = FileCopyPublications.snapshot(context).records.filter { it.matchesSource(source, expected) }
     records.forEach { record ->
-        reportFileCopyRecoveryIncident(context, record.token, failure)
+        reportFileCopyRecoveryIncident(context, record, failure)
     }
     throw failure
 }

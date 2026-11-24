@@ -402,6 +402,9 @@ internal class FlacPcmDecoder(
     override fun readFrames(start: Long, count: Long, consume: (ByteArray, Int, Int) -> Unit) {
         check(!closed)
         require(start >= 0 && count >= 0 && start <= info.frameCount - count)
+        // Shuttle retirement revokes its generation without interrupting the shared worker.
+        // Observe that admission as well as thread interruption before native work/delivery.
+        checkPcmConversionNotInterrupted()
         if (count == 0L) return
         val codec = codec ?: return try {
             readRawFrames(start, count, consume)
@@ -420,7 +423,7 @@ internal class FlacPcmDecoder(
         var deadline = System.nanoTime() + 30_000_000_000L
         val wholeFile = start == 0L && count == info.frameCount
         while (!outputEnd && (copied < count || wholeFile)) {
-            if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("FLAC read cancelled")
+            checkPcmConversionNotInterrupted()
             var progress = false
             if (!inputEnd) {
                 val index = codec.dequeueInputBuffer(0)
@@ -452,6 +455,7 @@ internal class FlacPcmDecoder(
                     if (first > start + copied && available > 0) throw IOException("FLAC decoder skipped audio")
                     val take = minOf((available - skip).toLong(), count - copied).toInt()
                     if (take > 0) {
+                        checkPcmConversionNotInterrupted()
                         output.position(bufferInfo.offset + skip * frameBytes)
                         output.limit(bufferInfo.offset + (skip + take) * frameBytes)
                         codecScratch = consumeFlacPcmBuffer(output, codecScratch, consume)
@@ -489,7 +493,7 @@ internal class FlacPcmDecoder(
         // A partial read leaves its complete decoded block here. Nearby waveform probes can
         // reuse it, but a whole-file verification must still inspect the extractor's terminal.
         if (hasRetainedRawFrames(start, count)) {
-            if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("FLAC read cancelled")
+            checkPcmConversionNotInterrupted()
             val offset = (start - rawBlockStart).toInt() * frameBytes
             consume(block, offset, count.toInt() * frameBytes)
             return
@@ -500,10 +504,11 @@ internal class FlacPcmDecoder(
         var copied = 0L
         var more = true
         while (copied < count && more) {
-            if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("FLAC read cancelled")
+            checkPcmConversionNotInterrupted()
             buffer.clear()
             val stamp = extractor.sampleTime
             val bytes = extractor.readSampleData(buffer, 0)
+            checkPcmConversionNotInterrupted()
             if (bytes < 0 || stamp < 0) break
             rawBlockDecodeCount++
             if (bytes == 0 || bytes > block.size || bytes % frameBytes != 0) throw IOException("Invalid decoded FLAC block")

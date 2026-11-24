@@ -37,6 +37,9 @@ internal data class FileCopyPublication(
     val createdIdentity: String = "",
     val targetIdentity: String = "",
 ) {
+    // Process-only diagnostic ownership: excluded from wire format, equality and copy fields.
+    internal var recoveryIncidentOwner: FileCopyRecoveryIncidentOwner? = null
+
     fun sourceFingerprint() = StableOutputFingerprint(
         CopyDigest(byteCount, sha256Hex.hexToByteArray()), sourceIdentity, null,
     )
@@ -104,6 +107,7 @@ internal object FileCopyPublications {
     private val mutex = Mutex()
     private var revision = 0L
     private val activeSources = ConcurrentHashMap.newKeySet<String>()
+    private val recoveryIncidents = FileCopyRecoveryIncidentOwners()
 
     private fun readLocked(context: Context): List<FileCopyPublication> {
         val entries = getRecorderPreferences(context).requireDurableStringSet(PrefKey.FILE_COPY_PUBLICATIONS)
@@ -117,7 +121,7 @@ internal object FileCopyPublications {
             record
         }.sortedBy { it.token }.also { records ->
             if (records.map { it.token }.toSet().size != records.size) throw IOException("Duplicate FILE copy transaction")
-        }
+        }.onEach(recoveryIncidents::bind)
     }
 
     // Synchronous entry points are called by the existing storage IO workers only.
@@ -125,11 +129,19 @@ internal object FileCopyPublications {
         mutex.withLock { FileCopyPublicationSnapshot(revision, readLocked(context)) }
     }
 
-    fun replace(context: Context, previous: FileCopyPublication?, next: FileCopyPublication?) = runBlocking {
-        mutex.withLock { replaceLocked(context, previous, next) }
+    fun replace(context: Context, previous: FileCopyPublication?, next: FileCopyPublication?) {
+        runBlocking { mutex.withLock { replaceLocked(context, previous, next) } }
     }
 
-    private fun replaceLocked(context: Context, previous: FileCopyPublication?, next: FileCopyPublication?) {
+    fun retireIncomplete(context: Context, record: FileCopyPublication, failure: FileCopyRecoveryRequired) {
+        val report = runBlocking {
+            mutex.withLock { replaceLocked(context, record, null, failure) }
+        }
+        if (report) enqueueFileCopyRecoveryIncident(context, failure)
+    }
+
+    private fun replaceLocked(context: Context, previous: FileCopyPublication?, next: FileCopyPublication?,
+        terminalFailure: FileCopyRecoveryRequired? = null): Boolean {
         val preferences = getRecorderPreferences(context)
         val current = preferences.requireDurableStringSet(PrefKey.FILE_COPY_PUBLICATIONS)
         val updated = current.toMutableSet()
@@ -141,11 +153,20 @@ internal object FileCopyPublications {
             if (updated.any { decodeFileCopyPublication(it)?.token == next.token }) throw IOException("Duplicate FILE copy transaction")
             updated += encodeFileCopyPublication(next)
         }
-        if (updated == current) return
+        if (updated == current) return false
         if (!preferences.commitDurableStringSetReplacement(PrefKey.FILE_COPY_PUBLICATIONS, current, updated)) {
             throw IOException("Unable to persist FILE copy publication")
         }
         revision++
+        next?.let(recoveryIncidents::bind)
+        if (previous != null && previous.token != next?.token) {
+            // A failed/uncertain commit above retains both durable authority and dedup ownership.
+            // Claim an incomplete-preservation terminal incident before retiring its owner, so
+            // an outer catch holding an older snapshot cannot report it a second time.
+            if (terminalFailure != null) terminalFailure.incidentOwnedByRecovery = true
+            return recoveryIncidents.retire(previous, withIncident = terminalFailure != null)
+        }
+        return false
     }
 
     suspend fun <T> catalogCommit(
@@ -219,7 +240,7 @@ internal fun fileCopySourceIdsToHide(
 internal fun filterFileCopyCatalogRows(context: Context, rows: List<RecordingEntity>): List<RecordingEntity> {
     if (rows.none { it.storageType == RecordingStorageType.FILE }) return rows
     val snapshot = try { FileCopyPublications.snapshot(context) } catch (failure: Exception) {
-        reportFileCopyRecoveryIncident(context, "journal-unavailable", failure)
+        reportFileCopyJournalUnavailableIncident(context, failure)
         // These are already cataloged rows. New FILE imports still require a readable journal;
         // preserve this known snapshot instead of removing unrelated provider recordings.
         return rows
@@ -266,8 +287,7 @@ internal class ContextFileCopyPublicationStore(private val context: Context) : F
         if (!suppressFileOutputWithoutDeletion(context, record.targetId, fingerprint.digest)) {
             throw IOException("Unable to preserve incomplete FILE publication")
         }
-        replace(record, null)
-        reportFileCopyRecoveryIncident(context, record.token, failure)
+        FileCopyPublications.retireIncomplete(context, record, failure)
     }
 }
 

@@ -44,13 +44,20 @@ def signing_block_ids(apk: Path) -> set[int]:
         length = f.tell()
         require(length >= 22, "APK is truncated")
         f.seek(max(0, length - 65557))
-        tail = f.read()
+        tail = f.read(min(length, 65557))
         eocd = tail.rfind(b'PK\x05\x06')
-        require(eocd >= 0 and eocd + 22 <= len(tail), "Missing ZIP end record")
-        comment_length = struct.unpack_from('<H', tail, eocd + 20)[0]
-        require(eocd + 22 + comment_length == len(tail), "Invalid ZIP end record")
-        cd_size, cd_offset = struct.unpack_from('<II', tail, eocd + 12)
-        require(cd_offset + cd_size == length - len(tail) + eocd, "Invalid ZIP directory geometry")
+        # EOCD magic can occur inside a valid ZIP comment. Only a complete
+        # record whose comment ends at EOF and directory ends at the record
+        # is a candidate, including when the comment contains a full header.
+        while eocd >= 0:
+            if eocd + 22 <= len(tail):
+                comment_length = struct.unpack_from('<H', tail, eocd + 20)[0]
+                if eocd + 22 + comment_length == len(tail):
+                    cd_size, cd_offset = struct.unpack_from('<II', tail, eocd + 12)
+                    if cd_offset + cd_size == length - len(tail) + eocd:
+                        break
+            eocd = tail.rfind(b'PK\x05\x06', 0, eocd)
+        require(eocd >= 0, "Missing or invalid ZIP end record/directory geometry")
         require(cd_offset >= 32, "Missing APK Signing Block")
         f.seek(cd_offset - 24)
         footer = f.read(24)
@@ -80,7 +87,8 @@ def verify_block_policy(ids: set[int]) -> None:
 
 
 
-def verify_signer_output(signature: str) -> None:
+def verify_signer_output(signature: str, *, scheme: str = 'v2') -> None:
+    require(scheme in ('v2', 'v3'), 'Unsupported signature verification scheme')
     counts = re.findall(r'^Number of signers:\s*(\d+)\s*$', signature, re.MULTILINE)
     require(counts == ['1'], f"Expected exactly one APK signer: {counts}")
     # Build Tools 37 changed "Signer #1" to the scheme-specific "V2 Signer:".
@@ -90,8 +98,9 @@ def verify_signer_output(signature: str) -> None:
     )
     require(bool(certs) and {cert.lower() for cert in certs} == {SIGNER},
             f"Unexpected signing certificate: {certs}")
-    require('Verified using v2 scheme (APK Signature Scheme v2): true' in signature,
-            "APK v2 signature verification failed")
+    prefix = f'Verified using {scheme} scheme (APK Signature Scheme {scheme}): '
+    require([line[len(prefix):] for line in signature.splitlines() if line.startswith(prefix)] == ['true'],
+            f"APK {scheme} signature verification failed")
 
 
 def run(args: list[str], root: Path) -> str:
@@ -99,6 +108,16 @@ def run(args: list[str], root: Path) -> str:
                             stderr=subprocess.STDOUT, check=False)
     require(result.returncode == 0, f"{args[0]} failed ({result.returncode}):\n{result.stdout}")
     return result.stdout
+
+
+def verify_apk_signatures(apk: Path, tools: Path, root: Path, ids: set[int]) -> None:
+    # Verify the supported platform range first. Build Tools 37 may select v3
+    # without checking v2 on minSdk 28+, so a separate v2-only range is mandatory.
+    signature = run([str(tools / 'apksigner'), 'verify', '--verbose', '--print-certs', str(apk)], root)
+    verify_signer_output(signature, scheme='v3' if 0xF05368C0 in ids else 'v2')
+    v2_signature = run([str(tools / 'apksigner'), 'verify', '--verbose', '--print-certs',
+                        '--min-sdk-version', '24', '--max-sdk-version', '27', str(apk)], root)
+    verify_signer_output(v2_signature)
 
 
 
@@ -126,6 +145,15 @@ def verify_source_version(source: str, name: str, code: str) -> None:
     require(names == [name], "APK version name differs from literal F-Droid-readable source")
 
 
+def file_sha256(path: Path) -> str:
+    """Hash every byte without allocating the whole release APK."""
+    digest = hashlib.sha256()
+    with path.open('rb') as source:
+        while chunk := source.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def verify(tag: str, apk: Path, tools: Path) -> dict[str, object]:
     root = Path(__file__).resolve().parent.parent
     require(re.fullmatch(r'v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?', tag) is not None,
@@ -134,7 +162,7 @@ def verify(tag: str, apk: Path, tools: Path) -> dict[str, object]:
     require(run(['git', 'rev-parse', 'HEAD'], root).strip() == commit, "HEAD does not match tag")
     require(not run(['git', 'status', '--porcelain', '--untracked-files=all'], root).strip(),
             "Release source must be clean")
-    initial_hash = hashlib.sha256(apk.read_bytes()).hexdigest()
+    initial_hash = file_sha256(apk)
     with zipfile.ZipFile(apk) as z:
         names = z.namelist()
         require(len(names) == len(set(names)), "Duplicate ZIP entries")
@@ -143,8 +171,7 @@ def verify(tag: str, apk: Path, tools: Path) -> dict[str, object]:
         require(z.testzip() is None, "APK ZIP integrity check failed")
     ids = signing_block_ids(apk)
     verify_block_policy(ids)
-    signature = run([str(tools / 'apksigner'), 'verify', '--verbose', '--print-certs', str(apk)], root)
-    verify_signer_output(signature)
+    verify_apk_signatures(apk, tools, root, ids)
     run([str(tools / 'zipalign'), '-c', '-P', '16', '4', str(apk)], root)
     badging = run([str(tools / 'aapt2'), 'dump', 'badging', str(apk)], root)
     info = re.search(r"^package: name='([^']+)' versionCode='([^']+)' versionName='([^']+)'",
@@ -161,7 +188,7 @@ def verify(tag: str, apk: Path, tools: Path) -> dict[str, object]:
     require(run(['git', 'rev-parse', 'HEAD'], root).strip() == commit, "HEAD changed during verification")
     require(not run(['git', 'status', '--porcelain', '--untracked-files=all'], root).strip(),
             "Source changed during verification")
-    require(hashlib.sha256(apk.read_bytes()).hexdigest() == initial_hash, "APK changed during verification")
+    require(file_sha256(apk) == initial_hash, "APK changed during verification")
     return {'tag': tag, 'commit': commit, 'package': package, 'versionName': name,
             'versionCode': int(code), 'sha256': initial_hash, 'signerSha256': SIGNER,
             'signingBlocks': [f'0x{x:08x}' for x in sorted(ids)], 'zipalign16KiB': True,

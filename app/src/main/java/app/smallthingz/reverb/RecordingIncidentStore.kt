@@ -799,47 +799,58 @@ internal fun unexpectedErrorIncidentDescription(
     maxChars: Int = 384,
 ): String {
     require(maxChars > 0)
-    val normalizedSource = source.trim().ifBlank { "Unexpected app error" }
-    val type = error::class.java.name
-    val message = error.message?.trim().orEmpty()
+    // Bound each append before copying provider text; truncating a completed description can
+    // otherwise allocate several full-size copies while reporting an already failing operation.
+    val result = StringBuilder(minOf(maxChars, 384))
+    fun append(value: String, start: Int = 0) {
+        val count = minOf(value.length - start, maxChars - result.length)
+        result.append(value, start, start + count)
+    }
+    fun trimmedPrefix(value: String): String {
+        var start = 0
+        var end = value.length
+        while (start < end && value[start].isWhitespace()) start++
+        while (end > start && value[end - 1].isWhitespace()) end--
+        return value.substring(start, start + minOf(end - start, maxChars - result.length))
+    }
+    append(trimmedPrefix(source).ifBlank { "Unexpected app error" })
+    append(": ")
+    append(error::class.java.name)
+    if (result.length == maxChars) return result.toString()
+    val message = error.message?.let(::trimmedPrefix).orEmpty()
+    if (message.isNotEmpty()) { append(": "); append(message) }
+    if (result.length == maxChars) return result.toString()
     val stackTrace = error.stackTrace
     val frame = stackTrace.firstOrNull { it.className.startsWith("app.smallthingz.reverb") }
         ?: stackTrace.firstOrNull()
-    val location = frame?.let { stack ->
-        buildString {
-            append(stack.className.substringAfterLast('.'))
-            append('.')
-            append(stack.methodName)
-            if (stack.lineNumber > 0) append(':').append(stack.lineNumber)
-        }
-    }.orEmpty()
+    if (frame != null) {
+        append(" @ ")
+        append(frame.className, frame.className.lastIndexOf('.') + 1)
+        append(".")
+        append(frame.methodName)
+        if (frame.lineNumber > 0) { append(":"); append(frame.lineNumber.toString()) }
+    }
+    if (result.length == maxChars) return result.toString()
     var root: Throwable? = null
     var cause = error.cause
     if (cause != null) {
         val seenCauses = IdentityHashMap<Throwable, Boolean>()
         seenCauses[error] = true
-        // A repeated object closes a cause cycle; retain the last distinct cause instead.
+        // Keep the deepest finite cause and identity-based cycle behavior when it can be shown.
         while (cause != null && seenCauses.put(cause, true) == null) {
             root = cause
             cause = cause.cause
         }
     }
-    val rootDetail = root?.let { cause ->
-        val causeMessage = cause.message?.trim().orEmpty()
-        buildString {
-            append("; cause ")
-            append(cause::class.java.name)
-            if (causeMessage.isNotEmpty()) append(": ").append(causeMessage)
+    root?.let { cause ->
+        append("; cause ")
+        append(cause::class.java.name)
+        if (result.length < maxChars) {
+            val causeMessage = cause.message?.let(::trimmedPrefix).orEmpty()
+            if (causeMessage.isNotEmpty()) { append(": "); append(causeMessage) }
         }
-    }.orEmpty()
-    return buildString {
-        append(normalizedSource)
-        append(": ")
-        append(type)
-        if (message.isNotEmpty()) append(": ").append(message)
-        if (location.isNotEmpty()) append(" @ ").append(location)
-        append(rootDetail)
-    }.take(maxChars)
+    }
+    return result.toString()
 }
 
 internal fun completeRecordingIncidentDowntimes(

@@ -49,6 +49,14 @@ def sha256(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as source:
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def inspect_dependencies(path):
     raw = Path(path).read_bytes()
     report = json.loads(raw)
@@ -183,7 +191,7 @@ def inspect_apk(path, allowed_legacy=frozenset()):
             if info.file_size > 256 * 1024 * 1024:
                 raise ValueError("DEX exceeds this bounded gate's supported size")
             results[info.filename] = inspect_dex(archive.read(info), allowed_legacy)
-    return {"path": str(path.resolve()), "sha256": sha256(path.read_bytes()),
+    return {"path": str(path.resolve()), "sha256": file_sha256(path),
             "dex": results}
 
 

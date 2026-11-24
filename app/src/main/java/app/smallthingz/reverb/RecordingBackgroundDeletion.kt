@@ -5,6 +5,39 @@ import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 
+/** Retain active process work only; callers may keep the completed receipt for UI settlement. */
+internal class RecordingBackgroundDeletionQueue(private val scope: CoroutineScope) {
+    private var tail: Job? = null
+
+    @Synchronized
+    fun pending(): Job? = tail
+
+    @Synchronized
+    fun enqueue(
+        recordings: List<RecordingEntity>,
+        deleteBatch: suspend (List<RecordingEntity>) -> RecordingDeletionBatchResult,
+        reportFailure: (RecordingDeletionBatchResult) -> Unit,
+    ): Deferred<RecordingDeletionBatchResult> {
+        val receipt = scope.launchRecordingBackgroundDeletion(tail, recordings, deleteBatch, reportFailure)
+        tail = receipt
+        receipt.invokeOnCompletion {
+            synchronized(this) {
+                // An older batch may finish after a newer batch has taken queue ownership.
+                if (tail === receipt) tail = null
+            }
+        }
+        return receipt
+    }
+
+    suspend fun awaitIdle() {
+        while (true) {
+            val job = pending() ?: return
+            job.join()
+            if (pending() === job) return
+        }
+    }
+}
+
 /** The process owner keeps the physical result after any particular UI waiter is cancelled. */
 internal fun CoroutineScope.launchRecordingBackgroundDeletion(
     previous: Job?,
