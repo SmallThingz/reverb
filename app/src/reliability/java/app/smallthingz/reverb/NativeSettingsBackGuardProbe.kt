@@ -48,6 +48,9 @@ internal fun verifyNativeSettingsBackGuard(
     var failure: Throwable? = null
     try {
         for (mode in listOf(AppThemeMode.LIGHT, AppThemeMode.DARK)) {
+            val hydrationEvidence = if (hydrationOnly) JSONObject().put("theme", mode.name)
+                .put("case_passed", false).put("stage", "opening") else null
+            hydrationEvidence?.let { cases.put(it); publish() }
             val host = if (hydrationOnly) launchCurrentUiSmokeActivity(instrumentation)
                 else launchNativeParityActivity(instrumentation)
             var render: MainSettingsParityRender? = null
@@ -100,6 +103,7 @@ internal fun verifyNativeSettingsBackGuard(
                 }
                 val baseline = nativeParityOnMain(instrumentation) { settings.owner.snapshot }
                 if (hydrationOnly) {
+                    val hydration = checkNotNull(hydrationEvidence)
                     val retainedList = nativeParityOnMain(instrumentation) { checkNotNull(settings.sectionContent) }
                     val retainedPosition = nativeParityOnMain(instrumentation) { settings.savePosition() }
                     main { host.onBackPressedDispatcher.onBackPressed() }
@@ -115,12 +119,66 @@ internal fun verifyNativeSettingsBackGuard(
                         settings.owner.state.active && settings.owner.state.hydrationPending &&
                             backGuardViews(settings).filterIsInstance<ReverbIncidentLoadingView>().any { it.isLaidOut }
                     }
-                    val hydrationEvidence = nativeParityOnMain(instrumentation) {
+                    fun recordHydrationState(stage: String) {
+                        hydration.put("stage", stage)
+                        nativeParityOnMain(instrumentation) {
+                            val observed = JSONObject().put("active", settings.owner.state.active)
+                                .put("hydrated", settings.owner.state.hydrated)
+                                .put("hydration_pending", settings.owner.state.hydrationPending)
+                                .put("input_allowed", settings.inputAllowed)
+                                .put("retained_list", settings.sectionContent === retainedList)
+                                .put("retained_scroll", settings.savePosition() == retainedPosition)
+                                .put("snapshot_unchanged", settings.owner.snapshot == baseline)
+                                .put("settings_alpha", settings.alpha)
+                                .put("content_alpha", retainedList.alpha)
+                                .put("top_bar_alpha", settings.topBar.alpha)
+                                .put("toolbar_parent_is_settings", settings.topBar.parent === settings)
+                                .put("list_parent_is_settings", retainedList.parent === settings)
+                                .put("settings_importance", settings.importantForAccessibility)
+                                .put("list_importance", retainedList.importantForAccessibility)
+                                .put("toolbar_importance", settings.topBar.importantForAccessibility)
+                            hydration.put(stage, observed)
+                            fun nodeEvidence(view: View): JSONObject {
+                                val entry = JSONObject().put("attached", view.isAttachedToWindow)
+                                    .put("shown", view.isShown).put("width", view.width).put("height", view.height)
+                                    .put("alpha", view.alpha).put("importance", view.importantForAccessibility)
+                                val node = view.createAccessibilityNodeInfo()
+                                try {
+                                    entry.put("node_present", node != null)
+                                    if (node != null) entry.put("class", node.className?.toString())
+                                        .put("visible", node.isVisibleToUser).put("enabled", node.isEnabled)
+                                        .put("screen_reader_focusable", node.isScreenReaderFocusable)
+                                        .put("state_description", node.stateDescription?.toString())
+                                } finally { @Suppress("DEPRECATION") node?.recycle() }
+                                return entry
+                            }
+                            val actions = JSONArray()
+                            observed.put("toolbar_actions", actions)
+                            for (view in listOf(settings.topBar.navigation.visual, settings.topBar.done.visual)) {
+                                actions.put(nodeEvidence(view))
+                            }
+                            val loaders = JSONArray()
+                            observed.put("loaders", loaders)
+                            backGuardViews(settings).filterIsInstance<ReverbIncidentLoadingView>()
+                                .forEach { loaders.put(nodeEvidence(it)) }
+                        }
+                        publish()
+                    }
+                    recordHydrationState("pending")
+                    hydration.put("pending_screenshot", captureHydration("pending"))
+                    publish()
+                    main {
                         check(!settings.inputAllowed && settings.owner.state.hydrated)
                         check(settings.sectionContent === retainedList && settings.savePosition() == retainedPosition)
-                        check(retainedList.alpha == .38f && settings.topBar.alpha == .38f)
+                        // The stable toolbar stayed opaque when 7d6348f9 moved its binding
+                        // before hydration. Only retained editable content receives the fade.
+                        check(retainedList.alpha == .38f && settings.topBar.alpha == 1f && settings.alpha == 1f) {
+                            "Unexpected pending opacity: ${hydration.getJSONObject("pending")}"
+                        }
+                        check(settings.topBar.parent === settings && retainedList.parent === settings)
                         check(settings.importantForAccessibility == View.IMPORTANT_FOR_ACCESSIBILITY_NO)
                         check(retainedList.importantForAccessibility == View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS)
+                        check(settings.topBar.importantForAccessibility == View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS)
                         for (view in listOf(settings.topBar.navigation.visual, settings.topBar.done.visual)) {
                             val node = view.createAccessibilityNodeInfo()
                             try { check(node == null || !node.isVisibleToUser) }
@@ -133,42 +191,46 @@ internal fun verifyNativeSettingsBackGuard(
                             check(node.className == "android.widget.ProgressBar" && node.isVisibleToUser)
                             check(node.isScreenReaderFocusable && !node.stateDescription.isNullOrBlank())
                         } finally { @Suppress("DEPRECATION") node.recycle() }
-                        JSONObject().put("retained_list", true).put("retained_scroll", true)
+                        hydration.put("retained_list", true).put("retained_scroll", true)
                             .put("suspension", "process_settings_commit_barrier").put("input_blocked", true)
                             .put("content_alpha", retainedList.alpha).put("top_bar_alpha", settings.topBar.alpha)
                             .put("loading_status_accessible", true).put("loader_attached", true)
                             .put("list_children_hidden", true).put("toolbar_actions_hidden", true)
                     }
-                    hydrationEvidence.put("pending_screenshot", captureHydration("pending"))
                     main { check(settings.owner.state.hydrationPending && !settings.inputAllowed) }
                     // The loading affordance does not acquire Back ownership: clean pending Settings can leave.
+                    hydration.put("stage", "back_while_pending")
+                    publish()
                     main { host.onBackPressedDispatcher.onBackPressed() }
                     await("Back closes pending Settings") {
                         !settings.owner.state.active &&
                             backGuardViews(settings).none { it is ReverbIncidentLoadingView }
                     }
+                    recordHydrationState("closed")
                     main { check(retainedList.alpha == 1f && settings.topBar.alpha == 1f) }
                     await("Settings action after pending close") { current.actionCount(host.getString(R.string.open_settings)) == 1 }
                     main { current.click(host.getString(R.string.open_settings)) }
                     await("second retained hydration pending") { settings.owner.state.hydrationPending }
                     main { releaseHydration.complete(Unit) }
                     await("released hydration restores input") { settings.inputAllowed && hydrationBarrier?.isCompleted == true }
+                    recordHydrationState("restored")
+                    hydration.put("restored_screenshot", captureHydration("restored"))
+                    publish()
                     main {
                         check(settings.sectionContent === retainedList && settings.savePosition() == retainedPosition)
                         check(retainedList.alpha == 1f && settings.topBar.alpha == 1f)
                         check(backGuardViews(settings).none { it is ReverbIncidentLoadingView })
                         check(settings.owner.snapshot == baseline)
-                        hydrationEvidence.put("restored_content_alpha", retainedList.alpha)
+                        hydration.put("restored_content_alpha", retainedList.alpha)
                             .put("restored_top_bar_alpha", settings.topBar.alpha)
                     }
-                    hydrationEvidence.put("native_back_closed_pending", true).put("released_read_restored_input", true)
-                        .put("restored_screenshot", captureHydration("restored"))
+                    hydration.put("native_back_closed_pending", true).put("released_read_restored_input", true)
                         .put("restored_loader_absent", true).put("restored_snapshot_unchanged", true)
                     main { check(settings.inputAllowed && !settings.owner.state.hydrationPending) }
                     check(preferences.all == original) { "Hydration changed durable QA preferences" }
                     check(current.forbiddenCalls == 0)
-                    cases.put(hydrationEvidence.put("theme", mode.name).put("case_passed", true)
-                        .put("durable_preferences_unchanged", true))
+                    hydration.put("case_passed", true).put("stage", "complete")
+                        .put("durable_preferences_unchanged", true)
                     publish()
                     continue
                 }
@@ -243,7 +305,11 @@ internal fun verifyNativeSettingsBackGuard(
                 check(current.forbiddenCalls == 0)
                 first.put("case_passed", true).put("second_back_closed", true).put("durable_preferences_unchanged", true)
                 publish()
-            } catch (error: Throwable) { passFailure = error; throw error }
+            } catch (error: Throwable) {
+                passFailure = error
+                hydrationEvidence?.put("failure", error.stackTraceToString())
+                throw error
+            }
             finally {
                 releaseHydration.complete(Unit)
                 var cleanup = passFailure
