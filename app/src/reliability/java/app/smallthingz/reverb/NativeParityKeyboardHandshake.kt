@@ -4,10 +4,16 @@ import android.app.Instrumentation
 import android.os.Bundle
 import android.os.Process
 import android.os.SystemClock
+import android.system.ErrnoException
+import android.system.Os
+import android.system.OsConstants
+import android.system.StructStat
 import android.util.AtomicFile
 import org.json.JSONObject
 import java.io.File
 import java.util.UUID
+
+internal const val NATIVE_KEYBOARD_ACK_PROTOCOL = 4
 
 /**
  * QA-only rendezvous with the existing host runner. This code never injects an input event.
@@ -45,13 +51,24 @@ internal fun awaitNativeParityKeyboardCommand(
             directory.name.startsWith("native-rename-editor-current-"))
     }
     check(directory.isDirectory)
+    // Use the canonical private directory, and pin its non-symlink identity for this request.
+    check(OsConstants.S_ISDIR(Os.lstat(directory.path).st_mode))
+    val protocolDirectory = File(context.filesDir.canonicalFile, directory.name)
+    check(directory.canonicalFile == protocolDirectory)
+    val directoryIdentity = Os.lstat(protocolDirectory.path)
+    check(OsConstants.S_ISDIR(directoryIdentity.st_mode))
     val requestId = UUID.randomUUID().toString().replace("-", "")
-    val requestFile = File(directory, "keyboard-${requestId}.request.json")
-    val acknowledgementFile = File(directory, "keyboard-${requestId}.ack.json")
-    val challengeFile = File(directory, "keyboard-${requestId}.challenge.json")
-    val challengeResponseFile = File(directory, "keyboard-${requestId}.challenge-response.json")
-    check(!requestFile.exists() && !acknowledgementFile.exists() &&
-        !challengeFile.exists() && !challengeResponseFile.exists())
+    val prefix = "keyboard-v4-$nonce-$requestId"
+    val requestFile = File(protocolDirectory, "$prefix.request.json")
+    val acknowledgementFile = File(protocolDirectory, "$prefix.ack.json")
+    val challengeFile = File(protocolDirectory, "$prefix.challenge.json")
+    val challengeResponseFile = File(protocolDirectory, "$prefix.challenge-response.json")
+    val acknowledgementReady = File(protocolDirectory, "${acknowledgementFile.name}.ready")
+    val challengeReady = File(protocolDirectory, "${challengeFile.name}.ready")
+    check(listOf(requestFile, acknowledgementFile, challengeFile, challengeResponseFile,
+        acknowledgementReady, challengeReady).all { keyboardLstatOrMissing(it) == null })
+    fun readHostPayload(file: File, ready: File): JSONObject? = readPublishedKeyboardPayload(
+        file, ready, protocolDirectory, directoryIdentity, prefix)
     val first = JSONObject(guardedSnapshot().toString())
     check(first.getInt("display_id") == 0)
     check(first.getString("window_title").isNotBlank()) { "An exact own-window title is required" }
@@ -59,7 +76,7 @@ internal fun awaitNativeParityKeyboardCommand(
     check(renderer == "compose" || renderer == "native")
     val started = SystemClock.uptimeMillis()
     val request = JSONObject()
-        .put("ack_protocol", 3)
+        .put("ack_protocol", NATIVE_KEYBOARD_ACK_PROTOCOL)
         .put("nonce", nonce).put("request_id", requestId)
         .put("renderer", renderer).put("stage", stage)
         .put("package", context.packageName).put("uid", Process.myUid()).put("pid", Process.myPid())
@@ -76,6 +93,8 @@ internal fun awaitNativeParityKeyboardCommand(
         .put("ack_file", "files/${directory.name}/${acknowledgementFile.name}")
         .put("challenge_file", "files/${directory.name}/${challengeFile.name}")
         .put("challenge_response_file", "files/${directory.name}/${challengeResponseFile.name}")
+        .put("challenge_ready_file", "files/${directory.name}/${challengeReady.name}")
+        .put("ack_ready_file", "files/${directory.name}/${acknowledgementReady.name}")
         .put("status", "pending")
     var primary: Throwable? = null
     try {
@@ -85,20 +104,25 @@ internal fun awaitNativeParityKeyboardCommand(
             putString("stream", "NATIVE_KEYBOARD_REQUEST ${request}\n")
         })
         var challengeAnswered: String? = null
-        while (!acknowledgementFile.exists()) {
+        var receivedAcknowledgement: JSONObject? = null
+        while (receivedAcknowledgement == null) {
             assertSameKeyboardWindow(first, guardedSnapshot(), stableTargetBounds)
             check(SystemClock.uptimeMillis() < started + 30_000L) {
                 "Targeted keyboard host acknowledgement timed out; no input fallback is allowed"
             }
-            if (challengeFile.exists() && challengeAnswered == null) {
-                check(challengeFile.length() in 1L..65_536L)
-                val challenge = JSONObject(challengeFile.readText())
+            // A payload name may be visible while the host is still writing it. Only the
+            // create-once ready marker authorizes reading, including for acknowledgements.
+            receivedAcknowledgement = readHostPayload(acknowledgementFile, acknowledgementReady)
+            if (receivedAcknowledgement != null) break
+            val challenge = if (challengeAnswered == null) readHostPayload(challengeFile, challengeReady) else null
+            if (challenge != null) {
                 for (key in listOf("ack_protocol", "request_id", "nonce", "stage")) {
                     check(challenge.get(key) == request.get(key)) { "Freshness challenge mismatch: $key" }
                 }
                 val challengeNonce = challenge.getString("challenge_nonce")
                 check(challengeNonce.matches(Regex("[0-9a-f]{32}")))
-                check(!acknowledgementFile.exists() && !challengeResponseFile.exists())
+                check(readHostPayload(acknowledgementFile, acknowledgementReady) == null &&
+                    keyboardLstatOrMissing(challengeResponseFile) == null)
                 assertSameKeyboardWindow(first, guardedSnapshot(), stableTargetBounds)
                 val remaining = started + 30_000L - SystemClock.uptimeMillis()
                 check(remaining > 0L) { "Freshness challenge arrived after request expiry" }
@@ -112,8 +136,7 @@ internal fun awaitNativeParityKeyboardCommand(
         check(challengeAnswered != null) { "Host acknowledged without a completed freshness challenge" }
         assertSameKeyboardWindow(first, guardedSnapshot(), stableTargetBounds)
         check(SystemClock.uptimeMillis() < started + 30_000L) { "Keyboard acknowledgement arrived after expiry" }
-        check(acknowledgementFile.length() in 1L..65_536L) { "Invalid keyboard acknowledgement size" }
-        val acknowledgement = JSONObject(acknowledgementFile.readText())
+        val acknowledgement = checkNotNull(receivedAcknowledgement)
         request.put("host_acknowledgement", acknowledgement)
         check(acknowledgement.getString("challenge_nonce") == challengeAnswered)
         for (key in listOf("nonce", "request_id", "renderer", "stage",
@@ -124,7 +147,7 @@ internal fun awaitNativeParityKeyboardCommand(
             acknowledgement.get("post_admitted").let { it is Boolean && it }) {
             "Targeted keyboard command or its post-admission failed"
         }
-        check(keyboardIntegral(acknowledgement.get("ack_protocol"), "ack_protocol") == 3L)
+        check(keyboardIntegral(acknowledgement.get("ack_protocol"), "ack_protocol") == NATIVE_KEYBOARD_ACK_PROTOCOL.toLong())
         // Only instrumentation owns Android uptime. Host acknowledges after guarded input returns;
         // receiving its nonce-bound completion before expiry establishes this causal boundary.
         val acknowledgementReceived = SystemClock.uptimeMillis()
@@ -149,6 +172,73 @@ internal fun awaitNativeParityKeyboardCommand(
             if (earlier == null) throw cleanup else if (earlier !== cleanup) earlier.addSuppressed(cleanup)
         }
     }
+}
+
+private fun keyboardLstatOrMissing(file: File): StructStat? = try {
+    Os.lstat(file.path)
+} catch (error: ErrnoException) {
+    if (error.errno == OsConstants.ENOENT) null else throw error
+}
+
+private fun sameKeyboardFile(before: StructStat, after: StructStat): Boolean =
+    before.st_dev == after.st_dev && before.st_ino == after.st_ino &&
+        before.st_mode == after.st_mode && before.st_size == after.st_size
+
+/** Bounded no-follow read, checked against the opened descriptor and final pathname. */
+private fun readKeyboardRegularFile(file: File, size: LongRange): Pair<ByteArray, StructStat> {
+    check(file.canonicalFile == file.absoluteFile) { "Noncanonical keyboard protocol path" }
+    val before = Os.lstat(file.path)
+    check(OsConstants.S_ISREG(before.st_mode) && before.st_size in size) {
+        "Invalid keyboard protocol file type/size: ${file.name}"
+    }
+    val descriptor = Os.open(file.path, OsConstants.O_RDONLY or OsConstants.O_NOFOLLOW or
+        OsConstants.O_CLOEXEC or OsConstants.O_NONBLOCK, 0)
+    var primary: Throwable? = null
+    val bytes = try {
+        check(sameKeyboardFile(before, Os.fstat(descriptor))) { "Keyboard protocol file replaced before read" }
+        val data = ByteArray(before.st_size.toInt())
+        var offset = 0
+        while (offset < data.size) {
+            val count = Os.read(descriptor, data, offset, data.size - offset)
+            check(count > 0) { "Keyboard protocol payload truncated" }
+            offset += count
+        }
+        check(Os.read(descriptor, ByteArray(1), 0, 1) == 0 && sameKeyboardFile(before, Os.fstat(descriptor))) {
+            "Keyboard protocol file changed during read"
+        }
+        data
+    } catch (error: Throwable) {
+        primary = error
+        throw error
+    } finally {
+        try { Os.close(descriptor) } catch (cleanup: Throwable) {
+            val earlier = primary
+            if (earlier == null) throw cleanup else if (earlier !== cleanup) earlier.addSuppressed(cleanup)
+        }
+    }
+    check(sameKeyboardFile(before, Os.lstat(file.path))) { "Keyboard protocol pathname replaced during read" }
+    return bytes to before
+}
+
+private fun readPublishedKeyboardPayload(file: File, ready: File, directory: File,
+    identity: StructStat, prefix: String): JSONObject? {
+    fun sameDirectory() {
+        val current = Os.lstat(directory.path)
+        check(directory.canonicalFile == directory && OsConstants.S_ISDIR(current.st_mode) &&
+            current.st_dev == identity.st_dev && current.st_ino == identity.st_ino) {
+            "Keyboard protocol directory changed"
+        }
+    }
+    sameDirectory()
+    check(file.parentFile == directory && ready.parentFile == directory &&
+        file.name in listOf("$prefix.challenge.json", "$prefix.ack.json") && ready.name == "${file.name}.ready")
+    // Absence alone means pending. Dangling symlinks and all nonregular marker types fail.
+    if (keyboardLstatOrMissing(ready) == null) return null
+    val marker = readKeyboardRegularFile(ready, 0L..0L).second
+    val payload = readKeyboardRegularFile(file, 1L..65_536L).first
+    check(sameKeyboardFile(marker, Os.lstat(ready.path))) { "Keyboard ready marker replaced during read" }
+    sameDirectory()
+    return JSONObject(payload.toString(Charsets.UTF_8))
 }
 
 private fun assertSameKeyboardWindow(first: JSONObject, current: JSONObject, stableBounds: Boolean) {

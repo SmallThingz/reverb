@@ -118,13 +118,19 @@ internal fun verifyNativeLibraryAdmission(
             }
             val poses = JSONArray()
             entry.put("poses", poses)
-            for (offscreen in listOf(false, true)) {
-                val pose = JSONObject().put("offscreen", offscreen).put("passed", false)
+            val poseNames = if (branch == "loading") listOf("visible", "offscreen", "inactive", "restored")
+                else listOf("visible", "offscreen")
+            for (poseName in poseNames) {
+                val offscreen = poseName == "offscreen"
+                val inactive = poseName == "inactive"
+                val exposed = !offscreen && !inactive
+                val pose = JSONObject().put("pose", poseName).put("offscreen", offscreen)
+                    .put("inactive", inactive).put("passed", false)
                 poses.put(pose)
                 requireNativeParityHost(instrumentation, activity)
                 val direct = JSONObject()
                 pose.put("direct", direct)
-                nativeParityOnMain(instrumentation) { current.pose(offscreen, direct) }
+                nativeParityOnMain(instrumentation) { current.pose(offscreen, direct, inactive) }
                 val importance = JSONObject()
                 pose.put("importance", importance)
                 verifyNativeMainImportanceTraversal(automation, importance) { traversal ->
@@ -139,19 +145,36 @@ internal fun verifyNativeLibraryAdmission(
                         val node = raw.getJSONObject(index)
                         node.optString("text") == current.controlText && node.getBoolean("visible")
                     }) { "Fixture's fixed visible control paragraph is missing" }
+                    val markerAdmission = JSONArray()
+                    traversal.put("marker_admission", markerAdmission)
                     for (marker in current.markers) {
-                        val count = (0 until raw.length()).count { index ->
-                            val node = raw.getJSONObject(index)
+                        val matches = (0 until raw.length()).map(raw::getJSONObject).filter { node ->
                             node.optString("text") == marker || node.optString("description") == marker
                         }
-                        check(count == if (offscreen) 0 else 1) { "$branch: unexpected platform admission for $marker" }
-                    }
-                    if (branch == "loading" && !offscreen) {
-                        val loader = (0 until raw.length()).map(raw::getJSONObject).single {
-                            it.optString("description") == current.markers.single()
+                        // The native progress View remains queryable after translation, with
+                        // isVisibleToUser=false. Inactive surfaces suppress its subtree instead.
+                        val expectedCount = if (!inactive && (branch == "loading" || exposed)) 1 else 0
+                        val visibleCount = matches.count { it.getBoolean("visible") }
+                        markerAdmission.put(JSONObject().put("marker", marker).put("nodes", JSONArray(matches))
+                            .put("expected_raw_count", expectedCount).put("raw_count", matches.size)
+                            .put("expected_visible_count", if (exposed) 1 else 0).put("visible_count", visibleCount))
+                        check(matches.size == expectedCount && visibleCount == if (exposed) 1 else 0) {
+                            "$branch/$poseName: unexpected platform admission for $marker: ${markerAdmission}"
                         }
-                        check(loader.getBoolean("visible") && loader.getString("class") == "android.widget.ProgressBar")
-                        check(loader.getString("state_description") == activity.getString(smallthingz.ui.R.string.in_progress))
+                    }
+                    if (branch == "loading") {
+                        if (!inactive) {
+                            val loader = (0 until raw.length()).map(raw::getJSONObject).single {
+                                it.optString("description") == current.markers.single()
+                            }
+                            check(loader.getBoolean("visible") == exposed && loader.getString("class") == "android.widget.ProgressBar")
+                            check(loader.getString("state_description") == activity.getString(smallthingz.ui.R.string.in_progress))
+                            val bounds = loader.getJSONArray("bounds")
+                            val rectangle = android.graphics.Rect(bounds.getInt(0), bounds.getInt(1), bounds.getInt(2), bounds.getInt(3))
+                            val intersectsFixture = !rectangle.isEmpty && android.graphics.Rect.intersects(rectangle,
+                                android.graphics.Rect(0, 0, current.root.width, current.root.height))
+                            check(intersectsFixture == exposed) { "Loading bounds disagree with $poseName: $bounds" }
+                        }
                         check((0 until raw.length()).none { index ->
                             val node = raw.getJSONObject(index)
                             val forbidden = listOf(activity.getString(smallthingz.ui.R.string.reverb_library_empty),
@@ -159,7 +182,9 @@ internal fun verifyNativeLibraryAdmission(
                             node.optString("description") in forbidden || node.optString("text") in forbidden
                         }) { "Loading advertised Empty or Retry" }
                     }
-                    evidence.put("raw_nodes", raw.length()).put("markers_present", !offscreen)
+                    evidence.put("raw_nodes", raw.length())
+                        .put("markers_present", !inactive && (branch == "loading" || exposed))
+                        .put("markers_visible", exposed)
                         .put("strict_missing_child_check", true)
                 }
                 pose.put("passed", true)
@@ -202,7 +227,14 @@ private class LibraryAdmissionFixture(
     text: NativeWindowTextAccessibilityOwner,
     private val branch: String,
 ) : AutoCloseable {
-    val root = FrameLayout(activity)
+    val root = object : FrameLayout(activity) {
+        override fun addChildrenForAccessibility(children: ArrayList<View>) {
+            val first = children.size
+            super.addChildrenForAccessibility(children)
+            // Match Main's surface gate even when the service requests layout wrappers.
+            source.retainPresentLayerChildren(children, first)
+        }
+    }
     private val layer = FrameLayout(activity)
     val controlText = "QA Library admission control"
     private val control = environment.paragraph(activity, controlText,
@@ -241,7 +273,7 @@ private class LibraryAdmissionFixture(
         source = NativeMainAccessibility(board, root, { listOf(layer, control) }, { false },
             clip = { NativeTextSemanticsClip.Unclipped }, minimumTouch = { view ->
                 if (view is NativeClickPhaseHost) 48f * environment.textDensity.density else 0f
-            })
+            }, inactiveLayer = { it.importantForAccessibility == View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS })
         try {
             val width = minOf(board.width, 720)
             val height = minOf(board.height, 720)
@@ -253,7 +285,6 @@ private class LibraryAdmissionFixture(
             root.addView(layer, FrameLayout.LayoutParams(-1, -1))
             root.addView(control, FrameLayout.LayoutParams(-1, -2, android.view.Gravity.BOTTOM))
             layer.addView(content, FrameLayout.LayoutParams(-1, -1))
-            content.addView(unknown, ViewGroup.LayoutParams(1, 1))
             board.addView(root, FrameLayout.LayoutParams(width, height))
             root.measure(exact(width), exact(height)); root.layout(0, 0, width, height)
             if (branch == "empty" || branch == "loading") {
@@ -276,6 +307,9 @@ private class LibraryAdmissionFixture(
                     root.measure(exact(width), exact(height)); root.layout(0, 0, width, height)
                 }
             }
+            // Status mode replacement rebuilds its children. Add the unrelated fixture child
+            // after the final mode so the advertisement check queries an attached sibling.
+            content.addView(unknown, ViewGroup.LayoutParams(1, 1))
             when (val current = content) {
                 is ReverbLibraryListView -> current.scrollView.let { viewport ->
                     val marker = "QA Library Ready viewport"
@@ -455,11 +489,26 @@ private class LibraryAdmissionFixture(
         .filter { it.getText().startsWith("QA Library row ") && independentlyVisibleInViewport(it) }
         .map { it.getText().toString() }.toList()
 
-    fun pose(offscreen: Boolean, evidence: JSONObject): JSONObject {
+    fun pose(offscreen: Boolean, evidence: JSONObject, inactive: Boolean): JSONObject {
+        evidence.put("unknown_child_parent_is_content", unknown.parent === content)
+            .put("unknown_child_attached", unknown.isAttachedToWindow)
+        check(unknown.parent === content && unknown.isAttachedToWindow) {
+            "Library fixture must attach its unknown child before testing advertisement"
+        }
+        layer.importantForAccessibility = if (inactive) View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+            else View.IMPORTANT_FOR_ACCESSIBILITY_NO
         content.translationY = if (offscreen) root.height * 2f else 0f
-        check(source.node(layer).present) { "Fixture must keep the enclosing layer present" }
+        check(source.node(layer).present != inactive) { "Fixture layer admission disagrees with its active state" }
         check(source.node(control).present) { "Fixture's fixed control must remain present" }
-        check(semantics.all { source.node(it).present != offscreen }) { "$branch source geometry did not establish the requested pose" }
+        check(semantics.all { source.node(it).present == (!offscreen && !inactive) }) {
+            "$branch source geometry did not establish the requested pose"
+        }
+        if (inactive) {
+            val children = arrayListOf(prefix)
+            root.addChildrenForAccessibility(children)
+            check(children == listOf(prefix, control)) { "Inactive Library content remained advertised" }
+            return evidence.put("passed", true).put("inactive_subtree_suppressed", true)
+        }
         // Only advertised edges are reachable by an accessibility client. Walking every physical
         // descendant would query children of the deliberately excluded offscreen RecyclerView.
         val parents = java.util.ArrayDeque<ViewGroup>()

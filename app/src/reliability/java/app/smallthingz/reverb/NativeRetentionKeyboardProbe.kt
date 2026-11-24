@@ -58,6 +58,7 @@ internal fun verifyNativeRetentionKeyboardParity(
     check(directory.mkdir())
     val flows = JSONArray()
     val result = JSONObject().put("schema", 1).put("flows", flows).put("passed", false)
+        .put("ack_protocol", NATIVE_KEYBOARD_ACK_PROTOCOL)
         .put("selected_mode", selectedMode ?: "all").put("expected_flows", expectedFlows)
         .put("scope", "Actual own-QA focused editing with visible real IME and stage-bound hardware keys")
         .put("not_qualified", JSONArray(listOf("soft-key composition", "drag selection",

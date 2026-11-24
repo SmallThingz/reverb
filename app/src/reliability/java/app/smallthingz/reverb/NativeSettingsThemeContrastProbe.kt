@@ -25,9 +25,11 @@ import org.json.JSONObject
 import smallthingz.ui.animation.ColorTransition
 import smallthingz.ui.animation.view.ViewColorTransition
 import smallthingz.ui.components.NativeDropdown
+import smallthingz.ui.components.NativeBackdropBinding
 import smallthingz.ui.controls.textSurfaceForeground
 import smallthingz.ui.reverb.settings.ReverbRetentionInputView
 import smallthingz.ui.reverb.settings.ReverbRetentionMode
+import smallthingz.ui.reverb.ReverbTitledTopBarLayout
 import smallthingz.ui.text.RetentionLineHeightSpan
 import smallthingz.ui.text.view.ParagraphView
 import smallthingz.ui.graphics.Color as NativeColor
@@ -109,12 +111,15 @@ internal fun verifyNativeSettingsThemeContrast(instrumentation: Instrumentation,
                             .put("reverse", pose.reverse).put("retarget_at", pose.retargetAt ?: JSONObject.NULL).put("scale", pose.scale.toDouble())
                         cases.put(entry)
                         main { probe.pose(pose) }
+                        val surfaces = main { probe.surfaceRanges() }
                         val mask = main { probe.masks() }
                         val underlay = main { probe.withoutGlyphs { probe.bitmap() } }
                         try {
                             val software = main { probe.bitmap() }
                             try {
                                 saveNativeParityBitmap(directory, "$label-software.png", software)
+                                saveNativeParityBitmap(directory, "$label-software-underlay.png", underlay)
+                                main { probe.checkSurfaceRanges(surfaces) }
                                 entry.put("software", main { probe.verify(software, underlay, mask) })
                             } finally { software.recycle() }
                             val hardware = captureNativeParityContent(instrumentation, host) { current.board }
@@ -123,6 +128,7 @@ internal fun verifyNativeSettingsThemeContrast(instrumentation: Instrumentation,
                                 try {
                                     saveNativeParityBitmap(directory, "$label-hardware.png", hardware)
                                     saveNativeParityBitmap(directory, "$label-underlay.png", hardwareUnderlay)
+                                    main { probe.checkSurfaceRanges(surfaces) }
                                     entry.put("hardware", main { probe.verify(hardware, hardwareUnderlay, mask) })
                                 } finally { hardwareUnderlay.recycle() }
                             } finally { hardware.recycle() }
@@ -387,6 +393,11 @@ private class SettingsThemeSamples(
             }
             if (view is SettingsRetentionInputView) hold(themeEditorMotion(view))
         }
+        // The toolbar fill is owned by a retained binding, not a field of type
+        // ViewColorTransition on a View. Leaving it on Choreographer mixes different
+        // background frames between the underlay, glyph capture and range assertion.
+        val toolbarChrome = themeField(ReverbTitledTopBarLayout::class.java, "chrome").get(settings.topBar)
+        hold(themeField(NativeBackdropBinding::class.java, "motion").get(toolbarChrome) as ViewColorTransition)
         hold(rootMotion)
         check(held.isNotEmpty())
     }
@@ -443,6 +454,14 @@ private class SettingsThemeSamples(
             return smallthingz.ui.controls.textSurfaceRange(fill.color)
         }
         return settingsTextSurface(view)
+    }
+    fun surfaceRanges(): LongArray = targets.map(::surface).toLongArray()
+    fun checkSurfaceRanges(expected: LongArray) {
+        val actual = surfaceRanges()
+        check(expected.contentEquals(actual)) {
+            "Settings painted surfaces advanced during a deterministic capture: " +
+                targets.indices.filter { expected[it] != actual[it] }.joinToString { label(targets[it]) }
+        }
     }
     private fun expectedInk(view: View): Int = when (view) {
         is ParagraphView -> {
