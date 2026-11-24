@@ -487,6 +487,8 @@ internal fun verifyNativeSegmentedPadding(instrumentation: Instrumentation, repo
             val default = smallthingz.ui.components.NativeSegmentedStyle.Default
             val styles = mapOf("default" to default, "undersized-overrides" to default.copy(
                 choiceStyle = default.choiceStyle.copy(horizontalPaddingDp = 2f, startPaddingDp = 0f, endPaddingDp = 1f)),
+                "horizontal-fallback" to default.copy(choiceStyle = default.choiceStyle.copy(horizontalPaddingDp = 2f)),
+                "mixed-edges" to default.copy(choiceStyle = default.choiceStyle.copy(horizontalPaddingDp = 2f, endPaddingDp = 20f)),
                 "larger-overrides" to default.copy(choiceStyle = default.choiceStyle.copy(
                     horizontalPaddingDp = 18f, startPaddingDp = 20f, endPaddingDp = 16f)))
             val unconstrained = View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
@@ -523,6 +525,7 @@ internal fun verifyNativeSegmentedPadding(instrumentation: Instrumentation, repo
                                     .put("text_width", text.width).put("lines", text.lineCount))
                                 check(child.paddingLeft >= dp(12) && child.paddingRight >= dp(12))
                                 if (name == "larger-overrides") check(child.paddingStart == dp(20) && child.paddingEnd == dp(16))
+                                if (name == "mixed-edges") check(child.paddingStart == dp(12) && child.paddingEnd == dp(20))
                                 check(child.paddingTop == 0 && child.paddingBottom == 0)
                                 val available = child.width - child.compoundPaddingLeft - child.compoundPaddingRight
                                 check(available > 0 && text.width <= available)
@@ -531,6 +534,11 @@ internal fun verifyNativeSegmentedPadding(instrumentation: Instrumentation, repo
                                 check(text.height <= child.height - child.compoundPaddingTop - child.compoundPaddingBottom)
                             }
                             if (widthDp == 120) check(children.map { it.top }.distinct().size > 1)
+                            if (widthDp == 600 && scale == 1f) {
+                                check(children.map { it.top }.distinct().size == 1)
+                                check(children.all { it.height == dp(34) })
+                                check((selector.getChildAt(1) as NativeSegmentedControl).height == dp(42))
+                            }
                             entry.put("passed", true)
                         }
                         selector.bind(smallthingz.ui.components.NativeThemeMode.DARK, palette, density, resolver)
