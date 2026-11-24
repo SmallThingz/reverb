@@ -1,6 +1,7 @@
 package app.smallthingz.reverb
 
 import java.io.File
+import java.util.concurrent.TimeUnit
 import javax.imageio.ImageIO
 import javax.xml.parsers.DocumentBuilderFactory
 import kotlin.math.abs
@@ -9,7 +10,7 @@ import org.junit.Test
 import org.w3c.dom.Element
 
 class BrandAssetsTest {
-    private val root = listOf(File(".."), File(".")).first { File(it, "app/src/main/icon.svg").isFile }
+    private val root = listOf(File(".."), File(".")).first { File(it, "native-ui/src/main/brand/reverb.svg").isFile }
     private val android = "http://schemas.android.com/apk/res/android"
     private fun file(path: String) = File(root, path)
     private fun document(path: String): Element = DocumentBuilderFactory.newInstance().apply {
@@ -21,7 +22,7 @@ class BrandAssetsTest {
     }
     private fun Element.a(name: String) = getAttributeNS(android, name)
     private fun Element.namedGroup(name: String) = nodes("group").single { it.a("name") == name }
-    private val svg get() = document("app/src/main/icon.svg")
+    private val svg get() = document("native-ui/src/main/brand/reverb.svg")
     private fun vector(name: String) = document("app/src/main/res/drawable/$name.xml")
     private fun animator(name: String) = document("app/src/main/res/animator/reverb_splash_$name.xml")
 
@@ -89,10 +90,45 @@ class BrandAssetsTest {
             assertEquals("@drawable/ic_launcher_$name", inset.a("drawable"))
             for (edge in listOf("Left", "Top", "Right", "Bottom")) assertEquals("0dp", inset.a("inset$edge"))
         }
-        val inApp = file("app/src/reliability/java/app/smallthingz/reverb/ReverbBrandMark.kt").readText()
-        assertTrue(inApp.contains("painterResource(R.drawable.ic_launcher_foreground)"))
-        assertFalse(inApp.contains(".offset("))
-        assertFalse(inApp.contains("translationX"))
+        val inApp = file("native-ui/src/main/kotlin/smallthingz/ui/reverb/ReverbBrandMarkView.kt").readText()
+        assertTrue(inApp.contains("Generated from native-ui/src/main/brand/reverb.svg"))
+        assertTrue(inApp.contains("NativeLayeredMarkView(context, description, reverbBrandArt, ::readReverbBrandPalette)"))
+        val appAdapter = file("app/src/main/java/app/smallthingz/reverb/nativeui/ReverbBrandMarkView.kt").readText()
+        assertTrue(appAdapter.contains("typealias ReverbBrandMarkView = smallthingz.ui.reverb.ReverbBrandMarkView"))
+        assertFalse(appAdapter.contains("Path("))
+        assertFalse(appAdapter.contains("translationX"))
+    }
+
+    @Test fun generatedRuntimeAssetsMatchCanonicalLibrarySourceWithoutStoreRenderer() {
+        val process = ProcessBuilder("python3", "scripts/generate_brand_assets.py", "--check", "--android-only")
+            .directory(root).redirectErrorStream(true).start()
+        val completed = process.waitFor(30, TimeUnit.SECONDS)
+        if (!completed) process.destroyForcibly()
+        assertTrue("Brand verification timed out", completed)
+        val output = process.inputStream.bufferedReader().use { it.readText() }
+        assertEquals(output, 0, process.exitValue())
+    }
+
+    @Test fun everyLauncherPaletteAliasesTheQualifiedLibraryBrandRoles() {
+        val libraryPalettes = file("native-ui/src/main/res").listFiles()!!.filter {
+            it.name.startsWith("values") && File(it, "reverb_brand_colors.xml").isFile
+        }
+        assertTrue(libraryPalettes.map { it.name }.containsAll(listOf("values", "values-v31", "values-night-v31")))
+        val roles = listOf("background", "accent", "main")
+        for (directory in libraryPalettes) {
+            val library = document("native-ui/src/main/res/${directory.name}/reverb_brand_colors.xml")
+                .nodes("color").associate { it.getAttribute("name") to it.textContent.trim() }
+            assertEquals(roles.map { "reverb_brand_$it" }.toSet(), library.keys)
+            val launcher = document("app/src/main/res/${directory.name}/colors.xml")
+                .nodes("color").associate { it.getAttribute("name") to it.textContent.trim() }
+            for (role in roles) assertEquals("@color/reverb_brand_$role", launcher["launcher_$role"])
+        }
+        val baseline = document("native-ui/src/main/res/values/reverb_brand_colors.xml")
+            .nodes("color").associate { it.getAttribute("name") to it.textContent.trim() }
+        val layers = svg.nodes("use").associateBy { it.getAttribute("id") }
+        assertEquals(svg.nodes("circle").single().getAttribute("fill"), baseline["reverb_brand_background"])
+        assertEquals(layers.getValue("near").getAttribute("stroke"), baseline["reverb_brand_accent"])
+        assertEquals(layers.getValue("main").getAttribute("stroke"), baseline["reverb_brand_main"])
     }
 
     @Test fun storeIconBalancesTheCompleteMarkWithCircularClearance() {

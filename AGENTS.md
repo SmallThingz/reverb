@@ -117,11 +117,15 @@
   the marker armed for the rest of the live process. Checked/unchecked incident taps transfer their durable history
   mutation to process lifetime before the UI callback returns; Activity/Compose disposal cannot revoke an accepted
   toggle, and storage failure is queued through process feedback.
-- `app/src/main/icon.svg` is the single Reverb brand geometry source. `scripts/generate_brand_assets.py` derives the
-  foreground, monochrome, splash and Fastlane assets; run it with `--check` after changes. Balance the full mark,
-  including the primary R and both echoes, in circular and rounded-rectangle launcher masks. In-app marks share
-  `ic_launcher_foreground` on `launcher_background`; never apply local logo offsets. Material You palettes remain dynamic.
-  The splash's main R stays at the same anchor throughout the echo reveal, and its final geometry matches the launcher exactly.
+- `native-ui/src/main/brand/reverb.svg` is the single Reverb brand geometry and baseline-color source, owned by the UI
+  library. `scripts/generate_brand_assets.py` derives the fast shared native mark, `app/src/main/icon.svg` mirror,
+  foreground, monochrome, splash and Fastlane assets. Run `--check --android-only` after runtime changes; full `--check`
+  also verifies the store PNG with librsvg. App `preBuild` enforces runtime parity with standard Python. Launcher colors
+  alias the library's `reverb_brand_*` resources, including dynamic day/night qualifiers; never add independent app
+  brand palettes or override generated drawable/animator names in a source variant or resource qualifier. Balance the
+  primary R and both echoes in circular and rounded-rectangle launcher masks, without local logo offsets. Keep the
+  existing `NativeLayeredMarkView` renderer and in-app layout. The splash's main R stays at its final anchor throughout
+  the echo reveal, and its completed geometry matches the launcher exactly.
 - Startup uses the native/AndroidX splash only: Android 12+ declares the platform starting-window splash attributes
   directly, and the mark uses a sub-second late-weighted native AVD split so launcher-to-splash handoff cannot
   consume all visible motion. No keep-on-screen condition, exit listener, timer, delay, or animation completion may

@@ -184,3 +184,16 @@ dependencies {
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.robolectric:robolectric:4.15.1'
 }
+
+// Check committed UI-owned artwork before any app variant is built. This does not regenerate
+// sources and uses only standard Python; the optional store PNG renderer is not a build input.
+tasks.register('verifyBrandAssets', Exec) {
+    group = 'verification'
+    description = 'Verify launcher and in-app brand assets against the UI library canonical source'
+    workingDir rootProject.projectDir
+    commandLine 'python3', rootProject.file('scripts/generate_brand_assets.py').absolutePath,
+        '--check', '--android-only'
+}
+tasks.named('preBuild').configure {
+    dependsOn tasks.named('verifyBrandAssets')
+}
