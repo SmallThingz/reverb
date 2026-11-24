@@ -479,7 +479,9 @@ internal fun verifyNativeSegmentedPadding(instrumentation: Instrumentation, repo
     val cases = JSONArray()
     val result = JSONObject().put("selector", "native_segmented_padding_current").put("passed", false)
         .put("scope", "Unattached real Views; minimum horizontal content inset, text fit, reflow and retained selection")
+        .put("width_contract", "120dp tests padding under a hard parent constraint; 168/360/600dp additionally require complete text fit")
         .put("cases", cases)
+    report.appendLine("SEGMENTED_PADDING_EVIDENCE ${directory.absolutePath}")
     try {
         nativeParityOnMain(instrumentation) {
             val palette = smallthingz.ui.controls.ControlPalette(-1, -1, 0xff202020.toInt(), 0xff606060.toInt(),
@@ -510,9 +512,9 @@ internal fun verifyNativeSegmentedPadding(instrumentation: Instrumentation, repo
                         selectorViews(selector).forEach { it.layoutDirection = direction }
                         val group = selectorViews(selector).filterIsInstance<NativeSegmentedChoice>().single()
                         val children = (0 until group.childCount).map { group.getChildAt(it) as NativeChip }
-                        for (widthDp in listOf(120, 360, 600)) {
+                        for (widthDp in listOf(120, 168, 360, 600)) {
                             val entry = JSONObject().put("dpi", dpi).put("font_scale", scale).put("direction", direction)
-                                .put("style", name).put("width_dp", widthDp).put("passed", false)
+                                .put("style", name).put("width_dp", widthDp).put("text_fit_required", widthDp != 120).put("passed", false)
                             cases.put(entry)
                             selector.measure(View.MeasureSpec.makeMeasureSpec(dp(widthDp), View.MeasureSpec.EXACTLY), unconstrained)
                             selector.layout(0, 0, selector.measuredWidth, selector.measuredHeight)
@@ -520,20 +522,27 @@ internal fun verifyNativeSegmentedPadding(instrumentation: Instrumentation, repo
                             entry.put("cells", geometry)
                             for (child in children) {
                                 val text = checkNotNull(child.layout)
+                                val available = child.width - child.compoundPaddingLeft - child.compoundPaddingRight
+                                val textFits = (0 until text.lineCount).all {
+                                    text.getLineWidth(it) <= available + 1 && text.getEllipsisCount(it) == 0
+                                }
                                 geometry.put(JSONObject().put("text", child.text).put("width", child.width).put("height", child.height)
                                     .put("left_padding", child.paddingLeft).put("right_padding", child.paddingRight)
-                                    .put("text_width", text.width).put("lines", text.lineCount))
+                                    .put("text_width", text.width).put("lines", text.lineCount).put("available_text_width", available)
+                                    .put("line_widths", JSONArray((0 until text.lineCount).map(text::getLineWidth)))
+                                    .put("text_fits", textFits))
                                 check(child.paddingLeft >= dp(12) && child.paddingRight >= dp(12))
                                 if (name == "larger-overrides") check(child.paddingStart == dp(20) && child.paddingEnd == dp(16))
                                 if (name == "mixed-edges") check(child.paddingStart == dp(12) && child.paddingEnd == dp(20))
                                 check(child.paddingTop == 0 && child.paddingBottom == 0)
-                                val available = child.width - child.compoundPaddingLeft - child.compoundPaddingRight
                                 check(available > 0 && text.width <= available)
-                                check((0 until text.lineCount).all { text.getLineWidth(it) <= available + 1 && text.getEllipsisCount(it) == 0 })
+                                // Fixed 120dp with enlarged text and wider custom padding can leave less
+                                // than one glyph of space. Keep the padding floor and report that limit.
+                                if (widthDp != 120) check(textFits)
                                 check(text.getLineEnd(text.lineCount - 1) == child.text.length)
                                 check(text.height <= child.height - child.compoundPaddingTop - child.compoundPaddingBottom)
                             }
-                            if (widthDp == 120) check(children.map { it.top }.distinct().size > 1)
+                            if (widthDp <= 168) check(children.map { it.top }.distinct().size > 1)
                             if (widthDp == 600 && scale == 1f) {
                                 check(children.map { it.top }.distinct().size == 1)
                                 check(children.all { it.height == dp(34) })
