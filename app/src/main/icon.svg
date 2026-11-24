@@ -1,3 +1,4 @@
+<!-- Generated from native-ui/src/main/brand/reverb.svg; run scripts/generate_brand_assets.py. -->
 <svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Reverb app icon">
   <circle cx="256" cy="256" r="256" fill="#0D1324"/>
   <!-- Canonical geometry for launcher, themed, splash, in-app and store marks.

@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Generated from app/src/main/icon.svg; run scripts/generate_brand_assets.py. -->
+<!-- Generated from native-ui/src/main/brand/reverb.svg; run scripts/generate_brand_assets.py. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="512" android:viewportHeight="512">
     <group android:name="mark_root" android:translateX="28.5" android:translateY="0">
         <group android:name="far_echo" android:translateX="56">
