@@ -306,13 +306,22 @@ class NativeSettingsForegroundCoverageTest {
         bind(f.light)
         val lightPixels = pixels(target, patch, f.environment.palette.field)
         screenshot(scene, "$name-light", f.environment.palette.background)
-        assertEquals("Light mode keeps the original flat surface", 1, lightPixels.toSet().size)
+        bind(f.lightFlat)
+        val lightFlatPixels = pixels(target, patch, f.environment.palette.field)
+        assertEquals("Light comparison patch excludes child paint", 1, lightFlatPixels.toSet().size)
+        assertTrue("Light foreground grain changes the actual painted patch",
+            lightPixels.indices.count { lightPixels[it] != lightFlatPixels[it] } > lightPixels.size / 20)
+        bind(f.light)
+        assertArrayEquals("Light rebind retains the deterministic texture", lightPixels,
+            pixels(target, patch, f.environment.palette.field))
+        assertSame("Theme changes reuse the retained grain layer", grain, grainOwner(target))
         if (target is NativeGroupLayout) {
-            assertEquals(f.environment.palette.field, lightPixels.first())
-            assertEquals(textSurfaceRange(target.paintedFillColor), target.paintedTextSurface)
+            assertEquals("Light fill role is unchanged", f.environment.palette.field, target.paintedFillColor)
+            assertEquals(f.environment.palette.field, lightFlatPixels.first())
+            assertTrue(target.paintedTextSurface != textSurfaceRange(target.paintedFillColor))
             descendants(target).filterIsInstance<SettingsRetentionInputView>().forEach {
                 assertTrue("Light-mode retention value stays readable",
-                    ColorUtils.calculateContrast(it.currentTextColor, target.paintedFillColor) >= 4.5)
+                    lightPixels.all { pixel -> ColorUtils.calculateContrast(it.currentTextColor, pixel) >= 4.5 })
             }
         } else {
             val colors = f.environment.palette
@@ -322,13 +331,14 @@ class NativeSettingsForegroundCoverageTest {
                 it.isAccessible = true; it.get(target) as Paint
             }
             assertEquals("Calibration binds the exact light-theme container", expectedContainer, actualPaint.color)
-            val renderedFill = lightPixels.first()
+            val renderedFill = lightFlatPixels.first()
             assertTrue("Calibration paints its translucent fill over the light underlay", renderedFill != colors.field)
             val ink = NativeMaterialButtonView::class.java.getDeclaredField("displayedInk").let {
                 it.isAccessible = true; it.getInt(target)
             }
             assertEquals(255, Color.alpha(ink))
-            assertTrue("Light-mode calibration label stays readable", ColorUtils.calculateContrast(ink, renderedFill) >= 4.5)
+            assertTrue("Light-mode calibration label stays readable over grain",
+                lightPixels.all { ColorUtils.calculateContrast(ink, it) >= 4.5 })
         }
         bind(f.dark)
         val restored = pixels(target, patch, f.environment.palette.field)
@@ -353,6 +363,7 @@ class NativeSettingsForegroundCoverageTest {
         val dark = ReverbEnvironment(context, true).forSettings()
         val darkFlat = dark.withPalette(dark.palette.copy(surfacePreset = NativeDarkSurfacePreset.Amoled.copy(foregroundGrain = 0f)))
         val light = ReverbEnvironment(context, false).forSettings()
+        val lightFlat = light.withPalette(light.palette.copy(surfacePreset = null))
         var environment = dark
         val owner = NativeSettingsOwner(context, root, lifecycle, parked, true,
             isPanelActive = { true }, onThemePreview = {}, releaseInputFocus = {},
