@@ -7,13 +7,29 @@ import android.util.Log
 import kotlin.system.exitProcess
 
 class ReverbApplication : Application() {
+    // One main-thread-created token for this Application/process; never an Activity owner.
+    internal var displayNightObserver: smallthingz.ui.components.NativeDisplayNightObserver? = null
+        private set
+
     override fun onCreate() {
         super.onCreate()
         installUnexpectedErrorHandler()
+        try {
+            displayNightObserver = smallthingz.ui.components.NativeDisplayNightObserver.create(this)
+        } catch (error: RuntimeException) {
+            // Reconciliation clears any old forced mirror when independence is unavailable.
+            Log.w("ReverbTheme", "Independent display night observation unavailable", error)
+        }
         ReverbNotificationChannels.refreshExisting(this)
         QuickSaveTileOptions.refresh(this)
         Thread({
             runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND) }
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S_V2) {
+                // Serialize startup repair with accepted saves so an older read cannot win.
+                runCatching {
+                    withRetentionPersistenceLock { applyLaunchThemeMode(this, getConfiguredThemeMode(this)) }
+                }.onFailure { Log.w("ReverbTheme", "Unable to reconcile starting-window theme", it) }
+            }
             runCatching { DurableSaveCoordinator.get(this).recover() }
                 .onFailure { Log.e("ReverbApplication", "Unable to recover pending saves", it) }
         }, "reverb-save-recovery").apply { isDaemon = true }.start()

@@ -180,7 +180,10 @@ internal class NativeSettingsPersistence(
                     }
                     // Publish the exact durable value before releasing transaction ordering.
                     // Replacement Activities observe this independently of the old UI tail.
-                    if (settingsCommitted) processCommittedTheme.publishCommitted(submittedSnapshot.themeMode)
+                    if (settingsCommitted) {
+                        processCommittedTheme.publishCommitted(submittedSnapshot.themeMode)
+                        applyLaunchThemeMode(context, submittedSnapshot.themeMode)
+                    }
                     settingsCommitted
                 }
                 }

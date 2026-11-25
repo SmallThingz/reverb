@@ -46,7 +46,7 @@ import java.util.Locale
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class SettingsSelectorAppearanceTest {
     @Test
-    fun defaultThemeSelectorMatchesThePriorGroupedRenderer() {
+    fun settingsThemeAddsSharedGutterAroundThePriorGroupedRenderer() {
         for (locale in listOf(Locale.ENGLISH, Locale.forLanguageTag("ar"))) {
             val context = windowContext(locale)
             for (dark in listOf(false, true)) {
@@ -76,16 +76,25 @@ class SettingsSelectorAppearanceTest {
                 try {
                     prior.layoutDirection = context.resources.configuration.layoutDirection
                     actual.layoutDirection = prior.layoutDirection
-                    layout(prior)
+                    layout(prior, 448)
                     layout(actual)
+                    val rtl = actual.layoutDirection == View.LAYOUT_DIRECTION_RTL
+                    assertEquals("Custom presentation remains edge-to-edge", 0,
+                        if (rtl) prior.width - prior.getChildAt(0).right else prior.getChildAt(0).left)
+                    assertEquals(16, if (rtl) actual.width - actual.getChildAt(0).right else actual.getChildAt(0).left)
+                    assertEquals(16, if (rtl) actual.getChildAt(1).left else actual.width - actual.getChildAt(1).right)
                     assertEquals(prior.measuredHeight, actual.measuredHeight)
                     assertEquals(42, actual.getChildAt(1).height)
                     assertEquals(34, choices(actual).height)
                     assertEquals(presentation.title.getText(), (actual.getChildAt(0) as ParagraphView).getText())
-                    val expected = bitmap(prior)
+                    val expected = Bitmap.createBitmap(actual.width, prior.height, Bitmap.Config.ARGB_8888).also {
+                        val canvas = Canvas(it)
+                        canvas.translate(16f, 0f)
+                        prior.draw(canvas)
+                    }
                     val observed = bitmap(actual)
                     try {
-                        assertTrue("Theme pixels differ for $locale, dark=$dark", expected.sameAs(observed))
+                        assertTrue("Only the shared outer gutter may change Theme pixels for $locale, dark=$dark", expected.sameAs(observed))
                     } finally {
                         expected.recycle()
                         observed.recycle()
@@ -141,6 +150,8 @@ class SettingsSelectorAppearanceTest {
                     assertEquals(expectedField, surface.paintedFillColor)
                     assertFalse(capsule.acceptsNativeInput)
                 }
+                assertEquals("Theme gutter is independent of Retention override", 16, theme.getChildAt(0).left)
+                assertEquals(16, theme.width - theme.getChildAt(1).right)
                 val changed = appearance === alternate
                 val retentionTitle = retention.getChildAt(0)
                 val retentionSelector = retention.getChildAt(1)

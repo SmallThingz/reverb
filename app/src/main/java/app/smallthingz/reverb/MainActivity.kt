@@ -46,6 +46,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var content: NativeActivityContentView
     private lateinit var statusBarProtection: NativeStatusBarProtection
     private lateinit var windowBackdrop: NoiseDrawable
+    private val displayNightObserver get() = (application as ReverbApplication).displayNightObserver
     private var themeJob: Job? = null
     private var closed = false
     private var renderedDark: Boolean? = null
@@ -74,6 +75,9 @@ class MainActivity : ComponentActivity() {
     private val runtimeLifecycle = object : DefaultLifecycleObserver {
         override fun onStart(owner: LifecycleOwner) { runtime.setStarted(true) }
         override fun onResume(owner: LifecycleOwner) {
+            // Read delivered token resources; a deferred WMS update still arrives by callback.
+            displayNightObserver?.resample()
+            if (!closed) publishTheme()
             deliverPlaybackRequest()
             BootResumeActivity.mainVisibilityChanged(this@MainActivity)
         }
@@ -200,10 +204,17 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+        displayNightObserver?.let { observer ->
+            lifecycleScope.launch {
+                repeatOnLifecycle(Lifecycle.State.STARTED) {
+                    observer.dark.collect { if (!closed) publishTheme() }
+                }
+            }
+        }
     }
 
-    private fun systemDark() =
-        resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
+    private fun systemDark() = displayNightObserver?.dark?.value ?: (
+        resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES)
 
     private fun registerDeletionConsent(token: String) {
         // The registry key and callback both carry the request token. A process-death or
