@@ -456,7 +456,10 @@ internal class NativeMainScreenView private constructor(
                 else if (started && !closed) updateSurfaceAdmission()
             }, restoredScrollPosition = restored?.libraryPosition)
         library = content
-        libraryLayer = NativeMainLibraryLayer(context, environment, content).also(::addView)
+        libraryLayer = NativeMainLibraryLayer(context, environment, content).also {
+            it.bindScrollIndicatorViewport(content.scrollIndicatorViewport)
+            addView(it)
+        }
         libraryPointer = NativeLibraryPointerBinding(content, pointer.coordinates, frames, scope) { false }
         libraryText = NativeLibraryAccessibilityBinding(content, windowText, source, scrollEvents,
             source::retainPresentSemanticChildren)

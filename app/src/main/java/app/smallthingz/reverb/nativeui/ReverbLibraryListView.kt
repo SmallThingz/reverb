@@ -184,6 +184,7 @@ internal class ReverbLibraryListView(
         itemAnimator = null
         isVerticalScrollBarEnabled = false
         isHorizontalScrollBarEnabled = false
+        bindScrollIndicator(initialEnvironment.appearance.scrollIndicator, initialEnvironment.palette.muted)
         setHasFixedSize(false)
         addOnScrollListener(object : RecyclerView.OnScrollListener() {
             override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) = onViewportGeometryChanged()
@@ -222,6 +223,7 @@ internal class ReverbLibraryListView(
     fun setEnvironment(value: ReverbViewEnvironment) {
         if (environment === value) return
         environment = value
+        list.bindScrollIndicator(value.appearance.scrollIndicator, value.palette.muted)
         list.sourceOverscroll?.setGlowColor(ReverbLibraryLayout.overscrollGlowColor(value.palette))
         updateInsets()
         invalidateRecordingFormatting()

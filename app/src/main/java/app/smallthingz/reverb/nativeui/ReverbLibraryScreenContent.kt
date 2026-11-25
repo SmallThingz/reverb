@@ -535,7 +535,8 @@ internal class ReverbLibraryScreenContent(
         return false
     }
     val emptyViewport: NativeVerticalViewport? get() = status?.emptyViewport
-    val listViewport: ReverbLibraryRecyclerView? get() = list.scrollView.takeIf { listVisible }
+    val scrollIndicatorViewport: ReverbLibraryRecyclerView get() = list.scrollView
+    val listViewport: ReverbLibraryRecyclerView? get() = scrollIndicatorViewport.takeIf { listVisible }
     val toolbarAccessibilityRoot: ViewGroup get() = toolbar
     fun sourceClip(view:View):NativeTextSemanticsClip {
         var ancestor:View?=view
