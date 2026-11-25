@@ -20,11 +20,17 @@ class AppIconOwnershipTest(unittest.TestCase):
             self.assertNotIn(resource.stem, names, str(resource))
 
     def test_only_generated_launcher_assets_have_app_vector_geometry(self):
-        allowed = {'ic_launcher_foreground', 'ic_launcher_monochrome',
-                   'reverb_splash_vector', 'ic_launcher_background'}
+        drawable = ROOT / 'app/src/main/res/drawable'
+        allowed = {
+            drawable / 'ic_launcher_background.xml',
+            drawable / 'ic_launcher_foreground.xml',
+            drawable / 'ic_launcher_monochrome.xml',
+            drawable / 'reverb_splash_foreground.xml',
+            drawable / 'reverb_splash_vector.xml',
+        }
         for resource in (ROOT / 'app/src').glob('*/res/**/*.xml'):
             if 'android:pathData=' in resource.read_text():
-                self.assertIn(resource.stem, allowed, str(resource))
+                self.assertIn(resource, allowed, str(resource))
 
     def test_icon_adapters_do_not_generate_paths(self):
         for source in (ROOT / 'app/src/main').rglob('*Icon*.kt'):
