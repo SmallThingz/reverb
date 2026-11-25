@@ -40,7 +40,7 @@ internal class NativeCaptureSheets(
                 clear = CaptureTextSheet(anchor, next, title, message, owner::dismissClearBuffer) { context ->
                     listOf(
                         LibrarySheetButton(anchor.context, context, next, false,
-                            anchor.context.getString(R.string.cancel), context.requestAnimatedDismiss),
+                            anchor.context.getString(R.string.cancel), context.requestAnimatedDismiss, leadingIcon = ReverbIcon.Close),
                         LibrarySheetButton(anchor.context, context, next, true,
                             anchor.context.getString(R.string.clear_buffer), owner::confirmClearBuffer,
                             leadingIcon = ReverbIcon.Delete, errorColors = true),
@@ -65,7 +65,7 @@ internal class NativeCaptureSheets(
                 clamp = CaptureTextSheet(anchor, next, title, message, owner::dismissExportClamp) { context ->
                     listOf(
                         LibrarySheetButton(anchor.context, context, next, false,
-                            anchor.context.getString(R.string.cancel), context.requestAnimatedDismiss),
+                            anchor.context.getString(R.string.cancel), context.requestAnimatedDismiss, leadingIcon = ReverbIcon.Close),
                         LibrarySheetButton(anchor.context, context, next, true,
                             anchor.context.getString(R.string.export), owner::proceedExportClamp),
                     )
