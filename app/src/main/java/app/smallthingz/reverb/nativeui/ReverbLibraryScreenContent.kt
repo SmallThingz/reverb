@@ -423,7 +423,7 @@ internal class ReverbLibraryScreenContent(
         startRenamePending = false
         // The editor owns its guarded layout/focus admission and single deferred IME request.
         view.startEditing()
-        list.revealRenameHeader(view, view.editor,
+        list.revealRenameHeader(view, view.editor, view.outlinedField,
             validation = renameHeader?.presentation?.owner?.state?.error != null)
     }
     private fun inlineCardPath(out: Path) {
@@ -585,7 +585,7 @@ internal class ReverbLibraryScreenContent(
             val header = renameHeader?.presentation?.view
             header?.post {
                 if (!closed && input.owner.active && renameHeader?.presentation?.view === header)
-                    list.revealRenameHeader(header, header.editor,
+                    list.revealRenameHeader(header, header.editor, header.outlinedField,
                         validation = renameHeader?.presentation?.owner?.state?.error != null)
             }
         }

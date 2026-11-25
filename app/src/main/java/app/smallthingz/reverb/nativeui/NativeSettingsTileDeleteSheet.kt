@@ -61,7 +61,7 @@ internal class NativeSettingsTileDeleteSheet(
                 return context.hit(view,node?.let(::listOf)?:emptyList(),{children},
                     clip={point->(view as?NativePointerLayerShape)?.containsPointerLayer(point.x,point.y)?:true})
             }
-            sheet.setContent(body.body,body.actions,listOf(hit(body.body),hit(body.actions)))
+            sheet.setContent(body.body,body.actions,listOf(hit(body.body),hit(body.actions)),scrollable=true)
             sheet.show()
         } catch(failure:Throwable) {
             try {retire()}catch(cleanup:Throwable) {if(cleanup!==failure)failure.addSuppressed(cleanup)}

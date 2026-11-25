@@ -19,6 +19,9 @@ class ReliabilityInstrumentation : Instrumentation() {
     private var consentFixtureManifestSha256: String? = null
     private var keyboardSessionNonce: String? = null
     private var keyboardMode: String? = null
+    private var renameKeyboardAttempt: String? = null
+    private var disposalApkSha256: String? = null
+    private var disposalSourceManifestSha256: String? = null
     private var fixtureSessionNonce: String? = null
     private var fixtureObservationDirectory: String? = null
     private var fixtureObservationSha256: String? = null
@@ -46,6 +49,9 @@ class ReliabilityInstrumentation : Instrumentation() {
         consentFixtureManifestSha256 = arguments?.getString("fixture_manifest_sha256")
         keyboardSessionNonce = arguments?.getString("keyboard_session_nonce")
         keyboardMode = arguments?.getString("keyboard_mode")
+        renameKeyboardAttempt = arguments?.getString("rename_keyboard_attempt")
+        disposalApkSha256 = arguments?.getString("disposal_apk_sha256")
+        disposalSourceManifestSha256 = arguments?.getString("disposal_source_manifest_sha256")
         fixtureSessionNonce = arguments?.getString("fixture_session_nonce")
         fixtureObservationDirectory = arguments?.getString("fixture_observation_directory")
         fixtureObservationSha256 = arguments?.getString("fixture_observation_sha256")
@@ -79,7 +85,7 @@ class ReliabilityInstrumentation : Instrumentation() {
             val currentUiBrandGeometry = currentUiSmoke && requestedTest == "brand_geometry"
             if (currentUiSmoke) {
                 check(targetContext.applicationContext.javaClass == android.app.Application::class.java &&
-                    (currentUiBrandGeometry || requestedTest == LIBRARY_PROGRESS_PERF_SELECTOR ||
+                    (currentUiBrandGeometry || requestedTest == LIBRARY_RENAME_KEYBOARD_SELECTOR || requestedTest == LIBRARY_PROGRESS_PERF_SELECTOR || requestedTest == LIBRARY_DISPOSAL_MEMORY_SELECTOR ||
                         requestedTest == CAPTURE_PREPARED_STORAGE_MEMORY_SELECTOR || requestedTest in nativeOwnerPerformanceSelectors || requestedTest in setOf("current_file_staged_recovery", "native_home_label_height", "native_rename_editor_current", "native_library_inline_current", "native_click_ripple_current", "native_retention_input_parity", "native_retention_keyboard", "native_icon_parity", "native_settings_library_selectors", "native_theme_matrix", "native_settings_calibration_current", "current_media_delete_consent",
                         "native_silence_blob_current", "native_silence_diagnostic_current", "native_blob_feel_current", "native_material_progress_current", "native_library_admission", "native_library_expansion_measurement", "native_library_expansion_clipping", "native_segmented_contrast", "native_settings_theme_contrast", "native_restart_permission_ui", "native_settings_ime_bounds",
                         "native_action_sheet_dismissal_current", "native_about_current", "native_incidents_observation", "native_incidents_store", "native_library_interaction_current",
@@ -104,7 +110,7 @@ class ReliabilityInstrumentation : Instrumentation() {
             }
             val parityOnly = targetContext.applicationContext.javaClass == android.app.Application::class.java
             check(!parityOnly || currentUiBrandGeometry || (currentUiSmoke &&
-                (requestedTest == LIBRARY_PROGRESS_PERF_SELECTOR || requestedTest == CAPTURE_PREPARED_STORAGE_MEMORY_SELECTOR ||
+                (requestedTest == LIBRARY_RENAME_KEYBOARD_SELECTOR || requestedTest == LIBRARY_PROGRESS_PERF_SELECTOR || requestedTest == LIBRARY_DISPOSAL_MEMORY_SELECTOR || requestedTest == CAPTURE_PREPARED_STORAGE_MEMORY_SELECTOR ||
                     requestedTest in nativeOwnerPerformanceSelectors)) || requestedTest in setOf(
                 "current_file_staged_recovery",
                 "native_rename_editor_current", "native_library_inline_current", "native_library_interaction_current", "native_click_ripple_current",
@@ -148,6 +154,9 @@ class ReliabilityInstrumentation : Instrumentation() {
             } else if (currentUiSmoke && requestedTest == LIBRARY_PROGRESS_PERF_SELECTOR) {
                 executed++
                 verifyNativeLibraryProgressPerformance(this, report)
+            } else if (currentUiSmoke && requestedTest == LIBRARY_DISPOSAL_MEMORY_SELECTOR) {
+                executed++
+                verifyNativeLibraryDisposalMemory(this, report, disposalApkSha256, disposalSourceManifestSha256)
             } else if (currentUiSmoke && requestedTest == CAPTURE_PREPARED_STORAGE_MEMORY_SELECTOR) {
                 executed++
                 verifyCapturePreparedStorageMemory(this, report)
@@ -539,6 +548,9 @@ class ReliabilityInstrumentation : Instrumentation() {
             } else if (requestedTest == "native_library_inline_current") {
                 executed++
                 verifyNativeLibraryInlineCurrent(this, report)
+            } else if (currentUiSmoke && requestedTest == LIBRARY_RENAME_KEYBOARD_SELECTOR) {
+                executed++
+                verifyNativeLibraryRenameKeyboard(this, report, keyboardSessionNonce, renameKeyboardAttempt)
             } else if (requestedTest == "native_library_interaction_current") {
                 executed++
                 verifyNativeLibraryInteractionCurrent(this, report)

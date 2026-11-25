@@ -1,0 +1,111 @@
+package app.smallthingz.reverb.nativeui
+
+import android.app.Activity
+import android.app.Application
+import android.graphics.Rect
+import android.view.View
+import android.widget.FrameLayout
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
+import androidx.lifecycle.setViewTreeLifecycleOwner
+import app.smallthingz.reverb.*
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.cancel
+import org.junit.Assert.*
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.Robolectric
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
+import org.robolectric.annotation.LooperMode
+import smallthingz.ui.components.NativeActionSheet
+import smallthingz.ui.components.NativeColorScheme
+import smallthingz.ui.components.NativeMaterialButtonView
+import smallthingz.ui.input.phase.NativePointerLayerShape
+import smallthingz.ui.reverb.ReverbEnvironment
+import smallthingz.ui.scroll.NativeVerticalPhaseBinding
+import smallthingz.ui.scroll.NativeVerticalViewport
+import smallthingz.ui.text.font.createFontFamilyResolver
+import smallthingz.ui.unit.Density
+import kotlin.coroutines.CoroutineContext
+
+/** Real app caller wiring: no copied sheet construction or mutation admission policy. */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35], application = Application::class, shadows = [SettingsPublicationEnvironmentShadow::class])
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+@LooperMode(LooperMode.Mode.PAUSED)
+class NativeSettingsTileDeleteScrollTest {
+    @Test fun actualTileDeleteCallerScrollsNaturalActionsAndExportsItsRoundedHitShape() {
+        val controller = Robolectric.buildActivity(Activity::class.java).setup().visible()
+        val activity = controller.get()
+        val lifecycleOwner = object : LifecycleOwner {
+            override val lifecycle = LifecycleRegistry(this).apply { currentState = Lifecycle.State.RESUMED }
+        }
+        val root = FrameLayout(activity).apply { setViewTreeLifecycleOwner(lifecycleOwner) }
+        activity.setContentView(root)
+        val environment = ReverbEnvironment(Density(1f, 2f), createFontFamilyResolver(activity), NativeColorScheme.fallback(false))
+        val parked = CoroutineScope(object : CoroutineDispatcher() {
+            override fun dispatch(context: CoroutineContext, block: Runnable) = Unit
+        })
+        val target = QuickSettingsTileDeleteTarget(QuickSaveTileOption(0, "a".repeat(32)), 7L)
+        val editor = QuickSettingsTilesEditorState().apply { deleting = target }
+        val owner = NativeQuickSettingsTilesOwner(activity, lifecycleOwner.lifecycle, parked, editor,
+            NativeQuickTilesInputs(true, true, true, 7L), { 7L }, { 7L }, { 7L }, { 7L })
+        val caller = NativeSettingsTileDeleteSheet(root) { environment }
+        try {
+            caller.bind(owner, target)
+            val dialog = field(caller, "dialog") as NativeActionSheet
+            val binding = field(dialog, "contentScroll") as? NativeVerticalPhaseBinding
+            assertNotNull("App caller must install the existing outer scroll owner", binding)
+            val viewport = checkNotNull(binding).dragNode.view as NativeVerticalViewport
+            val content = field(caller, "content") as QuickTileDeleteContent
+            val actions = content.actions
+            fun layoutViewport() {
+                viewport.measure(exact(200), exact(120))
+                viewport.layout(0, 0, 200, 120)
+            }
+            layoutViewport()
+            assertEquals(120, viewport.height)
+            assertTrue(viewport.state.maxValue > 0)
+            val surface = actions.actionSurface
+            val buttons = descendants(actions).filterIsInstance<NativeMaterialButtonView>()
+            assertEquals(2, buttons.size)
+            buttons.forEach { assertTrue(it.height >= 48) }
+            assertEquals(viewport.getChildAt(0).height - viewport.height, viewport.state.maxValue)
+            viewport.state.scrollBy(viewport.state.maxValue.toFloat())
+            viewport.requestLayout()
+            layoutViewport()
+            val last = Rect(0, 0, buttons.last().width, buttons.last().height)
+            viewport.offsetDescendantRectToMyCoords(buttons.last(), last)
+            assertTrue("Final Delete target is reachable", last.top >= 0 && last.bottom <= viewport.height)
+            // NativeSettingsTileDeleteSheet.hit(view) uses this exact interface while recursing.
+            val shape: NativePointerLayerShape = actions
+            for (direction in listOf(View.LAYOUT_DIRECTION_LTR, View.LAYOUT_DIRECTION_RTL)) {
+                actions.layoutDirection = direction
+                actions.measure(exact(700), View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED))
+                actions.layout(0, 0, 700, actions.measuredHeight)
+                assertEquals(if (direction == View.LAYOUT_DIRECTION_RTL) 0 else 700 - surface.width, surface.left)
+                assertFalse(shape.containsPointerLayer(surface.left + .5f, surface.top + .5f))
+                assertTrue(shape.containsPointerLayer(surface.left + surface.width / 2f, surface.top + surface.height / 2f))
+                assertFalse(shape.containsPointerLayer(350f, actions.height + 1f))
+            }
+            assertSame(target, editor.deleting) // Geometry never accepts the destructive operation.
+        } finally {
+            caller.close()
+            owner.close()
+            parked.cancel()
+            controller.pause().stop().destroy()
+        }
+    }
+
+    private fun field(instance: Any, name: String): Any? = instance.javaClass.getDeclaredField(name)
+        .apply { isAccessible = true }.get(instance)
+    private fun exact(size: Int) = View.MeasureSpec.makeMeasureSpec(size, View.MeasureSpec.EXACTLY)
+    private fun descendants(view: View): List<View> = buildList {
+        add(view)
+        if (view is android.view.ViewGroup) for (i in 0 until view.childCount) addAll(descendants(view.getChildAt(i)))
+    }
+}

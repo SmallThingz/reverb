@@ -1,13 +1,11 @@
-# Reverb native monochrome icons
+# Reverb icon compatibility adapters
 
-The original set contains 32 glyphs / 33 paths from released Reverb commit `3e16f8ddb78dca15df4b436d34d330801ce83ffd`: the 31 AppIcons properties and the direct Rounded.Add glyph. ThemeSystem/ThemeLight/ThemeDark now live in the library's `NativeThemeIconDrawable.kt`, with unchanged commands and provenance in `native-ui/SOURCE-theme.json`; the other 29 glyphs / 30 paths remain in `ReverbIconPaths.kt`. RestartAlt keeps its two separate paths. Only Back, Library, and Undo mirror in RTL. GitHub and brand artwork are outside this historical set. SOURCE.json remains the original generation manifest.
+App `ReverbIcon`, `ReverbIconPaths` and `ReverbIconDrawable` are typealiases into
+native-ui. The recommended common API is `smallthingz.ui.icons.MaterialRoundedIcon`
+(AndroidX Material Rounded 1.7.8); see `native-ui/docs/icons.md`.
 
-AndroidX Material Rounded core/extended 1.7.8 sources retain their Apache-2.0 notices; the full license is in LICENSE.txt. Reverb's OneShot and ExportRange paths retain the repository's GPL-3.0 license. SOURCE.json records the exact artifact URLs, hashes, individual source paths/hashes, baseline AppIcons hash, and generator hash. The generator and selected sources remain in the ignored `.tmp/native-views-20261021/icon-proposal/` evidence directory.
-
-Path commands are generated as direct Android Path operations. Relative commands stay relative. Horizontal/vertical coordinates and reflected controls follow Compose UI 1.11.2 PathParser Float arithmetic, with every arithmetic step rounded to binary32. There is no runtime path parser or vector tree.
-
-Reverb supplies those paths and their fill or stroke geometry as typed mask assets. The library applies the mask paint and draws each path in its original order. This keeps the AndroidX and Reverb geometry and its license notices in the app asset source.
-
-The drawable follows pinned Compose UI 1.11.2 PainterModifier, ContentScale.Fit, Alignment.Center, VectorPainter, VectorComponent, DrawCache, and AndroidPaint behavior. Bounds are the measured host content rectangle. The renderer applies Float Fit/center, rasterizes into a reusable ALPHA_8 software mask, and composites the ceil-sized cache at 1:1 with SrcIn tint. RTL mirrors the final image around the Float viewport center. Host code owns padding, semantics, touch targets, and animation scheduling; do not fit the drawable bounds a second time. Only SrcIn palette tint is supported. Arbitrary ColorFilters and alternative tint modes are explicitly rejected instead of silently using the wrong bitmap configuration.
-
-The initial proposal incorrectly reduced the painter viewport to integer bounds. Source inspection demonstrated the regression at densityDpi 280: 25 dp measures 44 px, but Float Fit yields 44.000003814697266 px and the cache is 45 px. The renderer now retains that distinction, with focused geometry regression cases moved to the library's CachedPathIconFitTest. ReverbIconDrawable is a thin app-glyph adapter over that shared CachedPathIconDrawable implementation. The separate icon parity probe retains all 32 released-vector cases, including the library-owned theme glyphs; its current execution is required to qualify changes to the shared renderer.
+Icon geometry, licenses and provenance are owned by native-ui under
+`src/main/resource-provenance/reverb-icons/`. This directory's SOURCE.json and
+license remain historical extraction evidence, not an app-owned drawing source.
+App platform icon resources are aliases to library assets. Launcher/splash resources
+continue to be generated from the library's canonical brand source.

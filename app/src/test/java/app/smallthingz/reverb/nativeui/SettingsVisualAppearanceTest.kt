@@ -1,6 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
 import android.app.Application
+import android.graphics.Rect
 import android.os.Bundle
 import android.view.View
 import android.view.ViewGroup
@@ -118,8 +119,13 @@ class SettingsVisualAppearanceTest {
             val inset = environment.appearance.quickTiles.editorInsetDp
             assertEquals(inset, capsule.top)
             assertTrue(capsule.bottom < wheel.top)
-            assertTrue(wheel.bottom < minOf(cancel.top, save.top))
-            assertEquals(editor.height - inset, maxOf(cancel.bottom, save.bottom))
+            fun editorBounds(view: View) = Rect(0, 0, view.width, view.height).apply {
+                editor.offsetDescendantRectToMyCoords(view, this)
+            }
+            val cancelBounds = editorBounds(cancel)
+            val saveBounds = editorBounds(save)
+            assertTrue(wheel.bottom < minOf(cancelBounds.top, saveBounds.top))
+            assertEquals(editor.height - inset, maxOf(cancelBounds.bottom, saveBounds.bottom))
         } finally {
             editor.close()
         }

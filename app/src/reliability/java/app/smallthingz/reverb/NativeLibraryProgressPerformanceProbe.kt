@@ -15,6 +15,7 @@ import android.widget.FrameLayout
 import androidx.recyclerview.widget.RecyclerView
 import app.smallthingz.reverb.nativeui.*
 import java.io.File
+import java.lang.ref.WeakReference
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineDispatcher
@@ -26,6 +27,7 @@ import smallthingz.ui.components.NativeModalWindowRuntime
 import kotlin.coroutines.CoroutineContext
 
 internal const val LIBRARY_PROGRESS_PERF_SELECTOR = "native_library_progress_performance"
+internal const val LIBRARY_DISPOSAL_MEMORY_SELECTOR = "native_library_disposal_memory"
 private const val PROGRESS_STEPS = 30
 private const val PROGRESS_CADENCE_MS = 150L
 private const val PROGRESS_BUDGET_MS = 70_000L // Leave the host claim time for final cleanup/evidence.
@@ -203,6 +205,178 @@ internal fun verifyNativeLibraryProgressPerformance(instrumentation: Instrumenta
     failure?.let { throw it }
 }
 
+internal fun verifyNativeLibraryDisposalMemory(instrumentation: Instrumentation, report: StringBuilder,
+    apkSha256: String?, sourceManifestSha256: String?) {
+    val context = instrumentation.targetContext
+    check(context.packageName == "app.smallthingz.reverb.uitheme.reliability")
+    check(context.applicationContext.javaClass == Application::class.java)
+    check(android.os.Looper.myLooper() != android.os.Looper.getMainLooper())
+    check(apkSha256?.matches(Regex("[0-9a-f]{64}")) == true)
+    check(sourceManifestSha256?.matches(Regex("[0-9a-f]{64}")) == true)
+    val started = SystemClock.elapsedRealtime(); val pid = Process.myPid()
+    // Stop admitting work at 85s, reserving 5s for cleanup/publication within the 90s session.
+    // Android synchronous calls require the operator watchdog for a hung main thread.
+    fun budget(reserveMs: Long = 0L) {
+        check(Process.myPid() == pid)
+        check(SystemClock.elapsedRealtime() - started + reserveMs < 85_000L) {
+            "Disposal budget exhausted; preserve partial evidence, no retry"
+        }
+    }
+    val directory = File(context.filesDir, "library-disposal-memory-${System.currentTimeMillis()}").also { check(it.mkdir()) }
+    val checkpoints = JSONArray(); val cycles = JSONArray()
+    val retired = ArrayList<DisposalRetired>(4)
+    val result = JSONObject().put("selector", LIBRARY_DISPOSAL_MEMORY_SELECTOR).put("passed", false)
+        .put("schema", "library-disposal-memory-v1").put("pid", pid).put("started_elapsed_ms", started)
+        .put("budget_ms", 90_000).put("work_deadline_elapsed_ms", started + 85_000)
+        .put("elapsed_scope", "JSON elapsed excludes publication; require successful instrumentation terminal within budget")
+        .put("admitted_apk_sha256", apkSha256).put("admitted_source_manifest_sha256", sourceManifestSha256)
+        .put("binding_scope", "Operator-supplied digests; external admission receipt must verify installed APK and source")
+        .put("scope", "One retained empty QA host; four fresh N1000-visible A fixtures; async effects parked")
+        .put("memory_scope", "Process-wide QA/framework counters; no forced GC, RAM threshold or leak verdict")
+        .put("weak_scope", "Survival without natural collection is inconclusive; cleared references do not require PSS to fall")
+        .put("requested_cycles", 4).put("updates_per_cycle", PROGRESS_STEPS).put("cadence_ms", PROGRESS_CADENCE_MS)
+        .put("checkpoints", checkpoints).put("cycles", cycles)
+    var host: NativeParityActivity? = null; var failure: Throwable? = null
+    try {
+        budget(5_000)
+        val activity = launchCurrentUiSmokeActivity(instrumentation).also { host = it }
+        budget(5_000)
+        awaitNativeParityDraw(instrumentation, activity.fixtureRoot)
+        val initialConfig = nativeParityOnMain(instrumentation) {
+            check(activity.fixtureRoot.childCount == 0)
+            progressConfiguration(activity)
+        }
+        result.put("configuration_before", initialConfig)
+        fun checkpoint(label: String, originMs: Long, targetAgeMs: Long) {
+            val waitMs = (originMs + targetAgeMs - SystemClock.elapsedRealtime()).coerceAtLeast(0)
+            budget(waitMs + 2_000)
+            if (waitMs > 0) SystemClock.sleep(waitMs)
+            budget(2_000)
+            requireNativeParityHost(instrumentation, activity, label)
+            nativeParityOnMain(instrumentation) { check(activity.fixtureRoot.childCount == 0) }
+            val before = SystemClock.elapsedRealtime()
+            val sample = progressMemory().put("label", label).put("origin_elapsed_ms", originMs)
+                .put("target_age_ms", targetAgeMs).put("sample_start_elapsed_ms", before)
+                .put("sample_end_elapsed_ms", SystemClock.elapsedRealtime()).put("observed_age_ms", before - originMs)
+            val weak = JSONArray()
+            for (item in retired) weak.put(JSONObject().put("cycle", item.cycle)
+                .put("fixture_alive", item.references[0].get() != null)
+                .put("controller_alive", item.references[1].get() != null)
+                .put("list_alive", item.references[2].get() != null))
+            checkpoints.put(sample.put("retired_weak_references", weak))
+            budget()
+        }
+        val initialEmpty = SystemClock.elapsedRealtime()
+        checkpoint("initial_400ms", initialEmpty, 400)
+        checkpoint("initial_5s", initialEmpty, 5_000)
+        checkpoint("initial_15s", initialEmpty, 15_000)
+        repeat(4) { index ->
+            budget(22_000)
+            val entry = JSONObject().put("cycle", index + 1).put("passed", false)
+                .put("finished_count", 1000).put("active", true).put("arm", "A-production")
+            cycles.put(entry)
+            val item = runLibraryDisposalCycle(instrumentation, activity, index + 1, entry, ::budget)
+            retired.add(item)
+            checkpoint("cycle_${index + 1}_closed_400ms", item.closedElapsedMs, 400)
+            checkpoint("cycle_${index + 1}_closed_5s", item.closedElapsedMs, 5_000)
+        }
+        checkpoint("final_closed_15s", retired.last().closedElapsedMs, 15_000)
+        budget(2_000)
+        val finalConfig = nativeParityOnMain(instrumentation) { progressConfiguration(activity) }
+        result.put("configuration_after", finalConfig)
+        check(initialConfig.toString() == finalConfig.toString()) { "Display/configuration changed" }
+        result.put("passed", true)
+    } catch (error: Throwable) {
+        failure = error
+    } finally {
+        failure = captureNativeParityCleanup(failure) {
+            nativeParityOnMain(instrumentation) {
+                try { host?.fixtureRoot?.removeAllViews() } finally { host?.finish(); host = null }
+            }
+        }
+        if (SystemClock.elapsedRealtime() - started >= 90_000 && failure == null)
+            failure = IllegalStateException("Disposal session exceeded 90s")
+        failure?.let { result.put("passed", false).put("failure", it.stackTraceToString().take(6000)) }
+        result.put("completed_cycles", retired.size).put("elapsed_ms", SystemClock.elapsedRealtime() - started)
+        report.appendLine("LIBRARY_DISPOSAL_MEMORY_EVIDENCE ${directory.name}/result.json")
+        failure = captureNativeParityCleanup(failure) {
+            writeQaEvidenceAtomically(File(directory, "result.json")) { it.write(result.toString(2).toByteArray(Charsets.UTF_8)) }
+        }
+        val terminalElapsed = SystemClock.elapsedRealtime() - started
+        report.appendLine("LIBRARY_DISPOSAL_MEMORY_TERMINAL_ELAPSED_MS $terminalElapsed")
+        if (terminalElapsed >= 90_000 && failure == null)
+            failure = IllegalStateException("Disposal publication exceeded 90s")
+    }
+    failure?.let { throw it }
+}
+private data class DisposalRetired(val cycle: Int, val closedElapsedMs: Long,
+    val references: List<WeakReference<Any>>)
+private fun runLibraryDisposalCycle(instrumentation: Instrumentation, activity: NativeParityActivity,
+    cycle: Int, entry: JSONObject, budget: (Long) -> Unit): DisposalRetired {
+    var fixture: ProgressPerfFixture? = null
+    var references: List<WeakReference<Any>> = emptyList()
+    var delivered = 0; var failure: Throwable? = null; var closedAt = 0L
+    try {
+        budget(7_000)
+        requireNativeParityHost(instrumentation, activity, "disposal-mount-$cycle")
+        nativeParityOnMain(instrumentation) {
+            budget(7_000)
+            check(activity.fixtureRoot.childCount == 0)
+            val created = ProgressPerfFixture(activity, 1000, true, false)
+            fixture = created
+            references = created.disposalWeakReferences()
+            activity.fixtureRoot.addView(created.view, FrameLayout.LayoutParams(-1, -1))
+            created.deliver(0)
+        }
+        val current = checkNotNull(fixture)
+        budget(5_000)
+        awaitNativeParityDraw(instrumentation, current.view)
+        budget(1_000)
+        SystemClock.sleep(200)
+        nativeParityOnMain(instrumentation) { current.begin(); check(current.view.isShown) }
+        entry.put("updates_start_elapsed_ms", SystemClock.elapsedRealtime())
+        repeat(PROGRESS_STEPS) { step ->
+            budget(2_000)
+            requireNativeParityHost(instrumentation, activity, "disposal-$cycle-$step")
+            val trigger = nativeParityOnMain(instrumentation) {
+                budget(2_000)
+                val now = SystemClock.elapsedRealtime()
+                current.deliver(step + 1); delivered++; current.verifyRetained()
+                now
+            }
+            val waitMs = (trigger + PROGRESS_CADENCE_MS - SystemClock.elapsedRealtime()).coerceAtLeast(0)
+            budget(waitMs + 1_000)
+            if (waitMs > 0) SystemClock.sleep(waitMs)
+        }
+        entry.put("updates_end_elapsed_ms", SystemClock.elapsedRealtime())
+        budget(5_000)
+        awaitNativeParityDraw(instrumentation, current.view)
+        nativeParityOnMain(instrumentation) {
+            current.verifyWork()
+            check(current.pendingTarget() == PROGRESS_STEPS / 31f)
+            entry.put("work", current.workJson()).put("final_draw_observed", true)
+        }
+        budget(2_000)
+        entry.put("mounted_after", progressMemory()).put("passed", true)
+    } catch (error: Throwable) {
+        failure = error
+    } finally {
+        failure = captureNativeParityCleanup(failure) {
+            nativeParityOnMain(instrumentation) {
+                try { fixture?.close() } finally {
+                    try { activity.fixtureRoot.removeAllViews() } finally { fixture = null }
+                }
+                check(activity.fixtureRoot.childCount == 0)
+            }
+        }
+        closedAt = SystemClock.elapsedRealtime()
+        entry.put("delivered", delivered).put("closed_elapsed_ms", closedAt).put("cleanup_complete", failure == null)
+        failure?.let { entry.put("passed", false).put("failure", it.stackTraceToString().take(6000)) }
+    }
+    failure?.let { throw it }
+    return DisposalRetired(cycle, closedAt, references)
+}
+
 private class ProgressPerfFixture(
     private val host: NativeParityActivity, private val count: Int,
     private var active: Boolean, private val control: Boolean,
@@ -269,6 +443,8 @@ private class ProgressPerfFixture(
     fun deliver(step: Int) {
         pendingField.set(owner, jobs[step]); dirtyField.setBoolean(owner, true); deliverMethod.invoke(owner)
     }
+    fun disposalWeakReferences(): List<WeakReference<Any>> =
+        listOf(WeakReference<Any>(this), WeakReference<Any>(owner), WeakReference<Any>(view))
     fun begin() {
         val snapshot = presentation.list.items as LibraryListSnapshot
         // Do not hold an obsolete control catalog just to compare candidate-only identities.

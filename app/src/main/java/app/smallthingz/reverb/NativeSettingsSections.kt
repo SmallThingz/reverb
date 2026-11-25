@@ -12,7 +12,8 @@ import app.smallthingz.reverb.nativeui.*
 import smallthingz.ui.reverb.settings.ReverbAudioActions
 import smallthingz.ui.reverb.settings.ReverbAudioChoices
 import smallthingz.ui.reverb.settings.ReverbAudioOptions
-import smallthingz.ui.reverb.settings.ReverbAutoStartSettings
+import smallthingz.ui.reverb.settings.ReverbSettingsToggle
+import smallthingz.ui.reverb.settings.ReverbSettingsToggleRole
 import smallthingz.ui.reverb.settings.ReverbRecordingPresentation
 import smallthingz.ui.reverb.settings.ReverbRecordingSettingsView
 import smallthingz.ui.reverb.settings.ReverbSettingsBackgroundWarningView
@@ -49,7 +50,7 @@ internal class NativeSettingsSections(
         SettingsSectionKey.RECORDING -> Recording().also { recordings.add(it) }
         SettingsSectionKey.QUICK_TILES -> tiles()
         SettingsSectionKey.STORAGE -> storage()
-        SettingsSectionKey.AUTO_START -> autoStart()
+        SettingsSectionKey.AUTO_START -> error("Auto-start is owned by the Recording settings group")
     }
 
     private fun background(): NativeSettingsSection {
@@ -176,7 +177,9 @@ internal class NativeSettingsSections(
             { owner.notificationEnabledChanged(activation, it) }, owner::notificationSecondsChanged,
             owner::notificationEditRevision,
         )
-        override val view = ReverbRecordingSettingsView(context, choices, compression, skip, notification,
+        private val autoStart = ReverbSettingsToggle(context, environment().theme, autoStartState(),
+            ReverbSettingsToggleRole.AUTO_START, inputRoot) { owner.autoStartChanged(activation, it) }
+        override val view = ReverbRecordingSettingsView(context, choices, compression, skip, notification, autoStart.view,
             recordingPresentation(), environment().theme)
 
         override fun bind() {
@@ -189,6 +192,7 @@ internal class NativeSettingsSections(
             notification.callbacks(owner::notificationSecondsChanged, owner::notificationEditRevision,
                 owner::childInteractionChanged)
             notification.bind(notificationState(), env)
+            autoStart.bind(autoStartState(), env.theme)
             view.bind(recordingPresentation(), env.theme)
             structureChanged()
         }
@@ -291,7 +295,7 @@ internal class NativeSettingsSections(
         override fun close() {
             recordings.remove(this)
             var failure: Throwable? = null
-            for (owned in listOf(choices, compression, skip, notification)) try { owned.close() }
+            for (owned in listOf(choices, compression, skip, notification, autoStart)) try { owned.close() }
             catch (error: Throwable) { if (failure == null) failure = error else if (failure !== error) failure.addSuppressed(error) }
             failure?.let { throw it }
         }
@@ -339,30 +343,16 @@ internal class NativeSettingsSections(
         }
     }
 
-    private fun autoStart(): NativeSettingsSection {
-        var activation = owner.state.activation
-        fun toggleState(): ToggleState {
-            val choice = owner.autoStartChoice
-            val description = when {
-                choice.unavailable -> R.string.auto_start_unavailable
-                choice.permissionPending -> R.string.auto_start_permission_pending
-                choice.enabled && owner.restartAccessMissing -> R.string.auto_start_permission_missing
-                else -> R.string.auto_start_summary
-            }
-            return ToggleState(context.getString(R.string.auto_start_title), choice.permissionPending || choice.enabled,
-                choice.loaded, context.getString(description))
+    private fun autoStartState(): ToggleState {
+        val choice = owner.autoStartChoice
+        val description = when {
+            choice.unavailable -> R.string.auto_start_unavailable
+            choice.permissionPending -> R.string.auto_start_permission_pending
+            choice.enabled && owner.restartAccessMissing -> R.string.auto_start_permission_missing
+            else -> R.string.auto_start_summary
         }
-        val body = ReverbAutoStartSettings(context, environment().theme, toggleState(), inputRoot) {
-            owner.autoStartChanged(activation, it)
-        }
-        return object : NativeSettingsSection {
-            override val view = body.view
-            override fun bind() {
-                activation = owner.state.activation
-                body.bind(toggleState(), environment().theme)
-            }
-            override fun close() = body.close()
-        }
+        return ToggleState(context.getString(R.string.auto_start_title), choice.permissionPending || choice.enabled,
+            choice.loaded, context.getString(description))
     }
 
 }

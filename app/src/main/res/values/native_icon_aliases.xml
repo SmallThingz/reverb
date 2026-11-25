@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Platform adapters only. Icon geometry belongs to native-ui; keep existing app resource IDs. -->
+<resources>
+    <item type="drawable" name="ic_github">@drawable/native_reverb_github</item>
+    <item type="drawable" name="ic_qs_quick_save">@drawable/native_reverb_qs_quick_save</item>
+    <item type="drawable" name="ic_qs_looping">@drawable/native_reverb_qs_looping</item>
+    <item type="drawable" name="ic_qs_one_shot">@drawable/native_reverb_qs_one_shot</item>
+    <item type="drawable" name="ic_notification_recording">@drawable/native_reverb_notification_recording</item>
+    <item type="drawable" name="ic_notification_saved">@drawable/native_reverb_notification_saved</item>
+</resources>

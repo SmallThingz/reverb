@@ -97,8 +97,9 @@
   identical messages once and present newest-first occurrence rows with start, end or ongoing status, PID, and
   available diagnostic evidence. Tapping an occurrence toggles checked/unchecked outside selection mode, and
   long-pressing offers Copy/Delete at the press location, with the row anchor retained for keyboard/accessibility input.
-  Long-pressing an error title selects all current occurrences of that error across day groups, adding to existing
-  selection. Selection mode targets occurrences individually and can select every current row.
+  Long-pressing an error title selects only current occurrences of that topic on the same displayed date, adding to
+  existing selection. Topic changes have a visible gap with square gap-facing corners and solid closed borders;
+  preserve rounded external day corners. Selection mode targets occurrences individually and can select every current row.
   Delete selected and confirmed Clear all persist one history transaction for the exact accepted occurrence snapshot,
   preserving concurrent arrivals even when their message matches. Deleted occurrences retain identity tombstones while
   evidence can replay. Checked occurrences remain visible and no longer contribute to the alert. Durable history

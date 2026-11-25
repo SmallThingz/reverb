@@ -322,16 +322,20 @@ internal class ReverbLibraryListView(
         return result
     }
 
-    /** Prefer editor plus actions over leading decoration when the padded header cannot fit. */
-    fun revealRenameHeader(header: View, editor: View, validation: Boolean = false) {
+    /** Keep the complete outlined field visible; include actions whenever they fit with it. */
+    fun revealRenameHeader(header: View, editor: View, field: View, validation: Boolean = false) {
         val item = list.findContainingItemView(header) as? ViewGroup ?: return
         val headerBounds = android.graphics.Rect(0, 0, header.width, header.height)
         val editorBounds = android.graphics.Rect(0, 0, editor.width, editor.height)
+        val fieldBounds = android.graphics.Rect(0, 0, field.width, field.height)
         item.offsetDescendantRectToMyCoords(header, headerBounds)
         item.offsetDescendantRectToMyCoords(editor, editorBounds)
-        val top = libraryRenameRevealTop(header.height, editorBounds.top - headerBounds.top,
-            (list.height - list.paddingTop - list.paddingBottom).coerceAtLeast(0), validation)
-        val rectangle = if (top == null) editorBounds else headerBounds.apply { this.top += top }
+        item.offsetDescendantRectToMyCoords(field, fieldBounds)
+        val viewportHeight = (list.height - list.paddingTop - list.paddingBottom).coerceAtLeast(0)
+        val top = libraryRenameRevealTop(header.height, fieldBounds.top - headerBounds.top,
+            viewportHeight, validation)
+        val rectangle = if (top != null) headerBounds.apply { this.top += top }
+            else if (fieldBounds.height() <= viewportHeight) fieldBounds else editorBounds
         // Same retained-rectangle path as Settings: scroll RV, never request a second window pan.
         list.requestChildRectangleOnScreen(item, rectangle, true)
     }
