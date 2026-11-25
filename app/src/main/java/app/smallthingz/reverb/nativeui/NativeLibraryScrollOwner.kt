@@ -64,7 +64,8 @@ internal class NativeLibraryScrollOwner(
     private val mutex = MutatorMutex()
     private var fraction = NativeLibraryScrollAccumulator()
     private val decay = splineBasedDecay(environment.textDensity)
-    private val overscroll = NativeVerticalOverscroll(view.context, environment.textDensity, ReverbLibraryLayout.overscrollGlowColor, view::invalidate)
+    private val overscroll = NativeVerticalOverscroll(view.context, environment.textDensity,
+        ReverbLibraryLayout.overscrollGlowColor(environment.palette), view::invalidate)
     private var scope: CoroutineScope? = null
     private var channel: Channel<Event>? = null
     private var router: NativeDragPointerRouter? = null

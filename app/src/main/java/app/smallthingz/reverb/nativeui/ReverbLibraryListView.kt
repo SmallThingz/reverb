@@ -222,6 +222,7 @@ internal class ReverbLibraryListView(
     fun setEnvironment(value: ReverbViewEnvironment) {
         if (environment === value) return
         environment = value
+        list.sourceOverscroll?.setGlowColor(ReverbLibraryLayout.overscrollGlowColor(value.palette))
         updateInsets()
         invalidateRecordingFormatting()
     }

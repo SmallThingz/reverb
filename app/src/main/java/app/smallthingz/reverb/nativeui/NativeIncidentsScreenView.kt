@@ -16,6 +16,7 @@ import app.smallthingz.reverb.NativeIncidentsRenderer
 import app.smallthingz.reverb.NativeIncidentsScreenOwner
 import smallthingz.ui.scroll.NativeWindowScrollAccessibilityEvents
 import smallthingz.ui.reverb.NativeIncidentsSavedPosition
+import smallthingz.ui.reverb.ReverbLibraryLayout
 import smallthingz.ui.reverb.ReverbIncidentListPosition
 import smallthingz.ui.reverb.ReverbIncidentsContentView
 import smallthingz.ui.reverb.reverbIncidentSafeInsets
@@ -165,6 +166,7 @@ internal class NativeIncidentsScreenView(
     fun bindPalette(palette: ReverbPalette) {
         if (closed) return
         environment = environment.withPalette(palette)
+        scrollList?.sourceOverscroll?.setGlowColor(ReverbLibraryLayout.overscrollGlowColor(palette))
         content?.bindTheme(environment.theme)
     }
 

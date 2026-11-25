@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import smallthingz.ui.reverb.ReverbLibraryLayout
+
 import smallthingz.ui.components.NativeTopBarInsets
 import smallthingz.ui.scroll.NativeVerticalNestedHost
 import smallthingz.ui.reverb.settings.ReverbSettingsScreenLayout
@@ -101,6 +103,7 @@ internal class NativeSettingsScreenContent(
         if(sourceEnvironment!==nextEnvironment) {
             sourceEnvironment=nextEnvironment
             environment=nextEnvironment.forSettings()
+            listViewport?.sourceOverscroll?.setGlowColor(ReverbLibraryLayout.overscrollGlowColor(environment.palette))
         }
         owner.setActive(next.active)
         if(started)publish()

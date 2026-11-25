@@ -112,7 +112,8 @@ internal class NativeOnboardingScreenView private constructor(
     private val backMotion = NativeFloatingPredictiveMotion()
     private val pager = NativeOnboardingPager(scope, density, onChanged = ::pagerChanged)
     private val pageArea = ReverbOnboardingScreenLayout.createPageArea(context)
-    private val overscroll = NativeHorizontalOverscroll(context, density, ReverbOnboardingScreenLayout.overscrollColor) { invalidate() }
+    private val overscroll = NativeHorizontalOverscroll(context, density,
+        ReverbOnboardingScreenLayout.overscrollColor(environment.palette)) { invalidate() }
     private val scrolling = NativeOnboardingPagerScrollOwner(pager, overscroll) {
         this::viewport.isInitialized && viewport.isAttachedToWindow
     }
@@ -284,6 +285,7 @@ internal class NativeOnboardingScreenView private constructor(
     fun setPalette(palette: ReverbPalette) {
         if (environment.palette === palette) return
         environment = environment.withPalette(palette)
+        overscroll.setGlowColor(ReverbOnboardingScreenLayout.overscrollColor(palette))
         bind(state)
     }
 

@@ -22,6 +22,11 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import smallthingz.ui.common.SegmentOption
+import smallthingz.ui.components.NativeGroupLayout
+import smallthingz.ui.components.NativeMergedActionLayout
+import smallthingz.ui.components.NativeQuickTileSectionLayout
+import smallthingz.ui.reverb.settings.ReverbSettingsBackgroundWarningView
+import smallthingz.ui.reverb.settings.ReverbSettingsStorageState
 import smallthingz.ui.components.NativeArcValueDial
 import smallthingz.ui.components.NativeSegmentedControl
 import smallthingz.ui.components.NativeUiAppearance
@@ -29,6 +34,7 @@ import smallthingz.ui.reverb.settings.ReverbQuickTileEditor
 import smallthingz.ui.runtime.MonotonicFrameClock
 import smallthingz.ui.text.view.ParagraphView
 import kotlin.math.floor
+import kotlin.math.roundToInt
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], application = Application::class, qualifiers = "mdpi")
@@ -125,9 +131,66 @@ class SettingsVisualAppearanceTest {
             val cancelBounds = editorBounds(cancel)
             val saveBounds = editorBounds(save)
             assertTrue(wheel.bottom < minOf(cancelBounds.top, saveBounds.top))
-            assertEquals(editor.height - inset, maxOf(cancelBounds.bottom, saveBounds.bottom))
+            val footerBottomPadding = (NativeMergedActionLayout.ACTION_FOOTER_BOTTOM_PADDING_DP *
+                environment.textDensity.density).roundToInt()
+            assertEquals(editor.height - footerBottomPadding, maxOf(cancelBounds.bottom, saveBounds.bottom))
         } finally {
             editor.close()
+        }
+    }
+
+    @Test fun sectionGuttersKeepDefaultsAndExplicitTileOverrideWithoutChangingStorageInnerPadding() {
+        val context = RuntimeEnvironment.getApplication()
+        val default = NativeUiAppearance.Default
+        val alternate = default.copy(quickTiles = default.quickTiles.copy(sectionHorizontalInsetDp = 24))
+        for (appearance in listOf(default, alternate)) {
+            val environment = ReverbViewEnvironment.withTestAppearance(context, false, appearance).forSettings()
+            val reject = { error("Section layout must not dispatch an action") }
+            val storage = SettingsStorageSection(context,
+                ReverbSettingsStorageState("Music/Reverb", false, false, false), environment,
+                { null }, reject, reject, reject)
+            val warning = ReverbSettingsBackgroundWarningView(context, environment, { null },
+                true, false, false, reject, reject, reject)
+            val tiles = object : NativeQuickTileSectionLayout(context, environment, "Tiles", "Loading",
+                "Apply first", { null }, {}, reject), AutoCloseable {
+                init {
+                    bindListContent(listOf(View(context).apply { minimumHeight = 32 }),
+                        false, null, "Retry", false)
+                }
+                override fun close() = closeRetry()
+            }
+            try {
+                for (direction in listOf(View.LAYOUT_DIRECTION_LTR, View.LAYOUT_DIRECTION_RTL)) {
+                    for (section in listOf(storage, warning, tiles)) {
+                        section.layoutDirection = direction
+                        section.measure(exact(360), unspecified())
+                        section.layout(0, 0, 360, section.measuredHeight)
+                    }
+                    val storageGroup = storage.getChildAt(1) as NativeGroupLayout
+                    val warningGroup = warning.getChildAt(0) as NativeGroupLayout
+                    val tileGroup = descendants(tiles).filterIsInstance<NativeGroupLayout>().single()
+                    for (group in listOf(storageGroup, warningGroup)) {
+                        assertEquals(16, group.left)
+                        assertEquals(344, group.right)
+                        assertEquals(328, group.width)
+                    }
+                    val tileInset = if (appearance === alternate) 24 else 16
+                    assertEquals(tileInset, tileGroup.left)
+                    assertEquals(360 - tileInset, tileGroup.right)
+                    assertEquals(360 - 2 * tileInset, tileGroup.width)
+                    val title = storage.getChildAt(0)
+                    assertEquals(16, if (direction == View.LAYOUT_DIRECTION_RTL) storage.width - title.right else title.left)
+                    val path = descendants(storageGroup).filterIsInstance<ParagraphView>()
+                        .single { it.getText() == "Music/Reverb" }
+                    val body = path.parent as ViewGroup
+                    assertEquals("Inner path padding is a separate role", 16,
+                        if (direction == View.LAYOUT_DIRECTION_RTL) body.width - path.right else path.left)
+                }
+            } finally {
+                tiles.close()
+                warning.close()
+                storage.close()
+            }
         }
     }
 
