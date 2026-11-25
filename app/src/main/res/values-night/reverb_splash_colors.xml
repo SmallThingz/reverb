@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="reverb_splash_background">@color/native_default_amoled_background</color>
+    <bool name="reverb_splash_dark_navigation_icons">false</bool>
     <color name="reverb_splash_compat_main">@color/reverb_brand_main</color>
 </resources>

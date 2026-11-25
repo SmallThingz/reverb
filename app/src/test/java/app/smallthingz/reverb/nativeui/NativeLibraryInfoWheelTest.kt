@@ -125,7 +125,74 @@ class NativeLibraryInfoWheelTest {
         assertEquals(0, state.selectedCount)
     }
 
-    private class Fixture : AutoCloseable {
+    @Test fun infoOpeningRetiresEffectsAndClosingAdmitsOnlyFreshFlingHandles() {
+        for (dark in listOf(false, true)) Fixture(dark).use { f ->
+            f.installPointerBinding()
+            val viewport = checkNotNull(f.screen.listViewport)
+            val overscroll = checkNotNull(viewport.sourceOverscroll)
+            val edge = object : android.widget.EdgeEffect(viewport.context) {
+                var stretch = 0f
+                var finishes = 0
+                val pulls = mutableListOf<Float>()
+                val absorbs = mutableListOf<Int>()
+                override fun getDistance() = stretch
+                override fun isFinished() = stretch == 0f
+                override fun onPull(deltaDistance: Float, displacement: Float) {
+                    pulls += deltaDistance
+                    stretch += deltaDistance
+                }
+                override fun onPullDistance(deltaDistance: Float, displacement: Float): Float {
+                    onPull(deltaDistance, displacement)
+                    return deltaDistance
+                }
+                override fun finish() { finishes++; stretch = 0f }
+                override fun onAbsorb(velocity: Int) { absorbs += velocity }
+                override fun onRelease() = Unit
+            }
+            smallthingz.ui.scroll.NativeAxisOverscroll::class.java.getDeclaredField("near")
+                .apply { isAccessible = true }.set(overscroll, edge)
+            fun drag() {
+                var calls = 0
+                assertEquals(7f, overscroll.scroll(30f, NativeVerticalScrollSource.USER_INPUT) {
+                    assertEquals(30f, it, 0f)
+                    calls++
+                    7f
+                }, 0f)
+                assertEquals(1, calls)
+            }
+            drag()
+            assertEquals(if (Build.VERSION.SDK_INT >= 31) 0 else 1, edge.pulls.size)
+            f.screen.owner.dismissInfo()
+            shadowOf(Looper.getMainLooper()).idle()
+            assertFalse(f.screen.inlineInfoActive)
+            assertSame(overscroll, viewport.sourceOverscroll)
+            edge.pulls.clear()
+            val stale = overscroll.beginFling(900f)
+            drag()
+            assertEquals(1, edge.pulls.size)
+            assertTrue(edge.stretch > 0f)
+            val finishes = edge.finishes
+            f.screen.owner.info(f.record)
+            shadowOf(Looper.getMainLooper()).idle()
+            assertTrue(f.screen.inlineInfoActive)
+            assertSame(overscroll, viewport.sourceOverscroll)
+            assertTrue(edge.finishes > finishes)
+            assertEquals(0f, edge.stretch, 0f)
+            edge.pulls.clear()
+            drag()
+            assertEquals(if (Build.VERSION.SDK_INT >= 31) 0 else 1, edge.pulls.size)
+            assertTrue(edge.absorbs.isEmpty())
+            f.screen.owner.dismissInfo()
+            shadowOf(Looper.getMainLooper()).idle()
+            val fresh = overscroll.beginFling(500f)
+            overscroll.finishFling(stale, 900f)
+            assertTrue(edge.absorbs.isEmpty())
+            overscroll.finishFling(fresh, 500f)
+            assertEquals(listOf(500), edge.absorbs)
+        }
+    }
+
+    private class Fixture(dark: Boolean = false) : AutoCloseable {
         private val activity = Robolectric.buildActivity(Activity::class.java).setup().visible()
         private val context = activity.get()
         private val root = FrameLayout(context)
@@ -138,10 +205,11 @@ class NativeLibraryInfoWheelTest {
         private val scope = CoroutineScope(object : CoroutineDispatcher() {
             override fun dispatch(context: CoroutineContext, block: Runnable) = Unit
         } + frames + object : MotionDurationScale { override val scaleFactor = 0f })
+        private var pointer: NativeLibraryPointerBinding? = null
         val record = RecordingEntity("/synthetic-info/one.wav", "One", "audio/wav", 1_700_000_000_000L,
             1_000L, 32_044L, "PCM", RecordingStorageType.FILE, "/synthetic-info")
         val screen = ReverbLibraryScreenContent(context,
-            ReverbViewEnvironment(Density(1f), createFontFamilyResolver(context), ReverbPalette.fallback(false)),
+            ReverbViewEnvironment(Density(1f), createFontFamilyResolver(context), ReverbPalette.fallback(dark)),
             NativeLibraryScreenInput(NativeLibraryInput(true, listOf(record), NativeLibraryCallbacks()),
                 false, true, LibraryScaffoldInsets(left = 11, right = 13, bottom = 17), {}, {}, {}, {}),
             lifecycleOwner, OnBackPressedDispatcher(), scope, frames, { 0f }, null, root,
@@ -150,7 +218,7 @@ class NativeLibraryInfoWheelTest {
                 override fun postScroll(consumedY: Float, availableY: Float, source: NativeVerticalScrollSource) = 0f
                 override suspend fun preFling(availableY: Float) = 0f
                 override suspend fun postFling(consumedY: Float, availableY: Float) = 0f
-            }, {}, {})
+            }, { pointer?.refresh() }, {})
         val spotlight get() = descendants(screen).filterIsInstance<ReverbRecordingSpotlight>().single()
         init {
             root.addView(screen, FrameLayout.LayoutParams(-1, -1))
@@ -164,8 +232,16 @@ class NativeLibraryInfoWheelTest {
             check(screen.inlineInfoActive && spotlight.isAttachedToWindow)
             check((screen.listViewport?.width ?: 0) > 0)
         }
+        fun installPointerBinding() {
+            check(pointer == null)
+            pointer = NativeLibraryPointerBinding(screen,
+                smallthingz.ui.input.phase.NativeWindowPointerCoordinates { root }, frames, scope) { false }
+            pointer?.refresh()
+        }
         override fun close() {
-            try { screen.close() } finally {
+            try {
+                try { pointer?.close() } finally { screen.close() }
+            } finally {
                 try { scope.cancel() } finally { activity.pause().stop().destroy() }
             }
         }

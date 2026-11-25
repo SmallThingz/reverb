@@ -27,7 +27,9 @@ import org.json.JSONObject
 import smallthingz.ui.components.NativeActionSheet
 import smallthingz.ui.components.NativeFloatingDialog
 import smallthingz.ui.components.NativeFloatingDialogContent
+import smallthingz.ui.components.NativeModalPaintedSurface
 import smallthingz.ui.components.NativeSheetDragHandle
+import smallthingz.ui.controls.textSurfaceRange
 import smallthingz.ui.graphics.NoiseDrawable
 import smallthingz.ui.interaction.view.readCachedAnimatorDurationScale
 import smallthingz.ui.text.font.createFontFamilyResolver
@@ -71,11 +73,13 @@ internal fun verifyNativeActionSheetDismissalCurrent(instrumentation: Instrument
             }
         }
         awaitNativeParityDraw(instrumentation, anchor)
+        var lightHandleGeometry: List<Int>? = null
         for (route in listOf("androidx-back-dispatcher", "scrim", "content-drag", "scroll-content-drag",
             "handle-above", "handle-below", "generic-custom", "generic-grain")) {
             val dragRoute = route.endsWith("content-drag")
             val handleRoute = route.startsWith("handle-")
             val genericRoute = route.startsWith("generic-")
+            val flatPaintRoute = route == "androidx-back-dispatcher" || route == "scrim"
             val customBackground = if (route == "generic-custom") ColorDrawable(0xff675142.toInt()) else null
             requireNativeParityHost(instrumentation, host, "before-$route-sheet")
             var busy = true
@@ -96,6 +100,10 @@ internal fun verifyNativeActionSheetDismissalCurrent(instrumentation: Instrument
                     NativeActionSheet(anchor, style, "Dismissal admission", dismiss,
                         closeIcon = null, contentBackground = customBackground)
                 } else createReverbActionSheet(anchor, environment, "Dismissal admission", dismiss)
+                if (flatPaintRoute) {
+                    val style = dialog.style
+                    dialog.updateStyle(style.copy(recipe = style.recipe.copy(grainSeed = null)))
+                }
                 currentSheet = dialog
                 body = TextView(host).apply {
                     text = "Busy operations must keep this window open."
@@ -137,6 +145,7 @@ internal fun verifyNativeActionSheetDismissalCurrent(instrumentation: Instrument
                     val bounds = Rect().also(node::getBoundsInScreen)
                     handleGeometry.put(JSONObject().put("route", route).put("density", density)
                         .put("handle_height", handle.height).put("handle_top", handle.top).put("content_top", content.top)
+                        .put("mark_width", mark.width).put("mark_height", mark.height)
                         .put("expected_handle_height", expectedHeight).put("expected_content_top", expectedTop + expectedHeight)
                         .put("nominal_content_top_dp", 41).put("accessible_bounds", bounds.toShortString()))
                     check(mark.height in 1 until ceil(4 * density).toInt() && mark.width > mark.height)
@@ -144,6 +153,13 @@ internal fun verifyNativeActionSheetDismissalCurrent(instrumentation: Instrument
                     check(handle.height == expectedHeight && handle.top == expectedTop &&
                         content.top == expectedTop + expectedHeight) { "Compact handle/content spacing differs from rounded 41dp recipe" }
                     check(bounds.height() >= (48 * density).toInt()) { "Compact handle lost its accessible touch target" }
+                    check(handle.background == null && mark.background == null)
+                    if (flatPaintRoute) {
+                        val geometry = listOf(handle.left, handle.top, handle.width, handle.height,
+                            mark.left, mark.top, mark.width, mark.height, content.top)
+                        if (route == "androidx-back-dispatcher") lightHandleGeometry = geometry
+                        else check(geometry == checkNotNull(lightHandleGeometry)) { "Light and Dark handle geometry differs" }
+                    }
                 } finally { node.recycle() }
                 Rect().also { check(dialog.contentView.getGlobalVisibleRect(it) && !it.isEmpty) }
             }
@@ -153,24 +169,31 @@ internal fun verifyNativeActionSheetDismissalCurrent(instrumentation: Instrument
                 val column = handle.parent as ViewGroup
                 val content = (0 until column.childCount).map(column::getChildAt).single { it !== handle }
                 val initial = dialog.style
-                val shared = column.background
+                val paintedSurface = generateSequence<View>(column) { it.parent as? View }
+                    .filterIsInstance<NativeModalPaintedSurface>().first()
+                val texturedRange = paintedSurface.paintedTextSurface
                 val evidence = JSONObject().put("route", route).put("passed", false)
-                    .put("column_background", shared?.javaClass?.name ?: JSONObject.NULL)
+                    .put("paint_owner", paintedSurface.javaClass.name)
+                    .put("column_background", column.background?.javaClass?.name ?: JSONObject.NULL)
                     .put("body_background", content.background?.javaClass?.name ?: JSONObject.NULL)
                 backgroundOwnership.put(evidence)
-                check(content.background == null && handle.background == null) { "Sheet background still belongs to a body/handle sibling" }
-                check(if (customBackground != null) shared === customBackground else shared is NoiseDrawable)
-                check(shared?.callback === column)
                 for (seed in listOf<Int?>(null, NoiseDrawable.SEED_TOP_BAR, initial.recipe.grainSeed)) {
                     dialog.updateStyle(initial.copy(recipe = initial.recipe.copy(grainSeed = seed)))
-                    val expected = if (customBackground != null || seed != null) shared else null
-                    check(column.background === expected && content.background == null && handle.background == null)
-                    check(shared?.callback === if (expected == null) null else column)
+                    check(content.background == null && handle.background == null) {
+                        "Sheet background belongs to a body/handle sibling"
+                    }
+                    check(column.background === customBackground) { "Sheet column changed its caller background" }
+                    if (customBackground != null) check(customBackground.callback === column)
+                    val range = paintedSurface.paintedTextSurface
+                    val expected = if (seed == null) textSurfaceRange(initial.palette.surfaceContainerLow)
+                        else texturedRange
+                    check(range == expected) { "Shared surface paint did not follow the grain recipe" }
+                    if (seed == null) check(range != texturedRange) { "Textured fixture had a flat paint range" }
                 }
                 dialog.updateStyle(initial)
                 evidence.put("seed_disable_reenable_preserved_owner", true).put("passed", true)
             }
-            if (route == "androidx-back-dispatcher" || route == "scrim" || genericRoute) {
+            if (flatPaintRoute || genericRoute) {
                 val paintCase = JSONObject().put("route", route).put("passed", false)
                 surfacePaint.put(paintCase)
                 val bitmap = captureRestartSheet(instrumentation, host, checkNotNull(dialog.window))
@@ -209,7 +232,7 @@ internal fun verifyNativeActionSheetDismissalCurrent(instrumentation: Instrument
                     paintCase.put("passed", true)
                 } finally { bitmap.recycle() }
             }
-            if (route == "androidx-back-dispatcher" || route == "scrim") {
+            if (flatPaintRoute) {
                 verifySheetHandleIndication(instrumentation, host, dialog, body, directory, route, handleIndication)
             }
             fun dispatchOrdinary(cancelled: Boolean = false) = main {

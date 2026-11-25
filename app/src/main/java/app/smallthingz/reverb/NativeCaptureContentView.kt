@@ -54,8 +54,6 @@ internal class NativeCaptureContentView(
     private var renderedRangeConfig: ExportUiConfig? = null
     private var lastHomeRoot: Rect? = null
     private var lastHomeBlob: Rect? = null
-    private var sourceKeySlot: BufferSlot? = null
-    private var sourceKeySnapshot: ReverbService.TimelineSnapshot? = null
     private var sourceGeometry: RangeMorphSourceGeometry? = null
     private var backProgress = 0f
     private val rangeBack = NativeLibraryPredictiveBack(dispatcher, lifecycleOwner, scope,
@@ -89,7 +87,7 @@ internal class NativeCaptureContentView(
         val slot = state.rangeSnapshotBuffer
         if (slot == null) {
             if (rangeView != null) disposeRange()
-            sourceKeySlot = null; sourceKeySnapshot = null; sourceGeometry = null
+            sourceGeometry = null
             val body = normal ?: ReverbHomeBodyOwner(context, environment, state.body,
                 state.selectedBuffer, owner.actions, scope, { inputRoot }, ::homeBoundsChanged).also {
                 normal = it
@@ -100,8 +98,9 @@ internal class NativeCaptureContentView(
             if (changedEnvironment) body.setEnvironment(environment)
             body.bind(state.body, state.selectedBuffer, owner.actions)
         } else {
-            if (!state.rangeSavePending && (sourceKeySlot != slot || sourceKeySnapshot !== state.rangeSnapshot)) {
-                sourceKeySlot = slot; sourceKeySnapshot = state.rangeSnapshot
+            val enteringRange = rangeOwner?.selectedBuffer != slot
+            if (enteringRange && !state.rangeSavePending) {
+                // Sample before detaching Home. The async snapshot belongs to this same morph.
                 val controller = if (slot == BufferSlot.ONE_SHOT) state.body.oneShotController else state.body.loopingController
                 sourceGeometry = rangeMorphSourceGeometry(lastHomeRoot, lastHomeBlob,
                     state.body.listening && state.body.activeBuffer == slot,
@@ -109,7 +108,7 @@ internal class NativeCaptureContentView(
                     owner.sampledBlobActivity(slot), controller.currentBaseRadiusFraction())
             }
             normal?.let { bodyText?.close(); bodyText = null; removeView(it.view); it.close(); normal = null }
-            if (rangeOwner?.selectedBuffer != slot) {
+            if (enteringRange) {
                 disposeRange()
                 val metrics = if (slot == BufferSlot.ONE_SHOT) state.body.oneShotMetrics else state.body.loopingMetrics
                 val created = NativeRangeExportOwner(context, lifecycleOwner, slot,

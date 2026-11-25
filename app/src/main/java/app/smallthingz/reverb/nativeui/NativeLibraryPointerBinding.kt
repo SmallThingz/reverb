@@ -9,6 +9,7 @@ import smallthingz.ui.input.phase.NativeAndroidInteropNode
 import smallthingz.ui.input.phase.NativePointerLayerShape
 import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.scroll.NativeVerticalViewport
+import android.os.Build
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewConfiguration
@@ -118,6 +119,9 @@ internal class NativeLibraryPointerBinding(
             }
             rebuildListNodes()
         }
+        // The Info cutout uses View geometry; Android 12+ stretch deforms its card in a RenderNode.
+        listView?.sourceOverscroll?.setEffectsEnabled(
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.S || !content.inlineInfoActive)
         val nextEmpty = content.emptyViewport
         if (nextEmpty !== emptyView) {
             emptyScroll?.close()

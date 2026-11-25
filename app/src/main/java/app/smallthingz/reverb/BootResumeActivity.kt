@@ -62,8 +62,9 @@ class BootResumeActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        val dark = getConfiguredThemeMode(this).nativeIsDark(
-            resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES)
+        val displayDark = (application as ReverbApplication).displayNightObserver?.dark?.value
+            ?: (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES)
+        val dark = getConfiguredThemeMode(this).nativeIsDark(displayDark)
         setTheme(if (dark) R.style.Theme_Reverb_Dark else R.style.Theme_Reverb_Light)
         super.onCreate(savedInstanceState)
         val candidate = if (savedInstanceState == null && !startedMains.refreshVisibility() && unlockedInteractive(this))
