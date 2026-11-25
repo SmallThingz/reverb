@@ -3,6 +3,7 @@ package app.smallthingz.reverb
 import android.app.Application
 import android.app.Instrumentation
 import android.content.Context
+import android.content.SharedPreferences
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
@@ -14,13 +15,19 @@ import android.os.SystemClock
 import android.view.Choreographer
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewTreeObserver
 import android.widget.TextView
 import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import androidx.core.graphics.ColorUtils
 import app.smallthingz.reverb.nativeui.*
 import java.io.File
 import java.lang.reflect.Field
 import java.util.function.LongSupplier
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+import kotlin.math.roundToInt
 import kotlin.math.pow
 import org.json.JSONArray
 import org.json.JSONObject
@@ -32,12 +39,15 @@ import smallthingz.ui.R as NativeUiR
 import smallthingz.ui.components.NativeColorScheme
 import smallthingz.ui.components.NativeDarkSurfacePreset
 import smallthingz.ui.components.NativeGrainPreset
+import smallthingz.ui.components.NativeMaterialSwitchView
+import smallthingz.ui.components.NativeToggleRow
 import smallthingz.ui.controls.textSurfaceForeground
 import smallthingz.ui.reverb.settings.ReverbRetentionInputView
 import smallthingz.ui.reverb.settings.ReverbRetentionMode
 import smallthingz.ui.reverb.ReverbTitledTopBarLayout
 import smallthingz.ui.reverb.ReverbDesign
 import smallthingz.ui.graphics.NoiseDrawable
+import smallthingz.ui.graphics.NoiseTexture
 import smallthingz.ui.text.RetentionLineHeightSpan
 import smallthingz.ui.text.view.ParagraphView
 import smallthingz.ui.graphics.Color as NativeColor
@@ -68,6 +78,9 @@ internal fun verifyNativeSettingsThemeContrast(instrumentation: Instrumentation,
         cases.put(producer)
         main { verifyReverbSurfaceProducer(host, producer) }
         cases.put(main { verifyRetentionEditorPaletteGeometry(host) })
+        val cachedRecording = JSONObject().put("name", "recording-cache-light-dark-light").put("passed", false)
+        cases.put(cachedRecording)
+        verifySettingsCachedRecordingTheme(instrumentation, host, directory, cachedRecording)
         for (scene in listOf(SettingsSectionKey.RETENTION, SettingsSectionKey.RECORDING)) {
             val current = main {
                 MainSettingsParityRender(host, false, AppThemeMode.SYSTEM, true, null,
@@ -194,7 +207,284 @@ internal fun verifyNativeSettingsThemeContrast(instrumentation: Instrumentation,
         report.appendLine("SETTINGS_THEME_CONTRAST_EVIDENCE ${directory.absolutePath}")
     }
     failure?.let { throw it }
-    report.appendLine("PASS native_settings_theme_contrast actual Settings glyphs, grain bounds, parent-only hardware invalidation and retained editor")
+    report.appendLine("PASS native_settings_theme_contrast actual Settings glyphs, grain bounds, cached Recording reattachment, parent-only hardware invalidation and retained editor")
+}
+
+/** Uses the app's Main -> Settings bind and its real Recording factory on both sides. */
+internal fun verifySettingsCachedRecordingTheme(instrumentation: Instrumentation, host: NativeParityActivity,
+    directory: File, result: JSONObject) {
+    check(host.packageName == "app.smallthingz.reverb.uitheme.reliability")
+    fun <T> main(block: () -> T) = nativeParityOnMain(instrumentation, block)
+    val preferences = getRecorderPreferences(host)
+    val originalPreferences = preferences.all.toMap()
+    val committedTheme = processCommittedTheme.state.value
+    val preferenceChanges = AtomicInteger()
+    val preferenceListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ -> preferenceChanges.incrementAndGet() }
+    val rounds = JSONArray()
+    result.put("rounds", rounds).put("animation_scale", 1)
+        .put("sample", "Software switch draw at first tree OnDraw after real cached attachment; color callbacks held at attachment")
+    var failure: Throwable? = null
+    var switchActions = 0
+    val callbackField = themeField(NativeToggleRow::class.java, "onChanged")
+    val originalCallbacks = mutableListOf<Pair<NativeToggleRow, Any?>>()
+    val originalScales = mutableListOf<Pair<ViewColorTransition, Any?>>()
+    var freshSection: NativeSettingsSection? = null
+    val current = main {
+        MainSettingsParityRender(host, false, AppThemeMode.LIGHT, false, null,
+            productionWindowFocus = true, productionEnvironmentForProbe = true)
+    }
+    fun motion(view: NativeMaterialSwitchView) = themeField(view, "colorMotion").get(view) as ViewColorTransition
+    fun switches(view: View) = themeViews(view).filterIsInstance<NativeMaterialSwitchView>().toList()
+    fun geometry(view: NativeMaterialSwitchView): List<Int> {
+        val row = view.parent as NativeToggleRow
+        return listOf(row.width, row.height, row.paddingLeft, row.paddingTop, row.paddingRight, row.paddingBottom,
+            view.left, view.top, view.right, view.bottom, view.measuredWidth, view.measuredHeight, view.layoutDirection)
+    }
+    fun colors(view: NativeMaterialSwitchView) = (0..2).map { motion(view).color(it) }
+    fun bitmap(view: NativeMaterialSwitchView): Bitmap {
+        val image = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+        try { view.draw(Canvas(image)); return image }
+        catch (error: Throwable) { image.recycle(); throw error }
+    }
+    fun await(label: String, ready: () -> Boolean) {
+        val deadline = SystemClock.uptimeMillis() + 5_000L
+        while (!main(ready)) {
+            check(SystemClock.uptimeMillis() < deadline) { "Cached Recording fixture timed out at $label" }
+            awaitNativeParityDraw(instrumentation, current.board)
+        }
+    }
+    try {
+        preferences.registerOnSharedPreferenceChangeListener(preferenceListener)
+        main {
+            // A bounded real viewport puts Recording fully into RV's cache at the Theme row.
+            current.board.layoutParams = android.widget.FrameLayout.LayoutParams(-1,
+                (240 * host.resources.displayMetrics.density).roundToInt())
+        }
+        val openSettings = host.getString(R.string.open_settings)
+        await("open Settings") { current.actionCount(openSettings) == 1 }
+        main { current.click(openSettings) }
+        await("hydrated Settings") {
+            themeViews(current.board).filterIsInstance<NativeSettingsScreenContent>().any {
+                it.inputAllowed && it.owner.autoStartChoice.loaded && !it.owner.autoStartChoice.saving
+            }
+        }
+        val settings = main { themeViews(current.board).filterIsInstance<NativeSettingsScreenContent>().single() }
+        await("Settings panel settled") {
+            val root = themeViews(current.board).filterIsInstance<NativeMainScreenView>().single()
+            val panel = themeField(root, "settingsMotion").get(root) as NativeMainPanelMotion
+            panel.panelProgress == 1f && panel.settledProgress == 1f
+        }
+        val viewport = main { checkNotNull(settings.listViewport) }
+        val manager = main { viewport.layoutManager as LinearLayoutManager }
+        val adapter = main { checkNotNull(viewport.adapter) }
+        fun position(key: SettingsSectionKey) = (0 until adapter.itemCount).single { adapter.getItemViewType(it) == key.ordinal }
+        fun preview(mode: AppThemeMode) {
+            // The existing harness callback publishes the production environment through Main.bind.
+            // It changes no draft field and never activates a switch or a Theme choice.
+            current.javaClass.getDeclaredMethod("themeChanged", AppThemeMode::class.java)
+                .apply { isAccessible = true }.invoke(current, mode)
+        }
+        main {
+            viewport.setItemViewCacheSize(adapter.itemCount)
+            manager.isItemPrefetchEnabled = false
+            preview(AppThemeMode.LIGHT)
+            manager.scrollToPositionWithOffset(position(SettingsSectionKey.RECORDING), 0)
+        }
+        await("Recording placement and grain") {
+            val holder = viewport.findViewHolderForAdapterPosition(position(SettingsSectionKey.RECORDING))
+            holder?.itemView?.isAttachedToWindow == true && !viewport.isLayoutRequested &&
+                !viewport.isComputingLayout && !viewport.hasPendingAdapterUpdates() &&
+                switches(holder.itemView).size == 4 && switches(holder.itemView).all { !themeState(motion(it)).running } &&
+                NoiseTexture.shader(NoiseDrawable.SEED_BACKGROUND) != null
+        }
+        val retained = main { checkNotNull(viewport.findViewHolderForAdapterPosition(position(SettingsSectionKey.RECORDING))) }
+        val controls = main { switches(retained.itemView) }
+        val recordingOffset = main {
+            val bounds = Rect(0, 0, controls.first().width, controls.first().height)
+            (retained.itemView as ViewGroup).offsetDescendantRectToMyCoords(controls.first(), bounds)
+            (viewport.height - bounds.height()) / 2 - bounds.top
+        }
+        main { manager.scrollToPositionWithOffset(position(SettingsSectionKey.RECORDING), recordingOffset) }
+        await("visible compression switch") {
+            val visible = Rect()
+            !viewport.isLayoutRequested && controls.first().getGlobalVisibleRect(visible) &&
+                visible.width() == controls.first().width && visible.height() == controls.first().height
+        }
+        val originalGeometry = main { controls.map(::geometry) }
+        val originalState = main { controls.map { themeField(it, "checked").getBoolean(it) to it.isEnabled } }
+        val draft = main { settings.owner.state }
+        val autoStart = main { settings.owner.autoStartChoice }
+        val autoStartRevision = AutoStartAfterRestart.policy.revision()
+        val factory = main { themeField(settings, "sections").get(settings) as NativeSettingsSections }
+        val recycler = main { themeField(RecyclerView::class.java, "mRecycler").get(viewport) }
+        fun isCached() = (themeField(recycler, "mCachedViews").get(recycler) as List<*>).any { it === retained }
+        fun checkCleanCache() {
+            check(isCached() && !retained.itemView.isAttachedToWindow && !viewport.hasPendingAdapterUpdates())
+            check(settings.owner.state == draft)
+            for ((method, expected) in listOf("isBound" to true, "isInvalid" to false, "needsUpdate" to false)) {
+                check(RecyclerView.ViewHolder::class.java.getDeclaredMethod(method).apply { isAccessible = true }
+                    .invoke(retained) == expected)
+            }
+        }
+        fun referenceColors(): List<List<Int>> {
+            val reference = factory.create(SettingsSectionKey.RECORDING).also { freshSection = it }
+            reference.bind()
+            val colors = switches(reference.view).map(::colors)
+            reference.close()
+            freshSection = null
+            return colors
+        }
+        var previousReference = main { referenceColors() }
+        main {
+            check(controls.distinct().size == 4 && retained.itemId == SettingsSectionKey.RECORDING.ordinal.toLong())
+            for (control in controls) {
+                val row = control.parent as NativeToggleRow
+                originalCallbacks += row to callbackField.get(row)
+                callbackField.set(row, { _: Boolean ->
+                    switchActions++
+                    error("Theme rebind invoked a Recording row action")
+                })
+                val colorMotion = motion(control)
+                val scale = themeField(colorMotion, "durationScale")
+                originalScales += colorMotion to scale.get(colorMotion)
+                scale.set(colorMotion, { 1f }) // Fixture-local supplier also works when device animation scale is zero.
+            }
+        }
+        for (mode in listOf(AppThemeMode.DARK, AppThemeMode.LIGHT)) {
+            val previousColors = main { controls.map(::colors) }
+            main { manager.scrollToPositionWithOffset(position(SettingsSectionKey.THEME), 0) }
+            await("Recording cached before $mode") { !retained.itemView.isAttachedToWindow && isCached() }
+            val entry = JSONObject().put("theme", mode.name).put("passed", false)
+                .put("previous_actual_colors", JSONArray(previousColors))
+            rounds.put(entry)
+            val fresh = main {
+                preview(mode)
+                check(settings.owner.state == draft && isCached() && !retained.itemView.isAttachedToWindow)
+                check(current.effectiveDark == (mode == AppThemeMode.DARK))
+                check(settings.pointerEnvironment.palette == ReverbDesign.appearance.resolveColorScheme(host, current.effectiveDark))
+                checkCleanCache()
+                factory.create(SettingsSectionKey.RECORDING).also { freshSection = it }
+            }
+            val drawn = CountDownLatch(1)
+            var sampleFailure: Throwable? = null
+            var sampled = false
+            var attached = 0
+            val held = main { controls.map { HeldThemeMotion(motion(it)) } }
+            val attachListener = object : RecyclerView.OnChildAttachStateChangeListener {
+                override fun onChildViewAttachedToWindow(view: View) {
+                    if (view === retained.itemView) {
+                        attached++
+                        held.forEach { it.stop() }
+                    }
+                }
+                override fun onChildViewDetachedFromWindow(view: View) = Unit
+            }
+            val drawListener = ViewTreeObserver.OnDrawListener {
+                if (attached > 0 && !sampled) {
+                    sampled = true
+                    try {
+                        check(attached == 1 && viewport.findViewHolderForAdapterPosition(position(SettingsSectionKey.RECORDING)) === retained)
+                        check(retained.itemView.isShown && retained.itemView.getGlobalVisibleRect(Rect()))
+                        val visible = Rect()
+                        check(controls.first().getGlobalVisibleRect(visible) && visible.width() == controls.first().width &&
+                            visible.height() == controls.first().height) { "First sampled switch is clipped" }
+                        check(switches(retained.itemView) == controls)
+                        check(controls.map(::geometry) == originalGeometry)
+                        check(controls.map { themeField(it, "checked").getBoolean(it) to it.isEnabled } == originalState)
+                        val freshControls = switches(fresh.view)
+                        check(freshControls.size == 4 && freshControls.map(::geometry) == originalGeometry)
+                        check(freshControls.map { themeField(it, "checked").getBoolean(it) to it.isEnabled } == originalState)
+                        check(freshControls.map(::colors) != previousReference) { "Fresh Light/Dark endpoints do not distinguish this case" }
+                        previousReference = freshControls.map(::colors)
+                        val samples = JSONArray()
+                        entry.put("switches", samples).put("same_cached_holder", true).put("same_views_state_geometry", true)
+                        var equal = true
+                        for (index in controls.indices) {
+                            val actual = controls[index]
+                            val expected = freshControls[index]
+                            val actualBitmap = bitmap(actual)
+                            try {
+                                val expectedBitmap = bitmap(expected)
+                                try {
+                                    val pixels = compareNativeParityPixels(expectedBitmap, actualBitmap)
+                                    val matches = pixels.getLong("different_pixels") == 0L && colors(actual) == colors(expected) &&
+                                        !themeState(motion(actual)).running
+                                    equal = equal && matches
+                                    samples.put(JSONObject().put("row", index).put("class", actual.javaClass.name)
+                                        .put("checked", originalState[index].first).put("enabled", actual.isEnabled)
+                                        .put("geometry_px", JSONArray(geometry(actual))).put("pixel_comparison", pixels)
+                                        .put("actual_colors", JSONArray(colors(actual))).put("fresh_colors", JSONArray(colors(expected)))
+                                        .put("transition_running", themeState(motion(actual)).running).put("passed", matches))
+                                    if (!matches) {
+                                        saveNativeParityBitmap(directory, "cached-$mode-$index.png", actualBitmap)
+                                        saveNativeParityBitmap(directory, "fresh-$mode-$index.png", expectedBitmap)
+                                    }
+                                } finally { expectedBitmap.recycle() }
+                            } finally { actualBitmap.recycle() }
+                        }
+                        entry.put("passed", equal)
+                    } catch (error: Throwable) { sampleFailure = error }
+                    finally { drawn.countDown() }
+                }
+            }
+            var roundFailure: Throwable? = null
+            try {
+                main {
+                    fresh.bind()
+                    fresh.view.layoutDirection = retained.itemView.layoutDirection
+                    fresh.view.measure(View.MeasureSpec.makeMeasureSpec(retained.itemView.width, View.MeasureSpec.EXACTLY),
+                        View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED))
+                    fresh.view.layout(0, 0, fresh.view.measuredWidth, fresh.view.measuredHeight)
+                    viewport.addOnChildAttachStateChangeListener(attachListener)
+                    current.board.viewTreeObserver.addOnDrawListener(drawListener)
+                    // Check again in the same main-thread turn as the scroll request.
+                    checkCleanCache()
+                    manager.scrollToPositionWithOffset(position(SettingsSectionKey.RECORDING), recordingOffset)
+                }
+                check(drawn.await(5, TimeUnit.SECONDS)) { "No first Recording draw after $mode" }
+                sampleFailure?.let { throw it }
+                main {
+                    check(settings.owner.state == draft && settings.owner.autoStartChoice == autoStart)
+                    check(AutoStartAfterRestart.policy.revision() == autoStartRevision && switchActions == 0)
+                    check(preferences.all == originalPreferences && preferenceChanges.get() == 0)
+                }
+            } catch (error: Throwable) { roundFailure = error }
+            finally {
+                roundFailure = captureNativeParityCleanup(roundFailure) { main {
+                    viewport.removeOnChildAttachStateChangeListener(attachListener)
+                    if (current.board.viewTreeObserver.isAlive) current.board.viewTreeObserver.removeOnDrawListener(drawListener)
+                } }
+                roundFailure = captureNativeParityCleanup(roundFailure) { main { fresh.close(); freshSection = null } }
+                roundFailure = captureNativeParityCleanup(roundFailure) { main {
+                    // Resume ordinary advancement after the first-draw evidence, including a failing old-source round.
+                    controls.forEach { motion(it).doFrame(System.nanoTime()) }
+                } }
+            }
+            roundFailure?.let { throw it }
+            await("settled $mode before next round") { controls.all { !themeState(motion(it)).running } }
+        }
+        result.put("retained_row_actions", switchActions).put("observed_preference_changes", preferenceChanges.get())
+            .put("passed", (0 until rounds.length()).all { rounds.getJSONObject(it).getBoolean("passed") })
+        check(result.getBoolean("passed")) { "Cached Recording first-draw colors differ from fresh controls; see both theme rounds" }
+    } catch (error: Throwable) { failure = error }
+    finally {
+        originalCallbacks.forEach { (row, callback) ->
+            failure = captureNativeParityCleanup(failure) { main { callbackField.set(row, callback) } }
+        }
+        originalScales.forEach { (motion, scale) ->
+            failure = captureNativeParityCleanup(failure) { main { themeField(motion, "durationScale").set(motion, scale) } }
+        }
+        failure = captureNativeParityCleanup(failure) { main { freshSection?.close() } }
+        failure = captureNativeParityCleanup(failure) { main { current.close() } }
+        failure = captureNativeParityCleanup(failure) { current.awaitClosed() }
+        failure = captureNativeParityCleanup(failure) { main {
+            preferences.unregisterOnSharedPreferenceChangeListener(preferenceListener)
+            check(preferences.all == originalPreferences && preferenceChanges.get() == 0)
+            check(processCommittedTheme.state.value == committedTheme && current.forbiddenCalls == 0 && switchActions == 0)
+        } }
+        if (failure != null) result.put("passed", false).put("failure", failure!!.stackTraceToString())
+    }
+    failure?.let { throw it }
 }
 
 /** Actual Android producer/consumer check; expected RGB never comes from the Reverb producer. */

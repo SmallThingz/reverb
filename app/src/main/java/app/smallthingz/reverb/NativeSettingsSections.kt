@@ -35,6 +35,11 @@ internal class NativeSettingsSections(
 ) : SettingsSectionFactory {
     private val recordings = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<Recording, Boolean>())
     fun dismissAudioChoices() = recordings.forEach { it.dismissAudioChoice() }
+
+    fun bindDetachedRecordingSections() {
+        recordings.forEach { if (!it.view.isAttachedToWindow) it.bind() }
+    }
+
     fun refreshCalibration() { recordings.filter { it.view.isAttachedToWindow }.forEach { it.refreshCalibration() } }
     fun pointerNodes(view: View): List<NativeViewPhasePointerNode> {
         for (recording in recordings) {

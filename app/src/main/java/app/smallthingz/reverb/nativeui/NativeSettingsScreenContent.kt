@@ -172,7 +172,10 @@ internal class NativeSettingsScreenContent(
             owner.allFilesAllowed,owner.audioReadAllowed,owner.autoStartChoice,environment,input.focusRetention)
         val tileEditorChanged=tileEditorPublication.changed(owner.quickTileEditorState)
         if(lastSections!=sectionValues) {
+            val environmentChanged = lastSections?.environment !== environment
             lastSections=sectionValues
+            // Cached switches must receive the palette before they can animate it on attach.
+            if (environmentChanged) sections.bindDetachedRecordingSections()
             currentList.bind(owner.batteryOptimizationRestricted || owner.resumeNotificationBlocked ||
                 owner.restartAccessMissing,environment)
         } else {
