@@ -2,17 +2,17 @@
 <resources>
     <style name="Theme.Reverb" parent="@android:style/Theme.Material.Light.NoActionBar">
         <item name="android:windowNoTitle">true</item>
-        <item name="android:windowBackground">@drawable/reverb_window_background</item>
+        <item name="android:windowBackground">@color/native_default_light_background</item>
     </style>
 
     <style name="Theme.Reverb.Light" parent="@android:style/Theme.Material.Light.NoActionBar">
         <item name="android:windowNoTitle">true</item>
-        <item name="android:windowBackground">@drawable/reverb_window_background</item>
+        <item name="android:windowBackground">@color/native_default_light_background</item>
     </style>
 
     <style name="Theme.Reverb.Dark" parent="@android:style/Theme.Material.NoActionBar">
         <item name="android:windowNoTitle">true</item>
-        <item name="android:windowBackground">@drawable/reverb_window_background</item>
+        <item name="android:windowBackground">@color/native_default_amoled_background</item>
     </style>
 
     <style name="Theme.Reverb.QuickTileAction" parent="@android:style/Theme.Material.NoActionBar">
@@ -24,8 +24,8 @@
     </style>
 
     <style name="Theme.Reverb.Splash" parent="Theme.SplashScreen">
-        <item name="windowSplashScreenBackground">@color/launcher_background</item>
-        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="windowSplashScreenBackground">@color/reverb_splash_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/reverb_splash_foreground</item>
         <item name="windowSplashScreenAnimationDuration">960</item>
         <item name="postSplashScreenTheme">@style/Theme.Reverb</item>
     </style>

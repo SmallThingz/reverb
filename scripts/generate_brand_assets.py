@@ -162,6 +162,7 @@ def assets(android_only=False):
     }
     for variant, filename in (("color", "ic_launcher_foreground"),
                               ("mono", "ic_launcher_monochrome"),
+                              ("compat_splash", "reverb_splash_foreground"),
                               ("splash", "reverb_splash_vector")):
         size = f"{MARK_SIZE_DP * (4 if variant == 'splash' else 1)}dp"
         vector = ET.Element("vector", android(width=size, height=size, viewportWidth="512", viewportHeight="512"))
@@ -172,6 +173,8 @@ def assets(android_only=False):
             child = ET.SubElement(group, "group", android(name="main_r" if name == "main" else name + "_echo", translateX=x))
             for path in glyph:
                 color = "#FFFFFFFF" if variant == "mono" else "@color/launcher_" + ("main" if name == "main" else "accent")
+                if variant == "compat_splash" and name == "main":
+                    color = "@color/reverb_splash_compat_main"
                 alpha = "0" if variant == "splash" and name != "main" else layer.attrib["stroke-opacity"]
                 ET.SubElement(child, "path", android(
                     name=name + "_" + path.attrib["id"], pathData=path.attrib["d"],

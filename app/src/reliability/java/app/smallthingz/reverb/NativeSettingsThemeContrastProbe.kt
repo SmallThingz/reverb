@@ -28,7 +28,10 @@ import smallthingz.ui.animation.ColorTransition
 import smallthingz.ui.animation.view.ViewColorTransition
 import smallthingz.ui.components.NativeDropdown
 import smallthingz.ui.components.NativeBackdropBinding
+import smallthingz.ui.R as NativeUiR
 import smallthingz.ui.components.NativeColorScheme
+import smallthingz.ui.components.NativeDarkSurfacePreset
+import smallthingz.ui.components.NativeGrainPreset
 import smallthingz.ui.controls.textSurfaceForeground
 import smallthingz.ui.reverb.settings.ReverbRetentionInputView
 import smallthingz.ui.reverb.settings.ReverbRetentionMode
@@ -198,9 +201,9 @@ internal fun verifyNativeSettingsThemeContrast(instrumentation: Instrumentation,
 private fun verifyReverbSurfaceProducer(context: Context, result: JSONObject) {
     val rows = JSONArray()
     result.put("samples", rows)
-    var oldOpaqueFailures = 0
     var oldTransparentFailures = 0
-    fun verify(label: String, source: Int, amount: Float, actual: Int) {
+    fun verifyModal(label: String, source: Int, actual: Int) {
+        val amount = .08f
         val alpha = Color.alpha(source)
         val retained = 1f - amount
         // Independent black-blend RGB reference, preserving the source alpha verbatim.
@@ -223,12 +226,7 @@ private fun verifyReverbSurfaceProducer(context: Context, result: JSONObject) {
                 "$label: opaque producer became an unknown surface"
             }
         } else check(range == 0L) { "$label: translucent producer claimed an opaque surface" }
-        if (amount == .04f) {
-            check(alpha == 255 && Color.alpha(old) == 254 && oldRange == 0L && old != expected) {
-                "$label: old opaque-alpha truncation negative control did not reproduce"
-            }
-            oldOpaqueFailures++
-        } else if (alpha in listOf(0, 1, 127)) {
+        if (alpha in listOf(0, 1, 127)) {
             check(Color.alpha(old) != alpha && old != expected) { "$label: old transparency mutation did not reproduce" }
             oldTransparentFailures++
         }
@@ -238,27 +236,38 @@ private fun verifyReverbSurfaceProducer(context: Context, result: JSONObject) {
             // Retain one resource snapshot for both resolvers, avoiding a changing system palette.
             val resources = HashMap<Int, Int>()
             val readColor: (Int) -> Int = { id ->
-                check(sdk >= 31) { "Fallback palette unexpectedly requested a device resource" }
+                check(sdk >= 31 || id == NativeUiR.color.native_default_light_background) {
+                    "Fallback palette requested unexpected resource $id"
+                }
                 resources.getOrPut(id) { context.resources.getColor(id, context.theme) }
             }
             val source = NativeColorScheme.resolve(dark, sdk, readColor)
             val actual = ReverbDesign.appearance.colorScheme.resolve(dark, sdk, readColor)
             val label = "$name-sdk$sdk-${if (dark) "dark" else "light"}"
-            check(Color.alpha(source.background) == 255 && Color.alpha(source.surface) == 255)
-            verify("$label-background", source.background, .04f, actual.background)
-            verify("$label-surface", source.surface, .04f, actual.surface)
-            check(actual.copy(background = source.background, surface = source.surface) == source) {
-                "$label: unrelated palette roles changed"
+            val backdrop = if (dark) context.getColor(NativeUiR.color.native_default_amoled_background)
+                else readColor(NativeUiR.color.native_default_light_background)
+            val expected = if (dark) NativeDarkSurfacePreset.Amoled.colorScheme().resolve(true, sdk, readColor)
+                else source.copy(background = backdrop, surface = backdrop,
+                    surfacePreset = NativeGrainPreset(backgroundGrain = 1f, foregroundGrain = .5f))
+            check(actual == expected) { "$label: default appearance palette differs from the shared policy" }
+            for ((role, color) in listOf("background" to actual.background, "surface" to actual.surface)) {
+                val range = NoiseDrawable(color).paintedTextSurface
+                check(color == backdrop && Color.alpha(color) == 255 && range != 0L) {
+                    "$label-$role: shared backdrop must be opaque and sampleable"
+                }
+                rows.put(JSONObject().put("label", "$label-$role")
+                    .put("expected_argb", backdrop.toLong() and 0xffffffffL)
+                    .put("actual_argb", color.toLong() and 0xffffffffL).put("known_surface", true))
             }
             for (alpha in listOf(0, 1, 127, 254, 255)) {
                 val modalSource = (source.surfaceContainerLow and 0x00ffffff) or (alpha shl 24)
-                verify("$label-modal-alpha$alpha", modalSource, .08f,
+                verifyModal("$label-modal-alpha$alpha", modalSource,
                     ReverbDesign.modalSurface(source.copy(surfaceContainerLow = modalSource)))
             }
         }
     }
-    check(rows.length() == 28 && oldOpaqueFailures == 8 && oldTransparentFailures == 12)
-    result.put("old_opaque_failures", oldOpaqueFailures).put("old_transparent_failures", oldTransparentFailures)
+    check(rows.length() == 28 && oldTransparentFailures == 12)
+    result.put("old_transparent_failures", oldTransparentFailures)
         .put("passed", true)
 }
 
