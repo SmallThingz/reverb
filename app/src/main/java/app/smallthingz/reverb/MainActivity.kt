@@ -49,6 +49,7 @@ class MainActivity : ComponentActivity() {
     private var themeJob: Job? = null
     private var closed = false
     private var renderedDark: Boolean? = null
+    private var platformThemeResource = 0
     private var windowPaletteDark: Boolean? = null
     private lateinit var environment: ReverbViewEnvironment
     private lateinit var directoryResultKey: String
@@ -86,7 +87,7 @@ class MainActivity : ComponentActivity() {
             ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED else ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
         installSplashScreen() // No keep-on-screen gate: same released early removal.
         val configuredMode = getConfiguredThemeMode(this)
-        setTheme(if (configuredMode.nativeIsDark(systemDark())) R.style.Theme_Reverb_Dark else R.style.Theme_Reverb_Light)
+        bindPlatformTheme(configuredMode.nativeIsDark(systemDark()))
         super.onCreate(savedInstanceState)
         statusBarProtection = createReverbStatusBarProtection(this)
         configureWindow()
@@ -118,6 +119,7 @@ class MainActivity : ComponentActivity() {
             it.observeCommitted(processCommittedTheme.state.value)
         }
         val dark = themePresentation.mode.nativeIsDark(systemDark())
+        bindPlatformTheme(dark)
         renderedDark = dark
         environment = ReverbViewEnvironment(this, dark)
         windowBackdrop = ReverbDesign.windowBackdrop(environment.palette)
@@ -229,6 +231,7 @@ class MainActivity : ComponentActivity() {
     private fun publishTheme() {
         if (closed) return
         val dark = themePresentation.mode.nativeIsDark(systemDark())
+        bindPlatformTheme(dark)
         // Navigation icons still follow the selected theme; status icons remain fixed.
         applyWindowPalette(dark)
         if (renderedDark != dark) {
@@ -238,6 +241,13 @@ class MainActivity : ComponentActivity() {
             ReverbDesign.bindWindowBackdrop(windowBackdrop, environment.palette)
             content.bind(owner.snapshot, environment)
         }
+    }
+
+    private fun bindPlatformTheme(dark: Boolean) {
+        val resource = if (dark) R.style.Theme_Reverb_Dark else R.style.Theme_Reverb_Light
+        if (platformThemeResource == resource) return
+        setTheme(resource)
+        platformThemeResource = resource
     }
 
     @Suppress("DEPRECATION")
