@@ -55,6 +55,8 @@ internal class NativeSettingsOwner(
     private var hydrationActive = false
     private var hydrationPersisting = false
     private var hydrationJob: Job? = null
+    // An unrelated successful save does not change this baseline, even after its UI tail.
+    private var malformedSilence: DurablePreferenceValueSnapshot? = null
     private var moveRevision = 0
     private var batteryObserverInstalled = false
     private var routes = supportedInputRouteModes(context)
@@ -236,13 +238,13 @@ internal class NativeSettingsOwner(
         try {
             errors = NativeSettingsRetentionErrors()
             notifyChanged()
-            when (readSettingsRetentionPreflight(admission, { retentionMutationIsSafe(context) }, ::currentSaveAdmission)) {
-                SettingsRetentionPreflightResult.SUPERSEDED -> return false
-                SettingsRetentionPreflightResult.UNSAFE -> {
-                    feedback(R.string.recorder_state_persist_failed)
-                    return false
-                }
-                SettingsRetentionPreflightResult.READY -> Unit
+            val preflight = runDurableUiAttempt {
+                readSettingsRetentionPreflight(admission, { retentionMutationIsSafe(context) }, ::currentSaveAdmission) ==
+                    SettingsRetentionPreflightResult.READY
+            }
+            if (!preflight.succeeded) {
+                if (currentSaveAdmission() == admission) feedback(R.string.recorder_state_persist_failed, preflight.failure)
+                return false
             }
             val current = state
             val validated = validateNativeSettingsSave(current.baseline, current.displayed)
@@ -250,7 +252,8 @@ internal class NativeSettingsOwner(
             validated.feedback?.let(::feedback)
             val submittedDraft = validated.draft ?: run { notifyChanged(); return false }
             val submission = draft.submission(attempt, submittedDraft)
-            val committedFormat = persistence.persist(current.baseline, submission) ?: return false
+            val committedFormat = persistence.persist(current.baseline, submission, malformedSilence) ?: return false
+            if (submission.snapshot.silenceGate != current.baseline.silenceGate) malformedSilence = null
             val mayContinue = draft.committed(submission, committedFormat)
             val saved = submission.snapshot
             val outputLimit = exportDurationLimitExactSeconds(
@@ -722,9 +725,11 @@ internal class NativeSettingsOwner(
             while (draft.needsHydration) {
                 val revision = state.editRevision
                 val hydrated = runDurableUiAttempt {
+                    var readMalformedSilence: DurablePreferenceValueSnapshot? = null
                     val result = draft.hydrate(
                         readDurable = {
                             val stored = persistence.readStoredConfiguration()
+                            readMalformedSilence = stored.malformedSilence
                             routes = supportedInputRouteModes(context)
                             val resolved = resolveNativeSettingsBaseline(stored, routes,
                                 fallbackRate = snapshot.sampleRate.takeIf { it > 0 } ?: 48_000)
@@ -738,7 +743,13 @@ internal class NativeSettingsOwner(
                             resolved
                         },
                     )
-                    if (result == SettingsDraftHydrationResult.APPLIED) refreshBattery()
+                    if (result == SettingsDraftHydrationResult.APPLIED) {
+                        if (readMalformedSilence != null && readMalformedSilence != malformedSilence) {
+                            feedback(R.string.silence_invalid_settings)
+                        }
+                        malformedSilence = readMalformedSilence
+                        refreshBattery()
+                    }
                     result == SettingsDraftHydrationResult.APPLIED
                 }
                 if (hydrated.succeeded) break

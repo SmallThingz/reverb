@@ -3,6 +3,7 @@ package app.smallthingz.reverb
 import android.annotation.SuppressLint
 import android.content.Context
 import android.net.Uri
+import java.io.IOException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -20,6 +21,9 @@ internal class NativeSettingsPersistence(
     /** Called inside SettingsDraftController.hydrate's existing readSettled barrier. */
     suspend fun readStoredConfiguration():NativeSettingsStoredConfiguration=withContext(Dispatchers.IO) {
         withRetentionPersistenceLock {
+            val preferences = getRecorderPreferences(context)
+            val rawPreferences = preferences.all
+            val silence = decodeOnboardingSilence(rawPreferences)
             NativeSettingsStoredConfiguration(
                 format = getConfiguredOutputFormat(context),
                 themeMode = getConfiguredThemeMode(context),
@@ -33,9 +37,13 @@ internal class NativeSettingsPersistence(
                 flacCompression = getConfiguredFlacCompression(context),
                 quickSaveEnabled = getConfiguredQuickSaveEnabled(context),
                 quickSaveSeconds = getConfiguredQuickSaveSeconds(context),
-                silence = SilenceGatePreferences.read(context),
-                silenceHistogram = getRecorderPreferences(context)
-                    .safeString(PrefKey.SILENCE_CALIBRATION_HISTOGRAM)
+                silence = SilenceGatePreferenceSnapshot(
+                    rawPreferences[PrefKey.SILENCE_GATE.name] as? String,
+                    silence.config,
+                ),
+                malformedSilence = if (silence.valid) null else
+                    durablePreferenceValueSnapshot(rawPreferences, PrefKey.SILENCE_GATE),
+                silenceHistogram = preferences.safeString(PrefKey.SILENCE_CALIBRATION_HISTOGRAM)
                     .takeIf { decodeSilenceCalibrationHistogram(it) != null },
             )
         }
@@ -43,9 +51,14 @@ internal class NativeSettingsPersistence(
 
     /** Caller supplies the already validated submission; no editor normalization or UI save tail. */
     @SuppressLint("UseKtx")
-    suspend fun persist(previous:SettingsSnapshot,submission:SettingsDraftController.Submission):ExportFormat? {
+    suspend fun persist(
+        previous: SettingsSnapshot,
+        submission: SettingsDraftController.Submission,
+        malformedSilence: DurablePreferenceValueSnapshot?,
+    ): ExportFormat? {
         val submittedSnapshot=submission.snapshot
-        val submittedSilenceRaw=submission.originalSilenceRaw
+        // Disabled presentation of corrupt data is not a request to replace it.
+        val writeSilence = malformedSilence == null || submittedSnapshot.silenceGate != previous.silenceGate
         val originalSnapshot=previous
         val currentSnapshot=submittedSnapshot
         val activeRetentionMode=submittedSnapshot.retentionMode
@@ -92,7 +105,6 @@ internal class NativeSettingsPersistence(
             .putInt(PrefKey.FLAC_COMPRESSION_LEVEL, submittedSnapshot.flacCompression)
             .putBoolean(PrefKey.QUICK_SAVE_ENABLED, submittedSnapshot.quickSaveEnabled)
             .putInt(PrefKey.QUICK_SAVE_SECONDS, submittedSnapshot.quickSaveSeconds)
-            .putString(PrefKey.SILENCE_GATE, submittedSnapshot.silenceGate)
             .putString(PrefKey.SILENCE_CALIBRATION_HISTOGRAM.name, submittedSnapshot.silenceHistogram)
             .putInt(PrefKey.PCM_SAMPLE_FORMAT, sampleFormat.storageCode.toInt())
             .putInt(PrefKey.AUDIO_SOURCE, source.storageCode.toInt())
@@ -100,6 +112,7 @@ internal class NativeSettingsPersistence(
             .putInt(PrefKey.INPUT_ROUTE, route.storageCode.toInt())
             .putInt(PrefKey.SAMPLE_RATE, sampleRate)
             .putInt(PrefKey.THEME_MODE, selectedTheme.storageCode.toInt())
+        if (writeSilence) settingsEditor.putString(PrefKey.SILENCE_GATE, submittedSnapshot.silenceGate)
         if (invalidateCachedOneShotFull) {
             settingsEditor.putBoolean(PrefKey.QUICK_TILE_ONE_SHOT_FULL, false)
         }
@@ -116,7 +129,7 @@ internal class NativeSettingsPersistence(
             processSettingsCommitBarrier.runAcceptedSave {
                 val committed = withContext(Dispatchers.IO) {
                 withRetentionPersistenceLock {
-                    val settingsCommitted = SilenceGatePreferences.withSettingsTransaction(context, submittedSilenceRaw) {
+                    val settingsCommitted = withSilenceTransaction(submission.originalSilenceRaw, malformedSilence) {
                     // Roll back to the state that was actually durable when this transaction started,
                     // not to the UI's older edit snapshot. Another writer may have committed since
                     // Settings opened.
@@ -163,7 +176,9 @@ internal class NativeSettingsPersistence(
                             restorePreferences = {
                                 val editor = preferences.edit()
                                 rollbackPreferences.forEach { (key, snapshot) ->
-                                    editor.restoreDurablePreferenceValue(key, snapshot)
+                                    if (key != PrefKey.SILENCE_GATE || writeSilence) {
+                                        editor.restoreDurablePreferenceValue(key, snapshot)
+                                    }
                                 }
                                 editor.commit()
                             },
@@ -196,6 +211,20 @@ internal class NativeSettingsPersistence(
             return null
         }
         return committedOutputFormat
+    }
+
+    private fun withSilenceTransaction(
+        expectedRaw: String?,
+        malformedSilence: DurablePreferenceValueSnapshot?,
+        commit: () -> Boolean,
+    ): Boolean {
+        if (malformedSilence == null) return SilenceGatePreferences.withSettingsTransaction(context, expectedRaw, commit)
+        // Use the tolerant transaction to retain the shared silence lock and revision publication.
+        return SilenceGatePreferences.withOnboardingTransaction(context) {
+            val current = getRecorderPreferences(context).snapshotDurablePreferenceValue(PrefKey.SILENCE_GATE)
+            if (current != malformedSilence) throw IOException(context.getString(R.string.silence_settings_changed))
+            commit()
+        }
     }
 
     fun refreshStoppedQuickTileFallback() {
@@ -245,5 +274,6 @@ internal data class NativeSettingsStoredConfiguration(
     val quickSaveSeconds: Int,
     val silence: SilenceGatePreferenceSnapshot,
     val silenceHistogram: String?,
+    val malformedSilence: DurablePreferenceValueSnapshot?,
 )
 
