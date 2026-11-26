@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.database.Cursor
 import android.database.DatabaseErrorHandler
+import android.database.DatabaseUtils
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteDatabaseCorruptException
 import android.net.Uri
@@ -30,6 +31,48 @@ private const val RECOVERY_LEDGER = "7c4199f06055937856b8c516410b22b2186fc09f84b
 private const val RECOVERY_RESULT = "1dc99d7939f9646473b40f96305ef261b8a3981f76e4bbae325d1c14ac739653"
 private const val RECOVERY_WAV = "029a9cba84693987917c7be5ee161543474f76ab9172ce4d5408c5cdf03c503a"
 private const val RECOVERY_PCM = "be65ea7c0372abbf61923127f77130fe104e08808474e76b7589fbe7b5239c7a"
+
+internal fun requireEmptyTransactionFixtureJournals(context: Context) {
+    val preferences = getRecorderPreferences(context)
+    for (key in listOf(PrefKey.PENDING_RECORDING_DELETIONS, PrefKey.PENDING_OUTPUT_CLEANUP,
+        PrefKey.VERIFIED_EXPORT_STAGING, PrefKey.FILE_COPY_PUBLICATIONS)) {
+        check(preferences.requireDurableStringSet(key).isEmpty()) { "Existing QA journal must be preserved: $key" }
+    }
+}
+
+internal fun requireEmptyTransactionFixtureCatalog(context: Context, recordingId: String? = null) {
+    check(transactionFixtureCatalogIsEmpty(context, recordingId)) {
+        "QA catalog is not empty for ${recordingId ?: "fixture admission or cleanup"}; preserve all rows"
+    }
+}
+
+internal fun transactionFixtureCatalogIsEmpty(context: Context, recordingId: String? = null): Boolean {
+    val file = context.getDatabasePath(DATABASE_FILE_NAME)
+    val state = storagePathState(file)
+    for (suffix in listOf("-journal", "-wal", "-shm")) {
+        val sidecar = observeStoragePath(File(file.path + suffix))
+        check(sidecar.state == StoragePathState.MISSING ||
+            (state == StoragePathState.PRESENT && sidecar.isRegularFile)) {
+            "QA catalog sidecar $suffix is orphaned or unavailable; preserve it"
+        }
+    }
+    if (state == StoragePathState.MISSING) {
+        check(storagePathState(file) == StoragePathState.MISSING) { "QA catalog changed during observation" }
+        return true
+    }
+    return readTransactionFixtureCatalog(file) { database ->
+        val count = if (recordingId == null) {
+            DatabaseUtils.queryNumEntries(database, RecordingDatabase.TABLE_RECORDINGS)
+        } else {
+            DatabaseUtils.queryNumEntries(database, RecordingDatabase.TABLE_RECORDINGS,
+                "${RecordingDatabase.COLUMN_ID} = ?", arrayOf(recordingId))
+        }
+        count == 0L
+    }
+}
+
+internal fun deleteOwnedTransactionFixture(context: Context, recording: RecordingEntity): Boolean =
+    runBlocking { withTimeout(15_000L) { RecordingRepository.deleteExactWithoutPendingReplay(context, recording) } }
 
 /** One explicitly selected retained QA output; never scans for, adopts, or cleans other recordings. */
 internal fun recoverExactNativeTransactionFixture(
@@ -105,9 +148,9 @@ internal fun recoverExactNativeTransactionFixture(
             .put("delete_outcome", "UNKNOWN until backend return and terminal observations")
         publishRecovery(directory, result)
         // Existing backend rechecks this exact current identity; no stale-token or name-based deletion.
-        val removed = runBlocking { withTimeout(15_000L) { RecordingRepository.delete(context, recording) } }
+        val removed = deleteOwnedTransactionFixture(context, recording)
         result.put("delete_returned", removed)
-        check(removed)
+        check(removed) { "Exact QA fixture recovery refused; preserve ${recording.id}" }
         check(recordingAssetState(context, recording) == RecordingAssetState.MISSING)
         requireRecoveryUriAbsent(context, Uri.parse(RECOVERY_URI))
         check(readRecoveryCatalog(context).isEmpty())
@@ -155,7 +198,7 @@ private fun recoveryEnvironment(context: Context): JSONObject {
     check(context.contentResolver.persistedUriPermissions.isEmpty() && getConfiguredExportTreeUri(context) == null)
     check(recordingMutations.activeIds.value.isEmpty()) { "QA mutation is still active" }
     val preferences = getRecorderPreferences(context)
-    check(preferences.requireDurableStringSet(PrefKey.PENDING_RECORDING_DELETIONS).isEmpty())
+    requireEmptyTransactionFixtureJournals(context)
     val values = JSONObject()
     for ((key, value) in preferences.all.toSortedMap()) {
         // Existing delete may retire an explicitly empty journal key; no other preference normalization.
@@ -175,12 +218,20 @@ private fun recoveryEnvironment(context: Context): JSONObject {
         .put("ui_mode", context.resources.configuration.uiMode).put("font_scale", context.resources.configuration.fontScale.toDouble())
 }
 
-private fun readRecoveryCatalog(context: Context): List<RecordingEntity> {
-    val file = context.getDatabasePath(DATABASE_FILE_NAME)
-    check(file.isFile) { "Existing QA catalog missing; no database creation" }
+private fun <T> readTransactionFixtureCatalog(file: File, read: (SQLiteDatabase) -> T): T {
+    check(observeStoragePath(file).isRegularFile) { "QA catalog is missing or unavailable; preserve it" }
     val corruption = DatabaseErrorHandler { throw SQLiteDatabaseCorruptException("Preserve corrupt read-only QA catalog") }
-    return SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READONLY, corruption).use { database ->
-        check(database.isReadOnly && database.version == RecordingDatabase.DATABASE_VERSION)
+    val flags = SQLiteDatabase.OPEN_READONLY or SQLiteDatabase.NO_LOCALIZED_COLLATORS
+    return SQLiteDatabase.openDatabase(file.path, null, flags, corruption).use { database ->
+        check(database.isReadOnly && database.version == RecordingDatabase.DATABASE_VERSION) {
+            "QA catalog schema is unavailable or unsupported; preserve it"
+        }
+        read(database)
+    }
+}
+
+private fun readRecoveryCatalog(context: Context): List<RecordingEntity> =
+    readTransactionFixtureCatalog(context.getDatabasePath(DATABASE_FILE_NAME)) { database ->
         database.query(RecordingDatabase.TABLE_RECORDINGS, arrayOf(
             RecordingDatabase.COLUMN_ID, RecordingDatabase.COLUMN_DISPLAY_NAME, RecordingDatabase.COLUMN_MIME_TYPE,
             RecordingDatabase.COLUMN_STARTED_AT_MILLIS, RecordingDatabase.COLUMN_DURATION_MILLIS, RecordingDatabase.COLUMN_SIZE_BYTES,
@@ -198,7 +249,6 @@ private fun readRecoveryCatalog(context: Context): List<RecordingEntity> {
             }
         }
     }
-}
 
 private fun observeRecoveryProvider(context: Context, recording: RecordingEntity): JSONObject {
     check(recording.id == RECOVERY_URI)

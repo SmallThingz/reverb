@@ -15,6 +15,7 @@ import android.Manifest
 import android.animation.ValueAnimator
 import android.app.Application
 import android.app.Instrumentation
+import android.content.ContentResolver
 import android.content.Context
 import android.content.pm.PackageManager
 import android.content.res.Configuration
@@ -23,7 +24,10 @@ import android.graphics.BitmapFactory
 import android.graphics.Rect
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.os.SystemClock
+import android.provider.DocumentsContract
+import android.provider.MediaStore
 import android.view.Choreographer
 import android.view.ContextThemeWrapper
 import android.view.View
@@ -1837,6 +1841,7 @@ private fun transactionDigest(bytes: ByteArray) = MessageDigest.getInstance("SHA
 internal fun recoverEmptyLibraryFixtureJournal(context: Context, result: JSONObject, persist: () -> Unit) {
     // Plain Application intentionally skips ReverbApplication's startup recovery. Run the real
     // empty QA journal recovery; never synthesize readiness or adopt existing pending saves.
+    requireQuietTransactionFixtureCatalog(context)
     val journal = durableSaveJournalRoot(context)
     val journalState = storagePathState(journal)
     check(journal.parentFile?.canonicalFile == context.noBackupFilesDir.canonicalFile)
@@ -1851,6 +1856,7 @@ internal fun recoverEmptyLibraryFixtureJournal(context: Context, result: JSONObj
     persist()
     val coordinator = DurableSaveCoordinator.get(context)
     check(coordinator.pendingCount() == 0) { "Existing QA coordinator work requires separate disposition" }
+    requireEmptyTransactionFixtureJournals(context)
     val handles = coordinator.recover()
     val readiness = DurableSaveJobs.readiness.value
     recovery.put("returned_handles", handles.size).put("pending_count", coordinator.pendingCount())
@@ -1866,6 +1872,39 @@ private fun requireTransactionIdentity(context: Context, currentUi: Boolean = fa
     check(context.applicationContext.javaClass == Application::class.java)
     check(context.checkSelfPermission(Manifest.permission.READ_MEDIA_AUDIO) != PackageManager.PERMISSION_GRANTED)
     check(context.contentResolver.persistedUriPermissions.isEmpty() && getConfiguredExportTreeUri(context) == null)
+}
+
+private fun requireQuietTransactionFixtureCatalog(context: Context) {
+    check(recordingMutations.activeIds.value.isEmpty()) { "QA recording mutation is still active" }
+    requireEmptyTransactionFixtureJournals(context)
+    requireEmptyTransactionFixtureCatalog(context)
+}
+
+@Suppress("DEPRECATION") // Android Q uses the URI parameter to include pending rows.
+private fun requireEmptyTransactionFixtureMediaStore(context: Context) {
+    check(usesMediaStoreDefaultStorage()) { "QA transaction fixtures require MediaStore" }
+    val collection = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+    val columns = arrayOf(MediaStore.MediaColumns._ID)
+    val selection = "${MediaStore.MediaColumns.RELATIVE_PATH}=?"
+    val paths = arrayOf("${Environment.DIRECTORY_MUSIC}/${APP_STORAGE_FOLDER_NAME}/")
+    val resolver = context.contentResolver
+    // A regular Library refresh can publish old pending staging even with empty journals.
+    val rows = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        val args = Bundle().apply {
+            putString(ContentResolver.QUERY_ARG_SQL_SELECTION, selection)
+            putStringArray(ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, paths)
+            putInt(MediaStore.QUERY_ARG_MATCH_PENDING, MediaStore.MATCH_INCLUDE)
+        }
+        resolver.query(collection, columns, args, null)
+    } else {
+        resolver.query(MediaStore.setIncludePending(collection), columns, selection, paths, null)
+    }
+    checkNotNull(rows) { "QA MediaStore listing is unavailable" }.use {
+        check(!it.extras.getBoolean(DocumentsContract.EXTRA_LOADING) &&
+            it.extras.getString(DocumentsContract.EXTRA_ERROR) == null) { "QA MediaStore listing is incomplete" }
+        check(it.getColumnIndex(MediaStore.MediaColumns._ID) >= 0) { "QA MediaStore listing is unavailable" }
+        check(!it.moveToFirst()) { "QA MediaStore directory is not empty; preserve all entries" }
+    }
 }
 
 /** Per-renderer authority ledger; never adopts an entry found by a scan. */
@@ -1893,20 +1932,31 @@ internal class TransactionFixtures(
     private var closed = false
     fun admit() {
         requireTransactionIdentity(context, currentUi)
-        val appExternal = context.getExternalFilesDir(android.os.Environment.DIRECTORY_MUSIC)?.canonicalFile
-        check(directory.canonicalFile.parentFile == appExternal ||
-            directory.canonicalPath.startsWith(context.filesDir.canonicalPath + File.separator))
-        check(directory.mkdirs() || directory.isDirectory)
-        check(directory.listFiles()?.isEmpty() == true) { "QA recording folder is not empty; preserve all entries" }
-        check(known().isEmpty()) { "QA catalog is not empty; no reset" }
-        check(runBlocking { withTimeout(15_000L) { RecordingRepository.refresh(context) } }.isEmpty())
-        admitted = true
+        requireEmptyBaseline()
         manifest.put("baseline_empty", true)
         save()
+        admitted = true
+    }
+    private fun requireEmptyDirectory() {
+        val appExternal = context.getExternalFilesDir(Environment.DIRECTORY_MUSIC)?.canonicalFile
+        check(directory.canonicalFile.parentFile == appExternal ||
+            directory.canonicalPath.startsWith(context.filesDir.canonicalPath + File.separator))
+        val state = storageDirectoryState(directory)
+        check(state == StoragePathState.MISSING ||
+            (state == StoragePathState.PRESENT && directory.listFiles()?.isEmpty() == true)) {
+            "QA recording folder is not empty or unavailable; preserve all entries"
+        }
+    }
+    private fun requireEmptyBaseline() {
+        requireQuietTransactionFixtureCatalog(context)
+        requireEmptyDirectory()
+        requireEmptyTransactionFixtureMediaStore(context)
     }
     fun create(count: Int = 2): List<RecordingEntity> {
         check(admitted && owned.isEmpty() && !closed)
         require(count in 2..12)
+        requireTransactionIdentity(context, currentUi)
+        requireEmptyBaseline()
         for (index in 0 until count) {
             val displayName = "$namePrefix ${'A' + index}.wav"
             val started = 1_792_497_600_000L - index * 60_000L
@@ -2006,22 +2056,22 @@ internal class TransactionFixtures(
         requireUnchanged()
         return renamed
     }
-    fun isDeleted(records: List<RecordingEntity>): Boolean {
-        val current = known()
-        return records.all { recording -> recordingAssetState(context, recording) == RecordingAssetState.MISSING &&
-            current.none { it.id == recording.id } }
+    fun isDeleted(records: List<RecordingEntity>): Boolean = records.all { recording ->
+        recordingAssetState(context, recording) == RecordingAssetState.MISSING &&
+            transactionFixtureCatalogIsEmpty(context, recording.id)
     }
     fun acceptDeleted(records: List<RecordingEntity>) {
         val current = known()
         for (recording in records) {
             val authority = owned.single { !it.deleted && it.recording.id == recording.id }
-            check(recordingAssetState(context, recording) == RecordingAssetState.MISSING && current.none { it.id == recording.id })
+            check(recordingAssetState(context, recording) == RecordingAssetState.MISSING)
+            requireEmptyTransactionFixtureCatalog(context, recording.id)
             authority.deleted = true
             authority.manifest.put("deleted_by_real_undo_expiry", true)
         }
         save()
         check(current.map { it.id }.toSet() == this.records().map { it.id }.toSet())
-        check(directory.listFiles()?.isEmpty() == true)
+        requireEmptyDirectory()
     }
     override fun close() {
         if (closed) return
@@ -2032,31 +2082,33 @@ internal class TransactionFixtures(
         } }
         for (authority in owned.asReversed()) cleanup {
             if (!authority.deleted) {
+                requireEmptyTransactionFixtureJournals(context)
                 val recording = authority.recording
                 val state = recordingAssetState(context, recording)
                 if (state == RecordingAssetState.MISSING) {
                     // A delivered delete may have completed before an earlier assertion failed.
                     // Record the terminal absence; never replace the earlier failed test result.
-                    check(known().none { it.id == recording.id })
+                    requireEmptyTransactionFixtureCatalog(context, recording.id)
                     authority.manifest.put("absent_at_cleanup", true)
                 } else {
                     check(state == RecordingAssetState.PRESENT) { "Owned fixture availability is unknown; preserved" }
                     verify(authority)
-                    check(runBlocking { withTimeout(15_000L) { RecordingRepository.delete(context, recording) } })
+                    check(deleteOwnedTransactionFixture(context, recording)) {
+                        "Exact QA fixture cleanup refused; preserve ${recording.id}"
+                    }
                     check(recordingAssetState(context, recording) == RecordingAssetState.MISSING)
-                    check(known().none { it.id == recording.id })
+                    requireEmptyTransactionFixtureCatalog(context, recording.id)
                     authority.manifest.put("deleted_by_cleanup", true)
                 }
                 authority.deleted = true
             }
         }
-        if (admitted) cleanup {
-            check(known().isEmpty())
-            check(directory.listFiles()?.isEmpty() == true) { "Uncertain/incomplete QA file remains; preserved" }
+        if (admitted && primary == null) cleanup {
             check(creationAttempts == owned.size && manifest.getJSONArray("fixtures").length() == owned.size &&
                 owned.all { it.deleted }) {
                 "Uncertain/incomplete QA output remains; retained in creation ledger"
             }
+            requireEmptyBaseline()
             manifest.put("cleanup_verified_empty", true)
         }
         primary?.let { manifest.put("cleanup_error", android.util.Log.getStackTraceString(it)) }
