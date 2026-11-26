@@ -197,7 +197,11 @@ class ShuttleEndpointAudioTrackShadow : ShadowAudioTrack() {
     val acceptedWrites: Int get() = synchronized(sink) { writeCount }
     @Volatile var playing = false
         private set
+    @Volatile var playCalls = 0
+        private set
     @Volatile var released = false
+        private set
+    @Volatile var releaseCalls = 0
         private set
     @Volatile var gain = Float.NaN
         private set
@@ -206,6 +210,7 @@ class ShuttleEndpointAudioTrackShadow : ShadowAudioTrack() {
 
     @Implementation fun setStartThresholdInFrames(threshold: Int): Int {
         synchronized(tracks) { tracks += this }
+        onTrackSetup?.invoke()
         return threshold
     }
 
@@ -228,20 +233,29 @@ class ShuttleEndpointAudioTrackShadow : ShadowAudioTrack() {
         return length
     }
 
-    @Implementation override fun play() { playing = true }
+    @Implementation override fun play() {
+        playCalls++
+        playing = true
+    }
     @Implementation fun pause() { playing = false }
     @Implementation override fun flush() = Unit
-    @Implementation fun release() { released = true }
+    @Implementation fun release() {
+        releaseCalls++
+        released = true
+    }
     @Implementation override fun getPlaybackHeadPosition(): Int = if (playing) frameCount else 0
     @Implementation fun getUnderrunCount(): Int = 0
 
     companion object {
         private val tracks = mutableListOf<ShuttleEndpointAudioTrackShadow>()
+        @Volatile var onTrackSetup: (() -> Unit)? = null
         lateinit var firstWrite: CountDownLatch
         lateinit var allowFirstWrite: CountDownLatch
         fun single(): ShuttleEndpointAudioTrackShadow = synchronized(tracks) { tracks.single() }
+        fun acquiredTracks(): List<ShuttleEndpointAudioTrackShadow> = synchronized(tracks) { tracks.toList() }
         fun reset() {
             synchronized(tracks) { tracks.clear() }
+            onTrackSetup = null
             firstWrite = CountDownLatch(1)
             allowFirstWrite = CountDownLatch(1)
         }

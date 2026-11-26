@@ -58,6 +58,105 @@ class ShuttleNearUnityWorkerTest {
         }
     }
 
+    @Test fun retainedPhaseAt44100() = checkRateTransition(44_100)
+    @Test fun retainedPhaseAt48000() = checkRateTransition(48_000)
+    @Test fun retainedPhaseAt96000() = checkRateTransition(96_000)
+
+    private fun checkRateTransition(hz: Int) {
+        val root = Files.createTempDirectory("shuttle-retained-phase-")
+        val previousRoot = ServiceStateOsShadow.fixtureRoot
+        ServiceStateOsShadow.fixtureRoot = root
+        ShadowAudioTrack.setMinBufferSize(256)
+        try {
+            for (channels in 1..2) {
+                val pcm = ByteBuffer.allocate(hz * channels * 2).order(ByteOrder.LITTLE_ENDIAN)
+                repeat(hz) { frame ->
+                    repeat(channels) { ch -> pcm.putShort(voicedSample(frame, hz, ch).toShort()) }
+                }
+                val wav = File(root.toFile(), "voiced-$channels.wav").apply {
+                    writeBytes(buildWavHeaderBytes(hz, channels, PcmSampleFormat.PCM_16, pcm.capacity().toLong()) +
+                        pcm.array())
+                }
+                val recording = RecordingEntity(wav.absolutePath, wav.name, "audio/wav", 1L, 1_000L,
+                    wav.length(), "PCM", RecordingStorageType.FILE, root.toString(), resolveFileIdentity(wav))
+                for (direction in listOf(-1, 1)) {
+                    // Both rates are exercised in each direction across the channel layouts.
+                    val lastRate = if ((direction > 0) == (channels == 1)) 1f else .9998f
+                    checkWorkerSeams(recording, hz, channels, direction, lastRate)
+                }
+            }
+        } finally {
+            ServiceStateOsShadow.fixtureRoot = previousRoot
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    private fun voicedSample(frame: Int, hz: Int, channel: Int): Int {
+        val phase = 2 * PI * 125 * frame / hz
+        return if (channel == 0) (16_384 * cos(phase)).roundToInt()
+            else (9_000 * cos(phase + .7)).roundToInt()
+    }
+
+    private fun checkWorkerSeams(recording: RecordingEntity, hz: Int, channels: Int, direction: Int, lastRate: Float) {
+        val origin = .160
+        val lower = .096
+        val upper = .224
+        val clock = AtomicLong(1_000_000_000L)
+        val waits = TargetWaitGate()
+        val errors = ConcurrentLinkedQueue<Throwable>()
+        val authority = RecordingScrubAuthority(RecordingScrubKey(1L, 1L))
+        val worker = TimelineAudioPreviewController(onTrackReleaseFailure = { errors += it },
+            shuttleNowNanos = clock::get, onShuttleTargetWait = waits::reached)
+        ShuttleEndpointAudioTrackShadow.reset()
+        ShuttleEndpointAudioTrackShadow.allowFirstWrite.countDown()
+        try {
+            worker.startRecordingShuttle(RuntimeEnvironment.getApplication(), recording, origin, direction * .75f,
+                onStarted = {}, onFailureAfterStart = { errors += AssertionError("Shuttle lost playback") },
+                onSourceCloseFailure = { errors += it }, fromSeconds = lower, untilSeconds = upper,
+                ordinaryAuthority = authority)
+            waits.observe(direction * .75f, "prime")
+            val track = ShuttleEndpointAudioTrackShadow.single()
+            assertEquals(hz, track.formatRate())
+            assertEquals(channels, track.formatChannels())
+            var target = origin
+            for (magnitude in listOf(.75f, lastRate)) {
+                val before = track.frameCount
+                val rate = magnitude * direction
+                target += rate * .016
+                clock.addAndGet(16_000_000L)
+                worker.updateShuttle(target, rate, lower, upper)
+                waits.resume()
+                waits.observe(rate, "worker consumed $rate at $hz Hz")
+                val hop = track.frameCount - before
+                val label = "$hz Hz, $channels channels, rate $rate, starting at output frame $before"
+                assertTrue("One full body per fresh command: $label", abs(hop - .016 * hz) <= 2)
+                assertSame(track, ShuttleEndpointAudioTrackShadow.single())
+                val output = samples(track.bytes())
+                // Compare each entire join with uninterrupted playback of the source WAV.
+                // A single 1x reading is still in the production grain-to-unity debounce.
+                for (i in 0 until (.008 * hz).roundToInt()) for (ch in 0 until channels) {
+                    val oriented = if (direction > 0) before + i else -1 - before - i
+                    val reference = voicedSample((origin * hz).roundToInt() + oriented, hz, ch)
+                    val observed = output.get((before + i) * channels + ch).toInt()
+                    val tolerance = if (ch == 0) 1_640 else 900 // 10% of each channel's peak, including frame rounding.
+                    assertTrue("Discontinuous phase: $label, frame $i ch $ch, expected $reference got $observed",
+                        abs(reference - observed) <= tolerance)
+                }
+            }
+        } finally {
+            worker.close()
+            waits.resume()
+            authority.revoke()
+            for (name in listOf("executor", "controlExecutor", "releaseExecutor")) {
+                val executor = TimelineAudioPreviewController::class.java.getDeclaredField(name)
+                    .apply { isAccessible = true }.get(worker) as ExecutorService
+                assertTrue("$name did not terminate", executor.awaitTermination(5, TimeUnit.SECONDS))
+            }
+            ShadowLooper.idleMainLooper()
+            assertTrue(errors.toString(), errors.isEmpty())
+        }
+    }
+
     private fun verifyPlayback(saved: Boolean) {
         val pcm = sourcePcm()
         val root = Files.createTempDirectory("shuttle-near-unity-")

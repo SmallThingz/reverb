@@ -173,6 +173,43 @@ class ShuttlePhaseAlignmentTest {
         }
     }
 
+    @Test fun retainedTailSearchRespectsTheSelectionFourMillisecondLimitAndTransientGuard() {
+        for (hz in listOf(44_100, 48_000, 96_000)) {
+            val radius = (.004 * hz).roundToInt()
+            val overlap = (.008 * hz).roundToInt()
+            val grain = (.024 * hz).roundToInt()
+            val nominal = 3 * radius
+            val candidate = nominal - radius
+            // A unique, low-crest waveform makes the exact shifted candidate observable.
+            val random = java.util.Random(125)
+            val window = ByteArray((nominal + grain + radius) * 2)
+            for (frame in 0 until window.size / 2) {
+                val value = random.nextInt(2001) - 1000
+                window[frame * 2] = value.toByte()
+                window[frame * 2 + 1] = (value shr 8).toByte()
+            }
+            fun align(tailStart: Int, lower: Int = 0, upper: Int = window.size / 2): Int {
+                val tail = window.copyOfRange(tailStart * 2, (tailStart + overlap) * 2)
+                return alignedShuttleStartFrame(window, 1, nominal, grain, tail, 1f, hz, true,
+                    selectedFirstFrame = lower, selectedEndFrame = upper,
+                    maximumContinuousShiftFrames = Int.MAX_VALUE)
+            }
+            assertEquals("Reachable retained phase at $hz", candidate, align(candidate))
+            assertEquals("Selected lower frame at $hz", nominal, align(candidate, lower = candidate + 1))
+            val upperCandidate = nominal + radius
+            assertEquals("Reachable positive shift at $hz", upperCandidate, align(upperCandidate))
+            assertEquals("Selected exclusive end at $hz", nominal,
+                align(upperCandidate, upper = upperCandidate + grain - 1))
+            assertEquals("History cannot widen the four millisecond search at $hz",
+                nominal, align(nominal - 2 * radius))
+            // Even a perfect candidate must be rejected when the full overlap has a sharp attack.
+            val impulseByte = (candidate + overlap / 3) * 2
+            window[impulseByte] = 0
+            window[impulseByte + 1] = 100
+            assertEquals("Transient must retain its nominal timing at $hz", nominal, align(candidate))
+        }
+    }
+
     @Test fun nonfiniteRatesKeepNominalSourceWithoutPhaseSearch() {
         val fixture = fixture(channels = 2)
         for (rate in listOf(Float.NaN, Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY)) {
