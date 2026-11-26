@@ -5,19 +5,20 @@ geometry and store artwork colors. Generated Android resources at
 `native-ui/src/main/res/values*/reverb_brand_colors.xml` alias background, main
 and accent to `reverb_brand_surface`, `reverb_brand_surface_main` and
 `reverb_brand_surface_accent`, respectively, in every qualifier.
-That library resource exports the actual recording-info foreground recipe:
+That library resource exports the fixed-dark recording-info foreground recipe:
 `NativeGroupSurfaceRecipes.Default.recordingInfoRow` (`HIGHEST`, or
-`surfaceContainerHighest`), including the central AMOLED preset at night.
-Stroke colors follow central `NativeColorScheme.ink` and `primary`; the light
-fallback no longer paints the SVG's white stroke on a light plate. There is no
-app-local plate palette and no API31–33 lStar approximation.
+`surfaceContainerHighest`) with the central AMOLED preset in both light and dark
+app themes. Stroke colors follow the dark central `NativeColorScheme.ink` and
+`primary` so the glyph stays readable on the dark plate. Day/night exports are
+identical for each SDK; platform accent changes can still refresh the resources.
+There is no app-local plate palette and no API31–33 lStar approximation.
 
 From the app repository root:
 
 ```sh
-python3 native-ui/scripts/generate_reverb_brand_plate.py
-python3 scripts/generate_brand_assets.py --android-only
-python3 scripts/generate_brand_assets.py --check --android-only
+python3 -B native-ui/scripts/generate_reverb_brand_plate.py
+python3 -B scripts/generate_brand_assets.py --android-only
+python3 -B scripts/generate_brand_assets.py --check --android-only
 python3 -B -m unittest discover -s scripts -p test_generate_brand_assets.py
 ./gradlew :app:testDebugUnitTest --tests '*BrandAssetsTest'
 ```
@@ -25,6 +26,8 @@ python3 -B -m unittest discover -s scripts -p test_generate_brand_assets.py
 The Android-only commands need standard Python 3. The app generator first invokes
 the library plate exporter's `--check`; only that library script derives the
 surface resources and texture. Regenerate its outputs first if that check fails.
+Use `-B` for source inspection too: imports must not leave bytecode in a frozen
+checkout. The fixture's exporter import also explicitly disables bytecode writes.
 Every app variant's `preBuild`
 depends on `verifyBrandAssets`, which checks committed runtime outputs without
 writing them. A stale launcher vector, in-app renderer, SVG mirror, palette alias,
@@ -42,21 +45,26 @@ layers. The generator produces the shared UI's `ReverbBrandMarkView.kt` Path dat
 the app's `icon.svg` mirror, launcher foreground and themed monochrome vectors,
 splash vector and animation endpoints, and library resource aliases. The app's
 launcher colors reference `@color/reverb_brand_*` in every library qualifier, so
-resource selection follows the same dynamic day/night strokes as the in-app mark.
+resource selection follows the same fixed-dark surface and readable strokes as
+the in-app mark, regardless of the app's current theme.
 Do not edit generated files or add app-local artwork offsets or palette values.
 
 Both launcher and Home use the library-owned `reverb_brand_grain` tiled drawable
 and its nodpi PNG. The icon tile is a deterministic 64x64 phase-zero crop of the
 central noise, using the original 1024-pixel row stride and unchanged RAW sample
 alpha. No foreground intensity is baked into the PNG. Launcher XML applies the
-central default foreground alpha once; the native binder applies its current
-palette foreground alpha once (128 at the default .5), never twice.
+central default foreground alpha once; the native mark applies that same fixed
+AMOLED foreground alpha once (128 at .5), never twice.
 Its icon-specific repeat period is 64 pixels; ordinary UI grain retains its
 1024-pixel period. This is shared icon texture, not a claim that the entire UI
-repeats the cropped tile. The Home bind site supplies the current window palette
-through `mark.bindReverbBrandSurface(value.palette)`; launcher resources use the
-corresponding system configuration. Per-window app theme overrides cannot change
-the independently configured launcher process.
+repeats the cropped tile. Home and Boot use the default fixed-dark mark; no app
+palette is passed to the icon. Home refreshes resources for system accent changes
+and calls `mark.setReverbBrandOutline(outlined)`, enabled on the Home center mark
+and disabled when the same toolbar is reused with Back. The library owns the
+thin button outline's color and width through `NativeDarkSurfacePreset.Amoled`.
+The existing circular mark remains round in its square Home slot. No app border
+color, width, radius or local geometry is introduced. The launcher keeps its
+platform mask and has no ring.
 
 The native mark continues to use `NativeLayeredMarkView`: retained Paths and its
 existing bitmap cache, 108dp intrinsic size, FillBounds geometry, circular clip,
@@ -73,8 +81,8 @@ To regenerate or compare the store PNG as well, install librsvg's `rsvg-convert`
 and omit `--android-only`:
 
 ```sh
-python3 scripts/generate_brand_assets.py
-python3 scripts/generate_brand_assets.py --check
+python3 -B scripts/generate_brand_assets.py
+python3 -B scripts/generate_brand_assets.py --check
 ```
 
 The store renderer is optional for normal Android builds. Before changing or

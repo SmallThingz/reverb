@@ -108,11 +108,19 @@ class BrandAssetsTest {
         assertFalse(appAdapter.contains("Path("))
         assertFalse(appAdapter.contains("translationX"))
         val home = file("app/src/main/java/app/smallthingz/reverb/nativeui/ReverbAppTopBarView.kt").readText()
-        assertTrue(home.contains("import smallthingz.ui.reverb.bindReverbBrandSurface"))
-        assertTrue(home.contains("mark.bindReverbBrandSurface(value.palette)"))
+        assertFalse(home.contains("bindReverbBrandSurface"))
+        assertTrue(home.contains("import smallthingz.ui.reverb.setReverbBrandOutline"))
+        assertTrue(home.contains("val onBack = actions.back"))
+        assertTrue(home.contains("brand.bind(value, onBack == null, actions.brand)"))
+        // Source wiring guard: each bind forwards Home=true, Back=false, Home=true again.
+        // Require the setter unconditionally at bind entry; rendering is covered by the library.
+        assertTrue("A reused brand action must refresh and replace its outline on every bind",
+            Regex("""fun bind\(value: ReverbViewEnvironment, outlined: Boolean, callback: \(\) -> Unit\)\s*\{\s*mark\.refreshResourcePalette\(\)\s*mark\.setReverbBrandOutline\(outlined\)""")
+                .containsMatchIn(home))
         val boot = file("app/src/main/java/app/smallthingz/reverb/BootResumeActivity.kt").readText()
-        assertTrue(boot.contains("import smallthingz.ui.reverb.bindReverbBrandSurface"))
-        assertTrue(boot.contains("apply { bindReverbBrandSurface(palette) }"))
+        assertFalse(boot.contains("bindReverbBrandSurface"))
+        assertFalse(boot.contains("setReverbBrandOutline"))
+        assertTrue(boot.contains("ReverbBrandMarkView(context, context.getString(R.string.app_name)),"))
     }
 
     @Test fun generatedRuntimeAssetsMatchCanonicalLibrarySourceWithoutStoreRenderer() {
@@ -157,7 +165,7 @@ class BrandAssetsTest {
         assertTrue(wrapper.nodes("bitmap").isEmpty())
     }
 
-    @Test fun libraryPlateAndInksUseSharedSurfaceRolesWithoutIndependentAppColors() {
+    @Test fun libraryPlateAndInksUseFixedDarkSharedRolesInEveryTheme() {
         val recipe = NativeGroupSurfaceRecipes.Default.recordingInfoRow
         fun roles(colors: NativeColorScheme) = mapOf(
             "reverb_brand_surface" to recipe.fillColor(colors),
@@ -167,16 +175,16 @@ class BrandAssetsTest {
         val surfaces = file("native-ui/src/main/res").listFiles()!!.filter {
             it.name.startsWith("values") && File(it, "reverb_brand_surface.xml").isFile
         }
-        assertTrue(surfaces.map { it.name }.containsAll(listOf("values", "values-night", "values-v31", "values-v34")))
+        assertEquals(setOf("values", "values-night", "values-v31", "values-night-v31",
+            "values-v34", "values-night-v34"), surfaces.map { it.name }.toSet())
         for (directory in surfaces) {
             val qualifier = directory.name
-            val dark = "night" in qualifier.split('-')
             val sdk = Regex("-v(\\d+)").find(qualifier)?.groupValues?.get(1)?.toInt() ?: 28
             val declared = document("native-ui/src/main/res/$qualifier/reverb_brand_surface.xml")
                 .nodes("color").associate { it.getAttribute("name") to it.textContent.trim() }
-            // The default resolver includes AMOLED dark surfaces; resource IDs stand in for
-            // dynamic colors so the role itself supplies the platform mapping without literals.
-            val expected = roles(NativeDefaultColorScheme.resolve(dark, sdk) { it })
+            // The icon always uses the shared AMOLED dark roles, including in light qualifiers.
+            // Resource IDs stand in for dynamic colors to verify platform roles without literals.
+            val expected = roles(NativeDefaultColorScheme.resolve(true, sdk) { it })
             for ((name, value) in expected) {
                 val color = declared.getValue(name)
                 if (color.startsWith("#")) {

@@ -23,7 +23,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import app.smallthingz.reverb.nativeui.ReverbPalette
 import app.smallthingz.reverb.nativeui.ReverbBrandMarkView
-import smallthingz.ui.reverb.bindReverbBrandSurface
 import app.smallthingz.reverb.nativeui.reverbAppearance
 import java.io.Closeable
 import java.util.UUID
@@ -345,7 +344,7 @@ internal class BootResumeContentView(
     palette: ReverbPalette,
 ) : NativeCenteredStatusContent(
     context, palette, reverbAppearance.statusContent,
-    ReverbBrandMarkView(context, context.getString(R.string.app_name)).apply { bindReverbBrandSurface(palette) },
+    ReverbBrandMarkView(context, context.getString(R.string.app_name)),
     context.getString(R.string.boot_resume_in_progress),
 ) {
     fun showSuccess() = showCompleted(context.getString(R.string.boot_resume_success))

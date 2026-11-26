@@ -5,10 +5,24 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
 import generate_brand_assets as brand
+
+
+def load_plate_exporter(root):
+    spec = importlib.util.spec_from_file_location("brand_plate", root / brand.PLATE_CHECKER)
+    plate = importlib.util.module_from_spec(spec)
+    previous = sys.dont_write_bytecode
+    try:
+        # The source may be a frozen checkout, even if the test caller omitted -B.
+        sys.dont_write_bytecode = True
+        spec.loader.exec_module(plate)
+    finally:
+        sys.dont_write_bytecode = previous
+    return plate
 
 
 class BrandGenerationTest(unittest.TestCase):
@@ -17,9 +31,7 @@ class BrandGenerationTest(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         sources = ["scripts/generate_brand_assets.py", brand.SOURCE]
-        spec = importlib.util.spec_from_file_location("brand_plate", brand.ROOT / brand.PLATE_CHECKER)
-        plate = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(plate)
+        plate = load_plate_exporter(brand.ROOT)
         sources += [brand.PLATE_CHECKER]
         sources += ["native-ui/" + path for path in plate.SOURCE_FILES]
         sources += ["native-ui/" + path for path in plate.outputs()]
@@ -50,6 +62,13 @@ class BrandGenerationTest(unittest.TestCase):
         result = self.run_generator()
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertFalse((self.root / "fastlane").exists())
+
+    def test_exporter_import_never_writes_into_its_source_checkout(self):
+        with mock.patch.object(sys, "dont_write_bytecode", False):
+            load_plate_exporter(self.root)
+            self.assertFalse(sys.dont_write_bytecode)
+        cache = Path(importlib.util.cache_from_source(str(self.root / brand.PLATE_CHECKER)))
+        self.assertFalse(cache.exists())
 
     def test_old_in_app_anchor_is_rejected(self):
         self.replace("native-ui/src/main/kotlin/smallthingz/ui/reverb/ReverbBrandMarkView.kt",
@@ -90,6 +109,14 @@ class BrandGenerationTest(unittest.TestCase):
             self.assertEqual("@color/reverb_brand_surface", colors["reverb_brand_background"])
             self.assertEqual("@color/reverb_brand_surface_main", colors["reverb_brand_main"])
             self.assertEqual("@color/reverb_brand_surface_accent", colors["reverb_brand_accent"])
+
+    def test_exported_icon_surface_and_inks_are_identical_in_day_and_night(self):
+        def palette(qualifier):
+            path = self.root / f"native-ui/src/main/res/{qualifier}/reverb_brand_surface.xml"
+            return {item.get("name"): item.text for item in ET.parse(path).getroot()}
+        for version in ("", "-v31", "-v34"):
+            with self.subTest(version=version):
+                self.assertEqual(palette("values" + version), palette("values-night" + version))
 
     def test_shared_raw_grain_drift_is_rejected_by_library_checker(self):
         tile = self.root / "native-ui/src/main/res/drawable-nodpi/reverb_brand_grain_tile.png"

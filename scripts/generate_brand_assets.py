@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = "native-ui/src/main/brand/reverb.svg"
 PLATE_CHECKER = "native-ui/scripts/generate_reverb_brand_plate.py"
 MARK_SIZE_DP = 108
-# Library-owned exports of the recording-info foreground and its deterministic icon grain.
+# Library-owned exports of the fixed-dark recording-info foreground and deterministic icon grain.
 BRAND_SURFACE_FILES = {
     f"native-ui/src/main/res/{qualifier}/reverb_brand_surface.xml"
     for qualifier in ("values", "values-night", "values-v31", "values-night-v31", "values-v34", "values-night-v34")

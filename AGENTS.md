@@ -119,8 +119,11 @@
   mutation to process lifetime before the UI callback returns; Activity/Compose disposal cannot revoke an accepted
   toggle, and storage failure is queued through process feedback.
 - `native-ui/src/main/brand/reverb.svg` is the single Reverb brand geometry and store-baseline-color source, owned by the
-  UI library. Its `scripts/generate_reverb_brand_plate.py` exports the shared recording-info foreground, ink/primary
-  roles and raw deterministic icon grain; foreground opacity is applied once by each consumer. App
+  UI library. Its `scripts/generate_reverb_brand_plate.py` exports the fixed-dark recording-info foreground and dark
+  ink/primary roles in both themes, plus raw deterministic icon grain; foreground opacity is applied once by each
+  consumer. Use `python3 -B` for generation, checks and source imports so frozen checkouts do not acquire bytecode.
+  Home alone adds the shared dark button outline to the round mark; the launcher retains its platform mask
+  without a ring. Never derive icon paint or border dimensions from the app's current theme. App
   `scripts/generate_brand_assets.py` requires the library export check and generates runtime color aliases, the fast
   shared native mark, `app/src/main/icon.svg` mirror, foreground, monochrome, splash and Fastlane assets. Run
   `--check --android-only` after runtime changes; full `--check` also verifies the store PNG with librsvg. App `preBuild`

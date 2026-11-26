@@ -1,7 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
 import smallthingz.ui.reverb.ReverbTopBarLayout
-import smallthingz.ui.reverb.bindReverbBrandSurface
+import smallthingz.ui.reverb.setReverbBrandOutline
 import smallthingz.ui.components.NativePathMorph
 import smallthingz.ui.components.NativeToolbarActionTone
 import smallthingz.ui.reverb.ReverbToolbarContentActionView
@@ -62,7 +62,7 @@ internal class ReverbAppTopBarView(
         incidentAlert = hasIncidents
         back?.setIncidentMorph(backIncidentProgress, hasIncidents)
         bindIncidents()
-        brand.bind(value, actions.brand)
+        brand.bind(value, onBack == null, actions.brand)
         refreshAccessibilityBack?.invoke()
     }
 
@@ -234,8 +234,9 @@ private class ReverbTopBarBrandAction(
     private val mark: ReverbBrandMarkView = ReverbBrandMarkView(context),
 ) : ReverbToolbarContentActionView(context, mark, context.getString(R.string.app_name), inputRoot,
     environment.textDensity.density, environment.palette) {
-    fun bind(value: ReverbViewEnvironment, callback: () -> Unit) {
-        mark.bindReverbBrandSurface(value.palette)
+    fun bind(value: ReverbViewEnvironment, outlined: Boolean, callback: () -> Unit) {
+        mark.refreshResourcePalette()
+        mark.setReverbBrandOutline(outlined)
         bindToolbarContent(value.textDensity.density, value.palette, callback)
     }
 }
