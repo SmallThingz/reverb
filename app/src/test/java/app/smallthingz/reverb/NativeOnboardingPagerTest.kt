@@ -2,7 +2,13 @@ package app.smallthingz.reverb
 
 import smallthingz.ui.runtime.MonotonicFrameClock
 import smallthingz.ui.MotionDurationScale
+import smallthingz.ui.animation.core.AnimationVector1D
+import smallthingz.ui.animation.core.Spring
+import smallthingz.ui.animation.core.TargetBasedAnimation
+import smallthingz.ui.animation.core.VectorConverter
+import smallthingz.ui.animation.core.spring
 import smallthingz.ui.unit.Density
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -13,7 +19,6 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
@@ -256,11 +261,11 @@ class NativeOnboardingPagerTest {
     }
 
     @Test
-    fun callerScaleZeroSkipsButtonAnimationButSnapFlingStillUsesScaleOne() = runBlocking {
+    fun zeroScaleCompletesButtonAndFlingOnTheirFirstFrames() = runBlocking {
         withPager { pager, scope, frames ->
-            val zeroScale = object : MotionDurationScale { override val scaleFactor = 0f }
-            val button = scope.launch(start = CoroutineStart.UNDISPATCHED) {
-                withContext(zeroScale) { pager.animateScrollToPage(1) }
+            val scale = TestMotionScale(0f)
+            val button = scope.launch(scale, start = CoroutineStart.UNDISPATCHED) {
+                pager.animateScrollToPage(1)
             }
             frames.send(0L)
             withTimeout(1000) { button.join() }
@@ -270,17 +275,164 @@ class NativeOnboardingPagerTest {
             pager.beginPointerGesture()
             pager.endPointerGesture(-560f)
             var unconsumed = Float.NaN
-            val fling = scope.launch(start = CoroutineStart.UNDISPATCHED) {
-                withContext(zeroScale) { unconsumed = pager.fling(0f) }
+            val fling = scope.launch(scale, start = CoroutineStart.UNDISPATCHED) {
+                unconsumed = pager.fling(0f)
             }
-            frames.send(100_000_000L)
-            yield()
-            assertTrue(fling.isActive)
             assertEquals(560L, pager.layoutAbsoluteOffsetPx)
-            finishAnimation(fling, frames, 200_000_000L)
-            if (pager.needsRemeasure) pager.updateLayout(1000)
+            frames.send(100_000_000L)
+            withTimeout(1000) { fling.join() }
             assertEquals(1000L, pager.layoutAbsoluteOffsetPx)
             assertEquals(0f, unconsumed, 0f)
+        }
+    }
+
+    @Test
+    fun flingReadsZeroScaleWhenItsFirstPendingFrameArrives() = runBlocking {
+        withPager { pager, scope, frames ->
+            pager.dispatchRawDelta(560f)
+            val scale = TestMotionScale(1f)
+            val deltas = mutableListOf<Float>()
+            val fling = scope.launch(scale, start = CoroutineStart.UNDISPATCHED) {
+                pager.fling(-500f) { delta ->
+                    deltas += delta
+                    scrollBy(delta)
+                }
+            }
+            assertTrue(deltas.isEmpty())
+            scale.scaleFactor = 0f
+            frames.send(1_000_000_000L)
+            withTimeout(1000) { fling.join() }
+            assertEquals(listOf(440f), deltas)
+            assertEquals(1000L, pager.layoutAbsoluteOffsetPx)
+        }
+    }
+
+    @Test
+    fun nonzeroVelocityFlingKeepsSpringSamplesAcrossPositiveScalesThenConsumesOnlyRemainder() = runBlocking {
+        withPager { pager, scope, frames ->
+            pager.dispatchRawDelta(560f)
+            val scale = TestMotionScale(2f)
+            val reference = TargetBasedAnimation(
+                spring(stiffness = Spring.StiffnessMediumLow, visibilityThreshold = 1f),
+                Float.VectorConverter, 0f, 440f, AnimationVector1D(500f),
+            )
+            val deltas = mutableListOf<Float>()
+            var unconsumed = Float.NaN
+            val fling = scope.launch(scale, start = CoroutineStart.UNDISPATCHED) {
+                unconsumed = pager.fling(-500f) { delta ->
+                    deltas += delta
+                    scrollBy(delta)
+                }
+            }
+            assertTrue(deltas.isEmpty())
+            val start = 1_000_000_000L
+            frames.send(start)
+            yield()
+            assertEquals(listOf(0f), deltas)
+
+            frames.send(start + 32_000_000L)
+            yield()
+            val first = reference.getValueFromNanos(16_000_000L)
+            assertEquals(first, deltas.last(), .0001f)
+
+            scale.scaleFactor = .5f
+            frames.send(start + 64_000_000L)
+            yield()
+            val second = reference.getValueFromNanos(80_000_000L)
+            assertEquals(second - first, deltas.last(), .0001f)
+            assertTrue(fling.isActive)
+
+            scale.scaleFactor = 0f
+            frames.send(start + 96_000_000L)
+            withTimeout(1000) { fling.join() }
+            assertEquals(4, deltas.size)
+            assertEquals(440f - second, deltas.last(), .0001f)
+            assertEquals(1000L, pager.layoutAbsoluteOffsetPx)
+            assertEquals(0f, unconsumed, 0f)
+        }
+    }
+
+    @Test
+    fun earlyFlingStopReturnsTheClampedSampledPhysicalVelocity() = runBlocking {
+        for (throwFromDelivery in listOf(false, true)) {
+            withPager { pager, scope, frames ->
+                pager.dispatchRawDelta(560f)
+                val reference = TargetBasedAnimation(
+                    spring(stiffness = Spring.StiffnessMediumLow, visibilityThreshold = 1f),
+                    Float.VectorConverter, 0f, 440f, AnimationVector1D(2500f),
+                )
+                var unconsumed = Float.NaN
+                val fling = scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                    unconsumed = pager.fling(-2500f) { delta ->
+                        if (delta != 0f && throwFromDelivery) throw CancellationException()
+                        0f
+                    }
+                }
+                frames.send(1_000_000_000L)
+                yield()
+                assertTrue(fling.isActive)
+                val elapsed = 100_000_000L
+                frames.send(1_000_000_000L + elapsed)
+                withTimeout(1000) { fling.join() }
+                assertFalse(fling.isCancelled)
+                val sampledVelocity = reference.getVelocityVectorFromNanos(elapsed).value
+                assertEquals(-sampledVelocity.coerceAtMost(2500f), unconsumed, .0001f)
+                assertEquals(560L, pager.layoutAbsoluteOffsetPx)
+            }
+        }
+    }
+
+    @Test
+    fun detachedZeroScaleSnapReturnsIncomingPhysicalVelocity() = runBlocking {
+        withPager { pager, scope, frames ->
+            pager.dispatchRawDelta(560f)
+            var unconsumed = Float.NaN
+            val fling = scope.launch(TestMotionScale(0f), start = CoroutineStart.UNDISPATCHED) {
+                unconsumed = pager.fling(-500f) { delta ->
+                    assertEquals(440f, delta, 0f)
+                    throw CancellationException()
+                }
+            }
+            frames.send(1_000_000_000L)
+            withTimeout(1000) { fling.join() }
+            assertFalse(fling.isCancelled)
+            assertEquals(-500f, unconsumed, 0f)
+            assertEquals(560L, pager.layoutAbsoluteOffsetPx)
+        }
+    }
+
+    @Test
+    fun clippedImmediateSnapReturnsPreviousSampleEvenWithinHalfPixel() = runBlocking {
+        withPager { pager, scope, frames ->
+            pager.updateLayout(2000)
+            pager.dispatchRawDelta(1120f)
+            val scale = TestMotionScale(1f)
+            val reference = TargetBasedAnimation(
+                spring(stiffness = Spring.StiffnessMediumLow, visibilityThreshold = 1f),
+                Float.VectorConverter, 0f, 880f, AnimationVector1D(2500f),
+            )
+            var unconsumed = Float.NaN
+            val fling = scope.launch(scale, start = CoroutineStart.UNDISPATCHED) {
+                unconsumed = pager.fling(-2500f) { delta ->
+                    scrollBy(if (scale.scaleFactor == 0f) delta - .4f else delta)
+                }
+            }
+            val start = 1_000_000_000L
+            val elapsed = 150_000_000L
+            frames.send(start)
+            yield()
+            frames.send(start + elapsed)
+            yield()
+            assertTrue(fling.isActive)
+            val sampledVelocity = reference.getVelocityVectorFromNanos(elapsed).value
+            assertTrue(sampledVelocity in 0f..<2500f)
+
+            scale.scaleFactor = 0f
+            frames.send(start + elapsed + 16_000_000L)
+            withTimeout(1000) { fling.join() }
+            assertFalse(fling.isCancelled)
+            assertEquals(-sampledVelocity, unconsumed, .0001f)
+            assertEquals(2000L, pager.layoutAbsoluteOffsetPx)
         }
     }
 
@@ -314,6 +466,8 @@ class NativeOnboardingPagerTest {
             assertEquals(Triple(1000L, 1, false), observations.last())
         }
     }
+
+    private class TestMotionScale(override var scaleFactor: Float) : MotionDurationScale
 
     private suspend fun finishAnimation(job: Job, frames: Channel<Long>, startNanos: Long) {
         var frame = 0

@@ -169,8 +169,7 @@ private fun verifyDropdownReleaseRipple(
     entry: JSONObject,
 ) {
     val root = activity.fixtureRoot
-    val dropdown = smallthingz.ui.components.NativeAnchoredDropdown(activity, root,
-        environment.appearance, environment.palette, environment.theme.density, environment.theme.fontResolver)
+    val dropdown = smallthingz.ui.components.NativeAnchoredDropdown(activity, root, environment.theme.controlTheme)
     val picks = mutableListOf<Int>()
     val content = smallthingz.ui.common.DropdownContent("Ripple fixture", 0, listOf(0, 1, 2)) { "Choice $it" }
     val anchor = nativeParityOnMain(instrumentation) {

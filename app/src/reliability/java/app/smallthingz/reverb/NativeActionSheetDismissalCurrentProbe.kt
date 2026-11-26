@@ -4,7 +4,6 @@ import android.app.Application
 import android.app.Instrumentation
 import android.graphics.Point
 import android.graphics.Rect
-import android.graphics.drawable.ColorDrawable
 import android.os.SystemClock
 import android.view.Display
 import android.view.InputDevice
@@ -75,12 +74,12 @@ internal fun verifyNativeActionSheetDismissalCurrent(instrumentation: Instrument
         awaitNativeParityDraw(instrumentation, anchor)
         var lightHandleGeometry: List<Int>? = null
         for (route in listOf("androidx-back-dispatcher", "scrim", "content-drag", "scroll-content-drag",
-            "handle-above", "handle-below", "generic-custom", "generic-grain")) {
+            "handle-above", "handle-below", "generic-theme", "generic-grain")) {
             val dragRoute = route.endsWith("content-drag")
             val handleRoute = route.startsWith("handle-")
             val genericRoute = route.startsWith("generic-")
             val flatPaintRoute = route == "androidx-back-dispatcher" || route == "scrim"
-            val customBackground = if (route == "generic-custom") ColorDrawable(0xff675142.toInt()) else null
+            var expectedThemeBackground = 0
             requireNativeParityHost(instrumentation, host, "before-$route-sheet")
             var busy = true
             var ownerDismissals = 0
@@ -89,6 +88,7 @@ internal fun verifyNativeActionSheetDismissalCurrent(instrumentation: Instrument
             lateinit var body: TextView
             main {
                 val environment = ReverbViewEnvironment(Density(host), createFontFamilyResolver(host), ReverbPalette.fallback(route != "androidx-back-dispatcher"))
+                expectedThemeBackground = environment.palette.background
                 val dismiss = {
                     ownerDismissals++
                     dialog.dismiss()
@@ -97,8 +97,7 @@ internal fun verifyNativeActionSheetDismissalCurrent(instrumentation: Instrument
                     val style = smallthingz.ui.reverb.reverbActionSheetStyle(environment.theme).let {
                         it.copy(recipe = it.recipe.copy(grainSeed = NoiseDrawable.SEED_BACKGROUND))
                     }
-                    NativeActionSheet(anchor, style, "Dismissal admission", dismiss,
-                        closeIcon = null, contentBackground = customBackground)
+                    NativeActionSheet.create(anchor, style, "Dismissal admission", dismiss)
                 } else createReverbActionSheet(anchor, environment, "Dismissal admission", dismiss)
                 if (flatPaintRoute) {
                     val style = dialog.style
@@ -171,6 +170,9 @@ internal fun verifyNativeActionSheetDismissalCurrent(instrumentation: Instrument
                 val initial = dialog.style
                 val paintedSurface = generateSequence<View>(column) { it.parent as? View }
                     .filterIsInstance<NativeModalPaintedSurface>().first()
+                check(initial.palette.surfaceContainerLow == expectedThemeBackground) {
+                    "Shared sheet fill does not match the selected theme background"
+                }
                 val texturedRange = paintedSurface.paintedTextSurface
                 val evidence = JSONObject().put("route", route).put("passed", false)
                     .put("paint_owner", paintedSurface.javaClass.name)
@@ -182,16 +184,19 @@ internal fun verifyNativeActionSheetDismissalCurrent(instrumentation: Instrument
                     check(content.background == null && handle.background == null) {
                         "Sheet background belongs to a body/handle sibling"
                     }
-                    check(column.background === customBackground) { "Sheet column changed its caller background" }
-                    if (customBackground != null) check(customBackground.callback === column)
+                    check(column.background == null) { "Sheet column overrides the theme-owned surface" }
                     val range = paintedSurface.paintedTextSurface
-                    val expected = if (seed == null) textSurfaceRange(initial.palette.surfaceContainerLow)
+                    val expected = if (seed == null) textSurfaceRange(expectedThemeBackground)
                         else texturedRange
                     check(range == expected) { "Shared surface paint did not follow the grain recipe" }
                     if (seed == null) check(range != texturedRange) { "Textured fixture had a flat paint range" }
                 }
                 dialog.updateStyle(initial)
                 evidence.put("seed_disable_reenable_preserved_owner", true).put("passed", true)
+                // Keep the generic constructor/seed ceremony, then sample its theme fill without grain.
+                if (route == "generic-theme") {
+                    dialog.updateStyle(initial.copy(recipe = initial.recipe.copy(grainSeed = null)))
+                }
             }
             if (flatPaintRoute || genericRoute) {
                 val paintCase = JSONObject().put("route", route).put("passed", false)
@@ -215,7 +220,7 @@ internal fun verifyNativeActionSheetDismissalCurrent(instrumentation: Instrument
                         samples[1] in 1 until bitmap.height - 1 && samples[2] in 1 until bitmap.height - 1)
                     val handlePixels = JSONArray()
                     val bodyPixels = JSONArray()
-                    val expected = bitmap.getPixel(samples[0], samples[1])
+                    val expected = expectedThemeBackground
                     var mismatches = 0
                     for (dy in -1..1) for (dx in -1..1) {
                         val upper = bitmap.getPixel(samples[0] + dx, samples[1] + dy)
@@ -224,11 +229,11 @@ internal fun verifyNativeActionSheetDismissalCurrent(instrumentation: Instrument
                         if (upper != expected || lower != expected) mismatches++
                     }
                     paintCase.put("handle_argb", handlePixels).put("body_argb", bodyPixels).put("mismatches", mismatches)
+                        .put("expected_theme_background", expectedThemeBackground)
                     if (route != "generic-grain") {
-                        check(mismatches == 0) { "Handle and dialog body have different backgrounds" }
-                        if (customBackground != null) check(expected == customBackground.color) { "Shared custom background was replaced by theme paint" }
+                        check(mismatches == 0) { "Clear handle/body patches do not match the selected theme background" }
                     }
-                    paintCase.put("oracle", if (route == "generic-grain") "Shared owner asserted; textured PNG retained for visual review" else "Uniform clear patches")
+                    paintCase.put("oracle", if (route == "generic-grain") "Shared owner asserted; textured PNG retained for visual review" else "Both clear patches equal selected theme background")
                     paintCase.put("passed", true)
                 } finally { bitmap.recycle() }
             }

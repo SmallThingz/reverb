@@ -10,6 +10,7 @@ import smallthingz.ui.scroll.NativeVerticalFling
 import smallthingz.ui.scroll.NativeVerticalNestedHost
 import smallthingz.ui.scroll.NativeVerticalOverscroll
 import smallthingz.ui.scroll.NativeVerticalScrollSource
+import smallthingz.ui.scroll.ScrollPlayTime
 
 import android.view.MotionEvent
 import android.view.View
@@ -235,14 +236,20 @@ internal class NativeLibraryScrollOwner(
         val available = initial - before
         var logicalLeftover = -available
         mutate(MutatePriority.Default) {
+            val duration = coroutineContext[MotionDurationScale]
             val fling = NativeVerticalFling(decay,
                 consume = { logical ->
                     if (scope !== owner || logical != 0f && !view.isAttachedToWindow) throw CancellationException("scroll node detached")
                     -scroll(-logical, NativeVerticalScrollSource.SIDE_EFFECT)
                 }, finished = { logicalLeftover = it })
+            val sample: (Long) -> Unit = { time ->
+                fling.frame(time, duration?.scaleFactor ?: 1f)
+            }
             fling.start(-available)
             try {
-                while (fling.isRunning) frames.withFrameNanos { fling.frame(it) }
+                // Initialize the platform scale cache before the first frame callback.
+                if (fling.isRunning) duration?.scaleFactor
+                while (fling.isRunning) frames.withFrameNanos(sample)
             } catch (_: CancellationException) {
                 logicalLeftover = fling.remainingVelocity
             } finally { fling.cancel() }
@@ -253,24 +260,24 @@ internal class NativeLibraryScrollOwner(
     }
 
     /** Same source semantics path as NativeVerticalScrollOwner, using real RV consumption. */
-    private suspend fun semanticsScrollBy(logicalDelta:Float) {
+    private suspend fun semanticsScrollBy(logicalDelta: Float) {
         val owner = scope ?: return
-        var consumed=0f
+        var consumed = 0f
         mutate(MutatePriority.Default) {
-            val animation=TargetBasedAnimation(spring<Float>(),Float.VectorConverter,0f,logicalDelta)
-            var start:Long?=null
-            var finished=false
-            while(!finished) {
-                val scale=coroutineContext[MotionDurationScale]?.scaleFactor?:1f
-                check(scale>=0f)
-                frames.withFrameNanos { time ->
-                    if (scope !== owner) throw CancellationException("scroll owner retired")
-                    val first=start?:time.also{start=it}
-                    val play=if(scale==0f)animation.durationNanos else ((time-first)/scale).toLong()
-                    consumed+=-dispatch(-(animation.getValueFromNanos(play)-consumed),NativeVerticalScrollSource.USER_INPUT)
-                    finished=animation.isFinishedFromNanos(play)
-                }
+            val animation = TargetBasedAnimation(spring<Float>(), Float.VectorConverter, 0f, logicalDelta)
+            val clock = ScrollPlayTime()
+            val duration = coroutineContext[MotionDurationScale]
+            // Initialize the platform scale cache while keeping every frame's read live.
+            duration?.scaleFactor
+            var finished = false
+            val sample: (Long) -> Unit = { time ->
+                if (scope !== owner) throw CancellationException("scroll owner retired")
+                val playTime = clock.advance(time, duration?.scaleFactor ?: 1f)
+                val delta = animation.getValueFromNanos(playTime) - consumed
+                consumed -= dispatch(-delta, NativeVerticalScrollSource.USER_INPUT)
+                finished = animation.isFinishedFromNanos(playTime)
             }
+            while (!finished) frames.withFrameNanos(sample)
         }
     }
 

@@ -1,5 +1,7 @@
 package app.smallthingz.reverb
 
+import smallthingz.ui.util.closePreservingPrimaryFailure
+
 import java.io.File
 import java.io.FileDescriptor
 import java.io.IOException
@@ -62,7 +64,7 @@ internal object DurablePcmPins {
         requireJobId(directory.name)
         val directoryIdentities = HashMap<File, String>()
         fun directoryIdentity(file: File) = directoryIdentities.getOrPut(file) { resolveDirectoryIdentity(file) }
-        val proofs = originals.mapIndexed { index, record ->
+        val proofs = java.util.Collections.unmodifiableList(originals.mapIndexed { index, record ->
             if (record.state != PersistentAudioChunkStore.ChunkState.FINALIZED) throw IOException("Save source was not sealed")
             val identity = synchronized(mutationLock) { identityResolver(record.file) }
             if (!identity.startsWith("stat:")) throw IOException("Save source object identity unavailable")
@@ -70,7 +72,7 @@ internal object DurablePcmPins {
                 record.payloadChecksum, checkedSourcePath(record.file.absolutePath).absolutePath,
                 directoryIdentity(requireNotNull(record.file.parentFile)),
                 directoryIdentity(requireNotNull(record.file.parentFile.parentFile)))
-        }
+        })
         val snapshot = Snapshot(source, proofs)
         beforeLinks(snapshot)
         for ((refsRoot, batch) in proofs.groupBy { referenceRoot(checkedSourcePath(it.sourcePath)) }) {
@@ -82,33 +84,53 @@ internal object DurablePcmPins {
                     throw IOException("Save source changed before referencing")
                 }
             }
-            val created = synchronized(mutationLock) {
+            val publication = synchronized(mutationLock) {
                 validateBatchSourceAuthority(directory, batch)
+                // Directory ctime can collide across creates. Retire any old permissive
+                // membership before setup, including failures before live registration.
+                referenceRootChecks.remove(refsRoot.absolutePath)
                 ensureDirectory(refsRoot)
                 if (storagePathState(marker) != StoragePathState.MISSING) throw IOException("PCM reference already exists")
+                if (temporary.absolutePath in livePublications) throw IOException("PCM reference publication already active")
                 Files.createFile(temporary.toPath())
-                resolveFileIdentity(temporary)
-            }
-            // The live lease protects source audio until this one batch and its namespace
-            // are durable. A visible partial batch conservatively protects the whole store.
-            val writtenIdentity = RandomAccessFile(temporary, "rw").use { output ->
-                if (!descriptorMatches(created, output.fd) || output.length() != 0L) throw IOException("PCM reference candidate changed")
-                output.write(payload)
-                syncFile(output.fd)
-                val written = resolveFileIdentity(temporary)
-                if (!sameFileObjectAcrossRename(created, written) || !descriptorMatches(written, output.fd)) {
-                    throw IOException("PCM reference changed")
+                val created = resolveFileIdentity(temporary)
+                val output = RandomAccessFile(temporary, "rw")
+                try {
+                    if (!descriptorMatches(created, output.fd) || output.length() != 0L) {
+                        throw IOException("PCM reference candidate changed")
+                    }
+                    LivePublication(created, resolveDirectoryIdentity(refsRoot), directory, batch.first(),
+                        batch.mapTo(HashSet()) { it.sourcePath }, output).also {
+                        livePublications[temporary.absolutePath] = it
+                    }
+                } catch (failure: Throwable) {
+                    closePreservingPrimaryFailure(failure, output::close)
+                    throw failure
                 }
-                written
             }
-            synchronized(mutationLock) {
-                if (storagePathState(marker) != StoragePathState.MISSING) throw IOException("PCM reference already exists")
-                Files.move(temporary.toPath(), marker.toPath(), StandardCopyOption.ATOMIC_MOVE)
-                if (!sameFileObjectAcrossRename(writtenIdentity, resolveFileIdentity(marker)) ||
-                    DurablePcmBatchReferences.read(marker, descriptorMatches, useCache = false) != batch.associateBy { it.sourcePath }) {
-                    throw IOException("PCM reference publication changed")
+            // The descriptor-bound live writer owns immutable membership. Until it retires,
+            // unrelated capture chunks need not be blocked by this partial marker.
+            try {
+                publication.output.use { output ->
+                    output.write(payload)
+                    syncFile(output.fd)
+                    val writtenIdentity = resolveFileIdentity(temporary)
+                    if (!sameFileObjectAcrossRename(publication.identity, writtenIdentity) ||
+                        !descriptorMatches(writtenIdentity, output.fd)) throw IOException("PCM reference changed")
+                    synchronized(mutationLock) {
+                        if (storagePathState(marker) != StoragePathState.MISSING) throw IOException("PCM reference already exists")
+                        Files.move(temporary.toPath(), marker.toPath(), StandardCopyOption.ATOMIC_MOVE)
+                        if (!sameFileObjectAcrossRename(writtenIdentity, resolveFileIdentity(marker)) ||
+                            DurablePcmBatchReferences.read(marker, descriptorMatches, useCache = false) != batch.associateBy { it.sourcePath }) {
+                            throw IOException("PCM reference publication changed")
+                        }
+                        validateBatchSourceAuthority(directory, batch)
+                    }
                 }
-                validateBatchSourceAuthority(directory, batch)
+            } finally {
+                synchronized(mutationLock) {
+                    if (livePublications[temporary.absolutePath] === publication) livePublications.remove(temporary.absolutePath)
+                }
             }
             // The live range lease remains held; do not monopolize the capture mutation
             // lock while checking a large history's individual object identities.
@@ -126,6 +148,49 @@ internal object DurablePcmPins {
         }
         return snapshot
     }
+
+    /** Never persisted or cached as reference-root membership. All access uses mutationLock. */
+    private class LivePublication(
+        val identity: String,
+        val rootIdentity: String,
+        val directory: File,
+        val authority: ObjectProof,
+        val sourcePaths: Set<String>,
+        val output: RandomAccessFile,
+    )
+    private val livePublications = HashMap<String, LivePublication>()
+
+    private fun livePublicationExcludes(marker: File, file: File): Boolean {
+        val live = livePublications[marker.absolutePath] ?: return false
+        if (file.absolutePath in live.sourcePaths ||
+            file.parentFile != checkedSourcePath(live.authority.sourcePath).parentFile ||
+            !fileIdentityMatches(live.rootIdentity, resolveDirectoryIdentity(marker.parentFile))) return false
+        validateSourceAuthority(live.directory, live.authority)
+        // The descriptor was bound before registration and remains open through writing.
+        // Its live inode cannot be recycled. Ignore write-induced size/ctime revisions,
+        // but never excuse a replacement path, lost descriptor, or changed directory.
+        return live.output.fd.valid() && pendingObjectMatches(live.identity, marker)
+    }
+
+    /** Unlike revision identity, this must tolerate the owner's concurrent write/ctime update. */
+    private fun pendingObjectMatches(identity: String, file: File): Boolean = runCatching {
+        val parts = identity.split(':')
+        when {
+            parts.size == 6 && parts[0] == "stat" -> {
+                val stat = android.system.Os.lstat(file.absolutePath)
+                android.system.OsConstants.S_ISREG(stat.st_mode) && stat.st_ino != 0L &&
+                    parts[1] == stat.st_dev.toString() && parts[2] == stat.st_ino.toString()
+            }
+            parts.size == 3 && parts[0] == "nio" -> {
+                val attributes = Files.readAttributes(file.toPath(), java.nio.file.attribute.BasicFileAttributes::class.java,
+                    java.nio.file.LinkOption.NOFOLLOW_LINKS)
+                val key = attributes.fileKey()?.toString().orEmpty()
+                attributes.isRegularFile && key.isNotBlank() && parts[1] ==
+                    java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(key.toByteArray(Charsets.UTF_8))
+            }
+            else -> false
+        }
+    }.getOrDefault(false)
 
     private val verificationHolds = HashMap<String, Int>()
     private val batchRemovalBarriers = HashMap<String, File>()
@@ -395,7 +460,7 @@ internal object DurablePcmPins {
         }
     }
 
-    /** Unknown or partial markers veto source mutation independently of hydration. */
+    /** Unknown/orphan partial markers veto mutation; exact live writers protect frozen membership. */
     fun isProtected(file: File,
         descriptorMatches: (String, FileDescriptor) -> Boolean = ::descriptorMatches): Boolean = synchronized(mutationLock) {
         val root = referenceRoot(file)
@@ -405,8 +470,10 @@ internal object DurablePcmPins {
             StoragePathState.UNAVAILABLE -> throw IOException("PCM reference root unavailable")
             StoragePathState.PRESENT -> {
                 requireDirectory(root)
-                if (hasUnknownReferenceEntry(root)) return@synchronized true
-                for (batch in referenceRootChecks[root.absolutePath]?.batches.orEmpty()) {
+                val liveTarget = if (livePublications.keys.any { File(it).parentFile == root }) file else null
+                val membership = referenceRootCheck(root, liveTarget)
+                if (membership.unknown) return@synchronized true
+                for (batch in membership.batches) {
                     val proofs = try { DurablePcmBatchReferences.read(batch, descriptorMatches) }
                     catch (_: IOException) { return@synchronized true }
                     if (file.absolutePath in proofs) return@synchronized true
@@ -425,19 +492,25 @@ internal object DurablePcmPins {
     }
     private data class ReferenceRootCheck(val revision: String?, val unknown: Boolean, val batches: List<File>)
     private val referenceRootChecks = mutableMapOf<String, ReferenceRootCheck>()
-    private fun hasUnknownReferenceEntry(root: File): Boolean {
+    private fun referenceRootCheck(root: File, liveTarget: File?): ReferenceRootCheck {
         val identity = resolveDirectoryIdentity(root)
         val revision = referenceRootRevision(root, identity)
         val cached = referenceRootChecks[root.absolutePath]
-        if (revision != null && cached != null && cached.revision == revision) return cached.unknown
+        // A live writer can retire without changing the directory (failed sync). Never
+        // reuse or publish a cache result that depended on that process-local exception.
+        if (liveTarget == null && revision != null && cached != null && cached.revision == revision) return cached
         val batches = ArrayList<File>()
+        var batchEntries = 0
         val unknown = Files.newDirectoryStream(root.toPath()).use { entries ->
             entries.any { entry ->
                 val name = entry.fileName.toString()
                 if (DurablePcmBatchReferences.isBatchName(name)) {
                     batches += entry.toFile()
-                    batches.size > DurableSaveJournal.MAX_JOBS || resolveFileIdentity(entry.toFile()).isBlank()
-                } else name.toUIntOrNull()?.toString() != name || resolveDirectoryIdentity(entry.toFile()).isBlank()
+                    ++batchEntries > DurableSaveJournal.MAX_JOBS || resolveFileIdentity(entry.toFile()).isBlank()
+                } else if (liveTarget != null && name.endsWith(".pending") &&
+                    DurablePcmBatchReferences.isBatchName(name.removeSuffix(".pending")) &&
+                    livePublicationExcludes(entry.toFile(), liveTarget)) ++batchEntries > DurableSaveJournal.MAX_JOBS
+                else name.toUIntOrNull()?.toString() != name || resolveDirectoryIdentity(entry.toFile()).isBlank()
             }
         }
         if (!fileIdentityMatches(identity, resolveDirectoryIdentity(root)) ||
@@ -445,8 +518,9 @@ internal object DurablePcmPins {
             throw IOException("PCM reference membership changed")
         }
         if (referenceRootChecks.size >= DurableSaveJournal.MAX_JOBS && root.absolutePath !in referenceRootChecks) referenceRootChecks.clear()
-        referenceRootChecks[root.absolutePath] = ReferenceRootCheck(revision, unknown, batches)
-        return unknown
+        val result = ReferenceRootCheck(revision, unknown, batches)
+        if (liveTarget == null) referenceRootChecks[root.absolutePath] = result
+        return result
     }
     private fun referenceRootRevision(root: File, identity: String): String? = runCatching {
         val stat = android.system.Os.lstat(root.absolutePath)

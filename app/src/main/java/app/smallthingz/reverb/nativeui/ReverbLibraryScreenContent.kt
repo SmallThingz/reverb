@@ -200,7 +200,7 @@ internal class ReverbLibraryScreenContent(
         input = next
         environment = nextEnvironment
         if (environmentChanged) {
-            menus.bindPalette(nextEnvironment.palette)
+            menus.bindTheme(nextEnvironment.theme)
             renameHeader?.presentation?.bindEnvironment(nextEnvironment)
             spotlight?.bindEnvironment(nextEnvironment)
             refreshIndicator.bindEnvironment(nextEnvironment)

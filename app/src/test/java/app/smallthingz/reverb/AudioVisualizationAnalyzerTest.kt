@@ -240,6 +240,242 @@ class AudioVisualizationAnalyzerTest {
         }
     }
 
+    private fun pcm16(frames: Int, sample: (Int) -> Double): ByteArray =
+        ByteBuffer.allocate(frames * Short.SIZE_BYTES).order(ByteOrder.nativeOrder()).apply {
+            repeat(frames) { putShort((sample(it) * Short.MAX_VALUE).toInt().toShort()) }
+        }.array()
+
+    private fun requireNeutral(frame: ReverbService.VisualizationFrame) {
+        assertEquals(0f, frame.activity, 0f)
+        assertTrue(frame.bins.all { it == 0f })
+    }
+
+    @Test
+    fun coldRoomAndRoomReturningAfterZerosStayNeutral() {
+        for (zeroReads in listOf(0, 250)) {
+            val analyzer = AudioVisualizationAnalyzer()
+            val zeros = ByteArray(384 * 2)
+            repeat(zeroReads) {
+                requireNeutral(analyzer.analyze(zeros, 0, zeros.size, PcmSampleFormat.PCM_16, 1, 48_000))
+            }
+            val noise = Random(9182)
+            repeat(125) { read ->
+                val pcm = pcm16(384) { i ->
+                    val phase = 2 * PI * (384 * read + i) / 48_000
+                    (noise.nextDouble() - 0.5) * 0.002 + 0.003 * sin(60 * phase) + 0.001 * sin(16_000 * phase)
+                }
+                requireNeutral(analyzer.analyze(pcm, 0, pcm.size, PcmSampleFormat.PCM_16, 1, 48_000))
+            }
+        }
+    }
+
+    @Test
+    fun acquiresAboveGateBroadbandRoomThenShowsVoicedContrast() {
+        for (zeroReads in listOf(0, 125)) {
+            val analyzer = AudioVisualizationAnalyzer()
+            val quiet = ByteArray(768)
+            repeat(zeroReads) {
+                analyzer.analyze(quiet, 0, quiet.size, PcmSampleFormat.PCM_16, 1, 48_000)
+            }
+            val random = Random(7833)
+            var previous = 0.0
+            var settledPeak = 0f
+            var voicePeak = 0f
+            repeat(500) { read ->
+                val pcm = pcm16(384) { i ->
+                    val white = 0.014 * (random.nextDouble() - 0.5)
+                    val room = (previous + white) / 2
+                    previous = white
+                    val phase = 2 * PI * 200 * (384 * read + i) / 48_000
+                    val voice = if (read in 400..424) {
+                        0.006 * (sin(phase) + sin(3 * phase) + 0.5 * sin(5 * phase)) *
+                            sin(PI * ((read - 400) * 384 + i) / (25 * 384))
+                    } else 0.0
+                    room + voice
+                }
+                val frame = analyzer.analyze(pcm, 0, pcm.size, PcmSampleFormat.PCM_16, 1, 48_000)
+                if (read == 0) assertTrue("fixture must exceed the cold gate", frame.activity > 0.1f)
+                if (read in 300..399 || read >= 475) settledPeak = maxOf(settledPeak, frame.activity)
+                if (read in 400..424) voicePeak = maxOf(voicePeak, frame.activity)
+            }
+            assertTrue("settled room peak=$settledPeak", settledPeak < 0.02f)
+            assertTrue("voice over acquired floor=$voicePeak", voicePeak > 0.12f)
+        }
+    }
+
+    @Test
+    fun fourMillisecondReadsAcquireTheSameRoomAtLowNormalAndHighRates() {
+        // Interpolate a single seeded source in physical time at every capture rate.
+        val random = Random(7203)
+        val bed = DoubleArray(5 * 16_000 + 1) { (random.nextDouble() - 0.5) * 0.011 }
+        for (rate in listOf(7_350, 16_000, 48_000, 96_000, 192_000)) {
+            val analyzer = AudioVisualizationAnalyzer()
+            var early = 0f
+            var settled = 0f
+            var voicePeak = 0f
+            repeat(1_250) { read ->
+                val start = read * rate / 250
+                val end = (read + 1) * rate / 250
+                val pcm = pcm16(end - start) { index ->
+                    val t = (start + index).toDouble() / rate
+                    val position = t * 16_000
+                    val k = position.toInt()
+                    val room = bed[k] + (bed[k + 1] - bed[k]) * (position - k)
+                    val phase = 2 * PI * 180 * t
+                    val envelope = if (t in 4.0..4.2) sin(PI * (t - 4.0) / 0.2) else 0.0
+                    room + envelope * 0.009 * (sin(phase) + 0.6 * sin(3 * phase))
+                }
+                val frame = analyzer.analyze(pcm, 0, pcm.size, PcmSampleFormat.PCM_16, 1, rate)
+                if (read < 25) early = maxOf(early, frame.activity)
+                if (read in 750..999) settled += frame.activity / 250
+                if (read in 1000..1049) voicePeak = maxOf(voicePeak, frame.activity)
+            }
+            assertTrue("above-gate room at $rate", early > 0.1f)
+            assertTrue("mean settled activity at $rate = $settled", settled < 0.01f)
+            assertTrue("voiced contrast at $rate = $voicePeak", voicePeak > 0.07f)
+        }
+    }
+
+    @Test
+    fun repeatedEarlyVoicedBurstsKeepContrastWithDiffuseQuietTails() {
+        val analyzer = AudioVisualizationAnalyzer()
+        val random = Random(809)
+        var initial = 0f
+        repeat(200) { read ->
+            val pcm = pcm16(1_920) { i ->
+                val burst = if (i < 960) 0.008 * sin(2 * PI * 800 * i / 48_000) else 0.0
+                burst + (random.nextDouble() - 0.5) * 0.0015
+            }
+            val frame = analyzer.analyze(pcm, 0, pcm.size, PcmSampleFormat.PCM_16, 1, 48_000)
+            if (read == 1) initial = frame.activity
+            if (read == 199) {
+                assertTrue(initial > 0.2f)
+                assertEquals("eight seconds of recurring bursts", initial, frame.activity, 0.02f)
+            }
+        }
+    }
+
+    @Test
+    fun pcm8OneCodeRoomFluctuationsSettleAndAudibleToneRemainsVisible() {
+        val analyzer = AudioVisualizationAnalyzer()
+        val random = Random(878)
+        var settled = 0f
+        var tonePeak = 0f
+        repeat(500) { read ->
+            val pcm = ByteArray(384) { i ->
+                val room = random.nextInt(3) - 1
+                val tone = if (read >= 400) (4 * sin(2 * PI * 750 * (384 * read + i) / 48_000)).toInt() else 0
+                (128 + room + tone).toByte()
+            }
+            val frame = analyzer.analyze(pcm, 0, pcm.size, PcmSampleFormat.PCM_8, 1, 48_000)
+            if (read in 300..399) settled += frame.activity / 100
+            if (read >= 490) tonePeak = maxOf(tonePeak, frame.activity)
+        }
+        assertTrue("settled one-code room=$settled", settled < 0.01f)
+        assertTrue("four-code tone over room=$tonePeak", tonePeak > 0.2f)
+    }
+
+    @Test
+    fun constantMicOffsetAndRumbleStayNeutral() {
+        for (frequency in listOf(0, 30, 50, 60)) {
+            val analyzer = AudioVisualizationAnalyzer()
+            repeat(40) { read ->
+                val pcm = pcm16(384) { i -> 0.1 + 0.006 * sin(2 * PI * frequency * (384 * read + i) / 48_000) }
+                requireNeutral(analyzer.analyze(pcm, 0, pcm.size, PcmSampleFormat.PCM_16, 1, 48_000))
+            }
+        }
+    }
+
+    @Test
+    fun midstreamBiasStepHasAnOnsetButConstantBiasDoesNotSustainMotion() {
+        for (pulseFrames in listOf(1, Int.MAX_VALUE)) {
+            val analyzer = AudioVisualizationAnalyzer()
+            val silence = ByteArray(768)
+            requireNeutral(analyzer.analyze(silence, 0, silence.size, PcmSampleFormat.PCM_16, 1, 48_000))
+            repeat(64) { read ->
+                val pcm = pcm16(384) { i -> if (read * 384 + i < pulseFrames) 0.1 else 0.0 }
+                val frame = analyzer.analyze(pcm, 0, pcm.size, PcmSampleFormat.PCM_16, 1, 48_000)
+                if (read == 0) assertTrue("onset pulseFrames=$pulseFrames", frame.activity > 0.1f)
+                if (read == 63) {
+                    // More than eleven 45 ms release constants after the discontinuity.
+                    assertTrue("residual pulseFrames=$pulseFrames", frame.activity < 0.0001f)
+                    assertTrue(frame.bins.all { it == 0f })
+                }
+            }
+        }
+    }
+
+    @Test
+    fun lowFundamentalVoiceWithWeakHarmonicsIsVisibleOverTheSameNoise() {
+        val roomAnalyzer = AudioVisualizationAnalyzer()
+        val voiceAnalyzer = AudioVisualizationAnalyzer()
+        val noise = Random(1917)
+        var peak = 0f
+        repeat(100) { read ->
+            val room = DoubleArray(384) { (noise.nextDouble() - 0.5) * 0.002 }
+            val roomPcm = pcm16(384) { room[it] }
+            val voicePcm = pcm16(384) { i ->
+                val phase = 2 * PI * 123 * (384 * read + i) / 48_000
+                val envelope = if (read in 50..74) {
+                    sin(PI * ((read - 50) * 384 + i) / (25 * 384))
+                } else 0.0
+                room[i] + envelope * 0.006 * (sin(phase) + 0.25 * sin(2 * phase) + 0.12 * sin(3 * phase))
+            }
+            requireNeutral(roomAnalyzer.analyze(roomPcm, 0, roomPcm.size, PcmSampleFormat.PCM_16, 1, 48_000))
+            val frame = voiceAnalyzer.analyze(voicePcm, 0, voicePcm.size, PcmSampleFormat.PCM_16, 1, 48_000)
+            if (read < 50) requireNeutral(frame)
+            if (read in 50..74) peak = maxOf(peak, frame.activity)
+        }
+        assertTrue("low fundamental peak=$peak", peak > 0.08f)
+    }
+
+    @Test
+    fun quietVoicedBurstOverRoomMovesThenReleases() {
+        val analyzer = AudioVisualizationAnalyzer()
+        val noise = Random(109)
+        var peak = 0f
+        repeat(180) { read ->
+            val pcm = pcm16(384) { i ->
+                val t = (384 * read + i) / 48_000.0
+                val voiced = if (read in 50..74) {
+                    val phase = 2 * PI * 180 * t
+                    0.003 * (sin(phase) + sin(3 * phase) + 0.5 * sin(6 * phase)) *
+                        sin(PI * (t - 0.4) / 0.2)
+                } else 0.0
+                voiced + (noise.nextDouble() - 0.5) * 0.002
+            }
+            val frame = analyzer.analyze(pcm, 0, pcm.size, PcmSampleFormat.PCM_16, 1, 48_000)
+            if (read < 50) requireNeutral(frame)
+            peak = maxOf(peak, frame.activity)
+            if (read == 179) assertTrue(frame.activity < 0.001f)
+        }
+        assertTrue(peak > 0.15f)
+    }
+
+    @Test
+    fun sustainedQuietToneKeepsContrastAcrossReadDurationsAndRates() {
+        var reference = 0f
+        for (rate in listOf(16_000, 48_000, 96_000)) {
+            val pcm = pcm16(3 * rate) { i -> 0.002 * sin(2 * PI * 937 * i / rate) }
+            for (ms in listOf(4, 8, 20)) {
+                val analyzer = AudioVisualizationAnalyzer()
+                val bytes = rate * ms / 1_000 * 2
+                var onset = 0f
+                var last = 0f
+                for (offset in pcm.indices step bytes) {
+                    last = analyzer.analyze(pcm, offset, bytes, PcmSampleFormat.PCM_16, 1, rate).activity
+                    if (offset + bytes == rate * 2 / 25) onset = last // 40 ms after onset
+                }
+                assertTrue("rate=$rate ms=$ms activity=$last", last > 0.10f)
+                // 0.02 of the 30 dB display range allows 0.6 dB of read-boundary variation.
+                assertEquals(onset, last, 0.02f)
+                if (rate == 16_000 && ms == 4) reference = last
+                // Includes passband discretization at 16 kHz and fractional periods per read.
+                assertEquals("rate=$rate ms=$ms", reference, last, 0.035f)
+            }
+        }
+    }
+
     private fun pcm16Tone(
         frequencyHz: Double,
         amplitude: Double,
