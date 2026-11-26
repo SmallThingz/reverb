@@ -5,6 +5,7 @@ import android.content.res.Configuration
 import android.os.Process
 import android.util.Log
 import kotlin.system.exitProcess
+import smallthingz.ui.graphics.NoiseUiLifecycle
 
 class ReverbApplication : Application() {
     // One main-thread-created token for this Application/process; never an Activity owner.
@@ -14,6 +15,7 @@ class ReverbApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         installUnexpectedErrorHandler()
+        NoiseUiLifecycle.install(this) { it is MainActivity }
         try {
             displayNightObserver = smallthingz.ui.components.NativeDisplayNightObserver.create(this)
         } catch (error: RuntimeException) {
