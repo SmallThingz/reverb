@@ -1045,10 +1045,12 @@
   source hops when the difference between commanded and pitch-adjusted source advance fits within one overlap.
   At materially slower rates, allow sparse audition when observed source progress and elapsed wait indicate the next
   audition needs more than one overlap. Keep the pending tail through fresh continuous waits and resume from its
-  consumed source edge after settlement. Prefer 96 kHz shuttle processing/output, with 48 kHz fallback if the
-  capability query or actual AudioTrack creation/configuration rejects 96 kHz. The audible target includes uncommitted display-rate jog
-  motion, continuous grains overlap on one persistent low-latency AudioTrack while bounds and direction permit it, and a
-  small verified normalized PCM source window is reused across adjacent grains instead of rescanning durable storage per
+  consumed source edge after settlement. For ordinary Library playback at 44.1 or 48 kHz, first request the file's
+  native PCM rate and the MediaPlayer `USAGE_MEDIA`/`CONTENT_TYPE_MUSIC` attributes with default AudioTrack performance
+  mode and the short shuttle buffer. Otherwise, or on configuration rejection, prefer 96 kHz low-latency shuttle
+  processing/output with 48 kHz fallback on capability or configuration rejection. The audible target includes uncommitted
+  display-rate jog motion. Continuous grains overlap on one persistent AudioTrack with a bounded queue while bounds and
+  direction permit it. A small verified normalized PCM source window is reused across adjacent grains instead of rescanning durable storage per
   hop. Bounds expansion preserves admitted queued support; contraction or direction reversal revokes the old epoch and
   silences its physical queue before replacement. Selected play/audition/shuttle output and resampler support stay inside
   the exact source-frame interval. Native pause/flush is independent of slow terminal release, with bounded outstanding

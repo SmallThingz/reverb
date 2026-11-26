@@ -776,17 +776,32 @@ internal fun shuttleSampleRateCandidates(preferredMinBufferBytes: Int): List<Int
         listOf(SHUTTLE_FALLBACK_SAMPLE_RATE)
     }
 
-internal inline fun <T> createShuttleWithSampleRateFallback(
+private data class ShuttleTrackRequest(val sampleRate: Int, val useLibraryOutput: Boolean = false)
+
+internal fun <T> createShuttleWithSampleRateFallback(
+    preferredMinBufferBytes: Int,
+    onConfigurationReleaseFailure: (Throwable) -> Unit,
+    create: (Int, (Throwable) -> Unit) -> T,
+): Pair<T, Int> = createShuttleTrackWithFallback(preferredMinBufferBytes, onConfigurationReleaseFailure) { request, report ->
+    create(request.sampleRate, report)
+}
+
+private inline fun <T> createShuttleTrackWithFallback(
     preferredMinBufferBytes: Int,
     noinline onConfigurationReleaseFailure: (Throwable) -> Unit,
-    create: (Int, (Throwable) -> Unit) -> T,
+    libraryPlaybackRate: Int? = null,
+    create: (ShuttleTrackRequest, (Throwable) -> Unit) -> T,
 ): Pair<T, Int> {
+    val requests = buildList {
+        libraryPlaybackRate?.let { add(ShuttleTrackRequest(it, useLibraryOutput = true)) }
+        shuttleSampleRateCandidates(preferredMinBufferBytes).forEach { add(ShuttleTrackRequest(it)) }
+    }
     var earlierFailure: Exception? = null
-    for (sampleRate in shuttleSampleRateCandidates(preferredMinBufferBytes)) {
+    for (request in requests) {
         try {
             // Configuration rejection may fall back, but its owner's actual release failure
             // must be reported before a later success discards that primary exception.
-            return create(sampleRate, onConfigurationReleaseFailure) to sampleRate
+            return create(request, onConfigurationReleaseFailure) to request.sampleRate
         } catch (error: Exception) {
             val previous = earlierFailure
             if (previous != null) error.addSuppressed(previous)
@@ -1055,6 +1070,7 @@ internal class TimelineAudioPreviewController(
     private interface ShuttlePcmSource : Closeable {
         val durationSeconds: Double
         val channelCount: Int
+        val nativeSampleRate: Int? get() = null
         fun readPcm16(
             startSeconds: Double,
             endSeconds: Double,
@@ -1100,6 +1116,7 @@ internal class TimelineAudioPreviewController(
     ) : ShuttlePcmSource {
         override val durationSeconds: Double get() = reader.durationSeconds
         override val channelCount: Int get() = reader.channelCount
+        override val nativeSampleRate: Int get() = reader.layout.sampleRate
 
         override fun unityBounds(start: Double, end: Double): Pair<Double, Double> {
             val rate = reader.layout.sampleRate
@@ -1568,6 +1585,11 @@ internal class TimelineAudioPreviewController(
             checkShuttleCurrent()
             val channelCount = source.channelCount
             val frameBytes = pcm16FrameBytes(channelCount)
+            // Match Library playback attributes and the source rate for common PCM formats.
+            // A 96 kHz FAST request can select a mixer that cannot grant FAST at that rate.
+            val libraryPlaybackRate = source.nativeSampleRate?.takeIf {
+                ordinaryAuthority != null && (it == 44_100 || it == SHUTTLE_FALLBACK_SAMPLE_RATE)
+            }
             val (shuttleTrack, shuttleSampleRate) = timeShuttleStage(token, { PreviewShuttleStage.CREATE_TRACK }) {
                 val preferredMinBufferBytes = runCatching {
                     AudioTrack.getMinBufferSize(
@@ -1576,18 +1598,21 @@ internal class TimelineAudioPreviewController(
                         AudioFormat.ENCODING_PCM_16BIT,
                     )
                 }.getOrDefault(0)
-                createShuttleWithSampleRateFallback(
+                createShuttleTrackWithFallback(
                     preferredMinBufferBytes = preferredMinBufferBytes,
                     onConfigurationReleaseFailure = ::reportTrackReleaseFailure,
-                ) { sampleRate, onConfigurationReleaseFailure ->
+                    libraryPlaybackRate = libraryPlaybackRate,
+                ) { (sampleRate, useLibraryOutput), onConfigurationReleaseFailure ->
                     val grainBufferBytes = (SHUTTLE_GRAIN_OUTPUT_SECONDS * sampleRate).roundToInt() * frameBytes
                     createTrack(
                         token = token,
                         volume = 1f,
                         channelCount = channelCount,
                         minimumBufferBytes = grainBufferBytes,
-                        lowLatency = true,
+                        lowLatency = !useLibraryOutput,
                         sampleRate = sampleRate,
+                        contentType = if (useLibraryOutput) AudioAttributes.CONTENT_TYPE_MUSIC
+                            else AudioAttributes.CONTENT_TYPE_SPEECH,
                         onConfigurationReleaseFailure = onConfigurationReleaseFailure,
                         checkAdmission = ::checkShuttleCurrent,
                     )
@@ -2214,6 +2239,7 @@ internal class TimelineAudioPreviewController(
         minimumBufferBytes: Int = PREVIEW_FRAMES_PER_BATCH * pcm16FrameBytes(channelCount) * 4,
         lowLatency: Boolean = false,
         sampleRate: Int = PREVIEW_SAMPLE_RATE,
+        contentType: Int = AudioAttributes.CONTENT_TYPE_SPEECH,
         onConfigurationReleaseFailure: (Throwable) -> Unit,
         checkAdmission: () -> Unit = {},
     ): AudioTrack {
@@ -2226,7 +2252,7 @@ internal class TimelineAudioPreviewController(
         try {
             checkCurrent(token)
             checkAdmission()
-            return createConfiguredTrack(volume, channelCount, minimumBufferBytes, lowLatency, sampleRate) { error ->
+            return createConfiguredTrack(volume, channelCount, minimumBufferBytes, lowLatency, sampleRate, contentType) { error ->
                 releaseFailed = true
                 failedTrackReleases.incrementAndGet()
                 onConfigurationReleaseFailure(error)
@@ -2243,6 +2269,7 @@ internal class TimelineAudioPreviewController(
         minimumBufferBytes: Int,
         lowLatency: Boolean,
         sampleRate: Int,
+        contentType: Int,
         onConfigurationReleaseFailure: (Throwable) -> Unit,
     ): AudioTrack {
         val channelMask = playbackChannelMask(channelCount)
@@ -2258,7 +2285,7 @@ internal class TimelineAudioPreviewController(
             .setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .setContentType(contentType)
                     .build(),
             )
             .setAudioFormat(
