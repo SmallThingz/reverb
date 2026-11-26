@@ -29,6 +29,9 @@ internal class CoordinatorMediaProvider(private val payload: File) : ContentProv
     val attemptedDeleteUris = mutableListOf<Uri>()
     val deletedPayloads = mutableMapOf<Uri, ByteArray>()
     var replaceOnNextRead: ByteArray? = null
+    var copiedOutputReportedSize: Long? = null
+    var beforeOpenRead: ((Uri) -> Unit)? = null
+    var wrapReadDescriptor: ((Uri, ParcelFileDescriptor) -> ParcelFileDescriptor)? = null
     var retainedBeforeReplacement: File? = null
     var readReplacementCount = 0
     val openedModes = mutableListOf<String>()
@@ -78,7 +81,9 @@ internal class CoordinatorMediaProvider(private val payload: File) : ContentProv
                 MediaStore.MediaColumns._ID to entry.uri.lastPathSegment!!.toLong(),
                 MediaStore.MediaColumns.DISPLAY_NAME to entry.name,
                 MediaStore.MediaColumns.MIME_TYPE to "audio/wav",
-                MediaStore.MediaColumns.SIZE to entry.file.length(),
+                MediaStore.MediaColumns.SIZE to if (entry.uri != sentinelUri && entry.file.length() > 0L) {
+                    copiedOutputReportedSize ?: entry.file.length()
+                } else entry.file.length(),
                 MediaStore.MediaColumns.DATE_MODIFIED to 100L,
                 MediaStore.MediaColumns.GENERATION_MODIFIED to entry.generation,
                 MediaStore.MediaColumns.RELATIVE_PATH to "Music/Reverb/",
@@ -95,20 +100,23 @@ internal class CoordinatorMediaProvider(private val payload: File) : ContentProv
             "rw" -> ParcelFileDescriptor.MODE_READ_WRITE
             else -> error("Unexpected descriptor mode $mode")
         }
-        if (mode == "r") replaceOnNextRead?.let { bytes ->
-            check(uri == this.uri) { "Replacement hook targeted an unowned row" }
-            replaceOnNextRead = null
-            val original = File(payload.parentFile, "provider-before-replacement.wav")
-            check(entry.file.renameTo(original))
-            retainedBeforeReplacement = original
-            entry.file.writeBytes(bytes)
-            entry.generation = 10
-            readReplacementCount++
+        if (mode == "r") {
+            beforeOpenRead?.invoke(uri)
+            replaceOnNextRead?.let { bytes ->
+                check(uri == this.uri) { "Replacement hook targeted an unowned row" }
+                replaceOnNextRead = null
+                val original = File(payload.parentFile, "provider-before-replacement.wav")
+                check(entry.file.renameTo(original))
+                retainedBeforeReplacement = original
+                entry.file.writeBytes(bytes)
+                entry.generation = 10
+                readReplacementCount++
+            }
         }
         val descriptor = ParcelFileDescriptor.open(entry.file, flags)
         openedModes += mode
         descriptors += descriptor to descriptor.fileDescriptor
-        return descriptor
+        return if (mode == "r") wrapReadDescriptor?.invoke(uri, descriptor) ?: descriptor else descriptor
     }
     override fun update(uri: Uri, values: ContentValues?, selection: String?, selectionArgs: Array<out String>?): Int {
         val entry = rows.single { it.uri == uri && !it.deleted }

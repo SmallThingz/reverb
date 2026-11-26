@@ -2445,20 +2445,13 @@ fun copyRecordingToDirectory(
         if (sourceSize != null && copiedBytes != sourceSize) {
             throw IOException("Recording copy was incomplete: expected=$sourceSize copied=$copiedBytes")
         }
-        val targetSize = resolveOutputTargetSize(context, resolvedTarget)
-        val verifiedTargetSize = if (targetSize == copiedBytes) {
-            targetSize
-        } else {
-            countOutputTargetBytes(context, resolvedTarget, copiedBytes)
-        }
-        if (verifiedTargetSize != copiedBytes) {
-            throw IOException("Recording copy size mismatch: copied=$copiedBytes target=$verifiedTargetSize")
-        }
         val targetFingerprint = readStableOutputFingerprint(
             context,
             resolvedTarget.storageType,
             resolvedTarget.id,
             resolvedTarget.stagingIdentity,
+            reuseVerifiedProviderRevision = false,
+            expectedByteCount = copiedBytes,
         ) ?: throw IOException("Unable to bind copied recording to a stable output object")
         if (!stagingFingerprintMatchesCreatedObject(resolvedTarget, targetFingerprint)) {
             throw IOException("Copied recording no longer matches the created staging object")
@@ -2503,7 +2496,7 @@ fun copyRecordingToDirectory(
             target = recording.copy(
                 id = finalizedTarget.id,
                 displayName = finalizedTarget.displayName,
-                sizeBytes = verifiedTargetSize,
+                sizeBytes = targetFingerprint.digest.byteCount,
                 storageType = finalizedTarget.storageType,
                 directoryId = finalizedTarget.directoryId,
                 fileIdentity = copiedIdentity,
@@ -2565,6 +2558,17 @@ internal fun sha256(
     input: InputStream,
     bufferSize: Int = FILE_COPY_BUFFER_BYTES,
 ): CopyDigest = transferWithSha256(input, null, bufferSize)
+
+internal fun sha256Exact(input: InputStream, expectedByteCount: Long): CopyDigest {
+    require(expectedByteCount >= 0L)
+    val digest = MessageDigest.getInstance("SHA-256")
+    val source = DigestInputStream(input, digest)
+    if (!source.discardFully(expectedByteCount, ByteArray(FILE_COPY_BUFFER_BYTES))) {
+        throw IOException("Recording copy ended before $expectedByteCount bytes")
+    }
+    if (source.read() >= 0) throw IOException("Recording copy exceeds $expectedByteCount bytes")
+    return CopyDigest(expectedByteCount, digest.digest())
+}
 
 internal fun providerReadHandoffMatchesExpected(
     expectedIdentity: String,
@@ -5176,11 +5180,17 @@ internal data class RecoverableStagingWav(
 )
 
 internal fun readRecoverableStagingWavDurationMillis(input: InputStream): Long =
-    readRecoverableStagingWav(input)?.durationMillis ?: 0L
+    readCompleteWavStreamStructure(input)?.durationMillis ?: 0L
 
 internal fun readRecoverableStagingWav(input: InputStream): RecoverableStagingWav? {
-    val messageDigest = MessageDigest.getInstance("SHA-256")
-    val source = DigestInputStream(input, messageDigest)
+    val digest = MessageDigest.getInstance("SHA-256")
+    val structure = readCompleteWavStreamStructure(DigestInputStream(input, digest)) ?: return null
+    return RecoverableStagingWav(structure.durationMillis, CopyDigest(structure.byteCount, digest.digest()))
+}
+
+private data class WavStreamStructure(val durationMillis: Long, val byteCount: Long)
+
+private fun readCompleteWavStreamStructure(source: InputStream): WavStreamStructure? {
     val riffHeader = ByteArray(12)
     if (!source.readFully(riffHeader)) return null
     if (!riffHeader.regionMatchesAscii(0, "RIFF") || !riffHeader.regionMatchesAscii(8, "WAVE")) {
@@ -5252,10 +5262,7 @@ internal fun readRecoverableStagingWav(input: InputStream): RecoverableStagingWa
     if (!sawFormat || !sawData || byteRate <= 0L || blockAlign <= 0L || dataSize <= 0L) return null
     if (dataSize % blockAlign != 0L) return null
     val durationMillis = (dataSize * 1000L / byteRate).takeIf { it > 0L } ?: return null
-    return RecoverableStagingWav(
-        durationMillis = durationMillis,
-        digest = CopyDigest(expectedTotalBytes, messageDigest.digest()),
-    )
+    return WavStreamStructure(durationMillis, consumedBytes)
 }
 
 private fun InputStream.discardFully(byteCount: Long, buffer: ByteArray): Boolean {
@@ -5272,37 +5279,6 @@ private fun InputStream.discardFully(byteCount: Long, buffer: ByteArray): Boolea
         }
     }
     return true
-}
-
-private fun countOutputTargetBytes(
-    context: Context,
-    target: RecordingOutputTarget,
-    expectedBytes: Long,
-): Long {
-    val input = when (target.storageType) {
-        RecordingStorageType.FILE -> FileInputStream(requireNotNull(target.file))
-        RecordingStorageType.DOCUMENT,
-        RecordingStorageType.MEDIASTORE,
-        -> context.contentResolver.openInputStream(requireNotNull(target.uri))
-    } ?: throw IOException("Unable to reopen copied recording")
-    input.use { source ->
-        val buffer = ByteArray(FILE_COPY_BUFFER_BYTES)
-        var total = 0L
-        val readLimit = if (expectedBytes == Long.MAX_VALUE) Long.MAX_VALUE else expectedBytes + 1L
-        while (total < readLimit) {
-            val maxRead = minOf(buffer.size.toLong(), readLimit - total).toInt()
-            if (maxRead <= 0) break
-            val read = source.read(buffer, 0, maxRead)
-            if (read < 0) break
-            if (read == 0) {
-                if (source.read() < 0) break
-                total++
-            } else {
-                total += read.toLong()
-            }
-        }
-        return total
-    }
 }
 
 private fun littleEndianInt(

@@ -869,9 +869,11 @@ internal fun readStableOutputFingerprint(
     preferredIdentity: String? = null,
     reuseVerifiedProviderRevision: Boolean = false,
     requiredProviderObject: ProviderPayloadRevision? = null,
+    expectedByteCount: Long? = null,
 ): StableOutputFingerprint? = runCatching {
+    require(expectedByteCount == null || !reuseVerifiedProviderRevision)
     when (storageType) {
-        RecordingStorageType.FILE -> readStableFileOutputFingerprint(File(id))
+        RecordingStorageType.FILE -> readStableFileOutputFingerprint(File(id), expectedByteCount)
         RecordingStorageType.DOCUMENT,
         RecordingStorageType.MEDIASTORE,
         -> {
@@ -895,7 +897,11 @@ internal fun readStableOutputFingerprint(
                 val cached = if (reuseVerifiedProviderRevision) {
                     VerifiedProviderDigestCache.read(storageType, id, before, nativeBefore)
                 } else null
-                val digest = cached ?: sha256(source)
+                val digest = cached ?: if (expectedByteCount == null) {
+                    sha256(source)
+                } else {
+                    sha256Exact(source, expectedByteCount)
+                }
                 val afterRead = resolveProviderRecordingIdentity(context, storageType, uri, before)
                 if (!providerReadRemainsStable(before, afterOpen, afterRead) ||
                     !providerDescriptorMatchesIdentity(before, source.fd)
@@ -912,17 +918,20 @@ internal fun readStableOutputFingerprint(
     }
 }.getOrNull()
 
-internal fun readStableFileOutputFingerprint(file: File): StableOutputFingerprint? = runCatching {
+internal fun readStableFileOutputFingerprint(file: File): StableOutputFingerprint? =
+    readStableFileOutputFingerprint(file, expectedByteCount = null)
+
+private fun readStableFileOutputFingerprint(file: File, expectedByteCount: Long?): StableOutputFingerprint? = runCatching {
     val beforeObservation = observeStoragePath(file)
     if (beforeObservation.state != StoragePathState.PRESENT || !beforeObservation.isRegularFile) {
         return@runCatching null
     }
     val beforeIdentity = resolveFileIdentity(file).takeIf { it.isNotBlank() } ?: return@runCatching null
-    FileInputStream(file).use { input ->
+    val fingerprint = FileInputStream(file).use { input ->
         val openedIdentity = resolveFileDescriptorIdentity(input.fd)
             .takeIf { it.isNotBlank() } ?: return@runCatching null
         if (!fileDescriptorIdentityMatches(beforeIdentity, openedIdentity)) return@runCatching null
-        val digest = sha256(input)
+        val digest = if (expectedByteCount == null) sha256(input) else sha256Exact(input, expectedByteCount)
         val closedIdentity = resolveFileDescriptorIdentity(input.fd)
         if (openedIdentity != closedIdentity) return@runCatching null
         val afterObservation = observeStoragePath(file)
@@ -933,10 +942,10 @@ internal fun readStableFileOutputFingerprint(file: File): StableOutputFingerprin
         if (!fileIdentityMatches(beforeIdentity, afterIdentity) ||
             !fileDescriptorIdentityMatches(afterIdentity, closedIdentity)
         ) return@runCatching null
-        StableOutputFingerprint(digest, fileKey = beforeIdentity, providerIdentity = null).also {
-            VerifiedFileDigestCache.remember(file, it)
-        }
+        StableOutputFingerprint(digest, fileKey = beforeIdentity, providerIdentity = null)
     }
+    VerifiedFileDigestCache.remember(file, fingerprint)
+    fingerprint
 }.getOrNull()
 
 internal fun outputCleanupAssetState(
