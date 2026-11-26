@@ -48,11 +48,14 @@ class NativeLibraryPredictiveToolbarMembershipTest {
         assertEquals(initial + 1, f.refreshes)
         assertTrue("Preview-created toolbar must immediately acquire real accessibility leases", f.ownedToolbars().contains(first))
         val before = checkNotNull(f.screen.currentState())
+        f.settleToolbar()
         f.progress(.2f)
+        assertFalse("Progress must not relayout the predictive preview toolbar", f.toolbar.isLayoutRequested)
         assertTrue("Reproduce the progress-only fast path", libraryOnlySaveProgressChanged(before, checkNotNull(f.screen.currentState())))
         assertEquals(initial + 1, f.refreshes)
         assertTrue(f.ownedToolbars().contains(first))
         f.screen.selectionBackFrame(true, .6f, 1f)
+        assertTrue("Real predictive frames still bind the toolbar", f.toolbar.isLayoutRequested)
         assertEquals("Animation-only frame must not rescan membership", initial + 1, f.refreshes)
         f.screen.selectionBackFrame(true, 0f, 1f)
         assertEquals(initial + 2, f.refreshes)
@@ -76,6 +79,34 @@ class NativeLibraryPredictiveToolbarMembershipTest {
         assertTrue(f.refreshes > initial + 4)
     }
 
+    @Test fun progressSkipsOnlyToolbarLayoutWhileInputThemeAndPhaseChangesStillBind() = Fixture().use { f ->
+        f.showNormalToolbar()
+        val normal = checkNotNull(f.normal())
+        val refreshes = f.refreshes
+        f.settleToolbar()
+        repeat(3) { index ->
+            val before = checkNotNull(f.screen.currentState())
+            val progress = (index + 1) / 4f
+            f.progress(progress)
+            val current = checkNotNull(f.screen.currentState())
+            assertTrue(libraryOnlySaveProgressChanged(before, current))
+            val pending = (current.list.items as LibraryListSnapshot).pending.single() as LibraryListItem.Pending
+            assertEquals(progress, pending.save.progress!!, 0f)
+            assertSame(normal, f.normal())
+            assertEquals(refreshes, f.refreshes)
+            assertFalse("Real Screen publication must not request unchanged toolbar layout", f.toolbar.isLayoutRequested)
+        }
+        f.changeInput()
+        assertTrue("New input/insets must still bind", f.toolbar.isLayoutRequested)
+        assertTrue(f.refreshes > refreshes)
+        f.settleToolbar()
+        f.changeTheme()
+        assertTrue("Environment refresh must still bind even with retained input", f.toolbar.isLayoutRequested)
+        f.settleToolbar()
+        f.progress(.75f, SavePhase.FAILED)
+        assertTrue("A phase/semantic change is not the progress-only fast path", f.toolbar.isLayoutRequested)
+    }
+
     private class Fixture : AutoCloseable {
         private val activity = Robolectric.buildActivity(Activity::class.java).setup().visible()
         private val context = activity.get()
@@ -94,10 +125,12 @@ class NativeLibraryPredictiveToolbarMembershipTest {
         private val job = PendingSave("pending", "Saving", 1L, 1000L, SavePhase.SAVING, 0f)
         private var accessibility: NativeLibraryAccessibilityBinding? = null
         var refreshes = 0
-        val screen = ReverbLibraryScreenContent(context,
-            ReverbViewEnvironment(Density(1f), createFontFamilyResolver(context), ReverbPalette.fallback(false)),
-            NativeLibraryScreenInput(NativeLibraryInput(true, listOf(record), NativeLibraryCallbacks()),
-                false, false, LibraryScaffoldInsets(), {}, {}, {}, {}),
+        private val environment = ReverbViewEnvironment(
+            Density(1f), createFontFamilyResolver(context), ReverbPalette.fallback(false))
+        private var input = NativeLibraryScreenInput(
+            NativeLibraryInput(true, listOf(record), NativeLibraryCallbacks()),
+            false, false, LibraryScaffoldInsets(), {}, {}, {}, {})
+        val screen = ReverbLibraryScreenContent(context, environment, input,
             lifecycleOwner, OnBackPressedDispatcher(), scope, frames, { 0f }, null, root,
             object : NativeVerticalNestedHost {
                 override fun preScroll(availableY: Float, source: NativeVerticalScrollSource) = 0f
@@ -117,8 +150,8 @@ class NativeLibraryPredictiveToolbarMembershipTest {
             accessibility = NativeLibraryAccessibilityBinding(screen, window,
                 { view -> NativeSourceAccessibilityNode.fromView(view) }, scrollEvents).also { it.refresh() }
         }
-        fun progress(value: Float) {
-            set("pendingSaves", listOf(job.copy(progress = value)))
+        fun progress(value: Float, phase: SavePhase = SavePhase.SAVING) {
+            set("pendingSaves", listOf(job.copy(progress = value, phase = phase)))
             set("pendingItemsDirty", true)
             NativeLibraryController::class.java.getDeclaredMethod("invalidate")
                 .apply { isAccessible = true }.invoke(screen.owner)
@@ -127,7 +160,33 @@ class NativeLibraryPredictiveToolbarMembershipTest {
         }
         private fun set(name: String, value: Any) = NativeLibraryController::class.java
             .getDeclaredField(name).apply { isAccessible = true }.set(screen.owner, value)
-        fun normal(): View? = read(read(screen, "toolbar")!!, "normal") as View?
+        val toolbar: ReverbLibraryToolbarView
+            get() = read(screen, "toolbar") as ReverbLibraryToolbarView
+        fun settleToolbar() {
+            // Measure/layout the actual production toolbar only. The suppressed root keeps
+            // unrelated RecyclerView work from consuming its requestLayout flag afterward.
+            toolbar.measure(View.MeasureSpec.makeMeasureSpec(1080, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(toolbar.contentHeightPx, View.MeasureSpec.EXACTLY))
+            toolbar.layout(0, 0, toolbar.measuredWidth, toolbar.measuredHeight)
+            assertFalse(toolbar.isLayoutRequested)
+        }
+        fun showNormalToolbar() {
+            screen.owner.clearSelection()
+            shadowOf(Looper.getMainLooper()).idle()
+            input = input.copy(showNormalTopBar = true)
+            screen.bind(input)
+            shadowOf(Looper.getMainLooper()).idle()
+        }
+        fun changeInput() {
+            input = input.copy(hasIncidents = true, scaffoldInsets = LibraryScaffoldInsets(left = 7, right = 11))
+            screen.bind(input)
+            shadowOf(Looper.getMainLooper()).idle()
+        }
+        fun changeTheme() {
+            screen.bind(input, environment.withPalette(ReverbPalette.fallback(true)))
+            shadowOf(Looper.getMainLooper()).idle()
+        }
+        fun normal(): View? = read(toolbar, "normal") as View?
         fun ownedToolbars(): Set<View> {
             @Suppress("UNCHECKED_CAST")
             val map = read(checkNotNull(accessibility), "toolbarLeases") as Map<View, AutoCloseable>

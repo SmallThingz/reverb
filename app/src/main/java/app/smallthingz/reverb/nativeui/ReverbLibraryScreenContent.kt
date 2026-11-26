@@ -274,8 +274,12 @@ internal class ReverbLibraryScreenContent(
         fallbackBack.isEnabled = input.owner.active && value.selectedCount == 0 &&
             (value.list.expandedOwner != null || value.renameRecording != null || value.infoRecording != null)
         selectionBack.bind(input.owner.active && value.selectedCount > 0, owner::clearSelection)
-        toolbar.setActionInsets(input.scaffoldInsets.left, input.scaffoldInsets.right)
-        val toolbarNodesChanged = toolbar.bind(toolbarState(value), toolbarActions())
+        // Progress does not change toolbar state/actions. Predictive frames bind membership
+        // immediately in selectionBackFrame; input/environment changes retain their own bind.
+        val toolbarNodesChanged = if (progressOnly) false else {
+            toolbar.setActionInsets(input.scaffoldInsets.left, input.scaffoldInsets.right)
+            toolbar.bind(toolbarState(value), toolbarActions())
+        }
         val mode = when {
             value.list.items.isEmpty() && value.loadFailed -> LibraryBodyMode.FAILED
             value.list.items.isEmpty() && !value.hasLoaded -> LibraryBodyMode.LOADING
