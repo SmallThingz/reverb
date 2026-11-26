@@ -56,9 +56,9 @@ private const val PREVIEW_PROGRESS_INTERVAL_MILLIS = 32L
 private const val PREVIEW_DRAIN_STALL_TIMEOUT_MILLIS = 2_000L
 private const val SHUTTLE_GRAIN_OUTPUT_SECONDS = 0.024
 private const val SHUTTLE_CROSSFADE_SECONDS = 0.008
+private const val SHUTTLE_GRAIN_EDGE_SECONDS = 0.002
 private const val SHUTTLE_SOURCE_HOP_SECONDS = SHUTTLE_GRAIN_OUTPUT_SECONDS - SHUTTLE_CROSSFADE_SECONDS
 private const val SHUTTLE_MAX_TARGET_ERROR_SECONDS = SHUTTLE_SOURCE_HOP_SECONDS * 4.0
-private const val SHUTTLE_MIN_SOURCE_RATE = 0.02f
 private const val SHUTTLE_UNITY_RATE_TOLERANCE = 0.0001f
 private const val SHUTTLE_CROSSFADE_NANOS = 8_000_000L
 private const val SHUTTLE_SOURCE_HOP_NANOS = 16_000_000L
@@ -111,7 +111,7 @@ internal fun shuttleSourceRequiresReanchor(
     signedRate: Float,
 ): Boolean {
     val previous = previousAnchorSeconds?.takeIf { it.isFinite() } ?: return false
-    if (!targetAnchorSeconds.isFinite() || !signedRate.isFinite() || abs(signedRate) < SHUTTLE_MIN_SOURCE_RATE) {
+    if (!targetAnchorSeconds.isFinite() || !signedRate.isFinite() || signedRate == 0f) {
         return false
     }
     val direction = if (signedRate >= 0f) 1.0 else -1.0
@@ -125,7 +125,7 @@ internal fun nextShuttleSourceAnchorSeconds(
 ): Double? {
     if (!targetAnchorSeconds.isFinite() || !signedRate.isFinite()) return null
     val magnitude = abs(signedRate)
-    if (magnitude < SHUTTLE_MIN_SOURCE_RATE) return null
+    if (magnitude == 0f) return null
     val previous = previousAnchorSeconds?.takeIf { it.isFinite() } ?: return targetAnchorSeconds
     val direction = if (signedRate >= 0f) 1.0 else -1.0
     val distanceTowardTarget = (targetAnchorSeconds - previous) * direction
@@ -162,7 +162,7 @@ internal fun shuttleUsesUnityStream(sourceSecondsPerWallSecond: Float): Boolean 
 
 /** The two source hops can join while their difference still fits within the audible overlap. */
 internal fun shuttleUsesContinuousGrains(rate: Float): Boolean {
-    if (!rate.isFinite() || abs(rate) < SHUTTLE_MIN_SOURCE_RATE) return false
+    if (!rate.isFinite()) return false
     val pitch = shuttleAudibleSpeed(rate).toDouble()
     val hopDifference = abs(abs(rate).toDouble() - pitch) * SHUTTLE_SOURCE_HOP_SECONDS
     return hopDifference <= pitch * SHUTTLE_CROSSFADE_SECONDS
@@ -680,13 +680,15 @@ internal fun windowShuttlePcm16(input: ByteArray, edgeFrames: Int, channelCount:
     return output
 }
 
-internal fun fadeOutShuttlePcm16(input: ByteArray, channelCount: Int = 1): ByteArray {
+internal fun fadeOutShuttlePcm16(input: ByteArray, channelCount: Int = 1, edgeFrames: Int = Int.MAX_VALUE): ByteArray {
     val frameBytes = pcm16FrameBytes(channelCount)
     val frameCount = input.size / frameBytes
     if (frameCount <= 0) return ByteArray(0)
     val output = input.copyOf(frameCount * frameBytes)
-    for (frame in 0 until frameCount) {
-        val t = if (frameCount == 1) 1f else frame.toFloat() / (frameCount - 1).toFloat()
+    val edge = edgeFrames.coerceIn(0, frameCount)
+    val firstFadeFrame = frameCount - edge
+    for (frame in firstFadeFrame until frameCount) {
+        val t = if (edge == 1) 1f else (frame - firstFadeFrame).toFloat() / (edge - 1).toFloat()
         val fade = 1f - t * t * (3f - 2f * t)
         val firstSample = frame * channelCount
         for (channel in 0 until channelCount) {
@@ -825,6 +827,7 @@ internal fun crossfadeShuttlePcm16(
     current: ByteArray,
     overlapFrames: Int,
     channelCount: Int = 1,
+    entranceFrames: Int = overlapFrames,
 ): ShuttleCrossfadeResult {
     val frameBytes = pcm16FrameBytes(channelCount)
     val currentFrames = current.size / frameBytes
@@ -854,9 +857,9 @@ internal fun crossfadeShuttlePcm16(
             outFrame++
         }
     }
-    if (previousFrames == 0 && requestedOverlap > 0) {
-        for (frame in 0 until minOf(requestedOverlap, bodyFrames)) {
-            val t = (frame + 1).toFloat() / (requestedOverlap + 1).toFloat()
+    if (previousFrames == 0 && entranceFrames > 0) {
+        for (frame in 0 until minOf(entranceFrames, bodyFrames)) {
+            val t = (frame + 1).toFloat() / (entranceFrames + 1).toFloat()
             val fade = t * t * (3f - 2f * t)
             for (channel in 0 until channelCount) {
                 val value = current.readPcm16(frame * channelCount + channel)
@@ -1335,7 +1338,7 @@ internal class TimelineAudioPreviewController(
             stream(
                 token = token,
                 sourceFactory = { timelineStream(snapshot, start, end) },
-                volume = 0.72f,
+                volume = 1f,
                 samplePlaybackHead = false,
                 onProgress = null,
                 onStarted = {},
@@ -1609,6 +1612,7 @@ internal class TimelineAudioPreviewController(
             val overlapFrames = (SHUTTLE_CROSSFADE_SECONDS * shuttleSampleRate.toDouble())
                 .roundToInt()
                 .coerceAtLeast(1)
+            val grainEdgeFrames = (SHUTTLE_GRAIN_EDGE_SECONDS * shuttleSampleRate).roundToInt()
             var previousTail = ByteArray(0)
             var previousAnchorSeconds: Double? = null
             var grainTailAnchorSeconds: Double? = null
@@ -1679,7 +1683,7 @@ internal class TimelineAudioPreviewController(
                 grainTailAnchorSeconds = null
                 grainTailEndSeconds = null
                 if (previousTail.isEmpty()) return
-                write(fadeOutShuttlePcm16(previousTail, channelCount))
+                write(fadeOutShuttlePcm16(previousTail, channelCount, grainEdgeFrames))
                 previousTail = ByteArray(0)
             }
 
@@ -1763,7 +1767,9 @@ internal class TimelineAudioPreviewController(
                 val magnitude = abs(rate)
                 val continuousGrains = shuttleUsesContinuousGrains(rate)
                 val useUnityStream = unityMode.usesUnityStream(rate, command.observedNanos, continuousGrains)
-                if (magnitude < SHUTTLE_MIN_SOURCE_RATE) {
+                // The gesture already has a dead zone. Any reported nonzero rate can
+                // audition once, then sparse playback waits for actual source movement.
+                if (magnitude == 0f) {
                     finishPendingTail()
                     write(unityTail.finish())
                     previousAnchorSeconds = null
@@ -1887,7 +1893,7 @@ internal class TimelineAudioPreviewController(
                 val cadencedGrains = continuousGrains || sparseGrains
                 val now = shuttleNowNanos()
                 val fresh = now - command.observedNanos in 0L until SHUTTLE_UNITY_PROJECTION_NANOS
-                val projected = if (cadencedGrains) {
+                val projected = if (cadencedGrains && fresh) {
                     shuttleUnityTargetSeconds(target, rate, command.observedNanos, now).coerceIn(lower, upper)
                 } else target
                 if (fresh && handoffAnchor == null && shuttleSourceRequiresReanchor(previousAnchorSeconds, projected, rate)) {
@@ -1903,7 +1909,9 @@ internal class TimelineAudioPreviewController(
                 val atSettledBoundary = settledEdge != null &&
                     (if (direction > 0) settledEdge >= upper else settledEdge <= lower)
                 val anchor = when {
-                    !fresh || atSettledBoundary -> null
+                    // Opening a decoder or track can outlast the projection window. The
+                    // active gesture can still prime once at its last observed position.
+                    atSettledBoundary || (!fresh && startedCallbackSent) -> null
                     transitionAnchor != null -> transitionAnchor.coerceIn(lower, upper)
                     settledEdge != null -> {
                         val lead = if (cadencedGrains) SHUTTLE_CROSSFADE_SECONDS * magnitude else 0.0
@@ -1969,21 +1977,35 @@ internal class TimelineAudioPreviewController(
                 // Full grains still use the canonical 8 ms overlap; tiny edge grains reserve
                 // at most one third of their frames so they cannot disappear into the tail.
                 val grainOverlapFrames = shuttleOverlapFrames(acceleratedFrames, overlapFrames)
+                val sourceStep = (renderedGrainSourceFrames - 1).toDouble() / (acceleratedFrames - 1)
+                val renderedEnd = renderedGrainFirstSeconds + direction * acceleratedFrames * sourceStep / shuttleSampleRate
+                val endsAtBoundary = completedAnchor != anchor || rate >= 0f && end >= upper || rate < 0f && start <= lower
+                val sparseOverlapWouldArriveLate = sparseGrains &&
+                    sparseShuttleWaitExceedsOverlap(anchor, projected + rate * SHUTTLE_CROSSFADE_SECONDS, rate)
+                val isolated = previousTail.isEmpty() && (!fresh || endsAtBoundary || sparseOverlapWouldArriveLate)
+                if (isolated) {
+                    // A sparse grain with no overlap due before its body drains should
+                    // reach the sink in one packet, including its short terminal taper.
+                    previousAnchorSeconds = completedAnchor
+                    settledGrainEdge = renderedEnd.coerceIn(lower, upper)
+                    write(windowShuttlePcm16(accelerated, minOf(grainEdgeFrames, grainOverlapFrames), channelCount))
+                    continue
+                }
                 val blended = crossfadeShuttlePcm16(
                     previousTail,
                     accelerated,
                     grainOverlapFrames,
                     channelCount,
+                    entranceFrames = minOf(grainEdgeFrames, grainOverlapFrames),
                 )
                 previousTail = blended.tail
-                val sourceStep = (renderedGrainSourceFrames - 1).toDouble() / (acceleratedFrames - 1)
                 grainTailAnchorSeconds = renderedGrainFirstSeconds +
                     direction * (blended.output.size / frameBytes) * sourceStep / shuttleSampleRate
-                grainTailEndSeconds = renderedGrainFirstSeconds + direction * acceleratedFrames * sourceStep / shuttleSampleRate
+                grainTailEndSeconds = renderedEnd
                 previousAnchorSeconds = completedAnchor
                 write(blended.output)
                 lastGrainWriteNanos = shuttleNowNanos()
-                if (completedAnchor != anchor || rate >= 0f && end >= upper || rate < 0f && start <= lower) {
+                if (endsAtBoundary) {
                     // Later expansion starts at the already submitted endpoint. Repeated
                     // commands at the current boundary cannot prime the same audio again.
                     settledGrainEdge = grainTailEndSeconds?.coerceIn(lower, upper) ?: completedAnchor
