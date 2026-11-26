@@ -17,6 +17,20 @@ PACKAGE = "app.smallthingz.reverb"
 SIGNER = "3866bc43d3dd58bc0cfa9c716a93aaa6f34abdfaa7315a3b924079397d1decfe"
 VCS_ENTRY = "META-INF/version-control-info.textproto"
 ALLOWED_BLOCKS = {0x7109871A, 0xF05368C0, 0x1B93AD61, 0x42726577}
+NATIVE_LIBRARY = 'libreverb_file_move.so'
+# ELF class and e_machine for each shipped Android ABI.
+NATIVE_ABIS = {
+    'arm64-v8a': (2, 183),
+    'armeabi-v7a': (1, 40),
+    'riscv64': (2, 243),
+    'x86': (1, 3),
+    'x86_64': (2, 62),
+}
+ELF_LAYOUTS = {
+    1: (struct.Struct('<HHIIIIIHHHHHH'), struct.Struct('<8I')),
+    2: (struct.Struct('<HHIQQQIHHHHHH'), struct.Struct('<IIQQQQQQ')),
+}
+NATIVE_PAGE_SIZE = 16 * 1024
 REQUIRED_ERROR_ALLOCATIONS = {
     b'CatalogFirstPaintUnavailableException',
     b'ConfiguredRecordingDirectoryUnavailableException',
@@ -120,6 +134,72 @@ def verify_apk_signatures(apk: Path, tools: Path, root: Path, ids: set[int]) -> 
     verify_signer_output(v2_signature)
 
 
+def verify_elf_load_alignment(archive: zipfile.ZipFile, entry: zipfile.ZipInfo, abi: str) -> None:
+    """Check the ELF program headers inside the APK, independently of ZIP alignment."""
+    name = entry.filename
+    elf_class, expected_machine = NATIVE_ABIS[abi]
+    elf_header, program_header = ELF_LAYOUTS[elf_class]
+    with archive.open(entry) as source:
+        ident = source.read(16)
+        require(len(ident) == 16 and ident[:4] == b'\x7fELF', f"Invalid ELF identification: {name}")
+        require(ident[4:7] == bytes((elf_class, 1, 1)), f"Wrong ELF class, byte order or version: {name}")
+        header = source.read(elf_header.size)
+        require(len(header) == elf_header.size, f"Truncated ELF header: {name}")
+        kind, machine, version, _, phoff, _, _, ehsize, phentsize, phnum, _, _, _ = elf_header.unpack(header)
+        require(kind == 3 and machine == expected_machine and version == 1,
+                f"Wrong ELF shared object type, machine or version for {abi}: {name}")
+        table_size = phnum * phentsize
+        word_size = 4 if elf_class == 1 else 8
+        # Android's linker requires a naturally aligned program header table of at most 64 KiB.
+        require(ehsize == 16 + elf_header.size and phentsize == program_header.size
+                and 0 < table_size <= 64 * 1024 and phoff >= ehsize and phoff % word_size == 0
+                and phoff + table_size <= entry.file_size,
+                f"Invalid ELF program header table: {name}")
+        source.seek(phoff)
+        has_load = False
+        for index in range(phnum):
+            data = source.read(phentsize)
+            require(len(data) == phentsize, f"Truncated ELF program header: {name}")
+            fields = program_header.unpack(data)
+            if fields[0] != 1:  # PT_LOAD
+                continue
+            has_load = True
+            if elf_class == 1:
+                _, offset, address, _, filesz, memsz, _, alignment = fields
+            else:
+                _, _, offset, address, _, filesz, memsz, alignment = fields
+            segment = f"{name} PT_LOAD header {index}"
+            require(alignment >= NATIVE_PAGE_SIZE and (alignment & (alignment - 1)) == 0,
+                    f"{segment} alignment {alignment:#x} is not a power of two of at least 16 KiB")
+            require((address - offset) % alignment == 0,
+                    f"{segment} file offset and virtual address are incongruent")
+            require(filesz <= memsz and offset + filesz <= entry.file_size,
+                    f"{segment} has invalid file or memory bounds")
+        require(has_load, f"ELF has no PT_LOAD segments: {name}")
+
+
+def verify_native_libraries(archive: zipfile.ZipFile) -> list[str]:
+    libraries: dict[str, list[zipfile.ZipInfo]] = {}
+    for entry in archive.infolist():
+        name = entry.filename
+        if not (name.startswith('lib/') and name.endswith('.so')):
+            continue
+        match = re.fullmatch(r'lib/([^/]+)/([^/]+\.so)', name)
+        require(match is not None, f"Unexpected native library path: {name}")
+        libraries.setdefault(match[1], []).append(entry)
+    missing = sorted(NATIVE_ABIS.keys() - libraries.keys())
+    unexpected = sorted(libraries.keys() - NATIVE_ABIS.keys())
+    require(not missing and not unexpected, f"Wrong APK native ABIs: missing {missing}, unexpected {unexpected}")
+    for abi, entries in libraries.items():
+        required = f'lib/{abi}/{NATIVE_LIBRARY}'
+        require(sum(entry.filename == required for entry in entries) == 1,
+                f"Expected exactly one required native library: {required}")
+        for entry in entries:
+            require(entry.compress_type == zipfile.ZIP_STORED,
+                    f"Native library must be stored for ZIP page alignment: {entry.filename}")
+            verify_elf_load_alignment(archive, entry, abi)
+    return sorted(libraries)
+
 
 def verify_runtime_error_allocations(apk: Path, tools: Path, root: Path) -> None:
     """Require both concrete error identities in actual DEX allocation instructions."""
@@ -169,6 +249,7 @@ def verify(tag: str, apk: Path, tools: Path) -> dict[str, object]:
         require(VCS_ENTRY in names, "APK VCS metadata is missing")
         verify_revision(z.read(VCS_ENTRY).decode('utf-8'), commit)
         require(z.testzip() is None, "APK ZIP integrity check failed")
+        native_abis = verify_native_libraries(z)
     ids = signing_block_ids(apk)
     verify_block_policy(ids)
     verify_apk_signatures(apk, tools, root, ids)
@@ -192,6 +273,7 @@ def verify(tag: str, apk: Path, tools: Path) -> dict[str, object]:
     return {'tag': tag, 'commit': commit, 'package': package, 'versionName': name,
             'versionCode': int(code), 'sha256': initial_hash, 'signerSha256': SIGNER,
             'signingBlocks': [f'0x{x:08x}' for x in sorted(ids)], 'zipalign16KiB': True,
+            'nativeAbis': native_abis, 'elfLoadAlign16KiB': True,
             'vcsRevisionMatchesTag': True, 'debuggable': False, 'networkPermission': False,
             'runtimeErrorAllocations': True}
 
