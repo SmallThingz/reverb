@@ -9,6 +9,17 @@ internal object PcmNormalizer {
     const val DEFAULT_OUTPUT_BATCH_BYTES = 64 * 1024
     private const val CRC_SCRATCH_BYTES = 64 * 1024
 
+    /** Retains the largest slice requested by one synchronous stream normalization. */
+    internal class SegmentScratch {
+        private var bytes: ByteArray? = null
+
+        fun bytesFor(count: Int): ByteArray {
+            val current = bytes
+            if (current != null && current.size >= count) return current
+            return ByteArray(count).also { bytes = it }
+        }
+    }
+
     fun normalizeSegment(
         file: java.io.File,
         payloadDataOffset: Long,
@@ -129,7 +140,7 @@ internal object PcmNormalizer {
         return producedBytes
     }
 
-    private fun copyVerifiedSegment(
+    internal fun copyVerifiedSegment(
         file: java.io.File,
         payloadDataOffset: Long,
         payloadBytes: Long,
@@ -138,7 +149,9 @@ internal object PcmNormalizer {
         segmentByteCount: Long,
         outputBatchBytes: Int,
         consumer: PersistentAudioChunkStore.Consumer,
+        segmentScratch: SegmentScratch? = null,
     ): Long {
+        require(payloadDataOffset >= 0L && payloadBytes > 0L)
         val segmentBytes = readVerifiedSegment(
             file = file,
             payloadDataOffset = payloadDataOffset,
@@ -146,12 +159,14 @@ internal object PcmNormalizer {
             expectedPayloadChecksum = expectedPayloadChecksum,
             segmentByteOffset = segmentByteOffset,
             segmentByteCount = segmentByteCount,
+            segmentScratch = segmentScratch,
         )
 
+        val validBytes = segmentByteCount.toInt()
         var offset = 0
-        while (offset < segmentBytes.size) {
+        while (offset < validBytes) {
             checkPcmConversionNotInterrupted()
-            val count = minOf(outputBatchBytes, segmentBytes.size - offset)
+            val count = minOf(outputBatchBytes, validBytes - offset)
             if (consumer.consume(segmentBytes, offset, count) != count) {
                 throw java.io.IOException("PCM consumer rejected output")
             }
@@ -160,6 +175,7 @@ internal object PcmNormalizer {
         return segmentByteCount
     }
 
+    /** Returns the verified prefix of [segmentByteCount] bytes, borrowed when scratch is supplied. */
     internal fun readVerifiedSegment(
         file: java.io.File,
         payloadDataOffset: Long,
@@ -167,6 +183,7 @@ internal object PcmNormalizer {
         expectedPayloadChecksum: Int,
         segmentByteOffset: Long,
         segmentByteCount: Long,
+        segmentScratch: SegmentScratch? = null,
     ): ByteArray {
         require(payloadBytes >= 0L) { "Negative PCM payload size" }
         require(segmentByteCount <= Int.MAX_VALUE.toLong()) { "PCM segment too large" }
@@ -174,7 +191,8 @@ internal object PcmNormalizer {
         require(segmentByteOffset <= payloadBytes - segmentByteCount) { "PCM segment outside payload" }
 
         checkPcmConversionNotInterrupted()
-        val segmentBytes = ByteArray(segmentByteCount.toInt())
+        val validBytes = segmentByteCount.toInt()
+        val segmentBytes = segmentScratch?.bytesFor(validBytes) ?: ByteArray(validBytes)
         val segmentEnd = segmentByteOffset + segmentByteCount
         val crc = CRC32()
         val batchBytes = minOf(CRC_SCRATCH_BYTES.toLong(), payloadBytes).toInt()

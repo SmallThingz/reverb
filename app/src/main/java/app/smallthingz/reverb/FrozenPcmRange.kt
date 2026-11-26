@@ -18,6 +18,7 @@ internal data class FrozenPcmRange(
             it.record.sampleFormat == PcmSampleFormat.PCM_16
     }
 
+    /** The consumer's read-only slice is borrowed only for the duration of its callback. */
     fun readNormalized(
         targetSampleRate: Int,
         targetChannelCount: Int,
@@ -46,6 +47,7 @@ internal data class FrozenPcmRange(
         var cumulativeDuration = 0.0
         var cumulativeTargetFrames = 0L
         val emission = TargetFrameAccumulator(targetSampleRate)
+        val segmentScratch = PcmNormalizer.SegmentScratch()
         forEachContinuousRun { first, end, frames ->
             val rate = segments[first].record.sampleRate
             cumulativeDuration += frames.toDouble() / rate
@@ -59,6 +61,7 @@ internal data class FrozenPcmRange(
                     if (first == 0) leadingContext else emptyList(),
                     if (end == segments.size) trailingContext else emptyList(),
                     allowOutsideRangeContext = allowOutsideRangeContext,
+                    segmentScratch = segmentScratch,
                 )
                 framesToDrop = 0L
             } else {

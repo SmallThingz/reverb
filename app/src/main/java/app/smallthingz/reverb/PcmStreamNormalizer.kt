@@ -5,8 +5,11 @@ import kotlin.math.floor
 
 /** A lease-proven continuous run shares one phase, independent of storage chunk boundaries. */
 internal object PcmStreamNormalizer {
-    private val EMPTY_BYTES = ByteArray(0)
-
+    /**
+     * @param consumer Receives a borrowed, read-only slice valid only during the synchronous
+     * callback. Read only the supplied offset and count, and copy the slice if retaining it.
+     * @param segmentScratch Source byte capacity owned by the enclosing synchronous read.
+     */
     fun normalize(
         segments: List<PersistentAudioChunkStore.Segment>,
         targetFrameCount: Long,
@@ -18,6 +21,7 @@ internal object PcmStreamNormalizer {
         leadingContext: List<PersistentAudioChunkStore.Segment> = emptyList(),
         trailingContext: List<PersistentAudioChunkStore.Segment> = emptyList(),
         allowOutsideRangeContext: Boolean = true,
+        segmentScratch: PcmNormalizer.SegmentScratch = PcmNormalizer.SegmentScratch(),
     ): Long {
         checkPcmConversionNotInterrupted()
         require(segments.isNotEmpty() && firstTargetFrame in 0..targetFrameCount)
@@ -38,17 +42,24 @@ internal object PcmStreamNormalizer {
 
         // Preserve exact input bytes, including float bit patterns, for matching geometry.
         if (sourceFrames == targetFrameCount && channels == targetChannelCount && format == targetSampleFormat) {
+            val outputBatchBytes = maximumOutputBatchBytes / outputFrameBytes * outputFrameBytes
             var skip = firstTargetFrame
             var produced = 0L
             for (segment in segments) {
                 checkPcmConversionNotInterrupted()
                 if (skip >= segment.frameCount) { skip -= segment.frameCount; continue }
                 val count = segment.frameCount - skip
-                produced += PcmNormalizer.normalizeSegment(
-                    segment.record.file, segment.payloadOffsetBytes, segment.payloadBytesAtAcquire,
-                    segment.payloadChecksumAtAcquire, (segment.startFrame + skip) * frameBytes,
-                    count, segment.record.sampleRate, channels, format, count,
-                    targetChannelCount, targetSampleFormat, maximumOutputBatchBytes, consumer,
+                require(segment.record.sampleRate > 0)
+                produced += PcmNormalizer.copyVerifiedSegment(
+                    file = segment.record.file,
+                    payloadDataOffset = segment.payloadOffsetBytes,
+                    payloadBytes = segment.payloadBytesAtAcquire,
+                    expectedPayloadChecksum = segment.payloadChecksumAtAcquire,
+                    segmentByteOffset = Math.multiplyExact(segment.startFrame + skip, frameBytes.toLong()),
+                    segmentByteCount = Math.multiplyExact(count, frameBytes.toLong()),
+                    outputBatchBytes = outputBatchBytes,
+                    consumer = consumer,
+                    segmentScratch = segmentScratch,
                 )
                 skip = 0L
             }
@@ -75,7 +86,7 @@ internal object PcmStreamNormalizer {
         )
         val capacity = radius * 2 + 3
         val window = FloatArray(capacity * channels)
-        val cursor = VerifiedFrames(readSegments)
+        val cursor = VerifiedFrames(readSegments, segmentScratch)
         var firstWindowFrame = 0
         var lastWindowFrame = 0
         var windowStart = 0
@@ -200,6 +211,7 @@ internal object PcmStreamNormalizer {
     /** Holds one whole-CRC-verified payload slice plus the caller's bounded decoded ring. */
     private class VerifiedFrames(
         private val segments: List<PersistentAudioChunkStore.Segment>,
+        private val segmentScratch: PcmNormalizer.SegmentScratch,
     ) {
         private val channels = segments.first().record.channelCount
         private val format = segments.first().record.sampleFormat
@@ -209,7 +221,7 @@ internal object PcmStreamNormalizer {
         private var frames = segment.frameCount
         private var start = 0L
         private var frameInSegment = 0L
-        private var bytes = EMPTY_BYTES
+        private var bytes: ByteArray? = null
 
         private fun advance() {
             start += frames
@@ -217,7 +229,7 @@ internal object PcmStreamNormalizer {
             segment = segments[index]
             frames = segment.frameCount
             frameInSegment = 0L
-            bytes = EMPTY_BYTES
+            bytes = null
         }
 
         fun seek(frame: Long) {
@@ -231,16 +243,14 @@ internal object PcmStreamNormalizer {
 
         fun next(output: FloatArray, offset: Int) {
             if (frameInSegment == frames) advance()
-            if (bytes.isEmpty()) {
-                val firstFrame = segment.startFrame
-                bytes = PcmNormalizer.readVerifiedSegment(
-                    segment.record.file, segment.payloadOffsetBytes, segment.payloadBytesAtAcquire,
-                    segment.payloadChecksumAtAcquire, firstFrame * frameBytes, frames * frameBytes,
-                )
-            }
+            val source = bytes ?: PcmNormalizer.readVerifiedSegment(
+                segment.record.file, segment.payloadOffsetBytes, segment.payloadBytesAtAcquire,
+                segment.payloadChecksumAtAcquire, segment.startFrame * frameBytes, frames * frameBytes,
+                segmentScratch,
+            ).also { bytes = it }
             val byteOffset = Math.toIntExact(frameInSegment * frameBytes)
             for (channel in 0 until channels) {
-                output[offset + channel] = PcmNormalizer.decodeSample(bytes, byteOffset + channel * format.bytesPerSample, format)
+                output[offset + channel] = PcmNormalizer.decodeSample(source, byteOffset + channel * format.bytesPerSample, format)
             }
             frameInSegment++
         }
