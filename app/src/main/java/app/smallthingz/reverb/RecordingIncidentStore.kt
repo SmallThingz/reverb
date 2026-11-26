@@ -614,6 +614,7 @@ internal data class PendingProcessIncidentRetry(
     val expectedPid: Int,
     val expectedProcessStartElapsedRealtimeMillis: Long,
     val incident: RecordingIncident? = null,
+    val stopToken: KnownCaptureStopToken? = null,
 )
 
 /** Caller serialization owns this queue; a failed retry retains its exact root and position. */
@@ -623,7 +624,9 @@ internal class PendingProcessIncidentRetries {
     fun enqueue(retry: PendingProcessIncidentRetry) {
         if (pending.none {
                 it.root == retry.root && it.expectedPid == retry.expectedPid &&
-                    it.expectedProcessStartElapsedRealtimeMillis == retry.expectedProcessStartElapsedRealtimeMillis
+                    it.expectedProcessStartElapsedRealtimeMillis == retry.expectedProcessStartElapsedRealtimeMillis &&
+                    it.stopToken?.marker == retry.stopToken?.marker &&
+                    it.stopToken?.publicationEpoch === retry.stopToken?.publicationEpoch
             }
         ) pending += retry
     }
@@ -1263,6 +1266,28 @@ internal object RecordingIncidentStore {
     }
 
     @Synchronized
+    fun recordKnownCaptureStopDrainFailure(context: Context, token: KnownCaptureStopToken) {
+        val appContext = context.applicationContext
+        val root = incidentRoot(appContext)
+        val marker = token.marker ?: return
+        if (!marker.armed || !token.owns(root, captureSessionPublicationEpoch, marker)) return
+        val interruptedAtMillis = System.currentTimeMillis()
+        val description = "Capture stopped before buffered audio could be durably sealed"
+        val retry = PendingProcessIncidentRetry(
+            root = root,
+            occurredAtMillis = interruptedAtMillis,
+            description = description,
+            expectedPid = marker.pid,
+            expectedProcessStartElapsedRealtimeMillis = marker.processStartElapsedRealtimeMillis,
+            incident = incidentWithoutExitEvidence(marker, interruptedAtMillis, description),
+            stopToken = token,
+        )
+        if (runCatching { persistKnownCaptureStopDrainFailure(appContext, retry, token) }.isFailure) {
+            enqueueCaptureInterruptionRetry(retry)
+        }
+    }
+
+    @Synchronized
     fun completeKnownCaptureStop(context: Context, token: KnownCaptureStopToken): DeferredKnownCaptureStopResult {
         val appContext = context.applicationContext
         val root = incidentRoot(appContext).absoluteFile
@@ -1454,6 +1479,11 @@ internal object RecordingIncidentStore {
 
     private fun retryPendingCaptureInterruptions(context: Context) {
         pendingCaptureInterruptionRetries.retryOwned(incidentRoot(context)) { retry ->
+            val stopToken = retry.stopToken
+            if (stopToken != null) {
+                persistKnownCaptureStopDrainFailure(context, retry, stopToken)
+                return@retryOwned
+            }
             val markerFile = sessionFile(context)
             val marker = readSession(markerFile)
             if (marker == null) {
@@ -1493,6 +1523,24 @@ internal object RecordingIncidentStore {
             if (markerMatches && !disarmInterruptedSession(markerFile, resolvedMarker)) {
                 throw IOException("Unable to retire session after pending capture interruption")
             }
+        }
+    }
+
+    private fun persistKnownCaptureStopDrainFailure(
+        context: Context,
+        retry: PendingProcessIncidentRetry,
+        token: KnownCaptureStopToken,
+    ) {
+        // The reservation identifies the failed drain even if the marker cannot be read.
+        appendIncident(context, requireNotNull(retry.incident))
+        val file = sessionFile(context)
+        val current = readSession(file)
+        if (!token.owns(retry.root, captureSessionPublicationEpoch, current)) return
+        token.retirementAttempted = true
+        if (current == null) {
+            deleteAtomicDurablyIfPresent(file)
+        } else if (!disarmInterruptedSession(file, current)) {
+            throw IOException("Unable to retire session after failed Stop drain")
         }
     }
 

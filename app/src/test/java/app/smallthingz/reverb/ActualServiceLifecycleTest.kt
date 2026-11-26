@@ -4,17 +4,21 @@ import android.app.Application
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.PowerManager
 import app.smallthingz.reverb.actualserviceisolated.ActualServiceSandboxMarker
 import java.io.File
+import java.io.IOException
+import java.io.RandomAccessFile
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
@@ -74,6 +78,12 @@ class ActualServiceLifecycleTest {
 
     @Test fun stoppedInvalidTileStartAndDestroyRejectQueuedSnapshotButPreservePcm() = lifecycle(false)
     @Test fun publicCaptureStopKeepsCompletedPcmAndRejectsHeldRead() = lifecycle(true)
+    @Test fun dataSyncTimeoutKeepsPendingStopArmedUntilTheSeal() =
+        lifecycle(capture = true, stopTimeout = StopTimeout.DRAIN)
+    @Test fun dataSyncTimeoutReportsThePendingStopSealFailure() =
+        lifecycle(capture = true, stopTimeout = StopTimeout.SEAL_FAILURE)
+    @Test fun dataSyncTimeoutRevokesQueuedRestartAndStillDrainsThePendingStop() =
+        lifecycle(capture = true, stopTimeout = StopTimeout.QUEUED_RESTART)
     @Test fun retiredFalseWakePreferenceDoesNotCreateCaptureLock() = lifecycle(true, legacyWake = false)
     @Test fun retiredTrueWakePreferenceDoesNotCreateCaptureLock() = lifecycle(true, legacyWake = true)
     @Test fun retiredMalformedWakePreferenceDoesNotCreateCaptureLock() = lifecycle(true, legacyWake = "invalid")
@@ -123,8 +133,10 @@ class ActualServiceLifecycleTest {
         assertEquals(listOf("start", "promote"), events)
     }
 
+    private enum class StopTimeout { DRAIN, SEAL_FAILURE, QUEUED_RESTART }
+
     private fun lifecycle(capture: Boolean, rejectedStartThrows: Boolean? = null,
-        rejectNotificationQuickSave: Boolean = false, legacyWake: Any? = null) {
+        rejectNotificationQuickSave: Boolean = false, legacyWake: Any? = null, stopTimeout: StopTimeout? = null) {
         val app = RuntimeEnvironment.getApplication()
         val noBackup = app.noBackupFilesDir
         val appRoot = requireNotNull(app.filesDir.parentFile).canonicalFile
@@ -152,6 +164,7 @@ class ActualServiceLifecycleTest {
         val incidentChildrenBefore = children(incidentScope)
         check(incidentChildrenBefore.isEmpty()) { "Incident work already owned" }
         val incidentRevision = RecordingIncidentStore.historyRevision.value
+        val expectedIncidentRevision = incidentRevision + if (stopTimeout == StopTimeout.SEAL_FAILURE) 1 else 0
         check(incidentRetriesEmpty()) { "Incident retry already owned" }
         val incidentEpochField = RecordingIncidentStore::class.java.getDeclaredField("captureSessionPublicationEpoch")
             .apply { isAccessible = true }
@@ -357,7 +370,7 @@ class ActualServiceLifecycleTest {
                 val packet = PacketInput(first, rejected)
                 packetInput = packet
                 actual.syntheticInput = packet
-                exercisePublicCapture(actual, handler, retained, packet, first)
+                exercisePublicCapture(actual, handler, retained, packet, first, stopTimeout) { ownedFeedback = it }
                 captureEpoch = incidentEpochField.get(RecordingIncidentStore)
                 check(captureEpoch !== priorIncidentEpoch) { "Capture session was never armed" }
                 assertEquals(1, actual.inputAttempts.get())
@@ -477,7 +490,7 @@ class ActualServiceLifecycleTest {
             try {
                 joinNewChildren(incidentScope, incidentChildrenBefore)
                 check(incidentRetriesEmpty()) { "Fixture left incident retries" }
-                check(RecordingIncidentStore.historyRevision.value == incidentRevision) { "Unexpected incident history mutation" }
+                check(RecordingIncidentStore.historyRevision.value == expectedIncidentRevision) { "Unexpected incident history mutation" }
             } catch (error: Throwable) { failDrain(error) }
             try { assertNull(ShadowPowerManager.getLatestWakeLock()) }
             catch (error: Throwable) { failCleanup(error) }
@@ -495,7 +508,7 @@ class ActualServiceLifecycleTest {
                 joinNewChildren(snapshotCleanupScope, snapshotChildrenBefore)
                 joinNewChildren(incidentScope, incidentChildrenBefore)
                 check(incidentRetriesEmpty())
-                check(RecordingIncidentStore.historyRevision.value == incidentRevision)
+                check(RecordingIncidentStore.historyRevision.value == expectedIncidentRevision)
             } catch (error: Throwable) { failDrain(error) }
             try { drainTileWorker() } catch (error: Throwable) { failDrain(error) }
             if (!ownerDrainFailed) try {
@@ -527,8 +540,7 @@ class ActualServiceLifecycleTest {
                 assertFalse(getRecorderPreferences(service!!).getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, true))
                 check(captureEpoch != null && incidentEpochField.get(RecordingIncidentStore) === captureEpoch)
                 assertFalse(RecordingIncidentStore.beginKnownCaptureStop(service!!).armed)
-                assertTrue(listOf("recording-incidents.bin", "recording-incidents.bin.bak", "recording-incidents.bin.new")
-                    .all { !File(noBackup, it).exists() })
+                assertEquals(if (stopTimeout == StopTimeout.SEAL_FAILURE) 1 else 0, captureHistory(noBackup).size)
                 assertTrue(ProbeAudioRecordShadow.created.get() > 0)
                 assertEquals(ProbeAudioRecordShadow.created.get(), ProbeAudioRecordShadow.released.get())
                 assertEquals(0, ProbeAudioRecordShadow.liveCount())
@@ -547,7 +559,7 @@ class ActualServiceLifecycleTest {
                 AppFeedbackCenter.acknowledge(requireNotNull(ownedFeedback).id)
                 assertTrue(AppFeedbackCenter.events.value.isEmpty())
             } catch (error: Throwable) { failCleanup(error) }
-            if (rejectNotificationQuickSave) {
+            if (rejectNotificationQuickSave || stopTimeout == StopTimeout.SEAL_FAILURE) {
                 ownedFeedback?.let { AppFeedbackCenter.acknowledge(it.id) }
             }
             if (!ownerDrainFailed) try {
@@ -702,7 +714,7 @@ class ActualServiceLifecycleTest {
 
     private fun exercisePublicCapture(actual: NoMicService, handler: Handler,
         retained: MutableList<ReverbService.TimelineSnapshot>,
-        packet: PacketInput, first: ByteArray) {
+        packet: PacketInput, first: ByteArray, stopTimeout: StopTimeout?, ownFeedback: (FeedbackEvent) -> Unit) {
         val wrapperField = android.content.ContextWrapper::class.java.getDeclaredField("mBase").apply { isAccessible = true }
         val oldBase = wrapperField.get(actual) as android.content.Context
         val starts = mutableListOf<Intent>()
@@ -732,8 +744,32 @@ class ActualServiceLifecycleTest {
             assertTrue(armed.armed)
             assertEquals(47_191, requireNotNull(armed.marker).pid)
             assertEquals(android.os.Process.getStartElapsedRealtime(), armed.marker!!.processStartElapsedRealtimeMillis)
+            if (stopTimeout == StopTimeout.SEAL_FAILURE) {
+                fence(handler)
+                failNextCaptureSeal(actual)
+            }
             assertTrue(actual.disableListening().accepted)
             assertFalse(getRecorderPreferences(actual).getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, true))
+            val incidentRoot = actual.applicationContext.noBackupFilesDir
+            // Keep the ordinary Stop from attempting the injected seal before the timeout.
+            val queueRestart = stopTimeout == StopTimeout.QUEUED_RESTART || stopTimeout == StopTimeout.SEAL_FAILURE
+            if (queueRestart) {
+                assertTrue(actual.enableListening(ReverbService.BufferSlot.LOOPING).accepted)
+                assertTrue(getRecorderPreferences(actual).getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false))
+                assertEquals(2, starts.size)
+                assertEquals(Service.START_STICKY, actual.onStartCommand(starts.last(), 0, 38))
+            }
+            if (stopTimeout != null) {
+                val generation = field(actual, "listeningCommandGeneration") as AtomicLong
+                val beforeTimeout = generation.get()
+                actual.onTimeout(37, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+                assertEquals(armed.marker, RecordingIncidentStore.beginKnownCaptureStop(actual).marker)
+                assertTrue(captureHistory(incidentRoot).isEmpty())
+                if (queueRestart) {
+                    assertEquals(beforeTimeout + 1, generation.get())
+                    assertTrue(getRecorderPreferences(actual).getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false))
+                }
+            }
             packet.allowSecond.countDown()
             assertTrue(packet.released.await(8, TimeUnit.SECONDS))
             assertEquals(1, packet.stops.get())
@@ -741,9 +777,21 @@ class ActualServiceLifecycleTest {
             fence(handler)
             assertFalse(RecordingIncidentStore.beginKnownCaptureStop(actual).armed)
             assertNull(ShadowPowerManager.getLatestWakeLock())
-            val incidentRoot = actual.applicationContext.noBackupFilesDir
-            assertTrue(listOf("recording-incidents.bin", "recording-incidents.bin.bak", "recording-incidents.bin.new")
-                .all { !File(incidentRoot, it).exists() })
+            if (stopTimeout == StopTimeout.SEAL_FAILURE) {
+                val incident = captureHistory(incidentRoot).single()
+                assertEquals(armed.marker!!.armedAtMillis, incident.captureArmedAtMillis)
+                assertEquals(armed.marker!!.pid, incident.pid)
+                assertEquals("Capture stopped before buffered audio could be durably sealed", incident.description)
+                val feedback = AppFeedbackCenter.events.value.single().also(ownFeedback)
+                assertTrue(feedback.message.contains("fixture Stop seal failure"))
+            } else {
+                assertTrue(captureHistory(incidentRoot).isEmpty())
+            }
+            if (queueRestart) {
+                assertEquals(1, actual.inputAttempts.get())
+                assertTrue(actual.disableListening().accepted)
+                fence(handler)
+            }
             val snapshots = mutableListOf<ReverbService.TimelineSnapshot?>()
             actual.acquireTimelineSnapshot(ReverbService.BufferSlot.LOOPING) { snapshot ->
                 snapshot?.let(retained::add); snapshots += snapshot
@@ -756,7 +804,7 @@ class ActualServiceLifecycleTest {
             }
             snapshot.close(); retained.remove(snapshot)
             assertEquals(2, packet.reads.get())
-            assertEquals(1, starts.size)
+            assertEquals(if (queueRestart) 2 else 1, starts.size)
         } catch (error: Throwable) {
             failure = error
             throw error
@@ -767,6 +815,37 @@ class ActualServiceLifecycleTest {
                 if (firstFailure == null) throw error
                 if (firstFailure !== error) firstFailure.addSuppressed(error)
             }
+        }
+    }
+
+    private fun captureHistory(root: File): List<RecordingIncident> {
+        val file = File(root, "recording-incidents.bin")
+        return if (file.exists()) {
+            java.io.DataInputStream(file.inputStream().buffered()).use(RecordingIncidentStore::readHistoryPayload)
+        } else {
+            assertFalse(File(root, "recording-incidents.bin.bak").exists())
+            assertFalse(File(root, "recording-incidents.bin.new").exists())
+            emptyList()
+        }
+    }
+
+    private fun failNextCaptureSeal(service: ReverbService) {
+        val store = field(service, "loopingAudioChunkStore") as PersistentAudioChunkStore
+        synchronized(store) {
+            val type = PersistentAudioChunkStore::class.java
+            val record = type.getDeclaredField("activeRecord").apply { isAccessible = true }
+                .get(store) as PersistentAudioChunkStore.ChunkRecord
+            val access = type.getDeclaredField("activeAccess").apply { isAccessible = true }
+            (access.get(store) as RandomAccessFile).close()
+            access.set(store, object : RandomAccessFile(record.file, "rw") {
+                private var closing = false
+                override fun close() {
+                    if (closing) return
+                    closing = true
+                    super.close()
+                    throw IOException("fixture Stop seal failure")
+                }
+            })
         }
     }
 

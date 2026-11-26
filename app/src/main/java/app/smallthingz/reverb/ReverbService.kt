@@ -1832,11 +1832,11 @@ open class ReverbService : Service() {
     }
 
     private fun reportPendingKnownCaptureStopDrainFailure(error: Throwable) {
-        if (synchronized(listeningIntentLock) { pendingKnownCaptureStop == null }) return
-        // Publish outage evidence without disarming the still-pending capture session.
-        runCatching { RecordingIncidentStore.recordCaptureServiceStopped(this,
-            "Capture stopped before buffered audio could be durably sealed") }
-            .onFailure { if (it !== error) error.addSuppressed(it) }
+        synchronized(listeningIntentLock) {
+            val pending = pendingKnownCaptureStop ?: return
+            runCatching { RecordingIncidentStore.recordKnownCaptureStopDrainFailure(this, pending.token) }
+                .onFailure { if (it !== error) error.addSuppressed(it) }
+        }
     }
 
     private fun innerStopListening() {
@@ -5503,17 +5503,20 @@ open class ReverbService : Service() {
         // Stop accepting in-flight PCM before any incident/journal I/O. A type transition can
         // race this callback; preserve durable user intent so a foreground bind can retry.
         synchronized(listeningIntentLock) {
-            if (state == STATE_LISTENING && isListeningEnabled()) {
+            if (state == STATE_LISTENING && durableListeningIntentEnabled) {
                 listeningCommandGeneration.incrementAndGet()
                 captureContinuityGeneration.incrementAndGet()
                 state = STATE_PAUSED
                 publishCaptureIngress()
             }
+            // The pending Stop reserves the marker through its accepted PCM prefix.
+            if (pendingKnownCaptureStop == null) {
+                RecordingIncidentStore.recordCaptureInterrupted(
+                    this,
+                    "Foreground service timed out while capture was running",
+                )
+            }
         }
-        RecordingIncidentStore.recordCaptureInterrupted(
-            this,
-            "Foreground service timed out while capture was running",
-        )
         val retentionMaintenanceWasActive = retentionMaintenanceState.isActive()
         if (retentionMaintenanceWasActive) retentionMaintenanceState.clear()
         if ((fgsType and ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC) != 0) {
@@ -5531,10 +5534,18 @@ open class ReverbService : Service() {
                 )
             }
         }
-        postCaptureWork(pauseInput = true) post@ {
-
+        // A newer Start may have superseded the Stop callback before this timeout revoked
+        // the Start. Keep the drain fence even if stopSelf leaves this Service bound.
+        postCaptureWork(pauseInput = true) {
             runTerminalStoreCleanup(
-                seal = ::sealActiveChunks,
+                seal = {
+                    try {
+                        sealActiveChunks()
+                    } catch (error: Throwable) {
+                        reportPendingKnownCaptureStopDrainFailure(error)
+                        throw error
+                    }
+                },
                 releaseInput = ::releaseAudioRecord,
                 onFailure = { error ->
                     reportTerminalCaptureStoreFailure("seal after foreground timeout", error)
