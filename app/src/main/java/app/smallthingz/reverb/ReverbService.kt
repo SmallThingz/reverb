@@ -6293,6 +6293,10 @@ open class ReverbService : Service() {
         internal fun acquireRange(startSeconds: Double, endSeconds: Double): PersistentAudioChunkStore.RangeLease? =
             lease.acquireSubRange(startSeconds, endSeconds)
 
+        internal fun <T> readShuttleSegments(
+            start: Double, end: Double, read: (List<PersistentAudioChunkStore.Segment>) -> T,
+        ): T? = lease.readShuttleSegments(start, end, read)
+
         internal fun releaseChildRangeBestEffort(child: PersistentAudioChunkStore.RangeLease?) {
             runCleanupReportingException(
                 cleanup = { child?.close() },

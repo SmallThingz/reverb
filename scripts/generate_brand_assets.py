@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = "native-ui/src/main/brand/reverb.svg"
 PLATE_CHECKER = "native-ui/scripts/generate_reverb_brand_plate.py"
 MARK_SIZE_DP = 108
-# Library-owned exports of the fixed-dark recording-info foreground and deterministic icon grain.
+# Library-owned exports of the fixed-dark foreground and deterministic icon grain.
 BRAND_SURFACE_FILES = {
     f"native-ui/src/main/res/{qualifier}/reverb_brand_surface.xml"
     for qualifier in ("values", "values-night", "values-v31", "values-night-v31", "values-v34", "values-night-v34")
@@ -251,7 +251,9 @@ def assets(android_only=False):
                      for path in (ROOT / owner).glob("src/*/res/values*/*.xml")):
             for entry in ET.parse(path).getroot():
                 is_color = entry.tag == "color" or (entry.tag == "item" and entry.get("type") == "color")
-                if is_color and entry.get("name", "").startswith(prefix) and path.relative_to(ROOT).as_posix() not in managed:
+                name = entry.get("name", "")
+                if is_color and (name == "native_amoled_foreground_fill"
+                                 or (name.startswith(prefix) and path.relative_to(ROOT).as_posix() not in managed)):
                     raise ValueError(f"Brand color override outside canonical/generated palette: {path.relative_to(ROOT)}")
     # Android merges resources by type/name, regardless of source set, qualifier or extension.
     # Only the generated main files may define these drawable/animator names.

@@ -1463,6 +1463,16 @@ internal class PersistentAudioChunkStore internal constructor(
             return envelope
         }
 
+        /** The parent holds the verified PCM references throughout this bounded worker read. */
+        @Synchronized
+        internal fun <T> readShuttleSegments(start: Double, end: Double, read: (List<Segment>) -> T): T? {
+            check(!closedLease) { "RangeLease is closed" }
+            if (segments.isEmpty() || end <= start) return null
+            val from = (segmentIndexAt(start) - 1).coerceAtLeast(0)
+            val until = (segmentIndexAt(end) + 1).coerceAtMost(segments.lastIndex) + 1
+            return read(segments.subList(from, until))
+        }
+
         private fun segmentIndexAt(seconds: Double, frame: Long? = null): Int {
             var low = 0
             var high = segments.lastIndex

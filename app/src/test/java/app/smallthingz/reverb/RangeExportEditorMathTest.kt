@@ -719,28 +719,29 @@ class RangeExportEditorMathTest {
             decode(transformShuttlePcm16(source, -1f)),
         )
 
-        val twice = transformShuttlePcm16(source, 2f)
-        assertEquals(7, twice.size / 2)
+        val longRamp = pcm(*IntArray(32) { 100 + it * 100 })
+        val twice = transformShuttlePcm16(longRamp, 2f)
+        assertEquals(30, twice.size / 2)
         val forward = decode(twice)
         // Decimation filters the ramp's extended edges; direction and alignment
         // survive, but accelerated endpoint samples need not equal the originals.
         assertTrue(forward.first() in 100 until 200)
-        assertTrue(forward.last() in 701..800)
+        assertTrue(forward.last() in 3101..3200)
         assertTrue(forward.zipWithNext().all { (left, right) -> left < right })
-        val reverseTwice = transformShuttlePcm16(source, -2f)
-        assertEquals(7, reverseTwice.size / 2)
+        val reverseTwice = transformShuttlePcm16(longRamp, -2f)
+        assertEquals(30, reverseTwice.size / 2)
         assertEquals(forward.reversed(), decode(reverseTwice))
-        val eightTimes = transformShuttlePcm16(source, 8f)
-        assertEquals(5, eightTimes.size / 2)
-        assertEquals(1.1f, shuttleAudibleSpeed(2f), 0.0001f)
-        assertEquals(1.1f, shuttleAudibleSpeed(-2f), 0.0001f)
-        assertEquals(1.7f, shuttleAudibleSpeed(8f), 0.0001f)
-        assertEquals(1.7f, shuttleAudibleSpeed(-8f), 0.0001f)
-        assertEquals(3f, shuttleAudibleSpeed(21f), 0f)
-        assertEquals(3f, shuttleAudibleSpeed(200f), 0f)
+        val eightTimes = transformShuttlePcm16(longRamp, 8f)
+        assertEquals(27, eightTimes.size / 2)
+        assertTrue(shuttleAudibleSpeed(2f) in 1.04f..1.08f)
+        assertTrue(shuttleAudibleSpeed(8f) in 1.14f..1.25f)
+        assertEquals(shuttleAudibleSpeed(2f), shuttleAudibleSpeed(-2f), 0f)
+        assertEquals(shuttleAudibleSpeed(8f), shuttleAudibleSpeed(-8f), 0f)
+        assertTrue(shuttleAudibleSpeed(4_096f) in 1.5f..2f)
+        assertEquals(3f, shuttleAudibleSpeed(Float.MAX_VALUE), 0f)
         assertEquals(1f, shuttleAudibleSpeed(0.2f), 0f)
         assertEquals(0.024, shuttleSourceGrainSeconds(1f), 0.000001)
-        assertEquals(0.0408, shuttleSourceGrainSeconds(8f), 0.000001)
+        assertEquals(0.02832, shuttleSourceGrainSeconds(8f), 0.000001)
     }
 
     @Test
@@ -764,11 +765,11 @@ class RangeExportEditorMathTest {
             return sqrt(energy / frames.count())
         }
         for (rate in listOf(8f, -8f)) {
-            // Audible 1.7x pitch must retain this tone; filtering at the 8x
+            // The audible pitch must retain this tone; filtering at the 8x
             // transport speed instead would incorrectly remove it.
             val passband = normalizedRms(transformShuttlePcm16(tone(0.2), rate))
             assertEquals("$rate shuttle passband", 1.0 / sqrt(2.0), passband, 0.01)
-            val rejected = normalizedRms(transformShuttlePcm16(tone(0.4), rate))
+            val rejected = normalizedRms(transformShuttlePcm16(tone(0.45), rate))
             assertTrue("$rate shuttle aliases with normalized RMS $rejected", rejected < 0.003)
         }
     }

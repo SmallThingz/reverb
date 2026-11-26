@@ -12,6 +12,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ShuttlePhaseAlignmentTest {
+    // These 2x transport grains are 3.5 cycles apart at the expected 1.06x audible pitch.
+    private val opposingPhaseHz = 3.5 / (.032 - .016 * 1.06)
+
     private data class Fixture(
         val pcm: ByteArray,
         val tail: ByteArray,
@@ -35,7 +38,7 @@ class ShuttlePhaseAlignmentTest {
         channels: Int = 1,
         rate: Float = 2f,
         signal: (Double, Int) -> Double = { time, channel ->
-            .6 * sin(2 * PI * 243.05555555555554 * time + channel * .73)
+            .6 * sin(2 * PI * opposingPhaseHz * time + channel * .73)
         },
     ): Fixture {
         val pcm = ByteArray(sampleRate * channels * 2)
@@ -79,7 +82,7 @@ class ShuttlePhaseAlignmentTest {
             val before = transformShuttlePcm16(fixture.slice(false), rate, channels)
             val after = transformShuttlePcm16(fixture.slice(true), rate, channels)
             assertEquals(before.size, after.size)
-            assertEquals(1.1f, shuttleAudibleSpeed(rate), 0f)
+            assertEquals(1.06f, shuttleAudibleSpeed(rate), 1e-6f)
             for (channel in 0 until channels) {
                 assertTrue(correlation(fixture.tail, before, channels, channel) < -.98)
                 assertTrue(correlation(fixture.tail, after, channels, channel) >= .98)
@@ -98,20 +101,20 @@ class ShuttlePhaseAlignmentTest {
             assertArrayEquals(fixture.slice(false), fixture.slice(true))
         }
         for (amplitude in listOf(0.0, .0002)) {
-            val fixture = fixture { time, _ -> amplitude * sin(2 * PI * 243.05555555555554 * time) }
+            val fixture = fixture { time, _ -> amplitude * sin(2 * PI * opposingPhaseHz * time) }
             assertArrayEquals(fixture.slice(false), fixture.slice(true))
         }
     }
 
     @Test fun dcOffsetDoesNotHideOpposingAcPhase() {
-        val fixture = fixture { time, _ -> .4 + .1 * sin(2 * PI * 243.05555555555554 * time) }
+        val fixture = fixture { time, _ -> .4 + .1 * sin(2 * PI * opposingPhaseHz * time) }
         val after = transformShuttlePcm16(fixture.slice(true), fixture.rate)
         assertTrue(correlation(fixture.tail, after, 1, 0) >= .98)
     }
 
     @Test fun hardPannedStereoAlignsActiveChannelWithoutCreatingSignalInSilentChannel() {
         val fixture = fixture(channels = 2) { time, channel ->
-            if (channel == 0) .6 * sin(2 * PI * 243.05555555555554 * time) else 0.0
+            if (channel == 0) .6 * sin(2 * PI * opposingPhaseHz * time) else 0.0
         }
         val after = transformShuttlePcm16(fixture.slice(true), fixture.rate, 2)
         assertTrue(correlation(fixture.tail, after, 2, 0) >= .98)
@@ -142,7 +145,7 @@ class ShuttlePhaseAlignmentTest {
 
     @Test fun cappedFastRatesPreserveFilteredPitchFrameCountAndSelectedEdges() {
         for (sampleRate in listOf(48_000, 96_000)) for (channels in 1..2) {
-            for (rate in listOf(8f, -8f, 21f, -21f, 4096f, -4096f)) {
+            for (rate in listOf(8f, -8f, 21f, -21f, 4096f, -4096f, Float.MAX_VALUE, -Float.MAX_VALUE)) {
                 val fixture = fixture(sampleRate, channels, rate)
                 val nominal = fixture.slice(false)
                 val aligned = fixture.slice(true)
@@ -150,7 +153,10 @@ class ShuttlePhaseAlignmentTest {
                 val after = transformShuttlePcm16(aligned, rate, channels)
                 assertEquals(before.size, after.size)
                 assertEquals((sampleRate * .024).roundToInt() * channels * 2, after.size)
-                assertEquals(if (kotlin.math.abs(rate) == 8f) 1.7f else 3f, shuttleAudibleSpeed(rate), 0.000001f)
+                val audible = shuttleAudibleSpeed(rate)
+                assertTrue(audible in 1.14f..3f)
+                if (kotlin.math.abs(rate) == Float.MAX_VALUE) assertEquals(3f, audible, 0f)
+                else assertTrue(audible <= 1.75f)
                 for (channel in 0 until channels) {
                     // Any accepted shift must survive the actual anti-aliasing/PCM converter.
                     if (!nominal.contentEquals(aligned)) {
@@ -158,8 +164,8 @@ class ShuttlePhaseAlignmentTest {
                     } else assertArrayEquals(before, after)
                 }
                 assertArrayEquals(nominal, fixture.slice(true, fixture.start, fixture.end))
-                if (kotlin.math.abs(rate) == 4096f) {
-                    val capped = fixture.copy(rate = if (rate > 0f) 21f else -21f)
+                if (kotlin.math.abs(rate) == Float.MAX_VALUE) {
+                    val capped = fixture.copy(rate = if (rate > 0f) 1e12f else -1e12f)
                     assertArrayEquals(capped.slice(true), aligned)
                     assertArrayEquals(transformShuttlePcm16(capped.slice(true), capped.rate, channels), after)
                 }

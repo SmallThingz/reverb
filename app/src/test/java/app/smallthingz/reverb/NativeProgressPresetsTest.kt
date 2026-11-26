@@ -47,7 +47,7 @@ class NativeProgressPresetsTest {
                 error("Detached pending rows must not schedule animation frames")
         }
         val scope = CoroutineScope(Dispatchers.Unconfined + clock)
-        val palette = ReverbPalette.fallback(false).copy(primary = Color.WHITE, surfaceContainerLow = Color.BLACK)
+        val palette = ReverbPalette.fallback(false).copy(primary = Color.WHITE, surfaceContainerHigh = Color.BLACK)
         val layout = NativeUiAppearance.Default.listDecorations
         val alternate = NativeUiAppearance.Default.copy(listDecorations = layout.copy(
             pendingSave = layout.pendingSave.copy(spinnerStrokeDp = 4f, overlayAlphaByte = 0x80),

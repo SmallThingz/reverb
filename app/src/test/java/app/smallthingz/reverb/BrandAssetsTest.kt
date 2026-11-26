@@ -13,7 +13,6 @@ import org.w3c.dom.Element
 import smallthingz.ui.components.NativeColorScheme
 import smallthingz.ui.components.NativeDarkSurfacePreset
 import smallthingz.ui.components.NativeDefaultColorScheme
-import smallthingz.ui.components.NativeGroupSurfaceRecipes
 import smallthingz.ui.graphics.NOISE_TILE_SIZE
 import smallthingz.ui.graphics.generateNoisePixels
 
@@ -166,9 +165,7 @@ class BrandAssetsTest {
     }
 
     @Test fun libraryPlateAndInksUseFixedDarkSharedRolesInEveryTheme() {
-        val recipe = NativeGroupSurfaceRecipes.Default.recordingInfoRow
         fun roles(colors: NativeColorScheme) = mapOf(
-            "reverb_brand_surface" to recipe.fillColor(colors),
             "reverb_brand_surface_main" to colors.ink,
             "reverb_brand_surface_accent" to colors.primary,
         )
@@ -182,6 +179,7 @@ class BrandAssetsTest {
             val sdk = Regex("-v(\\d+)").find(qualifier)?.groupValues?.get(1)?.toInt() ?: 28
             val declared = document("native-ui/src/main/res/$qualifier/reverb_brand_surface.xml")
                 .nodes("color").associate { it.getAttribute("name") to it.textContent.trim() }
+            assertEquals("@color/native_amoled_foreground_fill", declared.getValue("reverb_brand_surface"))
             // The icon always uses the shared AMOLED dark roles, including in light qualifiers.
             // Resource IDs stand in for dynamic colors to verify platform roles without literals.
             val expected = roles(NativeDefaultColorScheme.resolve(true, sdk) { it })
@@ -201,7 +199,8 @@ class BrandAssetsTest {
     }
 
     @Test fun launcherPlateAndGrainRemainLibraryOwnedAcrossAppSourceSets() {
-        val owned = setOf("reverb_brand_surface", "reverb_brand_surface_main", "reverb_brand_surface_accent",
+        val owned = setOf("native_amoled_foreground_fill", "reverb_brand_surface",
+            "reverb_brand_surface_main", "reverb_brand_surface_accent",
             "reverb_brand_plate", "reverb_brand_grain", "reverb_brand_grain_tile")
         val appSources = file("app/src")
         val shadows = appSources.walkTopDown().filter { it.isFile &&

@@ -222,6 +222,36 @@ class NativeSpringFineSeekStateTest {
         h.state.frame(2_000_000_000L)
         val expected = rangeFineTuneDeltaSeconds(rangeFineTuneSeekPull(1f), 0f, 100f, .05f)
         assertEquals(expected, h.commits.single(), 0f)
+        assertEquals(expected, h.shuttleRates.single(), 0f) // Exactly one wall second elapsed.
+        h.state.frame(2_020_000_000L)
+        assertEquals(h.beginRates.single(), h.shuttleRates.last(), 0f)
+    }
+
+    @Test fun shuttleRateMatchesSignedSourceAdvancePerWallSecondAtDifferentDurations() {
+        val frameSeconds = .02f
+        val centerX = geometry.width * .5f
+        for (duration in listOf(20f, 2_000f)) {
+            // Find the pull that advances 20 ms of this recording in a 20 ms wall interval.
+            var low = 0f
+            var high = 1f
+            repeat(24) {
+                val candidate = (low + high) * .5f
+                val advance = rangeFineTuneDeltaSeconds(rangeFineTuneSeekPull(candidate), 0f, duration, frameSeconds)
+                if (advance < frameSeconds) low = candidate else high = candidate
+            }
+            val travel = (low + high) * .5f * geometry.inputHorizontalTravel
+            for (direction in listOf(-1f, 1f)) {
+                val h = Harness(durationSeconds = duration)
+                h.send(event(centerX, 60f, true, false))
+                h.send(event(centerX + direction * travel, 60f, true, true, previous = Offset(centerX, 60f)))
+                assertTrue(h.state.dragging)
+                h.state.frame(1_000_000_000L)
+                h.state.frame(1_020_000_000L)
+                assertEquals(direction * frameSeconds, h.pending.single(), .000001f)
+                assertEquals(direction, h.shuttleRates.single(), .0001f)
+                assertEquals(h.beginRates.single(), h.shuttleRates.single(), 0f)
+            }
+        }
     }
 
     @Test fun consumedReleaseCancelsRatherThanFlushingOrEnding() {
@@ -357,21 +387,23 @@ class NativeSpringFineSeekStateTest {
         }
     }
 
-    private inner class Harness(slop: Float = 10f, initialEnabled: Boolean = true) {
+    private inner class Harness(slop: Float = 10f, initialEnabled: Boolean = true, private val durationSeconds: Float = 100f) {
         val events = mutableListOf<String>()
         val commits = mutableListOf<Float>()
         val pending = mutableListOf<Float>()
+        val beginRates = mutableListOf<Float>()
+        val shuttleRates = mutableListOf<Float>()
         val state = NativeSpringFineSeekState({}, {})
         init { state.bind(binding("old", enabled = initialEnabled), slop) }
         fun binding(label: String, key: Any? = "recording", enabled: Boolean = true) =
-            SpringFineSeekBinding(enabled, false, 100f, key,
+            SpringFineSeekBinding(enabled, false, durationSeconds, key,
                 onTogglePlayback = { events += "$label:toggle" },
                 onInteractionStart = { events += "$label:start" },
-                onBeginFineAdjust = { events += "$label:begin" },
+                onBeginFineAdjust = { rate -> events += "$label:begin"; beginRates += rate },
                 onFineAdjust = { delta, hint ->
                     assertEquals(.04f, hint, 0f); events += "$label:commit"; commits += delta
                 },
-                onUpdateFineAdjustShuttle = { _, value -> pending += value },
+                onUpdateFineAdjustShuttle = { rate, value -> shuttleRates += rate; pending += value },
                 onEndFineAdjust = { events += "$label:end" },
                 onCancelFineAdjust = { events += "$label:cancel" })
         fun send(event: NativeDragPointerEvent) = state.pointer(event, NativePointerPass.MAIN, geometry)

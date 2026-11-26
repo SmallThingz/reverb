@@ -5,6 +5,9 @@ import kotlin.math.floor
 
 /** A lease-proven continuous run shares one phase, independent of storage chunk boundaries. */
 internal object PcmStreamNormalizer {
+    /** Source position of the first output sample in a trimmed, verified source window. */
+    data class OutputGrid(val sourceStep: Double, val firstSourcePosition: Double)
+
     /**
      * @param consumer Receives a borrowed, read-only slice valid only during the synchronous
      * callback. Read only the supplied offset and count, and copy the slice if retaining it.
@@ -22,6 +25,7 @@ internal object PcmStreamNormalizer {
         trailingContext: List<PersistentAudioChunkStore.Segment> = emptyList(),
         allowOutsideRangeContext: Boolean = true,
         segmentScratch: PcmNormalizer.SegmentScratch = PcmNormalizer.SegmentScratch(),
+        outputGrid: OutputGrid? = null,
     ): Long {
         checkPcmConversionNotInterrupted()
         require(segments.isNotEmpty() && firstTargetFrame in 0..targetFrameCount)
@@ -41,7 +45,8 @@ internal object PcmStreamNormalizer {
         require(sourceFrames > 0L)
 
         // Preserve exact input bytes, including float bit patterns, for matching geometry.
-        if (sourceFrames == targetFrameCount && channels == targetChannelCount && format == targetSampleFormat) {
+        if (sourceFrames == targetFrameCount && channels == targetChannelCount && format == targetSampleFormat &&
+            (outputGrid == null || outputGrid.sourceStep == 1.0 && outputGrid.firstSourcePosition == 0.0)) {
             val outputBatchBytes = maximumOutputBatchBytes / outputFrameBytes * outputFrameBytes
             var skip = firstTargetFrame
             var produced = 0L
@@ -66,7 +71,7 @@ internal object PcmStreamNormalizer {
             return produced
         }
 
-        val step = sourceFrames.toDouble() / targetFrameCount
+        val step = outputGrid?.sourceStep ?: sourceFrames.toDouble() / targetFrameCount
         val radius = pcmResamplingRadius(step)
         val ownBefore = if (allowOutsideRangeContext) minOf(radius.toLong(), first.startFrame) else 0L
         // Linear upsampling needs the next frame even though its filter radius is zero.
@@ -113,7 +118,10 @@ internal object PcmStreamNormalizer {
             val batch = minOf(framesPerBatch.toLong(), targetFrameCount - targetIndex).toInt()
             var offset = 0
             repeat(batch) { index ->
-                val position = before + (targetIndex + index).toDouble() * sourceFrames / targetFrameCount
+                val frame = (targetIndex + index).toDouble()
+                val sourcePosition = if (outputGrid == null) frame * sourceFrames / targetFrameCount
+                    else outputGrid.firstSourcePosition + frame * step
+                val position = before + sourcePosition
                 val center = floor(position).toLong()
                 val low = (center - radius).coerceIn(0L, bufferedFrames - 1)
                 val high = (center + maxOf(radius, 1)).coerceIn(0L, bufferedFrames - 1)

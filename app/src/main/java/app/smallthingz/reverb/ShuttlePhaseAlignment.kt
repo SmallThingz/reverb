@@ -16,13 +16,16 @@ internal fun alignedShuttleStartFrame(
     allowAlignment: Boolean,
     selectedFirstFrame: Int = 0,
     selectedEndFrame: Int = window.size / (channelCount * 2),
+    maximumContinuousShiftFrames: Int? = null,
 ): Int {
     val frameBytes = channelCount * 2
     require(channelCount in 1..2)
     val windowFrames = window.size / frameBytes
     require(nominalStart >= 0 && grainFrames > 0 && nominalStart.toLong() + grainFrames <= windowFrames)
-    if (!allowAlignment || previousTail.isEmpty() || !signedRate.isFinite() || abs(signedRate) <= 1f ||
-        (sampleRate != 48000 && sampleRate != 96000) || selectedFirstFrame < 0 || selectedEndFrame > windowFrames ||
+    val magnitude = abs(signedRate)
+    if (!allowAlignment || previousTail.isEmpty() || !signedRate.isFinite() || magnitude == 1f ||
+        (magnitude < 1f && maximumContinuousShiftFrames == null) || (sampleRate != 48000 && sampleRate != 96000) ||
+        selectedFirstFrame < 0 || selectedEndFrame > windowFrames ||
         nominalStart < selectedFirstFrame || nominalStart.toLong() + grainFrames > selectedEndFrame
     ) return nominalStart
     checkPcmConversionNotInterrupted()
@@ -30,7 +33,8 @@ internal fun alignedShuttleStartFrame(
     val outputFrames = (grainFrames / speed).roundToInt().coerceIn(1, grainFrames)
     val overlap = minOf(previousTail.size / frameBytes, outputFrames / 3)
     if (overlap < 16 || outputFrames < 2) return nominalStart
-    val radius = (sampleRate * .004).roundToInt()
+    val radius = minOf((sampleRate * .004).roundToInt(), maximumContinuousShiftFrames ?: Int.MAX_VALUE)
+    if (radius <= 0) return nominalStart
     val first = maxOf(selectedFirstFrame, nominalStart - radius)
     val last = minOf(selectedEndFrame - grainFrames, nominalStart + radius)
     if (first == last) return nominalStart

@@ -3,7 +3,6 @@ package app.smallthingz.reverb
 import android.app.Application
 import android.graphics.Bitmap
 import android.graphics.Canvas
-import android.graphics.Color
 import android.view.View
 import android.view.ViewGroup
 import android.app.Activity
@@ -51,18 +50,15 @@ class ReverbLightSurfaceGrainTest {
                 assertEquals(NativeUiAppearance.Default.modals.actionSheetStyle(
                     theme.density, theme.fontResolver, theme.palette), sheet)
                 assertNotNull("Light and Dark sheets retain their grain seed", sheet.recipe.grainSeed)
-                assertEquals(.5f, sheet.recipe.grainIntensity, 0f)
+                assertEquals(1f, sheet.recipe.grainIntensity, 0f)
                 assertEquals(2f, sheet.recipe.handleHeightDp, 0f)
                 assertEquals(16f, sheet.recipe.handleVerticalPaddingDp, 0f)
-                val low = theme.palette.surfaceContainerLow
-                assertEquals(Color.argb(Color.alpha(low), (Color.red(low) * .92f).toInt(),
-                    (Color.green(low) * .92f).toInt(), (Color.blue(low) * .92f).toInt()),
-                    sheet.palette.surfaceContainerLow)
+                assertEquals(theme.palette.background, sheet.palette.surfaceContainerLow)
                 assertEquals(ReverbDesign.modalSurface(theme.palette), sheet.palette.surfaceContainerLow)
                 val floating = NativeFloatingPanelRecipe()
                 val fill = floating.surfaceColor(theme.palette)
                 val expected = NoiseDrawable(fill, floating.grainSeed).apply {
-                    setNoiseIntensity(.5f)
+                    setNoiseIntensity(1f)
                 }.paintedTextSurface
                 assertEquals("Panel samples the grain for foreground contrast", expected, panel.paintedTextSurface)
                 about.measure(exact(360), View.MeasureSpec.makeMeasureSpec(640, View.MeasureSpec.AT_MOST))

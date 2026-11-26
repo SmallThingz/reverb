@@ -165,23 +165,22 @@ class PreviewAudioTrackBoundaryTest {
         assertAcquiredReleaseOnce(PreviewBoundaryTrackShadow.single())
     }
 
-    @Test fun actualShuttlePrimesBeforeHandoffAndQueuesTwoSelectedSourceGrainsOnOneTrackThenStops() {
+    @Test fun actualSavedShuttlePrimesBeforeHandoffAndWritesContiguousUnityPcmOnOneTrackThenStops() {
         var handedOff = 0
         var failedAfterStart = 0
         val sourceFailures = CopyOnWriteArrayList<Throwable>()
         val handoff = CountDownLatch(1)
         fixture(false, shuttleSource = true) { controller, recording ->
-            PreviewBoundaryTrackShadow.expectedVolume = .82f
             PreviewBoundaryTrackShadow.maximumWrite = 3072
             PreviewBoundaryTrackShadow.firstByteTarget = 3072
-            PreviewBoundaryTrackShadow.secondByteTarget = 6144
+            PreviewBoundaryTrackShadow.secondByteTarget = 7296
             controller.startRecordingShuttle(RuntimeEnvironment.getApplication(), recording,
                 atSeconds = .010, rate = 1f,
                 onStarted = { handedOff++; handoff.countDown() },
                 onFailureAfterStart = { failedAfterStart++ },
                 onSourceCloseFailure = sourceFailures::add,
                 fromSeconds = .010, untilSeconds = .070)
-            await(PreviewBoundaryTrackShadow.firstBodyAccepted, "first shuttle grain primed")
+            await(PreviewBoundaryTrackShadow.firstBodyAccepted, "first unity PCM accepted before handoff")
             val track = PreviewBoundaryTrackShadow.single()
             assertEquals(96_000, track.formatRate())
             assertEquals(1, track.formatChannels())
@@ -193,9 +192,9 @@ class PreviewAudioTrackBoundaryTest {
             await(PreviewBoundaryTrackShadow.played, "shuttle native play after main handoff")
             assertEquals(1, handedOff)
             controller.updateShuttle(atSeconds = .026, rate = 1f, fromSeconds = .010, untilSeconds = .070)
-            await(PreviewBoundaryTrackShadow.secondBodyAccepted, "second shuttle grain on persistent track")
+            await(PreviewBoundaryTrackShadow.secondBodyAccepted, "contiguous unity PCM on the persistent track")
             assertSame(track, PreviewBoundaryTrackShadow.single())
-            assertShuttleBodies(track)
+            assertUnityShuttlePrefix(track)
             controller.stopShuttle()
             await(PreviewBoundaryTrackShadow.released, "shuttle terminal release")
             drainMain()
@@ -204,29 +203,33 @@ class PreviewAudioTrackBoundaryTest {
             assertTrue(sourceFailures.toString(), sourceFailures.isEmpty())
         }
         // The shared fixture has now closed and joined every worker and drained Main.
-        assertShuttleBodies(PreviewBoundaryTrackShadow.single())
+        assertUnityShuttlePrefix(PreviewBoundaryTrackShadow.single())
         assertTerminalOnce(PreviewBoundaryTrackShadow.single())
         assertEquals(1, handedOff)
         assertEquals(0, failedAfterStart)
         assertTrue(sourceFailures.toString(), sourceFailures.isEmpty())
     }
 
-    private fun assertShuttleBodies(track: PreviewBoundaryTrackShadow) {
+    private fun assertUnityShuttlePrefix(track: PreviewBoundaryTrackShadow) {
         val bytes = track.acceptedBytes()
-        assertEquals(6144, bytes.size)
-        assertEquals(2, track.events.count { it.first == "write" })
+        assertEquals(7296, bytes.size)
+        assertEquals(3, track.events.count { it.first == "write" })
         assertEquals(1, track.events.count { it.first == "play" })
         val samples = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
-        // Selected PCM is1000, outside PCM30000. DC survives any crossfade of identical sources.
-        // The first8ms is fade-in; the remaining first plateau and complete second body are literal1000.
+        // The first 2 ms are the entry taper. The rest must match native PCM exactly,
+        // including the partial first write and the held-tail join with the next packet.
         for (index in 0 until samples.limit()) {
+            val expected = shuttleFixtureSample(960 + index)
             val value = samples.get(index).toInt()
-            if (index < 768) assertTrue("Excluded source sample at $index: $value", value in 0..1000)
-            else assertEquals("Selected-source DC at $index", 1000, value)
+            if (index < 192) assertTrue("Excluded or clipped source sample at $index: $value", value in 0..expected)
+            else assertEquals("Selected-source sample $index", expected, value)
         }
     }
 
-    private fun fixture(blockFirstWrite: Boolean, acquiredOnlyCleanup: Boolean = false, shuttleSource: Boolean = false, test: (TimelineAudioPreviewController, RecordingEntity) -> Unit) {
+    private fun fixture(
+        blockFirstWrite: Boolean, acquiredOnlyCleanup: Boolean = false, shuttleSource: Boolean = false,
+        shuttleClock: () -> Long = { 0L }, test: (TimelineAudioPreviewController, RecordingEntity) -> Unit,
+    ) {
         check(ServiceStateOsShadow.fixtureRoot == null)
         JournalHostIoShadow.reset()
         val root = Files.createTempDirectory("preview-track-boundary-")
@@ -248,7 +251,7 @@ class PreviewAudioTrackBoundaryTest {
                 createdAtMillis = 1L, lastSeenAtMillis = 1L)
             val owner = TimelineAudioPreviewController(onTrackReleaseFailure = {
                 synchronized(cleanupFailures) { cleanupFailures += it }
-            }).also { controller = it }
+            }, shuttleNowNanos = shuttleClock).also { controller = it }
             val prepared = CountDownLatch(1)
             val errors = mutableListOf<Throwable>()
             owner.prepareRecording(RuntimeEnvironment.getApplication(), recording,
@@ -327,6 +330,8 @@ class PreviewAudioTrackBoundaryTest {
         for (frame in 96 until 240) putShort((frame - 168).toShort())
     }.array()
 
+    private fun shuttleFixtureSample(frame: Int): Int = if (frame in 960 until 6720) 500 + frame % 2_000 else 30_000
+
     private fun writeWav(file: File, shuttleSource: Boolean = false) {
         val rate = if (shuttleSource) 96_000 else 48_000
         val frames = if (shuttleSource) 7680 else 480
@@ -337,7 +342,7 @@ class PreviewAudioTrackBoundaryTest {
         buffer.putShort(1); buffer.putShort(1); buffer.putInt(rate); buffer.putInt(rate * 2)
         buffer.putShort(2); buffer.putShort(16); tag("data"); buffer.putInt(payload)
         for (frame in 0 until frames) {
-            val sample = if (shuttleSource) { if (frame in 960 until 6720) 1000 else 30_000 }
+            val sample = if (shuttleSource) shuttleFixtureSample(frame)
                 else if (frame in 96 until 240) frame - 168 else 30_000
             buffer.putShort(sample.toShort())
         }
