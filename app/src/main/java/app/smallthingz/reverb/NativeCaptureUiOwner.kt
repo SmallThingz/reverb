@@ -89,6 +89,8 @@ internal class NativeCaptureUiOwner(
     private var captureCommandOwner = CaptureCommandUiOwner<ReverbService.UiCaptureCommandResult>()
     private var service: ReverbService? = null
     private var serviceStateHydrated = false
+    private var pendingStatePoll: ReverbService.StateCallback? = null
+    private var pendingStatePollConnectionGeneration = Long.MIN_VALUE
     private var serviceBindingRejected = false
     private var isListening = false
     private var activeBuffer: BufferSlot? = null
@@ -214,7 +216,7 @@ internal class NativeCaptureUiOwner(
             lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
                 while (true) {
                     service?.let { recorder ->
-                        requestRecorderState(recorder)
+                        requestRecorderState(recorder, periodic = true)
                         recorder.consumePendingError()?.let { errorMessage = it; publish() }
                     }
                     delay(500L)
@@ -274,6 +276,7 @@ internal class NativeCaptureUiOwner(
         visualization?.close(); visualization = null
         captureCommandOwner.retire()
         captureCommandOwner = CaptureCommandUiOwner()
+        pendingStatePoll = null
         service = next
         if (attached && screenAlive.get()) replaceLeases()
     }
@@ -330,13 +333,23 @@ internal class NativeCaptureUiOwner(
         replaceService(null)
     }
 
-    private fun requestRecorderState(recorder: ReverbService) {
+    private fun requestRecorderState(recorder: ReverbService) = requestRecorderState(recorder, periodic = false)
+
+    private fun requestRecorderState(recorder: ReverbService, periodic: Boolean) {
         val requestConnectionGeneration = serviceUiOwner.connectionGeneration
-        recorder.getState(object : ReverbService.StateCallback {
+        // A slow audio-thread read must not accumulate another callback every 500 ms.
+        // Explicit action/connection refreshes still pass through immediately.
+        if (periodic && pendingStatePoll != null &&
+            pendingStatePollConnectionGeneration == requestConnectionGeneration) return
+        val callback = object : ReverbService.StateCallback {
+            override fun awaitingStorage() {
+                if (pendingStatePoll === this) pendingStatePoll = null
+            }
             override fun state(commandGeneration: Long, listeningEnabled: Boolean, activeBufferSlot: BufferSlot?,
                 oneShotSeconds: Float, oneShotBytes: Long, loopingSeconds: Float, loopingBytes: Long,
                 oneShotIsEnabled: Boolean, oneShotIsFull: Boolean, loopingIsEnabled: Boolean,
                 retentionMode: RetentionMode?, exporting: Boolean) {
+                if (pendingStatePoll === this) pendingStatePoll = null
                 if (!shouldApplyRecorderStateSnapshot(requestConnectionGeneration,
                         serviceUiOwner.connectionGeneration, commandGeneration,
                         bookkeeping.latestListeningCommandGeneration)) return
@@ -366,7 +379,12 @@ internal class NativeCaptureUiOwner(
                 }
                 publish()
             }
-        })
+        }
+        if (periodic) {
+            pendingStatePollConnectionGeneration = requestConnectionGeneration
+            pendingStatePoll = callback
+        }
+        recorder.getState(callback)
     }
 
     private fun restartClearPoll() {
@@ -617,6 +635,7 @@ internal class NativeCaptureUiOwner(
 
     override fun close() {
         if (!screenAlive.compareAndSet(true, false)) return
+        pendingStatePoll = null
         captureCommandOwner.retire()
         scope.cancel()
         if (view.viewTreeObserver.isAlive) view.viewTreeObserver.removeOnWindowFocusChangeListener(focus)

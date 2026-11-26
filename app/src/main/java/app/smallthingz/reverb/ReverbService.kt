@@ -3864,6 +3864,7 @@ open class ReverbService : Service() {
                     publishQuickTileSnapshotOnAudioThread(
                         refreshTiles = false,
                         persistDurations = false,
+                        periodicRefresh = true,
                     )
                 }
             }
@@ -4377,6 +4378,7 @@ open class ReverbService : Service() {
     private fun publishQuickTileSnapshotOnAudioThread(
         refreshTiles: Boolean,
         persistDurations: Boolean = false,
+        periodicRefresh: Boolean = false,
     ): RecordingTileSnapshot {
         check(audioHandler.looper == Looper.myLooper())
         if (serviceDestroying) {
@@ -4410,7 +4412,9 @@ open class ReverbService : Service() {
         if (published) {
             // A newer command owns its replacement publication. Dispatch is a current-cache
             // wake-up outside the intent lock, never permission to replay this local sample.
-            RecordingQuickTiles.refreshCachedSnapshot(this, requestSystemRefresh = refreshTiles)
+            RecordingQuickTiles.refreshCachedSnapshot(
+                this, requestSystemRefresh = refreshTiles, periodicRefresh = periodicRefresh,
+            )
             if (persistDurations) RecordingQuickTileStateCache.persistCurrentDurations(this, quickTileStateOwner)
         }
         return snapshot

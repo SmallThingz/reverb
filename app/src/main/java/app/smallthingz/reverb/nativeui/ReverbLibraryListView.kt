@@ -674,6 +674,10 @@ internal class ReverbLibraryListView(
         }
         override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
             val entry = entries[position]
+            val pending = holder as? PendingSaveHolder
+            val progressOnly = pending?.boundSave?.let { before ->
+                entry.pendingSave?.let { after -> pendingSaveOnlyProgressChanged(before, after) }
+            } == true
             if (holder !is RecordingHolder) workObserver?.rowBound(entry.key)
             if (entry.footer) {
                 holder.itemView.layoutParams = RecyclerView.LayoutParams(LayoutParams.MATCH_PARENT,
@@ -693,7 +697,8 @@ internal class ReverbLibraryListView(
                     bind(checkNotNull(entry.header), entry.isCompactHeader(position))
                 }
             }
-            rowNodesChanged()
+            pending?.boundSave = entry.pendingSave
+            if (!progressOnly) rowNodesChanged()
         }
         override fun onViewAttachedToWindow(holder: RecyclerView.ViewHolder) {
             (holder as? PendingSaveHolder)?.presentation?.setPresentationActive(rowUpdates.current?.screenActive == true)
@@ -712,13 +717,18 @@ internal class ReverbLibraryListView(
         }
         override fun onViewRecycled(holder: RecyclerView.ViewHolder) {
             (holder as? RecordingHolder)?.retire()
-            (holder as? PendingSaveHolder)?.presentation?.close()
+            (holder as? PendingSaveHolder)?.let {
+                it.boundSave = null
+                it.presentation.close()
+            }
             super.onViewRecycled(holder)
         }
     }
 
     private class PendingSaveHolder(val presentation: LibraryPendingSaveRowPresentation) :
-        RecyclerView.ViewHolder(presentation.row)
+        RecyclerView.ViewHolder(presentation.row) {
+        var boundSave: PendingSave? = null
+    }
 
     private inner class RecordingHolder(val row: ReverbLibraryRecordingRow) : RecyclerView.ViewHolder(row) {
         var binding: Entry? = null

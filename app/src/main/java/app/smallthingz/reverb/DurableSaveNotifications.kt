@@ -38,6 +38,7 @@ internal object DurableSaveNotifications {
         scope.launch {
             val manager = app.getSystemService(NotificationManager::class.java) ?: return@launch
             val rendered = mutableMapOf<String, RenderedSaveNotification>()
+            val retirements = SaveNotificationRetirements()
             combine(DurableSaveJobs.state, DurableSaveJobs.readiness) { jobs, readiness -> jobs to readiness }
                 .collect { (jobs, readiness) ->
                     try {
@@ -46,9 +47,8 @@ internal object DurableSaveNotifications {
                             .associateBy(PendingSave::id)
                         val explicitlyFinished = jobs.filterNot(::durableSaveNeedsProgressNotification)
                             .map(PendingSave::id).toSet()
-                        (explicitlyFinished + (rendered.keys - desired.keys)).forEach { id ->
+                        retirements.cancelMissing(explicitlyFinished, desired.keys, rendered.keys) { id ->
                             manager.cancel(durableSaveNotificationTag(id), DURABLE_SAVE_NOTIFICATION_ID)
-                            rendered.remove(id)
                         }
                         if (readiness.loaded) {
                             // Also retire notifications left by a prior process, only after authoritative hydration.
@@ -119,6 +119,34 @@ internal object DurableSaveNotifications {
             .setAutoCancel(failed)
             .apply { if (!failed) setProgress(100, view.percent ?: 0, view.percent == null) }
             .build()
+    }
+}
+
+/** Collector-local cancel requests for completed jobs still retained by the Save presentation. */
+internal class SaveNotificationRetirements {
+    private val canceledCompleted = mutableSetOf<String>()
+
+    fun cancelMissing(
+        completed: Set<String>,
+        desired: Set<String>,
+        rendered: MutableSet<String>,
+        cancel: (String) -> Unit,
+    ) {
+        canceledCompleted.retainAll(completed)
+        for (id in completed) {
+            if (id in canceledCompleted) continue
+            cancel(id)
+            // Keep both the retry and the rendered entry if the cancellation throws.
+            canceledCompleted.add(id)
+            rendered.remove(id)
+        }
+        val iterator = rendered.iterator()
+        while (iterator.hasNext()) {
+            val id = iterator.next()
+            if (id in desired) continue
+            cancel(id)
+            iterator.remove()
+        }
     }
 }
 

@@ -30,6 +30,91 @@ import kotlin.coroutines.CoroutineContext
 @Config(sdk = [35], application = Application::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class NativeLibraryProgressWorkTest {
+    @Test fun progressTopologyGuardRejectsOtherStateAndCatalogChanges() = Fixture(100, true).use { f ->
+        f.deliver(listOf(f.job))
+        val before = f.presentation
+        f.deliver(listOf(f.job.copy(progress = .5f)))
+        val progress = f.presentation
+        assertTrue(libraryOnlySaveProgressChanged(before, progress))
+        assertFalse(libraryOnlySaveProgressChanged(null, progress))
+        assertFalse(libraryOnlySaveProgressChanged(before, before))
+        val row = f.recordings.first()
+        val changedRows = listOf(
+            progress.list.copy(screenActive = false),
+            progress.list.copy(selectionActive = !progress.list.selectionActive),
+            progress.list.copy(activeMutationIds = setOf(row.id)),
+            progress.list.copy(localOperationBusyIds = setOf(row.id)),
+            progress.list.copy(expandedOwner = InlinePlaybackRowOwner(row.id)),
+            progress.list.copy(trimRequestRecordingId = row.id),
+            progress.list.copy(infoRecordingId = row.id),
+            progress.list.copy(renameRecordingId = row.id),
+            progress.list.copy(playingRecording = row),
+            progress.list.copy(waveformReadAllowed = false),
+        )
+        changedRows.forEach { assertFalse(libraryOnlySaveProgressChanged(before, progress.copy(list = it))) }
+        assertFalse(libraryOnlySaveProgressChanged(before, progress.copy(menuRecording = row)))
+        assertFalse(libraryOnlySaveProgressChanged(before, progress.copy(undo = NativeLibraryUndoNotice("Undo", 1))))
+        assertFalse(libraryOnlySaveProgressChanged(before, progress.copy(loadFailed = !progress.loadFailed)))
+        f.deliver(listOf(f.job.copy(progress = .5f, displayName = "Changed title")))
+        assertFalse(libraryOnlySaveProgressChanged(before, f.presentation))
+        f.deliver(listOf(f.job.copy(phase = SavePhase.FAILED, error = "Failure")))
+        assertFalse(libraryOnlySaveProgressChanged(before, f.presentation))
+        f.catalog(listOf(row.copy(displayName = "Renamed")) + f.recordings.drop(1))
+        f.deliver(listOf(f.job.copy(progress = .6f)))
+        assertFalse(libraryOnlySaveProgressChanged(before, f.presentation))
+    }
+
+    @Test fun progressBindsRetainRealTextLeasesWhilePhaseAndRecyclingStillRefresh() = Fixture(100, false).use { f ->
+        val host = Robolectric.buildActivity(Activity::class.java).setup()
+        try {
+            host.get().setContentView(f.view)
+            f.deliver(listOf(f.job))
+            f.place()
+            f.flushNodes()
+            f.bindTextOwner()
+            val leases = f.textLeases()
+            assertTrue("Real paragraph/merged-row leases must be installed", leases.isNotEmpty())
+            val refreshes = f.nodeRefreshes
+            repeat(30) { index ->
+                val fraction = (index + 1) / 31f
+                f.deliver(listOf(f.job.copy(progress = fraction)))
+                f.place()
+                f.flushNodes()
+                assertEquals(fraction, f.pendingTarget(), 0f)
+                assertEquals("Progress alone must not rescan the real accessibility owner", refreshes, f.nodeRefreshes)
+                val current = f.textLeases()
+                assertEquals(leases.keys, current.keys)
+                leases.forEach { (view, lease) -> assertSame(lease, current[view]) }
+            }
+            // Changed text still updates the existing live semantic nodes; no text/value cache.
+            f.deliver(listOf(f.job.copy(displayName = "Updated pending title", progress = .8f)))
+            f.place()
+            f.flushNodes()
+            assertTrue(f.nodeRefreshes > refreshes)
+            val labels = f.textLeases().keys.filterIsInstance<smallthingz.ui.text.view.ParagraphView>()
+            assertTrue(labels.any { view ->
+                val node = checkNotNull(view.createAccessibilityNodeInfo())
+                try { node.text?.toString() == "Updated pending title" } finally { node.recycle() }
+            })
+            val afterTitle = f.nodeRefreshes
+            f.deliver(listOf(f.job.copy(phase = SavePhase.FAILED, error = "Failure")))
+            f.place()
+            f.flushNodes()
+            assertTrue("Removing spinner/adding Retry keeps topology refresh", f.nodeRefreshes > afterTitle)
+            val afterFailure = f.nodeRefreshes
+            f.view.restorePosition(NativeListSavedPosition(20, 11))
+            f.place()
+            f.flushNodes()
+            assertTrue("Detached/recycled holders must retire their bindings", f.nodeRefreshes > afterFailure)
+            f.deliver(listOf(f.job.copy(progress = .9f)))
+            f.view.restorePosition(NativeListSavedPosition(0, 0))
+            f.place()
+            f.flushNodes()
+            assertEquals(.9f, f.pendingTarget(), 0f)
+            assertTrue(f.textLeases().isNotEmpty())
+        } finally { host.pause().stop().destroy() }
+    }
+
     @Test fun thirtyProgressDeliveriesDoNotTouchFinishedCatalogAtAnySizeVisibleOrHidden() {
         for (count in listOf(0, 100, 1000)) for (active in listOf(true, false)) {
             Fixture(count, active).use { f ->
@@ -383,6 +468,8 @@ class NativeLibraryProgressWorkTest {
         val leaseCloses = java.util.IdentityHashMap<LibraryInlineExpansionLease, Int>()
         val work = Work()
         val changes = mutableListOf<Pair<Int, Int>>()
+        var nodeRefreshes = 0
+        private var textOwner: NativePageTextAccessibilityOwner? = null
         val view = ReverbLibraryListView(context,
             ReverbViewEnvironment(Density(1f), createFontFamilyResolver(context), ReverbPalette.fallback(false)),
             viewScope, View(context), LibraryRecordingRowActions(null, null, null), object : LibraryInlineExpansionHost {
@@ -391,7 +478,10 @@ class NativeLibraryProgressWorkTest {
                     return createLease(playback = true)
                 }
                 override fun createInfo(context: Context, recordingId: String) = createLease(playback = false)
-            }, {})
+            }, {}, onRowNodesChanged = {
+                nodeRefreshes++
+                textOwner?.refresh()
+            })
         private fun createLease(playback: Boolean) = object : LibraryInlineExpansionLease {
             override val view = View(context).apply { if (playback) minimumHeight = 80 }
             override fun bind(recording: RecordingEntity, owner: InlinePlaybackRowOwner?, expanded: Boolean,
@@ -446,6 +536,16 @@ class NativeLibraryProgressWorkTest {
             NativeLibraryController::class.java.getDeclaredMethod("setRecordings", List::class.java)
                 .apply { isAccessible = true }.invoke(owner, rows)
         }
+        fun bindTextOwner() {
+            val clips = smallthingz.ui.text.view.NativeTextSemanticsClipPolicy {
+                smallthingz.ui.text.view.NativeTextSemanticsClip.Unclipped
+            }
+            textOwner = NativeWindowTextAccessibilityOwner(view, clips).bindContent(view, clips) { true }
+        }
+        fun flushNodes() = org.robolectric.shadows.ShadowLooper.idleMainLooper()
+        @Suppress("UNCHECKED_CAST")
+        fun textLeases(): Map<View, AutoCloseable> =
+            (get(checkNotNull(textOwner), "leases") as Map<View, AutoCloseable>).toMap()
         fun entries() = get(adapter, "entries") as List<*>
         fun recordingsMap() = get(adapter, "recordingsById")
         fun headerLabelTop(position: Int): Int {
@@ -470,6 +570,7 @@ class NativeLibraryProgressWorkTest {
         override fun close() {
             try { owner.close() } finally {
                 try {
+                    textOwner?.close()
                     view.dispose()
                     leases.forEach { assertEquals("Each created inline lease retires once", 1, leaseCloses[it]) }
                 } finally { ownerScope.cancel(); viewScope.cancel() }

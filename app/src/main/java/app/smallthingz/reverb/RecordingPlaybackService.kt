@@ -68,6 +68,8 @@ class RecordingPlaybackService : Service() {
     private var focus: AudioFocusRequest? = null
     private lateinit var audio: AudioManager
     private lateinit var session: MediaSession
+    private var publishedMetadataTitle: String? = null
+    private var publishedMetadataDuration = -1
     private val attributes = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA)
         .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build()
     private val noisy = object : BroadcastReceiver() {
@@ -485,9 +487,15 @@ class RecordingPlaybackService : Service() {
             position, duration, ownership.generation, wantsPlayback = ownership.wantsPlayback,
             transportIntentRevision = ownership.transportIntentRevision, playbackAnchor = anchor))
         if (!updateNotification) return
-        session.setMetadata(MediaMetadata.Builder()
-            .putString(MediaMetadata.METADATA_KEY_TITLE, recording?.displayName.orEmpty())
-            .putLong(MediaMetadata.METADATA_KEY_DURATION, duration.toLong()).build())
+        val title = recording?.displayName.orEmpty()
+        // Seeks and transport changes still publish their clock/state, but not identical metadata.
+        if (publishedMetadataTitle != title || publishedMetadataDuration != duration) {
+            session.setMetadata(MediaMetadata.Builder()
+                .putString(MediaMetadata.METADATA_KEY_TITLE, title)
+                .putLong(MediaMetadata.METADATA_KEY_DURATION, duration.toLong()).build())
+            publishedMetadataTitle = title
+            publishedMetadataDuration = duration
+        }
         session.setPlaybackState(PlaybackState.Builder().setActions(
             PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or PlaybackState.ACTION_STOP or PlaybackState.ACTION_SEEK_TO)
             .setState(if (playing) PlaybackState.STATE_PLAYING else if (ownership.wantsPlayback) PlaybackState.STATE_BUFFERING

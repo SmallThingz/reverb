@@ -96,6 +96,66 @@ class CaptureIoBacklogTest {
         }
     }
 
+    @Test fun drainedPacketDoesNotPostAnEmptyWriterTurnWhileNextReadBlocks() {
+        val packet = byteArrayOf(1, 2)
+        withFixture(CapturePcmBudget(2, 8, 32, 8), listOf(packet), holdNextRead = true) { f ->
+            f.start()
+            f.await(f.writerEntered)
+            f.await(f.source.extraReadEntered)
+            f.releaseWriter.countDown()
+            f.onWriter { Unit }
+
+            assertEquals(1, f.writerDispatches.get())
+            assertTrue(f.storage.ring.status().reading)
+            assertArrayEquals(packet, f.delivered.single())
+            assertNull(f.unexpected.get())
+
+            f.coordinator.stopInput(preserveInFlight = false)
+            f.source.releaseExtraRead.countDown()
+            f.onReader { Unit }
+            f.awaitDrained()
+            f.detach()
+        }
+    }
+
+    @Test fun queuedBacklogAndFinalFailureDrainWithoutAnotherReaderWake() {
+        val packets = listOf(byteArrayOf(1, 2), byteArrayOf(3, 4), byteArrayOf(5, 6))
+        withFixture(CapturePcmBudget(2, 8, 32, 8), packets, holdNextRead = true) { f ->
+            f.source.heldReadStatus = AudioRecord.ERROR_DEAD_OBJECT
+            f.start()
+            f.await(f.writerEntered)
+            f.await(f.source.extraReadEntered)
+            val readerParked = CountDownLatch(1)
+            val releaseReader = CountDownLatch(1)
+            try {
+                // The failed read can wake the writer once. Park the reader after it returns
+                // so it cannot provide another wake when the writer kicks it after a packet.
+                assertTrue(f.installed.handler.post {
+                    readerParked.countDown()
+                    check(releaseReader.await(10, TimeUnit.SECONDS)) { "reader release timed out" }
+                })
+                f.source.releaseExtraRead.countDown()
+                f.await(readerParked)
+                assertEquals(0, f.failures.get())
+                f.releaseWriter.countDown()
+                f.await(f.failureDelivered)
+                f.onWriter { Unit }
+
+                assertEquals(1, f.failures.get())
+                assertEquals(packets.size, f.deliveredAtFailure.get())
+                assertEquals(packets.size + 1, f.writerDispatches.get())
+                assertEquals(AudioRecord.ERROR_DEAD_OBJECT, (f.inputFailure.get() as NativeReadFailure).status)
+                assertTrue(f.storage.ring.isDrained())
+                assertEquals(packets.size, f.delivered.size)
+                packets.indices.forEach { assertArrayEquals(packets[it], f.delivered[it]) }
+                assertNull(f.unexpected.get())
+            } finally {
+                releaseReader.countDown()
+            }
+            f.detach()
+        }
+    }
+
     @Test fun staleExactStopSettlesWithoutWaitingForReplacementRead() {
         val prefix = byteArrayOf(1, 2)
         val inFlight = byteArrayOf(3, 4)
@@ -240,6 +300,7 @@ class CaptureIoBacklogTest {
         val delivered = mutableListOf<ByteArray>()
         val failures = AtomicInteger()
         val writerFailures = AtomicInteger()
+        val writerDispatches = AtomicInteger()
         val deliveredAtFailure = AtomicInteger(-1)
         val inputFailure = AtomicReference<Throwable>()
         val unexpected = AtomicReference<Throwable>()
@@ -259,6 +320,10 @@ class CaptureIoBacklogTest {
             onInputFailure = { _, error -> deliveredAtFailure.set(delivered.size); inputFailure.set(error); failures.incrementAndGet(); failureDelivered.countDown() },
             onWriterFailure = { unexpected.compareAndSet(null, it); writerFailures.incrementAndGet(); writerFailureDelivered.countDown() },
             onDispatchFailure = { unexpected.compareAndSet(null, it) },
+            dispatchWriter = { work ->
+                writerDispatches.incrementAndGet()
+                writer.post(work)
+            },
         )
         fun start() = onWriter {
             installed = coordinator.install(source, 1, 2, storage,

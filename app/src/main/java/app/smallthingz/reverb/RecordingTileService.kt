@@ -15,6 +15,7 @@ import androidx.core.content.edit
 import java.util.EnumMap
 import java.util.IdentityHashMap
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 internal data class RecordingTileSnapshot(
     val listening: Boolean,
@@ -236,6 +237,23 @@ internal fun recordingTileRefreshTask(
     currentSnapshot: () -> RecordingTileSnapshot,
     render: (RecordingTileSnapshot) -> Unit,
 ): Runnable = Runnable { render(currentSnapshot()) }
+
+/** A periodic wake-up reads current state at delivery, so multiple queued wakes are redundant. */
+internal class PeriodicRecordingTileRefresh(
+    private val enqueue: (Runnable) -> Boolean,
+    render: Runnable,
+) {
+    private val queued = AtomicBoolean(false)
+    private val task = Runnable {
+        // A publication after the render reads its snapshot can still enqueue another wake.
+        queued.set(false)
+        render.run()
+    }
+
+    fun schedule() {
+        if (queued.compareAndSet(false, true) && !enqueue(task)) queued.set(false)
+    }
+}
 
 internal fun recordingTileSnapshotMayPublish(
     serviceDestroying: Boolean,
@@ -730,6 +748,10 @@ internal object RecordingQuickTiles {
     // keys, which makes even externally synchronized iteration unsafe on Android.
     private val listeningServices = IdentityHashMap<RecordingTileService, Unit>()
     private val handoffs = RecordingTileHandoffController()
+    private val connectedRefresh = recordingTileRefreshTask(
+        { RecordingQuickTileStateCache.readNonBlocking() }, ::renderConnected,
+    )
+    private val periodicConnectedRefresh = PeriodicRecordingTileRefresh(mainHandler::post, connectedRefresh)
     private const val HANDOFF_SOURCE_REFRESH_RETRY_MILLIS = 100L
 
     fun beginObservation(bufferSlot: ReverbService.BufferSlot): RecordingTileObservation =
@@ -838,13 +860,7 @@ internal object RecordingQuickTiles {
     internal fun refreshCachedSnapshot(
         context: Context,
         requestSystemRefresh: Boolean,
-    ) {
-        dispatchSnapshot(context, requestSystemRefresh)
-    }
-
-    private fun dispatchSnapshot(
-        context: Context,
-        requestSystemRefresh: Boolean,
+        periodicRefresh: Boolean = false,
     ) {
         var requestFullRefresh = requestSystemRefresh
         var handoffToRefresh: RecordingTileHandoff? = null
@@ -862,24 +878,27 @@ internal object RecordingQuickTiles {
                 }
             }
         }
-        val refreshConnected = recordingTileRefreshTask(RecordingQuickTileStateCache::readNonBlocking) { current ->
-            // A queued render may outlive a Stop, handoff, or Service teardown. The memory
-            // cache owns the latest state; never replay the snapshot captured before posting.
-            val services = synchronized(listeningServices) { listeningServices.keys.toList() }
-            // Deactivate the old recording tile before activating the new one. This prevents
-            // a frame where SystemUI can render both buffers ACTIVE during a handoff.
-            // Each concrete service has a fixed buffer slot, so callbacks cannot change priority.
-            for (priority in 0..1) {
-                for (index in services.indices) {
-                    val service = services[index]
-                    if (service.refreshPriority(current) == priority) service.refreshFromSnapshot(current)
-                }
-            }
+        when {
+            Looper.myLooper() == Looper.getMainLooper() -> connectedRefresh.run()
+            periodicRefresh && !requestSystemRefresh -> periodicConnectedRefresh.schedule()
+            else -> mainHandler.post(connectedRefresh)
         }
-        if (Looper.myLooper() == Looper.getMainLooper()) refreshConnected.run()
-        else mainHandler.post(refreshConnected)
         handoffToRefresh?.let { retryHandoffSourceRefresh(context.applicationContext, it) }
         if (requestFullRefresh) requestRefresh(context)
+    }
+
+    private fun renderConnected(current: RecordingTileSnapshot) {
+        // A queued render may outlive a Stop, handoff, or Service teardown. Its snapshot and
+        // listeners are read at delivery, so neither can replay an old recorder lifetime.
+        val services = synchronized(listeningServices) { listeningServices.keys.toList() }
+        // Deactivate the old recording tile before activating the new one. Each concrete
+        // service has a fixed buffer slot, so callbacks cannot change priority.
+        for (priority in 0..1) {
+            for (index in services.indices) {
+                val service = services[index]
+                if (service.refreshPriority(current) == priority) service.refreshFromSnapshot(current)
+            }
+        }
     }
 
     fun requestRefresh(

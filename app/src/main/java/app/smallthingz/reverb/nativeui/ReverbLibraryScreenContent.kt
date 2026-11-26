@@ -74,6 +74,7 @@ internal class ReverbLibraryScreenContent(
     private var environment = initialEnvironment
     private var input = initial
     private var presentation: NativeLibraryPresentation? = null
+    private var nodeInput: NativeLibraryScreenInput? = null
     private var closed = false
     private val scrollRestoration = NativeLibraryScrollRestoration(restoredScrollPosition.takeIf { initial.owner.active })
     private val playbackReveal = NativeRecordingRevealRequest(
@@ -258,6 +259,10 @@ internal class ReverbLibraryScreenContent(
         val value = if (!input.owner.active && next.list.screenActive) {
             next.copy(list = next.list.copy(screenActive = false))
         } else next
+        // Progress changes paint, not the paragraph/merged-row membership. A new host input
+        // still reconciles admission, toolbar/environment and callbacks through the normal path.
+        val progressOnly = nodeInput === input && libraryOnlySaveProgressChanged(presentation, value)
+        nodeInput = input
         presentation = value
         if (pendingRevealNeedsReconciliation && value.hasLoaded) {
             // Restoring this UI request must never replay the already-consumed transport command.
@@ -270,7 +275,7 @@ internal class ReverbLibraryScreenContent(
             (value.list.expandedOwner != null || value.renameRecording != null || value.infoRecording != null)
         selectionBack.bind(input.owner.active && value.selectedCount > 0, owner::clearSelection)
         toolbar.setActionInsets(input.scaffoldInsets.left, input.scaffoldInsets.right)
-        toolbar.bind(toolbarState(value), toolbarActions())
+        val toolbarNodesChanged = toolbar.bind(toolbarState(value), toolbarActions())
         val mode = when {
             value.list.items.isEmpty() && value.loadFailed -> LibraryBodyMode.FAILED
             value.list.items.isEmpty() && !value.hasLoaded -> LibraryBodyMode.LOADING
@@ -326,7 +331,7 @@ internal class ReverbLibraryScreenContent(
         }
         renderMenu(value)
         transientStateChanged(value)
-        changedNodes()
+        if (toolbarNodesChanged || !progressOnly) changedNodes()
     }
 
     private fun renderInline(value: NativeLibraryPresentation) {
@@ -517,7 +522,10 @@ internal class ReverbLibraryScreenContent(
         selectionBackActive = active
         selectionBackProgress = progress
         selectionBackDirection = direction
-        presentation?.let { toolbar.bind(toolbarState(it), toolbarActions()) }
+        presentation?.let {
+            // Preview/cancel can add or retire the normal toolbar without an owner publication.
+            if (toolbar.bind(toolbarState(it), toolbarActions())) changedNodes()
+        }
     }
     fun activePlayerLeases(): List<NativeLibraryPlayerLease> = leases.toList()
     fun currentState(): NativeLibraryPresentation? = presentation

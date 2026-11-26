@@ -54,7 +54,10 @@ internal class ReverbLibraryToolbarView(
         if (Build.VERSION.SDK_INT >= 29) isForceDarkAllowed = false
     }
 
-    fun bind(value: LibraryToolbarState, callbacks: LibraryToolbarActions) {
+    /** Report actual child identity changes, including predictive-Back-only updates. */
+    fun bind(value: LibraryToolbarState, callbacks: LibraryToolbarActions): Boolean {
+        val previousNormal = normal
+        val previousSelection = selection
         state = value
         actions = callbacks
         val selected = value.selectedCount > 0
@@ -80,6 +83,7 @@ internal class ReverbLibraryToolbarView(
         selection?.bind(environment, value, callbacks)
         applyMotion()
         requestLayout()
+        return normal !== previousNormal || selection !== previousSelection
     }
 
     fun setActionInsets(left: Int, right: Int) {

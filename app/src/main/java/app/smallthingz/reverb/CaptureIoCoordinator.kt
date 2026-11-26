@@ -302,7 +302,13 @@ internal class CaptureIoCoordinator(
                 onWriterFailure(error)
             } finally { ring.completePacket(packet) }
             kickReader(current)
-            wakeWriter()
+            // Newly admitted commands and native completions post their own wakeups.
+            // This packet can also unblock a claimed fence or the final failure delivery.
+            if (control != null || ring.hasQueuedPackets() ||
+                (current.failure != null && !current.failureDelivered)
+            ) {
+                wakeWriter()
+            }
         } else {
             val failure = current.failure
             if (failure != null && !current.failureDelivered && ring.isDrained()) {

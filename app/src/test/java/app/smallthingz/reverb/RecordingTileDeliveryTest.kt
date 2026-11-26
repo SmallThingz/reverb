@@ -48,6 +48,65 @@ class RecordingTileDeliveryTest {
     }
 
     @Test
+    fun periodicWakeBurstQueuesOneRenderOfTheLatestState() {
+        var latest = running
+        val pending = ArrayDeque<Runnable>()
+        val delivered = mutableListOf<RecordingTileSnapshot>()
+        val refresh = PeriodicRecordingTileRefresh(pending::add,
+            recordingTileRefreshTask({ latest }, delivered::add))
+
+        repeat(4) { tick ->
+            latest = running.copy(loopingSeconds = 11f + tick)
+            refresh.schedule()
+        }
+        latest = latest.copy(listening = false, commandGeneration = 2L)
+
+        assertEquals(1, pending.size)
+        assertTrue(delivered.isEmpty())
+        pending.removeFirst().run()
+        assertSame(latest, delivered.single())
+        assertTrue(pending.isEmpty())
+    }
+
+    @Test
+    fun periodicPublicationDuringRenderSchedulesAnotherWake() {
+        val pending = ArrayDeque<Runnable>()
+        val delivered = mutableListOf<RecordingTileSnapshot>()
+        val next = running.copy(oneShotSeconds = 3f)
+        var latest = running
+        lateinit var refresh: PeriodicRecordingTileRefresh
+        refresh = PeriodicRecordingTileRefresh(pending::add, recordingTileRefreshTask({ latest }) { snapshot ->
+            delivered.add(snapshot)
+            if (snapshot === running) {
+                latest = next
+                refresh.schedule()
+            }
+        })
+
+        refresh.schedule()
+        pending.removeFirst().run()
+        assertEquals(listOf(running), delivered)
+        pending.removeFirst().run()
+        assertEquals(listOf(running, next), delivered)
+        assertTrue(pending.isEmpty())
+    }
+
+    @Test
+    fun rejectedPeriodicEnqueueDoesNotKeepTheWakeClaimed() {
+        val pending = ArrayDeque<Runnable>()
+        var acceptsPosts = false
+        var deliveries = 0
+        val refresh = PeriodicRecordingTileRefresh({ acceptsPosts && pending.add(it) }, Runnable { deliveries++ })
+
+        refresh.schedule()
+        assertTrue(pending.isEmpty())
+        acceptsPosts = true
+        refresh.schedule()
+        pending.removeFirst().run()
+        assertEquals(1, deliveries)
+    }
+
+    @Test
     fun delayedStoppedOrUnrelatedWakeUpKeepsTheNewLiveHandoff() {
         for (oldSnapshot in listOf(running.copy(listening = false), running.copy(activeBuffer = null))) {
             val oldOwner = Any()

@@ -7,6 +7,7 @@ import android.database.Cursor
 import android.database.MatrixCursor
 import android.media.AudioManager
 import android.media.MediaPlayer
+import android.media.MediaMetadata
 import android.media.session.MediaSession
 import android.net.Uri
 import android.os.CancellationSignal
@@ -180,6 +181,43 @@ class RecordingPlaybackServiceCallbackBoundaryTest {
             assertEquals(1_450, anchor.positionAt(SystemClock.elapsedRealtime()))
         }
 
+    @Test
+    @Config(shadows = [PlaybackMetadataShadow::class])
+    fun pausedSeeksReuseMetadataButPreparationRenameAndStopPublishChanges() =
+        withPlaybackService(declaredDuration = 1_000) { media, _, callback, _ ->
+            val service = readField(RecordingPlayback, "service") as RecordingPlaybackService
+            val session = readField(service, "session") as MediaSession
+            val updates = Shadow.extract<PlaybackMetadataShadow>(session).updates
+            fun assertMetadata(count: Int, title: String, duration: Long) {
+                assertEquals(count, updates.size)
+                assertEquals(title, updates.last().getString(MediaMetadata.METADATA_KEY_TITLE))
+                assertEquals(duration, updates.last().getLong(MediaMetadata.METADATA_KEY_DURATION))
+            }
+            val selected = checkNotNull(RecordingPlayback.state.value.recording)
+            assertMetadata(1, selected.displayName, 1_000)
+            callback.onPause()
+            assertMetadata(1, selected.displayName, 1_000)
+            media.setSeekDelay(-1)
+            media.invokePreparedListener()
+            assertMetadata(2, selected.displayName, 2_000)
+            for (target in listOf(400, 900, 1_400)) {
+                service.seekMatching(selected, target, resume = false)
+                media.invokeSeekCompleteListener()
+                assertEquals(target, RecordingPlayback.state.value.positionMillis)
+                assertFalse(RecordingPlayback.state.value.playing)
+                assertMetadata(2, selected.displayName, 2_000)
+            }
+            val renamed = selected.copy(displayName = "renamed.wav")
+            service.renameMatching(selected, renamed)
+            assertMetadata(3, renamed.displayName, 2_000)
+            assertEquals(renamed, RecordingPlayback.state.value.recording)
+            callback.onPause()
+            assertMetadata(3, renamed.displayName, 2_000)
+            callback.onStop()
+            assertMetadata(4, "", 0)
+            assertFalse(RecordingPlayback.state.value.playing)
+        }
+
     @Test fun blockedDocumentOpenAdmitsOnlyTheLatestReplacement() =
         exerciseBlockedProvider(blockInVerification = false)
 
@@ -297,6 +335,7 @@ class RecordingPlaybackServiceCallbackBoundaryTest {
 
     private fun withPlaybackService(
         startPosition: Int? = null,
+        declaredDuration: Long = 2_000,
         exercise: (ShadowMediaPlayer, Handler, MediaSession.Callback, Handler) -> Unit,
     ) {
         val app = RuntimeEnvironment.getApplication()
@@ -309,7 +348,7 @@ class RecordingPlaybackServiceCallbackBoundaryTest {
             writePcm16Wav(source, sampleRate = 48_000, durationMillis = 2_000)
             PlaybackSessionOsShadow.targetPath = source.absolutePath
             ShadowMediaPlayer.setMediaInfoProvider { ShadowMediaPlayer.MediaInfo(2_000, 60_000) }
-            val selectedRecording = fileRecording(source)
+            val selectedRecording = fileRecording(source).copy(durationMillis = declaredDuration)
             recording = selectedRecording
             val createdController = Robolectric.buildService(RecordingPlaybackService::class.java)
             serviceController = createdController
@@ -520,5 +559,16 @@ class PlaybackSessionOsShadow {
             }
             return hostUnixStat(descriptorPath, noFollowLinks = false)
         }
+    }
+}
+
+/** Counts the service's platform metadata submissions; does not qualify Binder routing. */
+@Implements(MediaSession::class)
+class PlaybackMetadataShadow {
+    val updates = mutableListOf<MediaMetadata>()
+
+    @Implementation
+    fun setMetadata(metadata: MediaMetadata?) {
+        updates.add(checkNotNull(metadata))
     }
 }

@@ -6,6 +6,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.UUID
 import kotlin.math.PI
+import kotlin.math.cos
 import kotlin.math.sin
 import org.junit.Assert.*
 import org.junit.Test
@@ -393,6 +394,55 @@ class SilenceGateTest {
             spectrum.analyze(bytes, spectrum.size)
             assertFalse(spectrum.exceeds(flat(-40)))
             assertEquals(0, run(bytes, flat(-40), format = PcmSampleFormat.PCM_FLOAT).bytes.size)
+        }
+    }
+
+    @Test fun hannPowerMatchesOrderedSumAtTheExactThresholdAcrossRefills() {
+        for (rate in listOf(12_000, 24_000, 48_000, 96_000, 192_000)) {
+            val spectrum = SilenceSpectrum(rate, 1, PcmSampleFormat.PCM_FLOAT)
+            val thresholds = DoubleArray(spectrum.binCount) { Double.POSITIVE_INFINITY }
+            for (frames in listOf(spectrum.size, spectrum.hop, spectrum.size - 1, spectrum.size)) {
+                val pad = (spectrum.size - frames) / 2
+                val middle = spectrum.size / 2 - pad
+                // Zero mean. The first impulse has zero Hann weight. The remaining
+                // impulse at FFT index N/2 has the same absolute value in every bin.
+                val pcm = ByteBuffer.allocate(frames * 4).order(ByteOrder.nativeOrder())
+                pcm.putFloat(0, -.5f)
+                pcm.putFloat(middle * 4, .5f)
+                fun hann(i: Int) = .5 - .5 * cos(2 * PI * i / (frames - 1))
+                var gain = 0.0
+                for (i in 0 until frames) gain += hann(i)
+                val impulse = .5 * hann(middle)
+                val expectedPower = impulse * impulse * (4.0 / (gain * gain))
+                spectrum.analyze(pcm.array(), frames)
+                thresholds[1] = expectedPower
+                assertFalse("equality at $rate/$frames", spectrum.exceeds(thresholds))
+                thresholds[1] = Math.nextDown(expectedPower)
+                assertTrue("one ULP below at $rate/$frames", spectrum.exceeds(thresholds))
+            }
+        }
+    }
+
+    @Test fun shortStopPeakUsesOnlyCurrentFramesFromEitherChannel() {
+        val rate = 16_000
+        val format = PcmSampleFormat.PCM_FLOAT
+        val spectrum = SilenceSpectrum(rate, 2, format)
+        val config = flat(-20)
+        // A constant channel has no AC power. Only the unresolved short-block peak can keep it.
+        for (activeChannel in 0..1) for (frames in listOf(spectrum.size, spectrum.hop - 1, 1, spectrum.hop)) {
+            val pcm = ByteBuffer.allocate(frames * 8).order(ByteOrder.nativeOrder())
+            repeat(frames) { pcm.putFloat((it * 2 + activeChannel) * 4, -.125f) }
+            val keep = frames < spectrum.hop
+            spectrum.analyze(pcm.array(), frames)
+            assertEquals(keep, spectrum.exceeds(config))
+            spectrum.analyze(ByteArray(8), 1)
+            assertFalse(spectrum.exceeds(config))
+            // The stream's overlap leaves a half-window for Stop after a full input window.
+            val result = run(pcm.array(), config, rate, 2, format)
+            assertArrayEquals(if (keep) pcm.array() else ByteArray(0), result.bytes)
+            assertEquals(if (keep) listOf(0L to pcm.capacity()) else emptyList(), result.spans)
+            assertEquals(if (keep) 0L else frames.toLong(), result.skipped)
+            assertEquals(if (keep) 0 else 1, result.gaps)
         }
     }
 

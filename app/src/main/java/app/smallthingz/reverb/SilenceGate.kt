@@ -122,6 +122,7 @@ internal class SilenceSpectrum(val sampleRate: Int, val channels: Int, val forma
     private var responseShift = size.toDouble() / (size - 1)
     private var edgeBins = 2
     private val window = DoubleArray(size) { 0.5 - 0.5 * cos(2 * PI * it / (size - 1)) }
+    private val fullWindowGain = window.fold(0.0) { gain, weight -> gain + weight }
     private val partialWindow = DoubleArray(size)
     private var analysisWindow = window
     private val reverse = IntArray(size) { Integer.reverse(it) ushr (32 - Integer.numberOfTrailingZeros(size)) }
@@ -158,8 +159,11 @@ internal class SilenceSpectrum(val sampleRate: Int, val channels: Int, val forma
         responseGain = partialHannResponse(0.0)
         shortBlockPeakPower = 0.0
         // Very short blocks stay centred under the full window to avoid a zero-gain onset.
-        var gain = 0.0
-        for (i in 0 until frames) gain += analysisWindow[pad + i]
+        val gain = if (frames == size) fullWindowGain else {
+            var sum = 0.0
+            for (i in 0 until frames) sum += analysisWindow[pad + i]
+            sum
+        }
         val scale = 4.0 / (gain * gain)
         repeat(channels) { channel ->
             real.fill(0.0); imaginary.fill(0.0)
@@ -178,7 +182,6 @@ internal class SilenceSpectrum(val sampleRate: Int, val channels: Int, val forma
                     if (i < firstFrames) { firstSum += safe; firstSquared += safe * safe }
                     else lastSquared += safe * safe
                 }
-                shortBlockPeakPower = max(shortBlockPeakPower, safe * safe)
                 real[pad + i] = safe; mean += safe
             }
             if (observeBoundaries) {
@@ -242,7 +245,14 @@ internal class SilenceSpectrum(val sampleRate: Int, val channels: Int, val forma
                 detectedPowers[channel * binCount + i] = power
                 detectedFrequencies[channel * binCount + i] = hz
             }
-            if (frames >= hop) calibrateEdgeTone(channel, frames)
+            if (frames >= hop) {
+                calibrateEdgeTone(channel, frames, gain)
+            } else {
+                for (i in 0 until frames) {
+                    val value = samples[i]
+                    shortBlockPeakPower = max(shortBlockPeakPower, value * value)
+                }
+            }
         }
     }
 
@@ -275,7 +285,7 @@ internal class SilenceSpectrum(val sampleRate: Int, val channels: Int, val forma
     // Conjugate Hann lobes overlap near DC/Nyquist, invalidating interior-bin
     // interpolation. Fit one coherent edge tone with a DC offset instead. The
     // fit is attempted only when an edge dominates, and uses fixed bounded work.
-    private fun calibrateEdgeTone(channel: Int, frames: Int) {
+    private fun calibrateEdgeTone(channel: Int, frames: Int, weight: Double) {
         var lowPower = 0.0; var highPower = 0.0
         for (bin in 1..edgeBins) {
             lowPower = max(lowPower, channelPowers[bin])
@@ -289,11 +299,9 @@ internal class SilenceSpectrum(val sampleRate: Int, val channels: Int, val forma
         // correlate a distant stationary tone with a low edge tone at a partial
         // boundary, then manufacture a louder residual when that fit is removed.
         val pad = (size - frames) / 2
-        var weight = 0.0
         var weightedSum = 0.0
         for (i in 0 until frames) {
             val w = analysisWindow[pad + i]
-            weight += w
             weightedSum += w * samples[i]
         }
         val weightedMean = weightedSum / weight

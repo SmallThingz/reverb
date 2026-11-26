@@ -4,6 +4,7 @@ import android.app.Activity
 import android.app.Application
 import android.os.Handler
 import android.os.Looper
+import android.os.Message
 import android.widget.FrameLayout
 import androidx.activity.OnBackPressedDispatcher
 import androidx.lifecycle.Lifecycle
@@ -24,6 +25,8 @@ import kotlinx.coroutines.cancel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -103,6 +106,61 @@ class NativeCaptureBufferRestorationTest {
         }
     }
 
+    @Test fun periodicStateReadsAreBoundedWhileExplicitRefreshStillRuns() = withFixture { fixture ->
+        fixture.withMain { _, owner ->
+            repeat(24) { fixture.poll(owner) }
+            assertEquals(1, fixture.audioPosts)
+            assertNotNull(fixture.pendingPoll(owner))
+            // An explicit action refresh must not wait behind the periodic admission gate.
+            fixture.request(owner, listening = true, active = LOOPING)
+            assertEquals(2, fixture.audioPosts)
+            fixture.deliver(owner, listening = true, active = LOOPING)
+            assertNull(fixture.pendingPoll(owner))
+            fixture.poll(owner)
+            assertEquals(3, fixture.audioPosts)
+            fixture.deliver(owner, listening = true, active = LOOPING)
+            assertNull(fixture.pendingPoll(owner))
+        }
+    }
+
+    @Test fun awaitingStorageAndUnavailableStateReleasePeriodicAdmission() = withFixture { fixture ->
+        fixture.withMain { _, owner ->
+            fixture.storagePending(true)
+            repeat(2) {
+                fixture.poll(owner)
+                assertNotNull(fixture.pendingPoll(owner))
+                shadowOf(Looper.getMainLooper()).idle()
+                assertNull(fixture.pendingPoll(owner))
+                assertFalse(owner.state.value.body.serviceStateHydrated)
+            }
+            fixture.storagePending(false)
+            fixture.poll(owner)
+            shadowOf(Looper.getMainLooper()).idle()
+            assertNull(fixture.pendingPoll(owner))
+            assertTrue(owner.state.value.body.serviceStateHydrated)
+            assertFalse(owner.state.value.body.oneShotEnabled)
+            assertFalse(owner.state.value.body.loopingEnabled)
+        }
+    }
+
+    @Test fun retiredConnectionCallbackCannotReleaseNewPeriodicAdmission() = withFixture { fixture ->
+        fixture.withMain { _, owner ->
+            fixture.poll(owner)
+            val old = checkNotNull(fixture.pendingPoll(owner))
+            fixture.advanceConnection(owner)
+            fixture.poll(owner)
+            val current = checkNotNull(fixture.pendingPoll(owner))
+            assertTrue(old !== current)
+            assertEquals(2, fixture.audioPosts)
+            old.awaitingStorage()
+            assertSame(current, fixture.pendingPoll(owner))
+            repeat(24) { fixture.poll(owner) }
+            assertEquals(2, fixture.audioPosts)
+            shadowOf(Looper.getMainLooper()).idle()
+            assertNull(fixture.pendingPoll(owner))
+        }
+    }
+
     private fun withFixture(block: (Fixture) -> Unit) {
         val root = temporary.newFolder()
         val previousRoot = ServiceStateOsShadow.fixtureRoot
@@ -124,6 +182,14 @@ class NativeCaptureBufferRestorationTest {
         // The actual Service state reader runs without Service startup or microphone work.
         private val service = Robolectric.buildService(ReverbService::class.java).get()
         private val looper = Looper.getMainLooper()
+        var audioPosts = 0
+            private set
+        private val audioHandler = object : Handler(looper) {
+            override fun sendMessageAtTime(msg: Message, uptimeMillis: Long): Boolean {
+                audioPosts++
+                return super.sendMessageAtTime(msg, uptimeMillis)
+            }
+        }
         private val generation = field<AtomicLong>(service, "listeningCommandGeneration")
         private val requestState = NativeCaptureUiOwner::class.java
             .getDeclaredMethod("requestRecorderState", ReverbService::class.java).apply { isAccessible = true }
@@ -143,7 +209,7 @@ class NativeCaptureBufferRestorationTest {
         })
 
         init {
-            setServiceField("audioHandler", Handler(looper))
+            setServiceField("audioHandler", audioHandler)
             setServiceField("oneShotAudioChunkStore", one)
             setServiceField("loopingAudioChunkStore", loop)
             setServiceField("captureStoresReady", true)
@@ -165,6 +231,27 @@ class NativeCaptureBufferRestorationTest {
                 }
             } finally {
                 board.removeView(main)
+            }
+        }
+
+        fun poll(owner: NativeCaptureUiOwner) {
+            NativeCaptureUiOwner::class.java.getDeclaredMethod("requestRecorderState",
+                ReverbService::class.java, Boolean::class.javaPrimitiveType).apply { isAccessible = true }
+                .invoke(owner, service, true)
+        }
+
+        fun pendingPoll(owner: NativeCaptureUiOwner): ReverbService.StateCallback? = field(owner, "pendingStatePoll")
+
+        fun storagePending(pending: Boolean) {
+            setServiceField("captureStoresReady", false)
+            setServiceField("captureInitializationPending", pending)
+        }
+
+        fun advanceConnection(owner: NativeCaptureUiOwner) {
+            val binding = field<CaptureServiceUiOwner>(owner, "serviceUiOwner")
+            CaptureServiceUiOwner::class.java.getDeclaredField("connectionGeneration").apply {
+                isAccessible = true
+                setLong(binding, binding.connectionGeneration + 1)
             }
         }
 

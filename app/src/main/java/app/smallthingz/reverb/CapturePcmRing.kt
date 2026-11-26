@@ -233,6 +233,7 @@ internal class CapturePcmRing(val budget: CapturePcmBudget) {
         check(reading == null) { "Native acknowledgement left its lease owned" }
         return true
     }
+    @Synchronized fun hasQueuedPackets(): Boolean = eventCount != 0
     @Synchronized fun isDrained() = reading == null && writing == null && eventCount == 0 && !forcedStopReleasePending
     private fun enqueue(event: Packet) {
         check(eventCount < events.size)
