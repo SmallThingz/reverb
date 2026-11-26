@@ -586,6 +586,9 @@ internal class SilenceSpectrum(val sampleRate: Int, val channels: Int, val forma
 
 internal interface SilenceGateOutput {
     fun audio(bytes: ByteArray, offset: Int, count: Int, sourceFrame: Long)
+    /** A contiguous run whose original hop starts still own capture timestamps. */
+    fun audioRun(bytes: ByteArray, offset: Int, count: Int, sourceFrame: Long, hopFrames: Int) =
+        audio(bytes, offset, count, sourceFrame)
     fun gap()
 }
 
@@ -593,6 +596,35 @@ internal enum class SilenceGateDecision { QUIET, CONTINUATION, BASELINE }
 
 private const val SILENCE_CONTINUATION_MILLIS = 1000
 private const val SILENCE_CONTINUATION_POWER = 0.251188643150958 // -6 dB, evaluated once.
+
+/** Preserve the rounding at the original hop and at a partial hop's One-shot overflow. */
+internal class KeptHopTimestamps(
+    private val streamStartedAtMillis: Long,
+    private val sourceFrame: Long,
+    private val sampleRate: Int,
+    private val hopFrames: Int,
+) {
+    fun atFrame(frameOffset: Int): Long {
+        val withinHop = frameOffset % hopFrames
+        val hopOffset = (frameOffset - withinHop).toLong()
+        val hopSourceFrame = sourceFrame.coerceAtMost(Long.MAX_VALUE - hopOffset) + hopOffset
+        val hopMillis = recordingTimestampWithOffset(streamStartedAtMillis, frameMillis(hopSourceFrame))
+        return recordingTimestampWithOffset(hopMillis, frameMillis(withinHop.toLong()))
+    }
+
+    fun atOverflowFrame(firstOverflowFrame: Int, frameOffset: Int): Long {
+        val framesUntilNextHop = hopFrames - firstOverflowFrame % hopFrames
+        return if (frameOffset < framesUntilNextHop) {
+            recordingTimestampWithOffset(atFrame(firstOverflowFrame), frameMillis(frameOffset.toLong()))
+        } else atFrame(firstOverflowFrame + frameOffset)
+    }
+
+    private fun frameMillis(frames: Long): Long {
+        val wholeSeconds = frames / sampleRate
+        if (wholeSeconds > Long.MAX_VALUE / 1000) return Long.MAX_VALUE
+        return recordingTimestampWithOffset(wholeSeconds * 1000, frames % sampleRate * 1000 / sampleRate)
+    }
+}
 
 /** One overlapping analysis window of latency, bounded memory, and byte-exact retained PCM. */
 internal class SilenceGateStream(
@@ -607,6 +639,14 @@ internal class SilenceGateStream(
     private val thresholds = spectrum.thresholdPowers(config.validate())
     private val buffer = ByteArray(spectrum.size * spectrum.frameBytes)
     private val boundaryBuffer by lazy { ByteArray(buffer.size) }
+    private val hopBytes = spectrum.hop * spectrum.frameBytes
+    // Completing a window carried from the prior packet may emit up to one extra hop.
+    private val keptRunCapacity by lazy {
+        CapturePcmBudget.forFormat(sampleRate, channels, format.bytesPerSample).maxReadBytes + hopBytes
+    }
+    private var keptRunScratch: ByteArray? = null
+    private var keptRunBytes = 0
+    private var keptRunSourceFrame = 0L
     private val minimumThresholdPower = 10.0.pow(config.points.minOf { it.db } / 10.0)
     private var frames = 0
     private var sourceFrame = 0L
@@ -628,9 +668,13 @@ internal class SilenceGateStream(
     val suppressingSilence: Boolean
         get() = config.enabled && !finished && !failed && !lastKept
 
-    fun accept(bytes: ByteArray, offset: Int, count: Int) {
+    fun accept(bytes: ByteArray, offset: Int, count: Int, coalesceKeptHops: Boolean = false) {
         check(!finished && !failed)
         require(offset >= 0 && count >= 0 && offset <= bytes.size - count && count % spectrum.frameBytes == 0)
+        // A packet no longer than one hop can emit at most one hop. Deliver it directly.
+        val runLimit = if (coalesceKeptHops && count > hopBytes) {
+            minOf(count.toLong() + hopBytes, keptRunCapacity.toLong()).toInt()
+        } else 0
         var cursor = offset
         val end = offset + count
         try {
@@ -639,9 +683,14 @@ internal class SilenceGateStream(
                 bytes.copyInto(buffer, frames * spectrum.frameBytes, cursor, cursor + copied)
                 frames += copied / spectrum.frameBytes
                 cursor += copied
-                if (frames == spectrum.size) emit(spectrum.hop)
+                if (frames == spectrum.size) emit(spectrum.hop, runLimit)
             }
-        } catch (error: Throwable) { failed = true; throw error }
+            flushKeptRun()
+        } catch (error: Throwable) {
+            keptRunBytes = 0
+            failed = true
+            throw error
+        }
     }
 
     private fun boundaryExceeds(atStart: Boolean, eligibleChannels: Int): Boolean {
@@ -663,7 +712,7 @@ internal class SilenceGateStream(
         return config.enabled && spectrum.exceeds(thresholds, config)
     }
 
-    private fun emit(count: Int) {
+    private fun emit(count: Int, runLimit: Int = 0) {
         spectrum.analyze(buffer, frames,
             observeBoundaries = (config.enabled || onSpectrum != null) && (sourceFrame == 0L || finished))
         onSpectrum?.invoke(spectrum, count)
@@ -701,10 +750,14 @@ internal class SilenceGateStream(
             continuationFrames = (continuationFrames - count).coerceAtLeast(0)
         }
         if (keptCount > 0) {
-            output.audio(buffer, 0, keptCount * spectrum.frameBytes, sourceFrame)
-            retainedFrames += keptCount
+            val byteCount = keptCount * spectrum.frameBytes
+            if (runLimit == 0) {
+                output.audio(buffer, 0, byteCount, sourceFrame)
+                retainedFrames += keptCount
+            } else stageKeptHop(byteCount, runLimit)
         }
         if (keptCount < count) {
+            flushKeptRun()
             if (lastKept || keptCount > 0) output.gap()
             skippedFrames += count - keptCount
         }
@@ -715,11 +768,35 @@ internal class SilenceGateStream(
         frames -= count
     }
 
+    private fun stageKeptHop(byteCount: Int, runLimit: Int) {
+        if (keptRunBytes + byteCount > runLimit) flushKeptRun()
+        val required = keptRunBytes + byteCount
+        val currentScratch = keptRunScratch
+        val scratch = if (currentScratch != null && currentScratch.size >= required) currentScratch else {
+            val capacity = maxOf(required, minOf((currentScratch?.size ?: 0) * 2, runLimit))
+            (currentScratch?.copyOf(capacity) ?: ByteArray(capacity)).also { keptRunScratch = it }
+        }
+        if (keptRunBytes == 0) keptRunSourceFrame = sourceFrame
+        buffer.copyInto(scratch, keptRunBytes, 0, byteCount)
+        keptRunBytes = required
+    }
+
+    private fun flushKeptRun() {
+        val byteCount = keptRunBytes
+        if (byteCount == 0) return
+        val scratch = checkNotNull(keptRunScratch)
+        keptRunBytes = 0 // The sink may commit a prefix before it throws.
+        if (byteCount <= hopBytes) output.audio(scratch, 0, byteCount, keptRunSourceFrame)
+        else output.audioRun(scratch, 0, byteCount, keptRunSourceFrame, spectrum.hop)
+        retainedFrames += byteCount / spectrum.frameBytes
+    }
+
     /** Flush already accepted PCM once at Stop/export/config/destination boundaries. */
     fun finish() {
         if (finished) return
         finished = true
         if (failed) return // An uncertain append cannot be replayed.
+        // The held window is a single emission, even when it contains more than one full hop.
         if (frames > 0) try { emit(frames) } catch (error: Throwable) { failed = true; throw error }
     }
 }

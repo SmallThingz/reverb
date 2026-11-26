@@ -458,13 +458,17 @@ internal class PersistentAudioChunkStore internal constructor(
         count: Int,
     ): Int = appendCapturedAt(array, offset, count, null)
 
-    /** Optional source timestamp keeps omitted silence out of PCM without moving later spans into that gap. */
+    /**
+     * Optional source timestamps preserve omitted spans. The mapper is called synchronously
+     * at new chunk starts, using a frame offset relative to the submitted slice.
+     */
     @Synchronized
     fun appendCapturedAt(
         array: ByteArray,
         offset: Int,
         count: Int,
         startedAtMillis: Long?,
+        chunkStartMillisAtFrame: ((Int) -> Long)? = null,
     ): Int {
         require(startedAtMillis == null || startedAtMillis >= 0)
         require(offset >= 0 && count >= 0 && offset <= array.size - count) {
@@ -493,9 +497,12 @@ internal class PersistentAudioChunkStore internal constructor(
                 var record = activeRecord
                 if (record == null) {
                     val firstFrame = (sourceOffset - offset) / frameBytes
-                    record = createActiveChunkLocked(startedAtMillis?.let {
+                    val chunkStartMillis = chunkStartMillisAtFrame?.invoke(firstFrame)?.also {
+                        require(it >= 0L) { "Recording timestamp must be non-negative" }
+                    } ?: startedAtMillis?.let {
                         recordingTimestampWithOffset(it, firstFrame * 1000L / configuredSampleRate)
-                    })
+                    }
+                    record = createActiveChunkLocked(chunkStartMillis)
                     if (record == null) break
                 }
 

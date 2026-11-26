@@ -7,6 +7,9 @@ import android.os.Build
 import android.os.Process
 import android.os.SystemClock
 import android.provider.Settings
+import android.system.ErrnoException
+import android.system.Os
+import android.system.OsConstants
 import android.util.AtomicFile
 import android.util.Log
 import androidx.annotation.RequiresApi
@@ -24,7 +27,10 @@ import java.io.DataOutputStream
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.IOException
+import java.security.DigestInputStream
+import java.security.MessageDigest
 import java.util.IdentityHashMap
+import java.util.PriorityQueue
 
 internal const val EXIT_REASON_MEMORY_LIMITER = 17
 internal const val EXIT_REASON_ANOMALY = 18
@@ -42,30 +48,47 @@ internal fun pendingIncidentQueueCanAppend(existingCount: Int): Boolean =
 internal fun atomicReadMissIsAuthoritativeAbsence(backingState: StoragePathState): Boolean =
     backingState == StoragePathState.MISSING
 
+private fun incidentAtomicStateMissing(baseFile: File): Boolean =
+    when (atomicFileRegularBackingState(baseFile)) {
+        StoragePathState.MISSING -> true
+        StoragePathState.PRESENT -> false
+        StoragePathState.UNAVAILABLE -> throw IOException(
+            "Unable to confirm incident-state absence: ${baseFile.absolutePath}",
+        )
+    }
+
+private fun requireIncidentAtomicStateMissing(baseFile: File) {
+    if (!incidentAtomicStateMissing(baseFile)) throw IOException(
+        "Incident state is present during removal confirmation: ${baseFile.absolutePath}",
+    )
+}
+
+private fun incidentStateParent(baseFile: File): File =
+    baseFile.parentFile ?: throw IOException("Incident state has no durability parent: ${baseFile.absolutePath}")
+
 /** A visible unlink is not durable absence until this directory barrier succeeds. */
 private fun requireDurableIncidentAtomicAbsence(
     baseFile: File,
     syncDirectory: (File) -> Unit,
 ) {
-    fun requireAbsent() {
-        when (atomicFileRegularBackingState(baseFile)) {
-            StoragePathState.MISSING -> Unit
-            StoragePathState.PRESENT -> throw IOException(
-                "Incident state is present during removal confirmation: ${baseFile.absolutePath}",
-            )
-            StoragePathState.UNAVAILABLE -> throw IOException(
-                "Unable to confirm incident-state absence: ${baseFile.absolutePath}",
-            )
-        }
-    }
-    requireAbsent()
-    val parent = baseFile.parentFile ?: throw IOException(
-        "Incident state has no durability parent: ${baseFile.absolutePath}",
-    )
-    // Do not convert the barrier's exception to a Boolean: keep its original failure/cause.
+    requireIncidentAtomicStateMissing(baseFile)
+    syncDirectory(incidentStateParent(baseFile))
+    requireIncidentAtomicStateMissing(baseFile)
+}
+
+/** Both files share the store monitor and directory. A present member needs normal recovery. */
+internal fun confirmMissingCaptureFiles(
+    pendingFile: File,
+    sessionFile: File,
+    syncDirectory: (File) -> Unit = ::forceRecordingDirectoryDurable,
+): Boolean {
+    if (!incidentAtomicStateMissing(pendingFile) || !incidentAtomicStateMissing(sessionFile)) return false
+    val parent = incidentStateParent(pendingFile)
+    if (parent != incidentStateParent(sessionFile)) throw IOException("Capture files have different parents")
     syncDirectory(parent)
-    // A new base, .new or .bak must be preserved, never deleted by an absence retry.
-    requireAbsent()
+    requireIncidentAtomicStateMissing(pendingFile)
+    requireIncidentAtomicStateMissing(sessionFile)
+    return true
 }
 
 internal fun deleteIncidentAtomicStateDurably(
@@ -433,10 +456,60 @@ internal data class PendingAppProcessExit(
     val endedByMillis: Long,
 )
 
+private const val PROCESS_FORMAT_VERSION = 2
+
 internal data class AppProcessRecoveryState(
     val current: AppProcessMarker,
     val pending: List<PendingAppProcessExit> = emptyList(),
+    private val sourceVersion: Int = PROCESS_FORMAT_VERSION,
+    private val oversizedOwnerDigest: List<Byte> = emptyList(),
+) {
+    val needsCompaction: Boolean get() = oversizedOwnerDigest.isNotEmpty()
+}
+
+// Optional crash diagnostics favor recent exits, which Android may still expose. Four passes
+// of eight owners cover the whole retained queue. Armed capture has separate fail-closed storage.
+internal const val MAX_PENDING_APP_PROCESSES = 32
+private const val APP_EXIT_INSPECTIONS_PER_PASS = 8
+private val appExitAge = compareBy<PendingAppProcessExit>(
+    { it.endedByMillis }, { it.marker.processStartedAtMillis }, { it.marker.pid },
 )
+
+internal class AppProcessInspectionCursor {
+    var nextIndex = 0
+}
+
+/** Store-monitor confined. A visible rename alone cannot authorize owner or tombstone retirement. */
+internal class AppProcessStatePublication {
+    private data class Attempt(val prior: AppProcessRecoveryState?, val target: AppProcessRecoveryState)
+    private val uncertain = mutableMapOf<File, Attempt>()
+
+    fun write(
+        file: File,
+        prior: AppProcessRecoveryState?,
+        target: AppProcessRecoveryState,
+        publish: (() -> Unit) -> Unit,
+    ) {
+        publish { uncertain[file] = Attempt(prior, target) }
+        uncertain.remove(file)
+    }
+
+    fun confirmRead(
+        file: File,
+        observed: AppProcessRecoveryState?,
+        republish: (AppProcessRecoveryState) -> Unit,
+    ): AppProcessRecoveryState? {
+        val attempt = uncertain[file] ?: return observed
+        if (observed != attempt.prior && observed != attempt.target) {
+            throw IOException("App process state changed during publication recovery: ${file.path}")
+        }
+        // Strict decoding preceded this check. Re-publish the exact target with the normal
+        // payload/descriptor/directory proof, including when finishWrite left the old base.
+        republish(attempt.target)
+        uncertain.remove(file)
+        return attempt.target
+    }
+}
 
 internal fun appExitTimestampMatches(owner: PendingAppProcessExit, pid: Int, timestamp: Long): Boolean =
     pid == owner.marker.pid && timestamp >= owner.marker.processStartedAtMillis &&
@@ -456,27 +529,45 @@ internal fun recoverAppProcessExits(
     writeState: (AppProcessRecoveryState) -> Unit,
     findExit: (PendingAppProcessExit) -> RecordingIncident?,
     publishIncident: (RecordingIncident) -> Unit,
+    cursor: AppProcessInspectionCursor = AppProcessInspectionCursor(),
 ): AppProcessRecoveryState {
-    val pending = previous?.pending.orEmpty().toMutableList()
+    var pending = previous?.pending.orEmpty()
+    if (pending.size > MAX_PENDING_APP_PROCESSES) throw IOException("Unbounded pending app process state")
     if (previous != null && previous.current != current) {
         val owner = PendingAppProcessExit(previous.current, current.processStartedAtMillis)
-        if (owner !in pending) pending += owner
-    }
-    val state = AppProcessRecoveryState(current, pending.toList())
-    if (state != previous) writeState(state)
-    val inspected = pending.take(8)
-    val unresolved = mutableListOf<PendingAppProcessExit>()
-    inspected.forEach { owner ->
-        val exit = findExit(owner)
-        if (exit == null) unresolved += owner
-        else if (unexpectedAppExitShouldCreateIncident(exit.exitReason, exit.exitStatus)) {
-            publishIncident(exit)
+        if (owner !in pending) {
+            pending = if (pending.size < MAX_PENDING_APP_PROCESSES) pending + owner else {
+                // Legacy inspection rotated the stored order. Use exit boundaries to evict the oldest.
+                val oldest = pending.minWith(appExitAge)
+                if (appExitAge.compare(owner, oldest) > 0) pending - oldest + owner else pending
+            }
         }
     }
-    // Rotate only the bounded inspected prefix, so an unavailable old record cannot starve others.
-    val remaining = pending.drop(inspected.size) + unresolved
-    val updated = state.copy(pending = remaining)
-    if (updated != state) writeState(updated)
+    val state = if (previous != null && previous.current == current && !previous.needsCompaction) previous else {
+        AppProcessRecoveryState(current, pending).also(writeState)
+    }
+    if (pending.isEmpty()) {
+        cursor.nextIndex = 0
+        return state
+    }
+    var next = cursor.nextIndex % pending.size
+    val retired = mutableListOf<Int>()
+    repeat(minOf(pending.size, APP_EXIT_INSPECTIONS_PER_PASS)) {
+        val index = next
+        next = (next + 1) % pending.size
+        val exit = findExit(pending[index])
+        if (exit != null) {
+            if (unexpectedAppExitShouldCreateIncident(exit.exitReason, exit.exitStatus)) publishIncident(exit)
+            retired += index
+        }
+    }
+    if (retired.isEmpty()) {
+        cursor.nextIndex = next
+        return state
+    }
+    val updated = state.copy(pending = pending.filterIndexed { index, _ -> index !in retired })
+    writeState(updated)
+    cursor.nextIndex = next - retired.count { it < next }
     return updated
 }
 
@@ -613,7 +704,7 @@ internal data class PendingProcessIncidentRetry(
     val description: String,
     val expectedPid: Int,
     val expectedProcessStartElapsedRealtimeMillis: Long,
-    val incident: RecordingIncident? = null,
+    var incident: RecordingIncident? = null,
     val stopToken: KnownCaptureStopToken? = null,
 )
 
@@ -659,7 +750,7 @@ internal fun resolvePendingCaptureExitEvidence(
     findIncident: (PendingRecordingSession) -> RecordingIncident?,
     publishObservedIncident: (RecordingIncident) -> Unit,
     writeRemaining: (List<PendingRecordingSession>) -> Unit,
-) {
+): Boolean {
     val remaining = ArrayList<PendingRecordingSession>(pending.size)
     var resolvedAny = false
     pending.forEach { owner ->
@@ -673,9 +764,16 @@ internal fun resolvePendingCaptureExitEvidence(
         }
     }
     if (resolvedAny) writeRemaining(remaining)
+    return remaining.isNotEmpty()
 }
 
 internal enum class CaptureSessionStartDisposition { NEW_SESSION, CONTINUE_SESSION, RESOLVE_INTERRUPTED_SESSION }
+
+internal data class CaptureResumeTargets(
+    val appContext: Context,
+    val pendingMarkers: Set<ActiveRecordingSessionMarker>,
+    val historyTargets: List<RecordingIncident>,
+)
 
 /** A Stop token is process-local; its durable marker stays armed until accepted PCM is sealed. */
 internal class KnownCaptureStopToken internal constructor(
@@ -685,6 +783,8 @@ internal class KnownCaptureStopToken internal constructor(
 ) {
     val armed: Boolean get() = marker?.armed == true
     internal var retirementAttempted = false
+    // Only an arm token can hand off these previous outages on the first accepted packet.
+    internal var resumeTargets: CaptureResumeTargets? = null
 
     internal fun owns(currentRoot: File, currentEpoch: Any, current: ActiveRecordingSessionMarker?): Boolean {
         if (root != currentRoot || publicationEpoch !== currentEpoch) return false
@@ -859,11 +959,12 @@ internal fun unexpectedErrorIncidentDescription(
 internal fun completeRecordingIncidentDowntimes(
     incidents: List<RecordingIncident>,
     resumedAtMillis: Long,
+    targetIndices: Set<Int>? = null,
 ): List<RecordingIncident> {
     var updated: MutableList<RecordingIncident>? = null
     incidents.forEachIndexed { index, incident ->
         if (
-            incident.recoveryPending &&
+            incident.recoveryPending && (targetIndices == null || index in targetIndices) &&
             resumedAtMillis >= incident.occurredAtMillis
         ) {
             val result = updated ?: incidents.toMutableList().also { updated = it }
@@ -876,11 +977,15 @@ internal fun completeRecordingIncidentDowntimes(
 internal object RecordingIncidentStore {
     private var captureSessionPublicationEpoch = Any()
 
+    private data class CaptureResume(val targets: CaptureResumeTargets, val resumedAtMillis: Long)
+    // Admission and detach take only this short lock; filesystem work uses the store monitor.
+    private val admittedResumes = mutableMapOf<File, CaptureResume>()
+    private var admittedCaptureEpoch: Any? = null
+
     private const val SESSION_MAGIC = 0x52495331 // RIS1
     private const val PROCESS_MAGIC = 0x52495032 // RIP2
     private const val HISTORY_MAGIC = 0x52494831 // RIH1
     private const val SESSION_FORMAT_VERSION = 3
-    private const val PROCESS_FORMAT_VERSION = 2
     private const val LEGACY_HISTORY_FORMAT_VERSION = 1
     private const val PREVIOUS_HISTORY_FORMAT_VERSION = 2
     private const val HISTORY_FORMAT_VERSION = 4
@@ -905,6 +1010,8 @@ internal object RecordingIncidentStore {
     private var lastUnexpectedErrorAtMillis = 0L
     private val observationIds = java.util.concurrent.atomic.AtomicLong()
     private val observationAdmission = CaptureObservationAdmission()
+    private val processStatePublication = AppProcessStatePublication()
+    private val appExitCursor = AppProcessInspectionCursor()
     private val currentAppProcess by lazy {
         AppProcessMarker(Process.myPid(), currentProcessStartedAtWallClockMillis())
     }
@@ -1018,10 +1125,15 @@ internal object RecordingIncidentStore {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return false
         val appContext = context.applicationContext
         val file = AtomicFile(File(appContext.noBackupFilesDir, PROCESS_FILE_NAME))
+        var prior = readProcessState(file)
         val recovered = recoverAppProcessExits(
-            previous = readProcessState(file),
+            previous = prior,
             current = currentAppProcess,
-            writeState = { writeProcessState(file, it) },
+            cursor = appExitCursor,
+            writeState = { state ->
+                publishProcessState(file, prior, state)
+                prior = state
+            },
             findExit = { owner ->
                 historicalAppExit(appContext, owner)?.let { exit ->
                     RecordingIncident(
@@ -1052,19 +1164,37 @@ internal object RecordingIncidentStore {
         return recovered.pending.isNotEmpty()
     }
 
+    /** Existing startup backoff retries capture evidence even when stopped-app recovery is idle. */
     @Synchronized
-    fun recoverPriorSessionIfNeeded(context: Context) {
-        val appContext = context.applicationContext
-        resolvePendingSessions(appContext)
+    fun retryPendingCaptureExitEvidence(context: Context): Boolean =
+        resolvePendingSessions(context.applicationContext)
 
+    /** One step of the existing startup retry budget; a settled-empty capture lane does no I/O. */
+    fun retryStartupCaptureRecovery(context: Context, previous: Result<Boolean>): Result<Boolean> {
+        if (!previous.getOrDefault(true)) return previous
+        return runCatching {
+            // A failed initial proof may still own an armed marker, not just a pending queue.
+            if (previous.isFailure) recoverPriorSessionIfNeeded(context)
+            else retryPendingCaptureExitEvidence(context)
+        }
+    }
+
+    @Synchronized
+    fun recoverPriorSessionIfNeeded(context: Context): Boolean {
+        val appContext = context.applicationContext
         val markerFile = sessionFile(appContext)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+            confirmMissingCaptureFiles(pendingSessionFile(appContext).baseFile, markerFile.baseFile)
+        ) return false
+        val capturePending = resolvePendingSessions(appContext)
+
         val marker = readSession(markerFile) ?: run {
             deleteAtomicDurablyIfPresent(markerFile)
-            return
+            return capturePending
         }
         if (!marker.armed) {
             deleteAtomicDurablyIfPresent(markerFile)
-            return
+            return capturePending
         }
         val bootCount = currentBootCount(appContext)
         val currentElapsed = SystemClock.elapsedRealtime()
@@ -1076,16 +1206,16 @@ internal object RecordingIncidentStore {
                 publishIncident = { appendIncident(appContext, it) },
                 retireMarker = { deleteAtomicDurablyIfPresent(markerFile) },
             )
-        ) return
+        ) return capturePending
 
-        if (markerBelongsToCurrentProcess(marker)) return
+        if (markerBelongsToCurrentProcess(marker)) return capturePending
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
             appendIncident(
                 appContext,
                 incidentWithoutExitEvidence(marker, System.currentTimeMillis()),
             )
             deleteAtomicDurablyIfPresent(markerFile)
-            return
+            return capturePending
         }
 
         // Preserve the previous armed session before the restarted recorder can overwrite the
@@ -1107,15 +1237,17 @@ internal object RecordingIncidentStore {
             ),
         )
         deleteAtomicDurablyIfPresent(markerFile)
-        resolvePendingSessions(appContext)
+        return resolvePendingSessions(appContext)
     }
 
     @Synchronized
     fun recordCaptureStarted(
         context: Context,
         continuousRestart: Boolean = false,
-    ) {
+    ): KnownCaptureStopToken {
         val appContext = context.applicationContext
+        val root = incidentRoot(appContext)
+        retryCaptureResume(appContext)
         // Process-local interruption publication/disarm failures have no process-exit evidence
         // to recover while this process remains alive. Resolve them before a fresh capture can
         // replace the armed marker they belong to; failure keeps capture start fail-closed.
@@ -1132,7 +1264,11 @@ internal object RecordingIncidentStore {
                 // A transparent AudioRecord/config restart is still the same logical capture
                 // session. Do not reset its arm timestamp or split later incident identity.
                 resolvePendingSessions(appContext)
-                return
+                val token = KnownCaptureStopToken(root, existing, captureSessionPublicationEpoch)
+                if (synchronized(admittedResumes) { admittedCaptureEpoch !== token.publicationEpoch }) {
+                    token.resumeTargets = readCaptureResumeTargets(appContext, requireNotNull(existing))
+                }
+                return token
             }
             CaptureSessionStartDisposition.RESOLVE_INTERRUPTED_SESSION -> {
                 val marker = requireNotNull(existing)
@@ -1148,30 +1284,105 @@ internal object RecordingIncidentStore {
             CaptureSessionStartDisposition.NEW_SESSION -> recoverPriorSessionIfNeeded(appContext)
         }
 
-        val resumedAtMillis = System.currentTimeMillis()
-        notePendingSessionsResumed(appContext, resumedAtMillis)
         resolvePendingSessions(appContext)
-        // Invalidate old process-local Stop tokens before replacement can become visible,
-        // including a write whose later durability barrier fails. Clock samples may repeat.
-        captureSessionPublicationEpoch = Any()
-        writeSession(
-            markerFile,
-            ActiveRecordingSessionMarker(
-                armed = true,
-                pid = Process.myPid(),
-                processStartElapsedRealtimeMillis = Process.getStartElapsedRealtime(),
-                armedAtMillis = resumedAtMillis,
-                armedElapsedRealtimeMillis = SystemClock.elapsedRealtime(),
-                packageLastUpdateTimeMillis = packageLastUpdateTime(appContext),
-                bootCount = currentBootCount(appContext),
-            ),
+        val targets = readCaptureResumeTargets(appContext)
+        val marker = ActiveRecordingSessionMarker(
+            armed = true,
+            pid = Process.myPid(),
+            processStartElapsedRealtimeMillis = Process.getStartElapsedRealtime(),
+            armedAtMillis = System.currentTimeMillis(),
+            armedElapsedRealtimeMillis = SystemClock.elapsedRealtime(),
+            packageLastUpdateTimeMillis = packageLastUpdateTime(appContext),
+            bootCount = currentBootCount(appContext),
         )
-        completePendingDowntime(appContext, resumedAtMillis)
+        // Invalidate old process-local tokens even if the new publication barrier fails.
+        synchronized(admittedResumes) { captureSessionPublicationEpoch = Any() }
+        // An old writer may have admitted its last packet during this arm's recovery reads.
+        retryCaptureResume(appContext)
+        writeSession(markerFile, marker)
+        return KnownCaptureStopToken(root, marker, captureSessionPublicationEpoch).apply { resumeTargets = targets }
+    }
+
+    private fun readCaptureResumeTargets(
+        context: Context,
+        continuing: ActiveRecordingSessionMarker? = null,
+    ): CaptureResumeTargets {
+        val pending = readPendingSessions(pendingSessionFile(context))
+            .filter { it.resumedAtMillis <= 0L }.mapTo(mutableSetOf()) { it.marker }
+        val current = continuing?.let { incidentWithoutExitEvidence(it, it.armedAtMillis) }
+        val history = readHistory(historyFile(context)).filter {
+            it.recoveryPending && (current == null || !recordingIncidentsShareCaptureSession(it, current))
+        }
+        return CaptureResumeTargets(context, pending, history)
+    }
+
+    fun discardUnadmittedCapture(token: KnownCaptureStopToken) {
+        synchronized(admittedResumes) { token.resumeTargets = null }
+    }
+
+    fun recordCaptureAdmitted(context: Context, token: KnownCaptureStopToken, resumedAtMillis: Long) {
+        val appContext = context.applicationContext
+        synchronized(admittedResumes) {
+            val targets = token.resumeTargets ?: return
+            if (targets.appContext !== appContext || token.publicationEpoch !== captureSessionPublicationEpoch ||
+                admittedCaptureEpoch === token.publicationEpoch) return
+            admittedCaptureEpoch = token.publicationEpoch
+            token.resumeTargets = null
+            if (targets.pendingMarkers.isEmpty() && targets.historyTargets.isEmpty()) return
+            admittedResumes[token.root] = CaptureResume(targets, resumedAtMillis)
+        }
+        historyMutationScope.launch {
+            synchronized(this@RecordingIncidentStore) {
+                try {
+                    retryCaptureResume(appContext)
+                } catch (_: Exception) {
+                    // The history reader retries the original time and targets with bounded backoff.
+                    signalHistoryChanged()
+                }
+            }
+        }
+    }
+
+    private fun retryCaptureResume(context: Context) {
+        val root = incidentRoot(context)
+        val resume = synchronized(admittedResumes) { admittedResumes[root] } ?: return
+        val time = resume.resumedAtMillis
+        if (resume.targets.pendingMarkers.isNotEmpty()) {
+            val file = pendingSessionFile(context)
+            val pending = readPendingSessions(file)
+            // Re-publish a matching visible value as well: a prior attempt can fail its
+            // directory barrier after exposing the new pending bytes.
+            if (pending.any { it.marker in resume.targets.pendingMarkers }) {
+                writePendingSessions(file, pending.map { owner ->
+                    if (owner.marker in resume.targets.pendingMarkers && owner.resumedAtMillis <= 0L)
+                        owner.copy(resumedAtMillis = time) else owner
+                })
+            }
+        }
+        val file = historyFile(context)
+        // readHistory first republishes any visible history whose directory barrier failed.
+        val existing = readHistory(file)
+        val indices = resume.targets.historyTargets.mapNotNullTo(mutableSetOf()) {
+            recordingIncidentMutationIndex(existing, it)
+        }
+        // Exit evidence may replace a provisional row (or restore an evicted one) after arm.
+        for (marker in resume.targets.pendingMarkers) {
+            val session = incidentWithoutExitEvidence(marker, marker.armedAtMillis)
+            existing.indices.filterTo(indices) { recordingIncidentsShareCaptureSession(existing[it], session) }
+        }
+        val updated = completeRecordingIncidentDowntimes(existing, time, indices)
+        if (updated !== existing) {
+            writeHistory(file, updated)
+            signalHistoryChanged()
+        }
+        synchronized(admittedResumes) { admittedResumes.remove(root) }
     }
 
     @Synchronized
     fun recordCaptureServiceStopped(context: Context, description: String) {
         val appContext = context.applicationContext
+        // Earlier terminal evidence owns this arm until its publication and retirement settle.
+        if (runCatching { retryPendingCaptureInterruptions(appContext) }.isFailure) return
         val stoppedAtMillis = System.currentTimeMillis()
         val retry = PendingProcessIncidentRetry(
             root = incidentRoot(appContext),
@@ -1210,6 +1421,8 @@ internal object RecordingIncidentStore {
     @Synchronized
     fun recordCaptureInterrupted(context: Context, description: String) {
         val appContext = context.applicationContext
+        // Earlier terminal evidence owns this arm until its publication and retirement settle.
+        if (runCatching { retryPendingCaptureInterruptions(appContext) }.isFailure) return
         val interruptedAtMillis = System.currentTimeMillis()
         val retry = PendingProcessIncidentRetry(
             root = incidentRoot(appContext),
@@ -1267,22 +1480,36 @@ internal object RecordingIncidentStore {
 
     @Synchronized
     fun recordKnownCaptureStopDrainFailure(context: Context, token: KnownCaptureStopToken) {
+        recordTokenInterruption(context, token, "Capture stopped before buffered audio could be durably sealed",
+            requireLiveMarker = false)
+    }
+
+    @Synchronized
+    fun recordAutomaticStopFailure(context: Context, token: KnownCaptureStopToken, description: String) {
+        recordTokenInterruption(context, token, description, requireLiveMarker = true)
+    }
+
+    private fun recordTokenInterruption(
+        context: Context,
+        token: KnownCaptureStopToken,
+        description: String,
+        requireLiveMarker: Boolean,
+    ) {
         val appContext = context.applicationContext
         val root = incidentRoot(appContext)
         val marker = token.marker ?: return
         if (!marker.armed || !token.owns(root, captureSessionPublicationEpoch, marker)) return
         val interruptedAtMillis = System.currentTimeMillis()
-        val description = "Capture stopped before buffered audio could be durably sealed"
         val retry = PendingProcessIncidentRetry(
             root = root,
             occurredAtMillis = interruptedAtMillis,
             description = description,
             expectedPid = marker.pid,
             expectedProcessStartElapsedRealtimeMillis = marker.processStartElapsedRealtimeMillis,
-            incident = incidentWithoutExitEvidence(marker, interruptedAtMillis, description),
+            incident = if (requireLiveMarker) null else incidentWithoutExitEvidence(marker, interruptedAtMillis, description),
             stopToken = token,
         )
-        if (runCatching { persistKnownCaptureStopDrainFailure(appContext, retry, token) }.isFailure) {
+        if (runCatching { persistTokenInterruption(appContext, retry, token) }.isFailure) {
             enqueueCaptureInterruptionRetry(retry)
         }
     }
@@ -1359,6 +1586,7 @@ internal object RecordingIncidentStore {
     @Synchronized
     fun readIncidents(context: Context): List<RecordingIncident> {
         val appContext = context.applicationContext
+        retryCaptureResume(appContext)
         // Same-process capture interruptions can fail while reading/writing the session/history
         // files. Retry both publication and exact-session disarm on every bounded UI history read.
         retryPendingCaptureInterruptions(appContext)
@@ -1481,7 +1709,7 @@ internal object RecordingIncidentStore {
         pendingCaptureInterruptionRetries.retryOwned(incidentRoot(context)) { retry ->
             val stopToken = retry.stopToken
             if (stopToken != null) {
-                persistKnownCaptureStopDrainFailure(context, retry, stopToken)
+                persistTokenInterruption(context, retry, stopToken)
                 return@retryOwned
             }
             val markerFile = sessionFile(context)
@@ -1526,14 +1754,21 @@ internal object RecordingIncidentStore {
         }
     }
 
-    private fun persistKnownCaptureStopDrainFailure(
+    private fun persistTokenInterruption(
         context: Context,
         retry: PendingProcessIncidentRetry,
         token: KnownCaptureStopToken,
     ) {
-        // The reservation identifies the failed drain even if the marker cannot be read.
-        appendIncident(context, requireNotNull(retry.incident))
         val file = sessionFile(context)
+        val incident = retry.incident ?: run {
+            // A full-buffer check can also run before fresh input arms. An old clean Stop
+            // from this Service has no interruption to publish.
+            if (!token.owns(retry.root, captureSessionPublicationEpoch, readSession(file))) return
+            incidentWithoutExitEvidence(requireNotNull(token.marker), retry.occurredAtMillis, retry.description).also {
+                retry.incident = it
+            }
+        }
+        appendIncident(context, incident)
         val current = readSession(file)
         if (!token.owns(retry.root, captureSessionPublicationEpoch, current)) return
         token.retirementAttempted = true
@@ -1590,16 +1825,16 @@ internal object RecordingIncidentStore {
         }
     }
 
-    private fun resolvePendingSessions(context: Context) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
+    private fun resolvePendingSessions(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return false
         val file = pendingSessionFile(context)
         val pending = readPendingSessions(file)
         if (pending.isEmpty()) {
             deleteAtomicDurablyIfPresent(file)
-            return
+            return false
         }
 
-        resolvePendingCaptureExitEvidence(
+        return resolvePendingCaptureExitEvidence(
             pending = pending,
             findIncident = { owner ->
                 historicalExit(context, owner)?.let { exit ->
@@ -1610,19 +1845,6 @@ internal object RecordingIncidentStore {
                 appendIncident(context, incident, incomingExitObserved = true)
             },
             writeRemaining = { writePendingSessions(file, it) },
-        )
-    }
-
-    private fun notePendingSessionsResumed(context: Context, resumedAtMillis: Long) {
-        val file = pendingSessionFile(context)
-        val pending = readPendingSessions(file)
-        if (pending.none { it.resumedAtMillis <= 0L }) return
-        writePendingSessions(
-            file,
-            pending.map { session ->
-                if (session.resumedAtMillis > 0L) session
-                else session.copy(resumedAtMillis = resumedAtMillis)
-            },
         )
     }
 
@@ -1745,15 +1967,6 @@ internal object RecordingIncidentStore {
         )
     }
 
-    private fun completePendingDowntime(context: Context, resumedAtMillis: Long) {
-        val file = historyFile(context)
-        val existing = readHistory(file)
-        val updated = completeRecordingIncidentDowntimes(existing, resumedAtMillis)
-        if (updated === existing) return
-        writeHistory(file, updated)
-        signalHistoryChanged()
-    }
-
     private fun historyRetainingReplayableDeletions(
         context: Context,
         existing: List<RecordingIncident>,
@@ -1764,7 +1977,9 @@ internal object RecordingIncidentStore {
             // A failed durable read is not proof that an owner is absent.
             val active = readSession(sessionFile(context))?.takeIf { it.armed }
             val pending = readPendingSessions(pendingSessionFile(context))
-            val process = readProcessState(AtomicFile(File(context.noBackupFilesDir, PROCESS_FILE_NAME)))
+            val process = readProcessState(
+                AtomicFile(File(context.noBackupFilesDir, PROCESS_FILE_NAME)), requireCompactedOwners = true,
+            )
             RecordingIncidentReplayOwners(
                 captureSessions = (pending.map { it.marker } + listOfNotNull(active)).map { marker ->
                     incidentWithoutExitEvidence(marker, marker.armedAtMillis)
@@ -1839,8 +2054,23 @@ internal object RecordingIncidentStore {
         deleteIncidentAtomicStateDurably(file.baseFile, removePresent = file::delete)
     }
 
-    private fun readProcessState(file: AtomicFile): AppProcessRecoveryState? =
-        readAtomic(file, "app process state", ::readProcessStatePayload)
+    private fun readProcessState(file: AtomicFile, requireCompactedOwners: Boolean = false): AppProcessRecoveryState? {
+        val observed = readAtomic(file, "app process state", ::readProcessStatePayload)
+        val confirmed = processStatePublication.confirmRead(file.baseFile, observed) { writeProcessState(file, it) }
+        // Tombstone pruning needs durable eviction even if it runs before stopped-app recovery.
+        if (requireCompactedOwners && confirmed?.needsCompaction == true) {
+            return AppProcessRecoveryState(confirmed.current, confirmed.pending).also {
+                publishProcessState(file, confirmed, it)
+            }
+        }
+        return confirmed
+    }
+
+    private fun publishProcessState(file: AtomicFile, prior: AppProcessRecoveryState?, target: AppProcessRecoveryState) {
+        processStatePublication.write(file.baseFile, prior, target) { started ->
+            writeProcessState(file, target, started)
+        }
+    }
 
     internal fun readProcessStatePayload(input: DataInputStream): AppProcessRecoveryState {
         if (input.readInt() != PROCESS_MAGIC) throw IOException("Invalid app process state magic")
@@ -1848,34 +2078,56 @@ internal object RecordingIncidentStore {
         if (version != 1 && version != PROCESS_FORMAT_VERSION) {
             throw IOException("Unsupported app process state version $version")
         }
-        fun readMarker(): AppProcessMarker {
-            val marker = AppProcessMarker(input.readInt(), input.readLong())
+        fun readMarker(source: DataInputStream): AppProcessMarker {
+            val marker = AppProcessMarker(source.readInt(), source.readLong())
             if (marker.pid <= 0 || marker.processStartedAtMillis <= 0L) {
                 throw IOException("Invalid app process marker")
             }
             return marker
         }
-        val current = readMarker()
-        if (version == 1) return AppProcessRecoveryState(current)
+        val current = readMarker(input)
+        if (version == 1) return AppProcessRecoveryState(current, sourceVersion = version)
         val count = input.readInt()
-        // Each owner needs 20 payload bytes. Never allocate from an unchecked serialized count.
-        if (count < 0 || count > input.available() / 20) throw IOException("Invalid pending app process count")
-        val pending = buildList {
-            repeat(count) {
-                val marker = readMarker()
-                val endedByMillis = input.readLong()
-                if (endedByMillis <= 0L) throw IOException("Invalid app process exit boundary")
-                add(PendingAppProcessExit(marker, endedByMillis))
+        if (count < 0) {
+            throw IOException("Invalid pending app process count")
+        }
+        fun readOwner(source: DataInputStream): PendingAppProcessExit {
+            val marker = readMarker(source)
+            val endedByMillis = source.readLong()
+            if (endedByMillis <= 0L) throw IOException("Invalid app process exit boundary")
+            return PendingAppProcessExit(marker, endedByMillis)
+        }
+        if (count <= MAX_PENDING_APP_PROCESSES) {
+            return AppProcessRecoveryState(current, List(count) { readOwner(input) })
+        }
+        // V2 had no product limit and could persist a rotated order. Validate even the owners
+        // we evict. The enclosing exact-EOF and descriptor checks precede any compaction write.
+        val newest = PriorityQueue(MAX_PENDING_APP_PROCESSES, appExitAge)
+        // A failed rename may leave the prior file. Bind every owner byte, including evictions,
+        // so an unrelated replacement with the same retained shortlist cannot authorize replay.
+        val digest = MessageDigest.getInstance("SHA-256")
+        val owners = DataInputStream(DigestInputStream(input, digest))
+        repeat(count) {
+            val owner = readOwner(owners)
+            if (newest.size < MAX_PENDING_APP_PROCESSES) newest.add(owner)
+            else if (appExitAge.compare(owner, newest.element()) > 0) {
+                newest.remove()
+                newest.add(owner)
             }
         }
-        return AppProcessRecoveryState(current, pending)
+        return AppProcessRecoveryState(current, newest.sortedWith(appExitAge), oversizedOwnerDigest = digest.digest().asList())
     }
 
-    private fun writeProcessState(file: AtomicFile, state: AppProcessRecoveryState) {
-        writeAtomic(file) { output -> writeProcessStatePayload(output, state) }
+    private fun writeProcessState(
+        file: AtomicFile,
+        state: AppProcessRecoveryState,
+        onPublicationStarted: () -> Unit = {},
+    ) {
+        writeAtomic(file, onPublicationStarted) { output -> writeProcessStatePayload(output, state) }
     }
 
     internal fun writeProcessStatePayload(output: DataOutputStream, state: AppProcessRecoveryState) {
+        if (state.pending.size > MAX_PENDING_APP_PROCESSES) throw IOException("Too many pending app processes")
         output.writeInt(PROCESS_MAGIC)
         output.writeByte(PROCESS_FORMAT_VERSION)
         output.writeInt(state.current.pid)
@@ -1910,15 +2162,97 @@ internal object RecordingIncidentStore {
         writeSessionMarker(output, marker)
     }
 
-    private fun readPendingSessions(file: AtomicFile): List<PendingRecordingSession> =
-        readAtomic(file, "pending recording incidents", ::readPendingSessionsPayload) ?: emptyList()
+    // Captured only after exact EOF and a barrier for the pinned queue in this directory.
+    private data class CaptureQueueRevision(val base: File, val directoryIdentity: String, val descriptorIdentity: String)
+    private var confirmedLegacyQueue: CaptureQueueRevision? = null
 
-    internal fun readPendingSessionsPayload(input: DataInputStream): List<PendingRecordingSession> {
+    private fun confirmLegacyQueueRevision(base: File, descriptorIdentity: String): CaptureQueueRevision {
+        val directory = requireNotNull(base.parentFile)
+        val identity = resolveDirectoryIdentity(directory)
+        val revision = CaptureQueueRevision(base, identity, descriptorIdentity)
+        fun requireCurrent() {
+            if (!atomicFileReadDescriptorRemainsCurrent(base, descriptorIdentity) ||
+                resolveDirectoryIdentity(directory) != identity
+            ) throw IOException("Pending capture queue changed during publication confirmation")
+        }
+        requireCurrent()
+        if (revision != confirmedLegacyQueue) {
+            // Pin the actual directory that we sync. A path-only barrier can follow a swap.
+            try {
+                val opened = Os.open(directory.path, OsConstants.O_RDONLY or OsConstants.O_NOFOLLOW or OsConstants.O_CLOEXEC, 0)
+                withOwnedResource(opened, release = { Os.close(it) }) { fd ->
+                    val stat = Os.fstat(fd)
+                    if (!OsConstants.S_ISDIR(stat.st_mode) || identity != "dirstat:${stat.st_dev}:${stat.st_ino}") {
+                        throw IOException("Unable to bind pending capture directory")
+                    }
+                    Os.fsync(fd)
+                    requireCurrent()
+                }
+            } catch (error: ErrnoException) {
+                throw IOException("Unable to confirm pending capture queue publication", error)
+            }
+        }
+        return revision
+    }
+
+    private fun readPendingSessions(file: AtomicFile): List<PendingRecordingSession> {
+        var version = 0
+        var confirmed: CaptureQueueRevision? = null
+        val owners = readAtomic(file, "pending recording incidents", block = { input ->
+            version = readPendingVersion(input)
+            readPendingRecords(input, version)
+        }, afterDecode = { decoded, identity ->
+            // v3 may be a visible rename from a migration whose parent sync failed. Its
+            // missing boot count survives v1 conversion, including across process restart.
+            if (version >= 3 && decoded.any { it.marker.bootCount == -1 && it.endedByMillis > 0L }) {
+                confirmed = confirmLegacyQueueRevision(file.baseFile, identity)
+            }
+        }) ?: return emptyList()
+        confirmedLegacyQueue = confirmed
+        if (version != 1 || owners.isEmpty()) return owners
+
+        // Only the original v1 queue predates the current enqueue-before-detector write.
+        // A zero carried forward by a newer writer cannot date a subsequently created card.
+        val history = readHistory(AtomicFile(File(file.baseFile.parentFile, HISTORY_FILE_NAME)))
+        val bounded = owners.map { owner ->
+            val marker = owner.marker
+            if (!marker.armed || owners.count {
+                    it.marker.pid == marker.pid && it.marker.armedAtMillis == marker.armedAtMillis
+                } != 1
+            ) return@map owner
+            val started = recordingSessionProcessStartedAtMillis(marker)
+            val card = history.singleOrNull {
+                it.kind == RecordingIncidentKind.UNEXPECTED_SHUTDOWN && it.pid == marker.pid &&
+                    it.captureArmedAtMillis == marker.armedAtMillis
+            } ?: return@map owner
+            // This persisted English literal identifies the released prior-process detector.
+            // It clamped backward clock samples to armedAt; equality cannot prove a deadline.
+            if (started <= 0L || card.processStartedAtMillis != started ||
+                card.occurredAtMillis <= marker.armedAtMillis ||
+                card.description != "Recording process ended while capture was running; exit evidence pending" ||
+                recordingIncidentHasObservedExitEvidence(card) || card.importance != Int.MIN_VALUE ||
+                card.pssKb != -1L || card.rssKb != -1L
+            ) owner else owner.copy(endedByMillis = card.occurredAtMillis)
+        }
+        // Evidence enrichment overwrites the detector description. Make the bound replayable
+        // first, even if history publishes and retiring the pending owner subsequently fails.
+        if (bounded != owners) writePendingSessions(file, bounded)
+        return bounded
+    }
+
+    internal fun readPendingSessionsPayload(input: DataInputStream): List<PendingRecordingSession> =
+        readPendingRecords(input, readPendingVersion(input))
+
+    private fun readPendingVersion(input: DataInputStream): Int {
         if (input.readInt() != PENDING_MAGIC) throw IOException("Invalid pending recording incidents magic")
         val version = input.readUnsignedByte()
         if (version !in 1..PENDING_FORMAT_VERSION) {
             throw IOException("Unsupported pending recording incidents version $version")
         }
+        return version
+    }
+
+    private fun readPendingRecords(input: DataInputStream, version: Int): List<PendingRecordingSession> {
         return readBoundedRecords(input, MAX_PENDING_INCIDENT_SESSIONS, "Pending recording incident") { records ->
             val marker = readSessionMarker(records, hasBootCount = version >= 3)
             val resumedAtMillis = records.readLong()
@@ -2132,6 +2466,7 @@ internal object RecordingIncidentStore {
         file: AtomicFile,
         label: String,
         block: (DataInputStream) -> T,
+        afterDecode: (T, String) -> Unit = { _, _ -> },
     ): T? {
         when (val backingState = atomicFileRegularBackingState(file.baseFile)) {
             StoragePathState.MISSING -> return null
@@ -2153,7 +2488,9 @@ internal object RecordingIncidentStore {
                 val descriptorIdentity = bindAtomicFileReadDescriptor(file.baseFile, stream.fd)
                     ?: throw IOException("Unable to bind $label to its AtomicFile backing object")
                 val result = DataInputStream(BufferedInputStream(stream)).use { input ->
-                    readIncidentPayloadExact(input, label, block)
+                    readIncidentPayloadExact(input, label, block).also { decoded ->
+                        afterDecode(decoded, descriptorIdentity)
+                    }
                 }
                 if (!atomicFileReadDescriptorRemainsCurrent(file.baseFile, descriptorIdentity)) {
                     throw IOException("AtomicFile backing object changed while reading $label")

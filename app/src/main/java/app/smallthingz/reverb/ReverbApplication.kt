@@ -36,18 +36,22 @@ class ReverbApplication : Application() {
         Thread(
             {
                 runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND) }
-                runCatching { RecordingIncidentStore.recoverPriorSessionIfNeeded(this) }
+                var captureRecovery = runCatching { RecordingIncidentStore.recoverPriorSessionIfNeeded(this) }
                     .onFailure { Log.e("ReverbApplication", "Unable to recover prior recording incident", it) }
                 // ExitInfo can appear after startup. Keep retries finite and silent on empty reads;
                 // unresolved identities remain durable for later history reads and process starts.
                 for (attempt in 0..5) {
+                    captureRecovery = RecordingIncidentStore.retryStartupCaptureRecovery(this, captureRecovery)
+                        .onFailure {
+                            if (attempt == 5) Log.e("ReverbApplication", "Unable to recover pending capture exit evidence", it)
+                        }
                     val pending = runCatching {
                         RecordingIncidentStore.recoverUnexpectedProcessExitAndMarkCurrent(this)
                     }.getOrElse {
                         if (attempt == 5) Log.e("ReverbApplication", "Unable to recover prior app-process incident", it)
                         true
                     }
-                    if (!pending || attempt == 5) break
+                    if ((!pending && !captureRecovery.getOrDefault(true)) || attempt == 5) break
                     Thread.sleep(500L shl attempt)
                 }
             },

@@ -13,6 +13,49 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class IncidentAtomicRemovalTest {
+    @Test
+    fun absentCaptureFiles_shareOneDirectoryBarrierAndPropagateItsFailure() {
+        Fixture().use { fixture ->
+            val pending = File(fixture.directory, "pending")
+            var syncs = 0
+            val failure = IOException("shared directory barrier failed")
+            assertSame(failure, assertThrows(IOException::class.java) {
+                confirmMissingCaptureFiles(pending, fixture.base) { throw failure }
+            })
+            assertTrue(confirmMissingCaptureFiles(pending, fixture.base) { parent ->
+                assertEquals(fixture.directory, parent)
+                syncs++
+                forceRecordingDirectoryDurable(parent)
+            })
+            assertEquals(1, syncs)
+        }
+    }
+
+    @Test
+    fun combinedAbsence_preservesEveryRegularOrUnavailableMemberAcrossTheBarrier() {
+        for (base in listOf("session", "pending")) for (suffix in SUFFIXES) {
+            for (regular in listOf(true, false)) Fixture().use { fixture ->
+                val pending = File(fixture.directory, "pending")
+                val artifact = File(fixture.directory, base + suffix)
+                assertThrows(IOException::class.java) {
+                    confirmMissingCaptureFiles(pending, fixture.base) {
+                        if (regular) artifact.writeBytes(REPLACEMENT) else assertTrue(artifact.mkdir())
+                    }
+                }
+                fun retry() = confirmMissingCaptureFiles(pending, fixture.base) {
+                    error("Existing artifact cannot share a clean-state barrier")
+                }
+                if (regular) {
+                    assertFalse(retry())
+                    assertArrayEquals(REPLACEMENT, artifact.readBytes())
+                } else {
+                    assertThrows(IOException::class.java) { retry() }
+                    assertTrue(artifact.isDirectory)
+                }
+            }
+        }
+    }
+
     @Test(timeout = 5_000)
     fun unlinkSuccessThenFailedBarriers_requireANewBarrierOnEveryMissingRetry() {
         Fixture().use { fixture ->

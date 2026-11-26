@@ -1830,13 +1830,19 @@ open class ReverbService : Service() {
         activateCapturePolicyObservation(record)
     }
 
+    // The writer binds the first accepted packet to its armed native input. Automatic Stop
+    // uses the same session even when a fresh on-disk Stop reservation cannot be read.
+    private var armedCaptureSession: KnownCaptureStopToken? = null
+    private var awaitingCaptureReleaseGeneration = Long.MIN_VALUE
+
     private fun armCaptureIncidentTrackingOnAudioThread(continuousRestart: Boolean = false): Boolean {
         check(audioHandler.looper == Looper.myLooper())
         return synchronized(listeningIntentLock) {
             if (serviceDestroying) return@synchronized false
             try {
                 check(pendingKnownCaptureStop == null) { "Capture arm overtook pending Stop durability" }
-                RecordingIncidentStore.recordCaptureStarted(this, continuousRestart = continuousRestart)
+                armedCaptureSession = RecordingIncidentStore.recordCaptureStarted(this, continuousRestart)
+                awaitingCaptureReleaseGeneration = audioRecordReleaseGeneration.get()
                 true
             } catch (error: Exception) {
                 pauseListeningAfterPersistenceFailure("arm capture incident tracking", error)
@@ -2019,6 +2025,10 @@ open class ReverbService : Service() {
             if (owner != null && !captureInputOwnerMatches(owner)) return false
             lastDurabilitySyncRequestNanos = 0L
             val record = audioRecord
+            if (awaitingCaptureReleaseGeneration != Long.MIN_VALUE) {
+                armedCaptureSession?.let(RecordingIncidentStore::discardUnadmittedCapture)
+                awaitingCaptureReleaseGeneration = Long.MIN_VALUE
+            }
             audioRecord = null
             // A failed native creation/start never transfers this allocation to CaptureIo.
             // Retire it with its input attempt; installed PCM remains owned by the drained input.
@@ -3461,6 +3471,11 @@ open class ReverbService : Service() {
                     appendCapturedAudio(bytes, offset, count, slot,
                         recordingTimestampWithOffset(batchStartedAtMillis, sourceFrame * 1000L / rate), silenceGateDrainOwner)
                 }
+                override fun audioRun(bytes: ByteArray, offset: Int, count: Int, sourceFrame: Long, hopFrames: Int) {
+                    if (!captureGateOutputMayCommit(epoch, persistenceInterruptedCaptureEpoch)) return
+                    val timestamps = KeptHopTimestamps(batchStartedAtMillis, sourceFrame, rate, hopFrames)
+                    appendCapturedAudio(bytes, offset, count, slot, timestamps.atFrame(0), silenceGateDrainOwner, timestamps)
+                }
                 override fun gap() {
                     if (!captureGateOutputMayCommit(epoch, persistenceInterruptedCaptureEpoch)) return
                     forEachAudioStore(PersistentAudioChunkStore::sealCaptureGap)
@@ -3472,7 +3487,7 @@ open class ReverbService : Service() {
         // first read's stale command version after a harmless destination change.
         silenceGateDrainOwner = drainOwner
         silenceGateDelivering = true
-        try { requireNotNull(silenceGateStream).accept(bytes, offset, count) }
+        try { requireNotNull(silenceGateStream).accept(bytes, offset, count, coalesceKeptHops = true) }
         finally { silenceGateDelivering = false }
         if (state != STATE_LISTENING || epoch != captureContinuityGeneration.get()) finishSilenceGate()
     }
@@ -3612,17 +3627,19 @@ open class ReverbService : Service() {
         captureBufferSlot: BufferSlot = activeBufferSlot,
         startedAtMillis: Long? = null,
         drainOwner: AcceptedCaptureReadOwner? = null,
+        keptHopTimestamps: KeptHopTimestamps? = null,
     ) {
+        val chunkStartMillisAtFrame = keptHopTimestamps?.let { it::atFrame }
         when (captureBufferSlot) {
             BufferSlot.LOOPING -> {
                 if (loopingBufferEnabled) {
-                    appendToCaptureSink(array, offset, count, BufferSlot.LOOPING, startedAtMillis)
+                    appendToCaptureSink(array, offset, count, BufferSlot.LOOPING, startedAtMillis, chunkStartMillisAtFrame)
                 }
             }
 
             BufferSlot.ONE_SHOT -> {
                 val writtenToOneShot = if (oneShotBufferEnabled && !oneShotAudioChunkStore.isFull()) {
-                    appendToCaptureSink(array, offset, count, BufferSlot.ONE_SHOT, startedAtMillis)
+                    appendToCaptureSink(array, offset, count, BufferSlot.ONE_SHOT, startedAtMillis, chunkStartMillisAtFrame)
                 } else {
                     0
                 }
@@ -3638,9 +3655,14 @@ open class ReverbService : Service() {
                         val overflow = count - writtenToOneShot
                         if (overflow > 0 && (oneShotOverflowMayUseLoopingFallback(alreadyOnLooping, handoffAccepted) ||
                                 queuedOverflowMayDrainWithoutHandoff(drainOwner))) {
+                            val firstOverflowFrame = writtenToOneShot / (channelMode.channelCount * pcmSampleFormat.bytesPerSample)
+                            val overflowChunkStart = keptHopTimestamps?.let { timestamps ->
+                                { frame: Int -> timestamps.atOverflowFrame(firstOverflowFrame, frame) }
+                            }
+                            val overflowStartMillis = keptHopTimestamps?.atFrame(firstOverflowFrame)
+                                ?: startedAtMillis?.let { recordingTimestampWithOffset(it, firstOverflowFrame * 1000L / sampleRate) }
                             appendToCaptureSink(array, offset + writtenToOneShot, overflow, BufferSlot.LOOPING,
-                                startedAtMillis?.let { recordingTimestampWithOffset(it,
-                                    writtenToOneShot / (channelMode.channelCount * pcmSampleFormat.bytesPerSample) * 1000L / sampleRate) })
+                                overflowStartMillis, overflowChunkStart)
                         }
                     } else {
                         publishQuickTileSnapshotOnAudioThread(refreshTiles = true)
@@ -3670,6 +3692,7 @@ open class ReverbService : Service() {
         count: Int,
         slot: BufferSlot,
         startedAtMillis: Long?,
+        chunkStartMillisAtFrame: ((Int) -> Long)? = null,
     ): Int {
         check(audioHandler.looper == Looper.myLooper())
         if (count <= 0) return 0
@@ -3683,7 +3706,7 @@ open class ReverbService : Service() {
             chunkStore(slot).sealActiveChunk()
             lastCaptureSinkSlot = slot
         }
-        val written = chunkStore(slot).appendCapturedAt(array, offset, count, startedAtMillis)
+        val written = chunkStore(slot).appendCapturedAt(array, offset, count, startedAtMillis, chunkStartMillisAtFrame)
         if (sinkChanged) scheduleRetentionMaintenanceIfNeeded()
         return written
     }
@@ -3753,25 +3776,28 @@ open class ReverbService : Service() {
             captureContinuityGeneration.incrementAndGet()
             state = STATE_PAUSED
             publishCaptureIngress()
-            automaticCaptureStopDisposition(committed, incidentStopPersisted)
+            val result = automaticCaptureStopDisposition(committed, incidentStopPersisted)
+            val description = when (result) {
+                AutomaticCaptureStopDisposition.KNOWN_STOP -> null
+                AutomaticCaptureStopDisposition.PERSISTENCE_FAILURE -> "Capture stopped because automatic-stop persistence failed"
+                AutomaticCaptureStopDisposition.INCIDENT_STATE_FAILURE -> "Capture stopped because known-Stop incident state could not be persisted"
+            }
+            if (description != null) armedCaptureSession?.let { token ->
+                RecordingIncidentStore.recordAutomaticStopFailure(this, token, description)
+                RecordingIncidentStore.discardUnadmittedCapture(token)
+                armedCaptureSession = null
+            }
+            result
         }
         when (disposition) {
             AutomaticCaptureStopDisposition.KNOWN_STOP -> Unit
             AutomaticCaptureStopDisposition.PERSISTENCE_FAILURE -> {
                 val error = IOException("Unable to persist automatic capture stop")
                 reportTerminalCaptureStoreFailure("persist automatic stop", error)
-                RecordingIncidentStore.recordCaptureServiceStopped(
-                    this,
-                    "Capture stopped because automatic-stop persistence failed",
-                )
             }
             AutomaticCaptureStopDisposition.INCIDENT_STATE_FAILURE -> {
                 val error = IOException("Unable to persist automatic known-Stop incident state")
                 reportTerminalCaptureStoreFailure("persist automatic Stop incident state", error)
-                RecordingIncidentStore.recordCaptureServiceStopped(
-                    this,
-                    "Capture stopped because known-Stop incident state could not be persisted",
-                )
             }
         }
         postCaptureWork(pauseInput = true) post@ {
@@ -4050,6 +4076,13 @@ open class ReverbService : Service() {
             id.continuityGeneration, input.releaseGeneration, id.commandGeneration, queued = true)
         val startedMillis = captureBatchStartedAtMillis(packet.endedAtMillis, packet.byteCount,
             id.frameBytes, id.sampleRate)
+        if (awaitingCaptureReleaseGeneration == input.releaseGeneration) {
+            awaitingCaptureReleaseGeneration = Long.MIN_VALUE
+            armedCaptureSession?.let { token ->
+                val armedAt = requireNotNull(token.marker).armedAtMillis
+                RecordingIncidentStore.recordCaptureAdmitted(this, token, startedMillis.coerceAtLeast(armedAt))
+            }
+        }
         processCapturedAudio(bytes, 0, packet.byteCount, slot, id.continuityGeneration,
             packet.endedAtNanos, packet.captureStartedAtNanos, owner, startedMillis)
         if (bootCaptureConfirmation != null || BootResumeNotification.needsCaptureProof) confirmBootCaptureFromPacket(input, packet)

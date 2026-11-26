@@ -7,6 +7,8 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.os.Process
 import android.provider.Settings
+import android.system.ErrnoException
+import android.system.OsConstants
 import app.smallthingz.reverb.incidentcontextisolated.IncidentContextSandboxMarker
 import java.io.File
 import java.io.IOException
@@ -16,6 +18,8 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.*
 import org.junit.Before
@@ -535,6 +539,112 @@ class IncidentContextRecoveryV2Test {
         assertEquals(setOf("recording-incidents.bin", "recording-incident-pending.bin"), root.list()!!.toSet())
     }
 
+    @Test fun settledCaptureLaneDoesNotRepeatAbsenceBarrierDuringStoppedOnlyRetries() = fixture { context, root ->
+        val before = JournalHostIoShadow.directorySyncAttempts
+        var result = runCatching { RecordingIncidentStore.recoverPriorSessionIfNeeded(context) }
+        assertFalse(result.getOrThrow())
+        assertEquals(before + 1, JournalHostIoShadow.directorySyncAttempts)
+        // Exercise all six possible passes while the independent stopped-app lane keeps retrying.
+        repeat(6) {
+            result = RecordingIncidentStore.retryStartupCaptureRecovery(context, result)
+            assertFalse(result.getOrThrow())
+            assertEquals(before + 1, JournalHostIoShadow.directorySyncAttempts)
+        }
+        assertTrue(root.list()!!.isEmpty())
+    }
+
+    @Test fun failedInitialCaptureProofRetriesMarkerBeforeSettlingItsQueue() = fixture { context, root ->
+        seed(root)
+        val barriers = JournalHostIoShadow.directorySyncAttempts
+        JournalHostIoShadow.failDirectorySyncs = 1
+        var result = runCatching { RecordingIncidentStore.recoverPriorSessionIfNeeded(context) }
+        val failure = result.exceptionOrNull()
+        // Os.fsync propagates its exact ErrnoException; the directory barrier does not wrap it.
+        assertTrue("Expected injected fsync EIO, got $failure", failure is ErrnoException)
+        val errnoFailure = failure as ErrnoException
+        assertTrue(errnoFailure.message.orEmpty().startsWith("fsync failed:"))
+        assertEquals(OsConstants.EIO, errnoFailure.errno)
+        assertEquals(0, JournalHostIoShadow.failDirectorySyncs)
+        assertEquals(barriers + 1, JournalHostIoShadow.directorySyncAttempts)
+        assertTrue(File(root, "recording-session.bin").exists())
+        assertArrayEquals(priorSession, File(root, "recording-session.bin").readBytes())
+        result = RecordingIncidentStore.retryStartupCaptureRecovery(context, result)
+        assertTrue(result.getOrThrow())
+        assertFalse(File(root, "recording-session.bin").exists())
+        assertTrue(File(root, "recording-incident-pending.bin").exists())
+        assertEquals(1, wireRows(File(root, "recording-incidents.bin").readBytes()).count { wirePid(it) == 41 })
+    }
+
+    @Test fun startupRetryEnrichesLateUserRequestedExitWhileHistoryObserverStaysAlive() = fixture { context, root ->
+        seed(root)
+        var captureRecovery = runCatching { RecordingIncidentStore.recoverPriorSessionIfNeeded(context) }
+        assertTrue(captureRecovery.getOrThrow())
+        val pendingFile = File(root, "recording-incident-pending.bin")
+        val pendingBefore = pendingFile.readBytes()
+        runBlocking {
+            withTimeout(5_000L) {
+                // This is Home's retained presentation owner; never reopen or restart its collector.
+                val controller = IncidentHistoryController(context)
+                val states = kotlinx.coroutines.channels.Channel<IncidentHistoryUiState>(
+                    kotlinx.coroutines.channels.Channel.UNLIMITED)
+                val observer = launch { controller.observeHistory { states.trySend(it).getOrThrow() } }
+                suspend fun readyCapture(reason: Int): RecordingIncident {
+                    while (true) {
+                        val next = states.receive()
+                        if (next.status != IncidentHistoryLoadStatus.READY) continue
+                        val captures = next.history.rows.map { it.incident }.filter {
+                            it.pid == 41 && it.captureArmedAtMillis == 100L
+                        }
+                        if (captures.size == 1 && captures.single().exitReason == reason) return captures.single()
+                    }
+                }
+                try {
+                    val provisional = readyCapture(ApplicationExitInfo.REASON_UNKNOWN)
+                    val identity = recordingIncidentPresentationKey(provisional)
+                    val revision = RecordingIncidentStore.historyRevision.value
+                    // Missing ExitInfo keeps only the capture lane pending, without revision churn.
+                    captureRecovery = RecordingIncidentStore.retryStartupCaptureRecovery(context, captureRecovery)
+                    assertTrue(captureRecovery.getOrThrow())
+                    assertFalse(RecordingIncidentStore.recoverUnexpectedProcessExitAndMarkCurrent(context))
+                    assertEquals(revision, RecordingIncidentStore.historyRevision.value)
+                    assertArrayEquals(pendingBefore, pendingFile.readBytes())
+
+                    val manager = context.getSystemService(ActivityManager::class.java)
+                    Shadow.extract<ShadowActivityManager>(manager).addApplicationExitInfo(
+                        ShadowActivityManager.ApplicationExitInfoBuilder.newBuilder()
+                            .setPid(41).setProcessName(context.packageName)
+                            .setReason(ApplicationExitInfo.REASON_USER_REQUESTED).setTimestamp(150L)
+                            .setStatus(0).setImportance(100).setPss(101L).setRss(102L)
+                            .setDescription("late-force-stop").build())
+                    // The exact entry called by the existing startup retry loop publishes the revision.
+                    // No capture start, acknowledgement, deletion, panel reopen or manual history read.
+                    captureRecovery = RecordingIncidentStore.retryStartupCaptureRecovery(context, captureRecovery)
+                    assertFalse(captureRecovery.getOrThrow())
+                    assertFalse(RecordingIncidentStore.recoverUnexpectedProcessExitAndMarkCurrent(context))
+                    val enriched = readyCapture(ApplicationExitInfo.REASON_USER_REQUESTED)
+                    assertTrue(observer.isActive)
+                    assertTrue(RecordingIncidentStore.historyRevision.value > revision)
+                    assertEquals(identity, recordingIncidentPresentationKey(enriched))
+                    assertEquals("late-force-stop", enriched.description)
+                    assertEquals(0L, enriched.resumedAtMillis)
+                    assertEquals(1, controller.state.history.rows.count { it.incident.pid == 41 })
+                    assertFalse(pendingFile.exists())
+                    assertFalse(File(root, "recording-session.bin").exists())
+                    val settledRevision = RecordingIncidentStore.historyRevision.value
+                    val settledHistory = File(root, "recording-incidents.bin").readBytes()
+                    captureRecovery = RecordingIncidentStore.retryStartupCaptureRecovery(context, captureRecovery)
+                    assertFalse(captureRecovery.getOrThrow())
+                    assertEquals(settledRevision, RecordingIncidentStore.historyRevision.value)
+                    assertArrayEquals(settledHistory, File(root, "recording-incidents.bin").readBytes())
+                    assertArrayEquals(sentinel, wireRows(settledHistory).single { wirePid(it) == 99 })
+                } finally {
+                    observer.cancelAndJoin()
+                    states.close()
+                }
+            }
+        }
+    }
+
     @Test fun delayedExitEnrichesOneExactSessionAndRetiresPendingOnlyAfterHistoryPublication() = fixture { context, root ->
         seed(root)
         RecordingIncidentStore.recoverPriorSessionIfNeeded(context)
@@ -644,6 +754,174 @@ class IncidentContextRecoveryV2Test {
         val completed = File(root, "recording-incidents.bin").readBytes()
         RecordingIncidentStore.recoverPriorSessionIfNeeded(context)
         assertArrayEquals(completed, File(root, "recording-incidents.bin").readBytes())
+    }
+
+    @Test fun failedArmKeepsLateCrashOpenUntilRetryIsAdmitted() = fixture { context, root ->
+        seed(root)
+        RecordingIncidentStore.recoverPriorSessionIfNeeded(context)
+        val pending = File(root, "recording-incident-pending.bin")
+        val history = File(root, "recording-incidents.bin")
+        val openPending = pending.readBytes()
+        val openHistory = history.readBytes()
+        val blocker = File(root, "recording-session.bin.new")
+        val failingArm = object : ContextWrapper(context) {
+            override fun getApplicationContext(): Context = this
+            override fun getPackageManager(): android.content.pm.PackageManager {
+                // Marker construction samples the package after the prior-session recovery barrier.
+                check(blocker.mkdir())
+                return super.getPackageManager()
+            }
+        }
+        assertThrows(IOException::class.java) { RecordingIncidentStore.recordCaptureStarted(failingArm) }
+        assertTrue(blocker.delete())
+        assertFalse(File(root, "recording-session.bin").exists())
+        assertArrayEquals(openPending, pending.readBytes())
+        assertArrayEquals(openHistory, history.readBytes())
+
+        addLateCrash(context)
+        RecordingIncidentStore.recoverPriorSessionIfNeeded(context)
+        assertFalse(pending.exists())
+        assertArrayEquals(expectedEnrichedHistory, history.readBytes())
+        val token = RecordingIncidentStore.recordCaptureStarted(context)
+        assertArrayEquals(expectedEnrichedHistory, history.readBytes())
+        val admittedAt = laterCaptureTime(checkNotNull(token.marker).armedAtMillis)
+        RecordingIncidentStore.recordCaptureAdmitted(context, token, admittedAt)
+        awaitHistoryWriters()
+        val crash = RecordingIncidentStore.readIncidents(context).single { it.pid == 41 }
+        assertEquals(ApplicationExitInfo.REASON_CRASH, crash.exitReason)
+        assertEquals(150L, crash.occurredAtMillis)
+        assertEquals(admittedAt, crash.resumedAtMillis)
+    }
+
+    @Test fun lateCrashPreservesAdmissionTimeRecordedWhileEvidenceWasPending() = fixture { context, root ->
+        seed(root)
+        val token = RecordingIncidentStore.recordCaptureStarted(context)
+        val pending = File(root, "recording-incident-pending.bin")
+        assertEquals(0L, ByteBuffer.wrap(pending.readBytes()).getLong(48))
+        val provisional = RecordingIncidentStore.readIncidents(context).single { it.pid == 41 }
+        assertEquals(0L, provisional.resumedAtMillis)
+
+        val admittedAt = laterCaptureTime(checkNotNull(token.marker).armedAtMillis)
+        val history = File(root, "recording-incidents.bin")
+        fun historyResumeTime(): Long {
+            val row = wireRows(history.readBytes()).single { wirePid(it) == 41 }
+            return ByteBuffer.wrap(row).getLong(9)
+        }
+        val admission = java.util.concurrent.FutureTask<Unit> {
+            RecordingIncidentStore.recordCaptureAdmitted(context, token, admittedAt)
+        }
+        val caller = Thread(admission, "capture-admission-test").apply { isDaemon = true }
+        try {
+            synchronized(RecordingIncidentStore) {
+                caller.start()
+                admission.get(5, TimeUnit.SECONDS)
+                assertEquals(0L, ByteBuffer.wrap(pending.readBytes()).getLong(48))
+                assertEquals(0L, historyResumeTime())
+            }
+        } finally {
+            // A caller blocked on the store can finish once the monitor is released, even on timeout.
+            caller.join(5_000)
+            assertFalse("Admission caller did not finish", caller.isAlive)
+            awaitHistoryWriters()
+        }
+        assertEquals(admittedAt, ByteBuffer.wrap(pending.readBytes()).getLong(48))
+        assertEquals(admittedAt, historyResumeTime())
+        addLateCrash(context)
+        val crash = RecordingIncidentStore.readIncidents(context).single { it.pid == 41 }
+        assertFalse(pending.exists())
+        assertEquals(provisional.captureArmedAtMillis, crash.captureArmedAtMillis)
+        assertEquals(ApplicationExitInfo.REASON_CRASH, crash.exitReason)
+        assertEquals(admittedAt, crash.resumedAtMillis)
+    }
+
+    @Test fun historyReadRetriesFailedAdmissionWriteWithOriginalTimestamp() = fixture { context, root ->
+        seed(root)
+        val token = RecordingIncidentStore.recordCaptureStarted(context)
+        val admittedAt = laterCaptureTime(checkNotNull(token.marker).armedAtMillis)
+        val writeAt = laterCaptureTime(admittedAt)
+        JournalHostIoShadow.failDirectorySyncs = 1
+        RecordingIncidentStore.recordCaptureAdmitted(context, token, admittedAt)
+        awaitHistoryWriters()
+        assertEquals(0, JournalHostIoShadow.failDirectorySyncs)
+
+        laterCaptureTime(writeAt)
+        val retried = RecordingIncidentStore.readIncidents(context).single { it.pid == 41 }
+        assertEquals(admittedAt, retried.resumedAtMillis)
+        val pending = File(root, "recording-incident-pending.bin")
+        assertEquals(admittedAt, ByteBuffer.wrap(pending.readBytes()).getLong(48))
+        val rows = wireRows(File(root, "recording-incidents.bin").readBytes())
+        assertEquals(2, rows.size)
+        assertArrayEquals(sentinel, rows.single { wirePid(it) == 99 })
+        assertEquals(admittedAt, ByteBuffer.wrap(rows.single { wirePid(it) == 41 }).getLong(9))
+    }
+
+    @Test fun visibleHistoryResumeRetriesFailedReplayBarrierWithOriginalTimestamp() = fixture { context, root ->
+        seed(root)
+        RecordingIncidentStore.recoverPriorSessionIfNeeded(context)
+        val pending = File(root, "recording-incident-pending.bin")
+        assertTrue(pending.isFile)
+        addLateCrash(context)
+        RecordingIncidentStore.recoverPriorSessionIfNeeded(context)
+        assertFalse(pending.exists())
+
+        val token = RecordingIncidentStore.recordCaptureStarted(context)
+        val history = File(root, "recording-incidents.bin")
+        assertArrayEquals(expectedEnrichedHistory, history.readBytes())
+        val admittedAt = laterCaptureTime(checkNotNull(token.marker).armedAtMillis)
+        JournalHostIoShadow.failDirectorySyncs = 1
+        RecordingIncidentStore.recordCaptureAdmitted(context, token, admittedAt)
+        awaitHistoryWriters()
+        assertEquals(0, JournalHostIoShadow.failDirectorySyncs)
+        val visible = history.readBytes()
+        val rows = wireRows(visible)
+        assertEquals(2, rows.size)
+        assertEquals(admittedAt, ByteBuffer.wrap(rows.single { wirePid(it) == 41 }).getLong(9))
+        assertArrayEquals(sentinel, rows.single { wirePid(it) == 99 })
+
+        laterCaptureTime(admittedAt)
+        JournalHostIoShadow.failDirectorySyncs = 1
+        val replayFailure = assertThrows(IOException::class.java) { RecordingIncidentStore.readIncidents(context) }
+        // Other recovery paths also sync this directory. This failure must belong to history publication.
+        assertTrue(replayFailure.message.orEmpty().contains(history.path))
+        assertEquals(0, JournalHostIoShadow.failDirectorySyncs)
+        assertArrayEquals(visible, history.readBytes())
+
+        val crash = RecordingIncidentStore.readIncidents(context).single { it.pid == 41 }
+        assertEquals(ApplicationExitInfo.REASON_CRASH, crash.exitReason)
+        assertEquals(admittedAt, crash.resumedAtMillis)
+        assertArrayEquals(visible, history.readBytes())
+        assertFalse(pending.exists())
+    }
+
+    @Test fun supersededArmCannotResumePendingOutageForDetachedInput() = fixture { context, root ->
+        seed(root)
+        val detached = RecordingIncidentStore.recordCaptureStarted(context)
+        val current = RecordingIncidentStore.recordCaptureStarted(context)
+        val pending = File(root, "recording-incident-pending.bin")
+        val history = File(root, "recording-incidents.bin")
+        val openPending = pending.readBytes()
+        val openHistory = history.readBytes()
+        val staleAt = laterCaptureTime(checkNotNull(current.marker).armedAtMillis)
+
+        RecordingIncidentStore.recordCaptureAdmitted(context, detached, staleAt)
+        awaitHistoryWriters()
+        assertArrayEquals(openPending, pending.readBytes())
+        assertArrayEquals(openHistory, history.readBytes())
+        val stillOpen = RecordingIncidentStore.readIncidents(context).single { it.pid == 41 }
+        assertEquals(0L, stillOpen.resumedAtMillis)
+
+        val admittedAt = laterCaptureTime(staleAt)
+        RecordingIncidentStore.recordCaptureAdmitted(context, current, admittedAt)
+        awaitHistoryWriters()
+        assertEquals(admittedAt, ByteBuffer.wrap(pending.readBytes()).getLong(48))
+        val resumed = wireRows(history.readBytes()).single { wirePid(it) == 41 }
+        assertEquals(admittedAt, ByteBuffer.wrap(resumed).getLong(9))
+    }
+
+    private fun laterCaptureTime(previous: Long): Long {
+        org.robolectric.shadows.ShadowSystemClock.advanceBy(1, TimeUnit.SECONDS)
+        awaitCondition { System.currentTimeMillis() > previous }
+        return System.currentTimeMillis()
     }
 
     private fun seed(root: File) {
