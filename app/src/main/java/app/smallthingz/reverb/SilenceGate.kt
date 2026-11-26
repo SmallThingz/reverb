@@ -166,7 +166,9 @@ internal class SilenceSpectrum(val sampleRate: Int, val channels: Int, val forma
         }
         val scale = 4.0 / (gain * gain)
         repeat(channels) { channel ->
-            real.fill(0.0); imaginary.fill(0.0)
+            // The windowing loop replaces all real entries for a full window.
+            if (frames < size) real.fill(0.0)
+            imaginary.fill(0.0)
             var mean = 0.0
             var firstSum = 0.0; var firstSquared = 0.0; var lastSquared = 0.0
             val firstFrames = frames / 2
@@ -182,7 +184,7 @@ internal class SilenceSpectrum(val sampleRate: Int, val channels: Int, val forma
                     if (i < firstFrames) { firstSum += safe; firstSquared += safe * safe }
                     else lastSquared += safe * safe
                 }
-                real[pad + i] = safe; mean += safe
+                mean += safe
             }
             if (observeBoundaries) {
                 val amplitude = (maximum - minimum) / 2
@@ -198,7 +200,7 @@ internal class SilenceSpectrum(val sampleRate: Int, val channels: Int, val forma
                     (lastSquared / lastFrames - 2 * dc * lastSum / lastFrames + dc * dc).coerceAtLeast(0.0)
             }
             mean /= frames
-            for (i in 0 until frames) real[pad + i] = (real[pad + i] - mean) * analysisWindow[pad + i]
+            for (i in 0 until frames) real[pad + i] = (samples[i] - mean) * analysisWindow[pad + i]
             fft()
             for (i in 0 until binCount) {
                 // DC and Nyquist have no mirrored negative-frequency partner to fold in.

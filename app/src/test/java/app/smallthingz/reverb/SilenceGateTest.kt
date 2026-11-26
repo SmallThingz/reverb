@@ -397,6 +397,26 @@ class SilenceGateTest {
         }
     }
 
+    @Test fun reusedFftScratchKeepsFullAndPartialSilentWindowsAtTheNoiseFloor() {
+        val spectrum = SilenceSpectrum(48_000, 2, PcmSampleFormat.PCM_FLOAT)
+        val impulse = ByteBuffer.allocate(spectrum.size * spectrum.frameBytes).order(ByteOrder.nativeOrder())
+        // Zero mean per channel. The off-centre impulse leaves both FFT arrays populated.
+        val offset = (3 * spectrum.size / 8) * spectrum.frameBytes
+        impulse.putFloat(0, -.75f)
+        impulse.putFloat(4, .5f)
+        impulse.putFloat(offset, .75f)
+        impulse.putFloat(offset + 4, -.5f)
+        val silence = ByteArray(impulse.capacity())
+        val gate = flat(-90)
+        for (frames in listOf(spectrum.size, spectrum.size - 1, spectrum.hop, spectrum.hop - 1, 1)) {
+            spectrum.analyze(impulse.array(), spectrum.size)
+            assertTrue(spectrum.exceeds(gate))
+            spectrum.analyze(silence, frames)
+            assertFalse("frames=$frames", spectrum.exceeds(gate))
+            assertTrue("frames=$frames", spectrum.graph().all { it == -120f })
+        }
+    }
+
     @Test fun hannPowerMatchesOrderedSumAtTheExactThresholdAcrossRefills() {
         for (rate in listOf(12_000, 24_000, 48_000, 96_000, 192_000)) {
             val spectrum = SilenceSpectrum(rate, 1, PcmSampleFormat.PCM_FLOAT)
