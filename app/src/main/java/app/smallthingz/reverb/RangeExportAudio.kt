@@ -1741,11 +1741,16 @@ internal class TimelineAudioPreviewController(
                 }
                 val activeWindow = checkNotNull(window)
                 val magnitude = abs(rate)
-                val continuousShift = if (magnitude != 1f && continuousGrains) {
-                    // One grain incurs only this much mismatch between source motion and
-                    // audible pitch. Search locally and leave nominal transport unmodified.
+                val nominalEdge = if (rate >= 0f) startSeconds else endSeconds
+                val retainedShift = grainTailAnchorSeconds?.let { tailEdge ->
+                    val nominalFrame = ((nominalEdge - activeWindow.startSeconds) * shuttleSampleRate).roundToInt()
+                    abs((tailEdge - activeWindow.startSeconds) * shuttleSampleRate - nominalFrame)
+                } ?: 0.0
+                val continuousShift = if (continuousGrains && (magnitude != 1f || retainedShift >= 0.5)) {
+                    // A tighter hop at a new rate must still be able to reach the phase
+                    // already in the unsubmitted tail. The search keeps its 4 ms hard cap.
                     val slip = abs(magnitude - shuttleAudibleSpeed(rate)) * SHUTTLE_SOURCE_HOP_SECONDS * shuttleSampleRate
-                    ceil(slip * 2).toInt() + 2
+                    ceil(maxOf(slip * 2, retainedShift)).toInt() + 2
                 } else null
                 val measure = budget.phaseAlignmentEnabled && (magnitude > 1f || continuousShift != null) &&
                     previousTail.isNotEmpty() && startSeconds > lower && endSeconds < upper

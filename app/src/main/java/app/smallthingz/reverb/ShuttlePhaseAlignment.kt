@@ -23,8 +23,9 @@ internal fun alignedShuttleStartFrame(
     val windowFrames = window.size / frameBytes
     require(nominalStart >= 0 && grainFrames > 0 && nominalStart.toLong() + grainFrames <= windowFrames)
     val magnitude = abs(signedRate)
-    if (!allowAlignment || previousTail.isEmpty() || !signedRate.isFinite() || magnitude == 1f ||
-        (magnitude < 1f && maximumContinuousShiftFrames == null) || (sampleRate != 48000 && sampleRate != 96000) ||
+    if (!allowAlignment || previousTail.isEmpty() || !signedRate.isFinite() ||
+        (magnitude <= 1f && maximumContinuousShiftFrames == null) ||
+        (sampleRate != 44_100 && sampleRate != 48_000 && sampleRate != 96_000) ||
         selectedFirstFrame < 0 || selectedEndFrame > windowFrames ||
         nominalStart < selectedFirstFrame || nominalStart.toLong() + grainFrames > selectedEndFrame
     ) return nominalStart
@@ -79,7 +80,7 @@ internal fun alignedShuttleStartFrame(
     }
     var best = nominalStart
     var bestScore = minOf(baseLeft, baseRight)
-    val coarseStride = sampleRate / 12000
+    val coarseStride = (sampleRate / 12_000.0).roundToInt()
     for (pass in 0..1) {
         val center = best
         val low = if (pass == 0) first else maxOf(first, center - coarseStride + 1)
