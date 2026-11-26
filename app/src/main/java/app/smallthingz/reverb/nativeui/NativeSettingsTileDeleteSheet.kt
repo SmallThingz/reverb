@@ -6,8 +6,10 @@ import smallthingz.ui.input.phase.NativeClickPhaseNode
 import smallthingz.ui.input.phase.NativeViewPointerHitLayout
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewTreeObserver
 import androidx.lifecycle.findViewTreeLifecycleOwner
 import app.smallthingz.reverb.*
+import smallthingz.ui.components.NativeActionSheet
 
 /** One real ReverbActionSheet route per current Settings tile-delete target. */
 internal class NativeSettingsTileDeleteSheet(
@@ -16,8 +18,9 @@ internal class NativeSettingsTileDeleteSheet(
 ):AutoCloseable {
     private var owner:NativeQuickSettingsTilesOwner?=null
     private var target:QuickSettingsTileDeleteTarget?=null
-    private var dialog:smallthingz.ui.components.NativeActionSheet?=null
+    private var dialog:NativeActionSheet?=null
     private var content:QuickTileDeleteContent?=null
+    private var focusLease:AutoCloseable?=null
     private var textLease:AutoCloseable?=null
     private var actionsLease:AutoCloseable?=null
     private val clicks=ArrayList<NativeClickPhaseNode>()
@@ -62,15 +65,45 @@ internal class NativeSettingsTileDeleteSheet(
                     clip={point->(view as?NativePointerLayerShape)?.containsPointerLayer(point.x,point.y)?:true})
             }
             sheet.setContent(body.body,body.actions,listOf(hit(body.body),hit(body.actions)),scrollable=true)
+            focusLease=observeSheetFocus(sheet,body)
             sheet.show()
         } catch(failure:Throwable) {
             try {retire()}catch(cleanup:Throwable) {if(cleanup!==failure)failure.addSuppressed(cleanup)}
             throw failure
         }
     }
+
+    private fun observeSheetFocus(sheet: NativeActionSheet, body: QuickTileDeleteContent): AutoCloseable {
+        val decor = checkNotNull(sheet.window).decorView
+        val root = sheet.contentContext.inputRoot
+        var tree: ViewTreeObserver? = null
+        fun refresh() {
+            if (dialog === sheet && content === body) body.bind(environment())
+        }
+        val focus = ViewTreeObserver.OnWindowFocusChangeListener { refresh() }
+        fun removeFocusListener() {
+            tree?.takeIf { it.isAlive }?.removeOnWindowFocusChangeListener(focus)
+            tree = null
+        }
+        val attachment = object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(view: View) {
+                tree = decor.viewTreeObserver.also { it.addOnWindowFocusChangeListener(focus) }
+                refresh()
+            }
+
+            override fun onViewDetachedFromWindow(view: View) = removeFocusListener()
+        }
+        root.addOnAttachStateChangeListener(attachment)
+        return AutoCloseable {
+            root.removeOnAttachStateChangeListener(attachment)
+            removeFocusListener()
+        }
+    }
+
     private fun retire() {
         val oldDialog=dialog;dialog=null
         val oldContent=content;content=null
+        val oldFocus=focusLease;focusLease=null
         val oldText=textLease;textLease=null
         val oldActions=actionsLease;actionsLease=null
         owner=null;target=null
@@ -78,6 +111,7 @@ internal class NativeSettingsTileDeleteSheet(
         fun release(action:()->Unit) {try{action()}catch(error:Throwable){
             if(failure==null)failure=error else if(failure!==error)failure!!.addSuppressed(error)
         }}
+        release {oldFocus?.close()}
         // Window removal cancels its actual retained pointer paths before the controls are disposed.
         release {oldDialog?.dismiss()}
         clicks.forEach {release(it::cancel)};clicks.clear()

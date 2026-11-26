@@ -3,6 +3,7 @@ package app.smallthingz.reverb.nativeui
 import android.app.Activity
 import android.app.Application
 import android.graphics.Rect
+import android.os.Looper
 import android.view.View
 import android.widget.FrameLayout
 import androidx.lifecycle.Lifecycle
@@ -12,15 +13,20 @@ import androidx.lifecycle.setViewTreeLifecycleOwner
 import app.smallthingz.reverb.*
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.annotation.LooperMode
+import org.robolectric.shadow.api.Shadow
+import org.robolectric.shadows.ShadowViewRootImpl
+import org.robolectric.util.ReflectionHelpers
 import smallthingz.ui.components.NativeActionSheet
 import smallthingz.ui.components.NativeColorScheme
 import smallthingz.ui.components.NativeMaterialButtonView
@@ -30,6 +36,9 @@ import smallthingz.ui.scroll.NativeVerticalPhaseBinding
 import smallthingz.ui.scroll.NativeVerticalViewport
 import smallthingz.ui.text.font.createFontFamilyResolver
 import smallthingz.ui.unit.Density
+import java.time.Duration
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
 import kotlin.coroutines.CoroutineContext
 
 /** Real app caller wiring: no copied sheet construction or mutation admission policy. */
@@ -97,6 +106,80 @@ class NativeSettingsTileDeleteScrollTest {
             caller.close()
             owner.close()
             parked.cancel()
+            controller.pause().stop().destroy()
+        }
+    }
+
+    @Test fun deleteFollowsItsOwnWindowFocusWithoutAnOwnerRebind() {
+        val controller = Robolectric.buildActivity(Activity::class.java).setup().visible()
+        val activity = controller.get()
+        val lifecycleOwner = object : LifecycleOwner {
+            override val lifecycle = LifecycleRegistry(this).apply { currentState = Lifecycle.State.RESUMED }
+        }
+        val root = FrameLayout(activity).apply { setViewTreeLifecycleOwner(lifecycleOwner) }
+        activity.setContentView(root)
+        val environment = ReverbEnvironment(Density(1f, 1f), createFontFamilyResolver(activity), NativeColorScheme.fallback(false))
+        val continuations = LinkedBlockingQueue<Runnable>()
+        val scope = CoroutineScope(object : CoroutineDispatcher() {
+            override fun dispatch(context: CoroutineContext, block: Runnable) { continuations.add(block) }
+        })
+        val option = QuickSaveTileOption(0, "b".repeat(32))
+        val target = QuickSettingsTileDeleteTarget(option, 7L)
+        val editor = QuickSettingsTilesEditorState().apply { deleting = target }
+        val owner = NativeQuickSettingsTilesOwner(activity, lifecycleOwner.lifecycle, scope, editor,
+            NativeQuickTilesInputs(true, true, true, 7L), { 7L }, { 7L }, { 7L }, { 7L })
+        val caller = NativeSettingsTileDeleteSheet(root) { environment }
+        try {
+            val prefs = getRecorderPreferences(activity)
+            assertTrue(prefs.edit().putString(PrefKey.QUICK_SAVE_TILE_OPTIONS, encodeQuickSaveTileOptions(listOf(option))).commit())
+            assertEquals(listOf(option), QuickSaveTileOptions.load(activity))
+
+            // Only the dialog focus events can rebind Delete after this initial bind.
+            caller.bind(owner, target)
+            val dialog = field(caller, "dialog") as NativeActionSheet
+            val content = field(caller, "content") as QuickTileDeleteContent
+            val delete = descendants(content.actions).filterIsInstance<NativeMaterialButtonView>().single {
+                it.label.getText() == activity.getString(R.string.delete_recording)
+            }
+            @Suppress("UNCHECKED_CAST")
+            val queuedConfirm = field(delete, "action") as () -> Unit
+            val main = shadowOf(Looper.getMainLooper())
+            main.idleFor(Duration.ofMillis(500))
+            val decor = checkNotNull(dialog.window).decorView
+            assertTrue(decor.isAttachedToWindow)
+            val viewRoot = checkNotNull(ReflectionHelpers.callInstanceMethod<Any>(decor, "getViewRootImpl"))
+            val sheetWindow: ShadowViewRootImpl = Shadow.extract(viewRoot)
+            fun focus(focused: Boolean) {
+                sheetWindow.callWindowFocusChanged(focused)
+                main.idle()
+                assertEquals(focused, dialog.hasCurrentWindowFocus)
+                assertEquals(focused, delete.isEnabled)
+                assertEquals(Lifecycle.State.RESUMED, lifecycleOwner.lifecycle.currentState)
+            }
+
+            focus(false)
+            focus(true)
+            focus(false)
+            queuedConfirm() // A queued action must recheck focus even after button admission.
+            assertFalse(editor.deletingBusy)
+            assertSame(target, editor.deleting)
+            assertEquals(listOf(option), QuickSaveTileOptions.options.value)
+
+            focus(true)
+            assertTrue(delete.performClick())
+            assertTrue(editor.deletingBusy)
+            queuedConfirm()
+            val ownerJob = checkNotNull(scope.coroutineContext[Job]).children.single()
+            assertEquals(1, ownerJob.children.count())
+            checkNotNull(continuations.poll(5, TimeUnit.SECONDS)).run()
+            assertEquals(emptyList<QuickSaveTileOption>(), QuickSaveTileOptions.options.value)
+            assertFalse(editor.deletingBusy)
+            assertNull(editor.deleting)
+            assertTrue(continuations.isEmpty())
+        } finally {
+            caller.close()
+            owner.close()
+            scope.cancel()
             controller.pause().stop().destroy()
         }
     }
