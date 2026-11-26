@@ -57,6 +57,18 @@ internal class CaptureControlMailbox<B> {
         return true
     }
 
+    /** The parked head retains its ticket and fence while an exact Stop revokes its blocked read. */
+    @Synchronized fun beginStopBeforeBlockedRead(
+        blocked: Ticket<B>,
+        canUnblock: (B) -> Boolean,
+    ): Ticket<B>? {
+        if (failed || active !== blocked || blocked.phase != Phase.CLAIMED) return null
+        val stop = pending.firstOrNull { canUnblock(it.boundary) } ?: return null
+        check(pending.remove(stop))
+        stop.phase = Phase.RUNNING
+        return stop
+    }
+
     @Synchronized fun finish(ticket: Ticket<B>) {
         check(ticket.phase == Phase.RUNNING || ticket.phase == Phase.REJECT_RUNNING)
         if (active === ticket) active = null

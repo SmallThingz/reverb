@@ -5,7 +5,9 @@ import java.nio.ByteOrder
 import java.util.Random
 import kotlin.math.PI
 import kotlin.math.sin
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -20,6 +22,36 @@ class AudioVisualizationAnalyzerTest {
         assertTrue(frame.activity > 0.1f)
         assertTrue(frame.bins.maxOrNull()!! > 0.05f)
         assertEquals(AudioVisualizationAnalyzer.OUTPUT_BINS, frame.bins.size)
+    }
+
+    @Test
+    fun captureMetadata_preservesAnalysisAndIndependentBins() {
+        val analyzer = AudioVisualizationAnalyzer()
+        val pcm = pcm16Tone(frequencyHz = 1_000.0, amplitude = 0.35)
+        val sampleRate = SAMPLE_RATE.toInt()
+        val expected = AudioVisualizationAnalyzer().analyze(pcm, 0, pcm.size, PcmSampleFormat.PCM_16, 1, sampleRate)
+        val frame = analyzer.analyze(
+            pcm, 0, pcm.size, PcmSampleFormat.PCM_16, 1, sampleRate,
+            silenceSuppressed = true,
+            bufferSlot = ReverbService.BufferSlot.ONE_SHOT,
+            captureCommandGeneration = 12L,
+            captureContinuityGeneration = 7L,
+        )
+
+        assertTrue(frame.silenceSuppressed)
+        assertEquals(ReverbService.BufferSlot.ONE_SHOT, frame.bufferSlot)
+        assertEquals(12L, frame.captureCommandGeneration)
+        assertEquals(7L, frame.captureContinuityGeneration)
+        assertEquals(expected.activity, frame.activity, 0f)
+        assertEquals(8, frame.bins.size)
+        assertArrayEquals(expected.bins, frame.bins, 0f)
+
+        val silence = ByteArray(pcm.size)
+        val nextFrame = analyzer.analyze(silence, 0, silence.size, PcmSampleFormat.PCM_16, 1, sampleRate)
+        assertNotSame(frame.bins, nextFrame.bins)
+        assertArrayEquals(expected.bins, frame.bins, 0f)
+        analyzer.reset()
+        assertArrayEquals(expected.bins, frame.bins, 0f)
     }
 
     @Test

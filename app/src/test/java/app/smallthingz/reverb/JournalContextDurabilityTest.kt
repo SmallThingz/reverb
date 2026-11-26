@@ -9,6 +9,7 @@ import java.io.File
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -57,11 +58,64 @@ class JournalContextDurabilityTest {
         assertEquals(0, JournalHostIoShadow.outstandingOwners)
     }
 
+    @Test fun retentionPublicationRejectsAnEqualByteReplacement() = fixture { context, root ->
+        var published: RetentionRecoveryPublication? = null
+        assertTrue(writeRetentionRecoveryConfiguration(context, retention) { published = it })
+        val publication = requireNotNull(published)
+        assertTrue(readRetentionRecovery(context, publication).matchesPublication)
+
+        val base = File(root, "retention-config.v1")
+        val replacement = File(root, "replacement").apply { writeBytes(retentionBytes) }
+        Files.move(replacement.toPath(), base.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+
+        assertEquals(RetentionRecoveryRead(RetentionRecoveryReadState.VALID, retention),
+            readRetentionRecovery(context, publication))
+        assertArrayEquals(retentionBytes, base.readBytes())
+        assertEquals(1, JournalHostIoShadow.directorySyncAttempts)
+        assertEquals(0, JournalHostIoShadow.outstandingOwners)
+    }
+
+    @Test fun retentionPublicationRejectsPendingAtomicFileStateEvenWhenBaseStillMatches() = fixture { context, root ->
+        var published: RetentionRecoveryPublication? = null
+        assertTrue(writeRetentionRecoveryConfiguration(context, retention) { published = it })
+        val publication = requireNotNull(published)
+        assertTrue(readRetentionRecovery(context, publication).matchesPublication)
+        File(root, "retention-config.v1.new").writeBytes(retentionBytes)
+
+        assertFalse(readRetentionRecovery(context, publication).matchesPublication)
+        assertEquals(1, JournalHostIoShadow.directorySyncAttempts)
+    }
+
+    @Test fun settingsSaveBaselineRequiresEveryRetentionFieldBeforeOfferingReuse() = fixture { context, _ ->
+        val configuration = defaultRetentionConfiguration()
+        val preferences = getRecorderPreferences(context)
+        assertTrue(restoreRetentionConfigurationToPreferences(preferences, configuration))
+        assertTrue(writeRetentionRecoveryConfiguration(context, configuration))
+        assertEquals(configuration, readRetentionSettingsBaseline(context).matchingConfiguration)
+
+        assertTrue(preferences.edit().remove(PrefKey.ONE_SHOT_RETENTION_SECONDS).commit())
+        val baseline = readRetentionSettingsBaseline(context)
+        assertEquals(configuration, baseline.rollbackConfiguration)
+        assertNull(baseline.matchingConfiguration)
+    }
+
+    @Test fun settingsSaveBaselineRejectsTwoValidButConflictingRetentionCopies() = fixture { context, _ ->
+        val configuration = defaultRetentionConfiguration()
+        assertTrue(restoreRetentionConfigurationToPreferences(getRecorderPreferences(context), configuration))
+        assertTrue(writeRetentionRecoveryConfiguration(context, configuration.copy(oneShotSeconds = 0L)))
+
+        val baseline = readRetentionSettingsBaseline(context)
+        assertEquals(configuration, baseline.rollbackConfiguration)
+        assertNull(baseline.matchingConfiguration)
+    }
+
     @Test fun postPublicationRetentionBarrierFailureReportsFalseAndPreservesPublishedNewBytes() = fixture { context, root ->
         val file = File(root, "retention-config.v1").apply { writeBytes(retentionBytes) }
         JournalHostIoShadow.failDirectorySyncs = 1
         val changed = retention.copy(oneShotSeconds = 0)
-        assertFalse(writeRetentionRecoveryConfiguration(context, changed))
+        var published: RetentionRecoveryPublication? = null
+        assertFalse(writeRetentionRecoveryConfiguration(context, changed) { published = it })
+        assertNull(published)
         assertEquals(RetentionRecoveryRead(RetentionRecoveryReadState.VALID, changed), readRetentionRecovery(context))
         val expectedNewBytes = "4e52545201000000010000000000000000000000b268de3a0000000031d4000000000000b032797600000000e919cabd"
             .chunked(2).map { it.toInt(16).toByte() }.toByteArray()

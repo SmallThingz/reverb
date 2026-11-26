@@ -96,6 +96,50 @@ class CaptureIoBacklogTest {
         }
     }
 
+    @Test fun staleExactStopSettlesWithoutWaitingForReplacementRead() {
+        val prefix = byteArrayOf(1, 2)
+        val inFlight = byteArrayOf(3, 4)
+        withFixture(CapturePcmBudget(2, 8, 32, 8), listOf(prefix), holdNextRead = true,
+            heldReadBytes = inFlight) { f ->
+            val stop = f.onWriter {
+                val old = f.coordinator.install(f.source, 0, 1, CaptureIoCoordinator.Storage(f.storage.budget),
+                    admit = { error("The retired input must have no read") },
+                    mayComplete = { false }, captureClockRequested = { false })
+                CaptureIoCoordinator.StopFence(old, onlyIfReading = false).also {
+                    check(f.coordinator.detach(f.source))
+                }
+            }
+            stop.input.thread.join(5_000)
+            assertFalse(stop.input.thread.isAlive)
+            f.releaseWriter.countDown()
+            f.start()
+            f.await(f.source.extraReadEntered)
+            val settled = CountDownLatch(1)
+            assertEquals(CaptureControlMailbox.Admission.ACCEPTED, f.coordinator.post(
+                pauseInput = true, stop = stop, rejected = { error("Stale Stop ticket was rejected at dispatch") },
+                work = { settled.countDown() },
+            ))
+            f.await(settled)
+            f.onWriter { Unit }
+            assertSame(f.installed, f.coordinator.currentInput())
+            assertTrue(f.storage.ring.status().reading)
+            assertFalse(f.storage.ring.status().fence)
+            assertNull(f.storage.ring.status().terminal)
+
+            val drained = CountDownLatch(1)
+            assertEquals(CaptureControlMailbox.Admission.ACCEPTED, f.coordinator.post(
+                pauseInput = true, rejected = { error("Replacement fence was rejected") },
+                work = { f.coordinator.stopInput(preserveInFlight = false); drained.countDown() },
+            ))
+            f.source.releaseExtraRead.countDown()
+            f.await(drained)
+            f.detach()
+            assertEquals(2, f.delivered.size)
+            assertArrayEquals(prefix, f.delivered.first())
+            assertArrayEquals(inFlight, f.delivered.last())
+        }
+    }
+
     @Test fun nativeReadErrorAcknowledgesLeaseAndDrainsOnlyCompletedPacketsBeforeFailure() {
         val packets = listOf(byteArrayOf(1, 2), byteArrayOf(3, 4, 5, 6), byteArrayOf(7, 8))
         withFixture(CapturePcmBudget(2, 8, 32, 8), packets, holdNextRead = true,

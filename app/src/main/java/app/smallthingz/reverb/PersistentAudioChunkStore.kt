@@ -306,6 +306,7 @@ internal class PersistentAudioChunkStore internal constructor(
     private var loaded = false
     private var closed = false
     private var indexGeneration = 0L
+    private var captureGapIndexPending = false
     private var nextChunkId = 0u
     private var retainedPayloadBytes = 0L
     private var retainedDurationSeconds = 0.0
@@ -915,6 +916,9 @@ internal class PersistentAudioChunkStore internal constructor(
             activeAppendBoundaryFailure?.let { failure ->
                 throw IOException("Cannot sync active chunk with an uncertain append boundary", failure)
             }
+            // Gap chunks already have forced FINALIZED headers. The index orders
+            // chunk files on restart, and does not certify any active payload bytes.
+            if (captureGapIndexPending) writeIndexLocked()
             val record = activeRecord ?: return 0L
             if (record.payloadBytes <= activeDurablePayloadBytes) return 0L
             ActivePayloadSyncSnapshot(
@@ -972,18 +976,26 @@ internal class PersistentAudioChunkStore internal constructor(
      * a fresh chunk with a fresh wall-clock timestamp even when the PCM format is unchanged.
      */
     @Synchronized
-    fun sealActiveChunk() {
+    fun sealActiveChunk() = sealActiveChunkLocked(deferGapIndex = false)
+
+    /** Keep a durable discontinuity at each omitted span and publish the index on the capture sync cadence. */
+    @Synchronized
+    internal fun sealCaptureGap() = sealActiveChunkLocked(deferGapIndex = true)
+
+    private fun sealActiveChunkLocked(deferGapIndex: Boolean) {
         pendingCaptureContinuationId = null
         ensureLoadedLocked()
         if (activeRecord == null) {
             retryRetirementTombstoneRemovalDurabilityLocked()
+            if (!deferGapIndex && captureGapIndexPending) writeIndexLocked()
             return
         }
         finalizeActiveLocked()
-        cleanupRetentionAfterCaptureLocked()
+        if (deferGapIndex) captureGapIndexPending = true
+        val retentionChanged = cleanupRetentionAfterCaptureLocked()
         retryRetiredDeletesLocked()
         retryRetirementTombstoneRemovalDurabilityLocked()
-        writeIndexLocked()
+        if (!deferGapIndex || retentionChanged) writeIndexLocked()
     }
 
     @Synchronized
@@ -2786,13 +2798,13 @@ internal class PersistentAudioChunkStore internal constructor(
         }
     }
 
-    private fun cleanupRetentionAfterCaptureLocked() {
+    private fun cleanupRetentionAfterCaptureLocked(): Boolean {
         if (deferredRetentionCleanup) {
             markRetentionMaintenancePendingLocked()
-            return
+            return false
         }
         if (overwriteOldest && retentionCleanupWillRetireChunkLocked()) syncActivePayloadLocked()
-        cleanupRetentionLocked()
+        return cleanupRetentionLocked()
     }
 
     private fun cleanupLoopingRetentionStepLocked(): RetentionStepOutcome {
@@ -3969,6 +3981,7 @@ internal class PersistentAudioChunkStore internal constructor(
             temp.delete()
             throw error
         }
+        captureGapIndexPending = false
     }
 
     private fun readIndex(file: File): LoadedIndex? {

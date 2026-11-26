@@ -46,6 +46,7 @@ internal class CapturePcmRing(val budget: CapturePcmBudget) {
     )
     class Fence internal constructor(
         internal val owner: CapturePcmRing, val afterSequence: Long, val pauseAdmission: Boolean,
+        internal val waitForNativeReturn: Boolean,
     ) {
         internal var completed = false
         internal var admissionPaused = pauseAdmission
@@ -66,6 +67,7 @@ internal class CapturePcmRing(val budget: CapturePcmBudget) {
     private var fenceCount = 0
     private var pausedFences = 0
     private var terminal: Terminal? = null
+    private var forcedStopReleasePending = false
     private var exhaustion: IOException? = null
     private var highWaterBytes = 0
     private var highWaterPackets = 0
@@ -124,22 +126,46 @@ internal class CapturePcmRing(val budget: CapturePcmBudget) {
         return keep
     }
 
-    /** Called during control acceptance; every earlier native reservation belongs to this prefix. */
-    @Synchronized fun reserveFence(pauseAdmission: Boolean): Fence {
+    /** Only the intent phase of an exact Stop can exclude an outstanding native reservation. */
+    @Synchronized fun reserveFence(pauseAdmission: Boolean, waitForNativeReturn: Boolean = true): Fence {
         check(fenceCount < 66)
+        check(waitForNativeReturn || pauseAdmission)
         fenceCount++
         if (pauseAdmission) pausedFences++
-        return Fence(this, sequence, pauseAdmission)
+        return Fence(this, sequence, pauseAdmission, waitForNativeReturn)
     }
+    @Synchronized fun reserveStopFence(onlyIfReading: Boolean): Fence =
+        reserveFence(pauseAdmission = true, waitForNativeReturn = onlyIfReading && reading == null)
+
     @Synchronized fun prefixDrained(token: Fence): Boolean {
         require(token.owner === this && !token.completed)
-        val oldest = writing?.lease ?: events[eventHead]?.lease ?: reading ?: return true
+        if (token.waitForNativeReturn && forcedStopReleasePending) return false
+        val oldest = writing?.lease ?: events[eventHead]?.lease
+            ?: reading?.takeIf { token.waitForNativeReturn } ?: return true
         return oldest.sequence > token.afterSequence
     }
-    @Synchronized fun poll(): Packet? {
+    @Synchronized fun stopCanUnblockFence(stop: Fence, blocked: Fence): Boolean {
+        val nativeRead = reading ?: return false
+        return !stop.waitForNativeReturn && blocked.waitForNativeReturn &&
+            nativeRead.sequence <= blocked.afterSequence && prefixDrained(stop)
+    }
+
+    /** Win native cleanup while the read still holds the full fence. */
+    @Synchronized fun beginForcedStopRelease(): Boolean {
+        if (reading == null || forcedStopReleasePending) return false
+        forcedStopReleasePending = true
+        return true
+    }
+
+    @Synchronized fun finishForcedStopRelease() {
+        check(forcedStopReleasePending)
+        forcedStopReleasePending = false
+    }
+    @Synchronized fun poll(throughSequence: Long = Long.MAX_VALUE): Packet? {
         check(writing == null)
         if (eventCount == 0) return null
         val packet = checkNotNull(events[eventHead])
+        if (packet.lease.sequence > throughSequence) return null
         events[eventHead] = null; eventHead = (eventHead + 1) % events.size; eventCount--
         writing = packet
         return packet
@@ -207,7 +233,7 @@ internal class CapturePcmRing(val budget: CapturePcmBudget) {
         check(reading == null) { "Native acknowledgement left its lease owned" }
         return true
     }
-    @Synchronized fun isDrained() = reading == null && writing == null && eventCount == 0
+    @Synchronized fun isDrained() = reading == null && writing == null && eventCount == 0 && !forcedStopReleasePending
     private fun enqueue(event: Packet) {
         check(eventCount < events.size)
         events[(eventHead + eventCount) % events.size] = event; eventCount++

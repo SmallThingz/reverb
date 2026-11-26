@@ -47,6 +47,10 @@ internal class CaptureIoCoordinator(
         @Volatile internal var started = false
         internal lateinit var read: Runnable
     }
+    class StopFence(val input: Input, val onlyIfReading: Boolean) {
+        var usesStopBoundary = false // Set during mailbox admission, read by its accepted callback.
+            internal set
+    }
     private class Boundary(var input: Input?, var fence: CapturePcmRing.Fence?, val allowTerminal: Boolean) {
         var healthy = true
     }
@@ -106,7 +110,8 @@ internal class CaptureIoCoordinator(
 
     /** ACCEPTED transfers exactly one terminal callback; other outcomes transfer no ownership. */
     fun post(pauseInput: Boolean, allowTerminal: Boolean = false, emergency: Boolean = false,
-        terminalClose: Boolean = false, rejected: () -> Unit, work: () -> Unit): CaptureControlMailbox.Admission {
+        terminalClose: Boolean = false, stop: StopFence? = null,
+        rejected: () -> Unit, work: () -> Unit): CaptureControlMailbox.Admission {
         val kind = when {
             terminalClose -> CaptureControlMailbox.Kind.TERMINAL
             emergency -> CaptureControlMailbox.Kind.EMERGENCY
@@ -114,7 +119,15 @@ internal class CaptureIoCoordinator(
         }
         val admission = commands.offer(kind, boundary = {
             val current = input
-            Boundary(current, current?.storage?.ring?.reserveFence(pauseInput), allowTerminal)
+            if (stop != null && !stop.onlyIfReading && current !== stop.input) {
+                // The stale intent still settles in FIFO order, without owning replacement PCM.
+                return@offer Boundary(null, null, allowTerminal)
+            }
+            val ring = current?.storage?.ring
+            val fence = if (stop != null && current === stop.input && ring != null) {
+                ring.reserveStopFence(stop.onlyIfReading).also { stop.usesStopBoundary = !it.waitForNativeReturn }
+            } else ring?.reserveFence(pauseInput)
+            Boundary(current, fence, allowTerminal)
         }, work = work, rejected = rejected)
         if (admission == CaptureControlMailbox.Admission.ACCEPTED) wakeWriter()
         return admission
@@ -163,6 +176,17 @@ internal class CaptureIoCoordinator(
             it.externallyReleased.set(true)
             it.storage.ring.stop(preserveInFlight = false)
         }
+    }
+
+    fun beginForcedStopRelease(current: Input): Boolean {
+        if (input !== current || !current.storage.ring.beginForcedStopRelease()) return false
+        revokeAfterForcedNativeRelease(current.record)
+        return true
+    }
+
+    fun finishForcedStopRelease(current: Input) {
+        current.storage.ring.finishForcedStopRelease()
+        wakeWriter()
     }
 
     private fun kickReader(current: Input) {
@@ -250,26 +274,24 @@ internal class CaptureIoCoordinator(
         val control = commands.claim()
         val boundary = control?.boundary
         val prefix = boundary?.input?.storage?.ring
-        if (control != null && (prefix == null || prefix.prefixDrained(checkNotNull(boundary?.fence)))) {
-            if (!commands.begin(control)) return
-            executingBoundary = boundary
-            try {
-                if (checkNotNull(boundary).allowTerminal ||
-                    (prefix?.fenceMayExecute(checkNotNull(boundary.fence)) ?: boundary.healthy)) {
-                    control.work()
-                } else control.rejected()
-            } finally {
-                executingBoundary = null
-                checkNotNull(boundary).fence?.let { prefix!!.completeFence(it) }
-                commands.finish(control)
-                if (control.kind == CaptureControlMailbox.Kind.TERMINAL) writer.looper.quitSafely()
-                else { input?.let(::kickReader); wakeWriter() }
+        if (control != null && boundary != null) {
+            if (prefix == null || prefix.prefixDrained(checkNotNull(boundary.fence))) {
+                if (commands.begin(control)) runControl(control)
+                return
             }
-            return
+            val blocked = checkNotNull(boundary.fence)
+            val stop = commands.beginStopBeforeBlockedRead(control) { candidate ->
+                val fence = candidate.fence
+                candidate.input === boundary.input && fence != null && prefix.stopCanUnblockFence(fence, blocked)
+            }
+            if (stop != null) {
+                runControl(stop)
+                return
+            }
         }
         val current = boundary?.input ?: input ?: return
         val ring = current.storage.ring
-        val packet = ring.poll()
+        val packet = ring.poll(boundary?.fence?.afterSequence ?: Long.MAX_VALUE)
         if (packet != null) {
             try {
                 ring.transferToWriter(packet, current.storage.writerScratch)
@@ -287,6 +309,24 @@ internal class CaptureIoCoordinator(
                 current.failureDelivered = true
                 onInputFailure(current, failure)
             }
+        }
+    }
+
+    private fun runControl(control: CaptureControlMailbox.Ticket<Boundary>) {
+        val boundary = control.boundary
+        val ring = boundary.input?.storage?.ring
+        executingBoundary = boundary
+        try {
+            if (boundary.allowTerminal ||
+                (ring?.fenceMayExecute(checkNotNull(boundary.fence)) ?: boundary.healthy)) {
+                control.work()
+            } else control.rejected()
+        } finally {
+            executingBoundary = null
+            boundary.fence?.let { checkNotNull(ring).completeFence(it) }
+            commands.finish(control)
+            if (control.kind == CaptureControlMailbox.Kind.TERMINAL) writer.looper.quitSafely()
+            else { input?.let(::kickReader); wakeWriter() }
         }
     }
 

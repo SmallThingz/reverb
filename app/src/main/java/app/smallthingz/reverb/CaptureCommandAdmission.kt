@@ -52,6 +52,7 @@ internal class CaptureCommandAdmission {
         enqueue: (Runnable) -> Boolean,
         onIdle: () -> Unit,
         onRejected: () -> Unit = {},
+        enqueueCommand: (Runnable) -> Boolean = enqueue,
         command: () -> Unit,
     ): Boolean = synchronized(lock) {
         if (closed) return@synchronized false
@@ -66,7 +67,7 @@ internal class CaptureCommandAdmission {
                 work = { if (finish(ticket)) onIdle() },
                 rejected = { if (finish(ticket)) onIdle() },
             )
-            queued = enqueue(CaptureCommandWork(work = {
+            queued = enqueueCommand(CaptureCommandWork(work = {
                 try {
                     command()
                 } finally {

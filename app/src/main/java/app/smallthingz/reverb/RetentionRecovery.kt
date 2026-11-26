@@ -56,7 +56,24 @@ internal enum class RetentionRecoveryReadState {
 internal data class RetentionRecoveryRead(
     val state: RetentionRecoveryReadState,
     val configuration: RetentionConfiguration? = null,
+    val matchesPublication: Boolean = false,
 )
+
+/** In-process proof of the exact descriptor revision that crossed both write barriers. */
+internal class RetentionRecoveryPublication(
+    private val baseFile: File,
+    private val configuration: RetentionConfiguration,
+    private val descriptorIdentity: String,
+) {
+    fun hasNoPendingFilesAt(path: File): Boolean =
+        path == baseFile &&
+            storagePathState(File(path.path + ".new")) == StoragePathState.MISSING &&
+            storagePathState(File(path.path + ".bak")) == StoragePathState.MISSING
+
+    fun matchesRead(path: File, configuration: RetentionConfiguration, readIdentity: String?): Boolean =
+        this.configuration == configuration && descriptorIdentity == readIdentity &&
+            hasNoPendingFilesAt(path) && atomicFileReadDescriptorRemainsCurrent(path, descriptorIdentity)
+}
 
 internal fun legacyRetentionPreferencesAllowed(recoveryState: RetentionRecoveryReadState): Boolean =
     recoveryState == RetentionRecoveryReadState.MISSING
@@ -266,7 +283,15 @@ internal fun retentionConfigurationForOperationalRead(context: Context): Retenti
         )?.configuration
     }
 
+internal data class RetentionSettingsBaseline(
+    val rollbackConfiguration: RetentionConfiguration,
+    val matchingConfiguration: RetentionConfiguration?,
+)
+
 internal fun retentionConfigurationForRead(context: Context): RetentionConfiguration =
+    readRetentionSettingsBaseline(context).rollbackConfiguration
+
+internal fun readRetentionSettingsBaseline(context: Context): RetentionSettingsBaseline =
     withRetentionPersistenceLock {
         val snapshot = retentionReadSnapshot(context)
         val verifiedPrimary = retentionConfigurationFromPreferences(
@@ -276,11 +301,20 @@ internal fun retentionConfigurationForRead(context: Context): RetentionConfigura
         )
         val historyExists = verifiedPrimary != null && snapshot.recovery != null &&
             verifiedPrimary != snapshot.recovery && hasPersistedBufferHistoryArtifacts(context)
-        preferredRetentionConfigurationForRead(verifiedPrimary, snapshot.recovery, historyExists)
-            ?: snapshot.primaryWithRecoveryFallback()
-            ?: snapshot.recovery
-            ?: defaultRetentionConfiguration()
+        RetentionSettingsBaseline(
+            rollbackConfiguration = preferredRetentionConfigurationForRead(verifiedPrimary, snapshot.recovery, historyExists)
+                ?: snapshot.primaryWithRecoveryFallback()
+                ?: snapshot.recovery
+                ?: defaultRetentionConfiguration(),
+            matchingConfiguration = verifiedPrimary?.takeIf {
+                it == snapshot.recovery && snapshot.values.hasAllRetentionFields()
+            },
+        )
     }
+
+internal fun RetentionPreferenceValues.hasAllRetentionFields(): Boolean =
+    modePresent && modeCode != null && oneShotSeconds != null && oneShotSizeBytes != null &&
+        loopingSeconds != null && loopingSizeBytes != null
 
 internal fun preferredRetentionConfigurationForRead(
     verifiedPrimary: RetentionConfiguration?,
@@ -430,14 +464,19 @@ internal fun readBoundedRetentionRecoveryBytes(input: InputStream): ByteArray? {
     return bytes.copyOf(offset)
 }
 
-internal fun readRetentionRecovery(context: Context): RetentionRecoveryRead {
+internal fun readRetentionRecovery(
+    context: Context,
+    publication: RetentionRecoveryPublication? = null,
+): RetentionRecoveryRead {
     val baseFile = retentionRecoveryFile(context)
     val atomicFile = AtomicFile(baseFile)
+    val eligiblePublication = publication?.takeIf { it.hasNoPendingFilesAt(baseFile) }
     when (atomicFileRegularBackingState(baseFile)) {
         StoragePathState.MISSING -> return RetentionRecoveryRead(RetentionRecoveryReadState.MISSING)
         StoragePathState.UNAVAILABLE -> return RetentionRecoveryRead(RetentionRecoveryReadState.INVALID)
         StoragePathState.PRESENT -> Unit
     }
+    var verifiedIdentity: String? = null
     val bytes = try {
         // Let AtomicFile recover a regular backup/new-file state, then bind the descriptor it
         // actually opened back to the recovered regular base before consuming durable authority.
@@ -449,6 +488,7 @@ internal fun readRetentionRecovery(context: Context): RetentionRecoveryRead {
             if (!atomicFileReadDescriptorRemainsCurrent(baseFile, descriptorIdentity)) {
                 return RetentionRecoveryRead(RetentionRecoveryReadState.INVALID)
             }
+            verifiedIdentity = descriptorIdentity
             value
         }
     } catch (_: FileNotFoundException) {
@@ -464,7 +504,11 @@ internal fun readRetentionRecovery(context: Context): RetentionRecoveryRead {
     }
     val configuration = decodeRetentionRecoveryConfiguration(bytes)
         ?: return RetentionRecoveryRead(RetentionRecoveryReadState.INVALID)
-    return RetentionRecoveryRead(RetentionRecoveryReadState.VALID, configuration)
+    return RetentionRecoveryRead(
+        RetentionRecoveryReadState.VALID,
+        configuration,
+        matchesPublication = eligiblePublication?.matchesRead(baseFile, configuration, verifiedIdentity) == true,
+    )
 }
 
 internal inline fun atomicWriteFailureResult(
@@ -483,6 +527,7 @@ internal inline fun atomicWriteFailureResult(
 internal fun writeRetentionRecoveryConfiguration(
     context: Context,
     configuration: RetentionConfiguration,
+    onPublication: ((RetentionRecoveryPublication) -> Unit)? = null,
 ): Boolean {
     val baseFile = retentionRecoveryFile(context)
     if (atomicFileRegularBackingState(baseFile) == StoragePathState.UNAVAILABLE) return false
@@ -499,6 +544,9 @@ internal fun writeRetentionRecoveryConfiguration(
             finishWrite = atomicFile::finishWrite,
             syncDirectory = { syncRetentionRecoveryDirectory(context) },
             onPublicationStarted = { output = null },
+            onPublishedIdentity = onPublication?.let { publish ->
+                { identity: String -> publish(RetentionRecoveryPublication(baseFile, configuration, identity)) }
+            },
         )
         true
     } catch (error: Exception) {

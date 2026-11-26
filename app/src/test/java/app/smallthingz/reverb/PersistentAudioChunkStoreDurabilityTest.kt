@@ -4,6 +4,8 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
 import java.io.RandomAccessFile
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.util.Random
@@ -118,6 +120,100 @@ class PersistentAudioChunkStoreDurabilityTest {
         PersistentAudioChunkStore(root).use { reopened ->
             configure(reopened, 512 * 1024L)
             assertArrayEquals(first + second, readAll(reopened))
+        }
+    }
+
+    @Test
+    fun restartBeforeGapIndexPublication_recoversSealedSpansAndContinuesIds() = withStoreRoot { root ->
+        val pcm = listOf(pcmBytes(320), pcmBytes(480), pcmBytes(640))
+        val timestamps = listOf(1_000L, 1_350L, 2_100L)
+        var forcedSlots = 0
+        val crashed = PersistentAudioChunkStore(root, mutableSlotSync = { descriptor ->
+            descriptor.sync()
+            forcedSlots++
+        })
+        configure(crashed, 512 * 1024L)
+        assertEquals(pcm.first().size, crashed.appendCapturedAt(pcm.first(), 0, pcm.first().size, timestamps.first()))
+        crashed.sealActiveChunk()
+        val indexed = latestIndex(root)
+        assertEquals(1, indexed.second)
+        val beforeGapForces = forcedSlots
+        for (index in 1 until pcm.size) {
+            val span = pcm[index]
+            assertEquals(span.size, crashed.appendCapturedAt(span, 0, span.size, timestamps[index]))
+            crashed.sealCaptureGap()
+            assertEquals(indexed, latestIndex(root))
+        }
+        assertEquals(pcm.size - 1, forcedSlots - beforeGapForces)
+
+        // Every gap closed its active descriptor. Leave the store without close/checkpoint
+        // to simulate a restart with the older valid index and the forced orphan tail.
+        PersistentAudioChunkStore(root).use { reopened ->
+            configure(reopened, 512 * 1024L)
+            assertArrayEquals(pcm[0] + pcm[1] + pcm[2], readAll(reopened))
+            assertEquals(3, latestIndex(root).second)
+            val next = pcmBytes(800)
+            assertEquals(next.size, reopened.appendCapturedAt(next, 0, next.size, 3_000L))
+            reopened.sealActiveChunk()
+            requireNotNull(reopened.acquireRange(0.0, reopened.durationSeconds())).use { lease ->
+                lease.withSealedRange { range ->
+                    assertEquals(listOf(0u, 1u, 2u, 3u), range.segments.map { it.record.id })
+                    assertEquals(timestamps + 3_000L, range.segments.map { it.record.createdAtMillis })
+                    assertTrue(range.segments.none { it.continuesPreviousChunkAtAcquire })
+                    assertTrue(range.segments.all { it.record.state == PersistentAudioChunkStore.ChunkState.FINALIZED })
+                }
+            }
+            assertArrayEquals(pcm[0] + pcm[1] + pcm[2] + next, readAll(reopened))
+        }
+    }
+
+    @Test
+    fun captureGapSeals_coalesceFullIndexWritesOnPayloadSyncCadence() = withStoreRoot { root ->
+        PersistentAudioChunkStore(root).use { store ->
+            store.configure(RetentionMode.SIZE, 512 * 1024L, 8_000, 1, deferRetentionCleanup = true)
+            val span = pcmBytes(320)
+            fun appendSpan(ordinal: Int) {
+                assertEquals(span.size, store.appendCapturedAt(span, 0, span.size, 1_000L + ordinal * 100L))
+            }
+
+            val initial = latestIndex(root)
+            repeat(64) { ordinal ->
+                appendSpan(ordinal)
+                store.sealCaptureGap()
+            }
+            assertEquals(initial, latestIndex(root))
+            store.checkpoint()
+            val seeded = latestIndex(root)
+            assertEquals(initial.first + 1L to 64, seeded)
+
+            repeat(8) { offset ->
+                appendSpan(64 + offset)
+                store.sealCaptureGap()
+                assertEquals(seeded, latestIndex(root))
+            }
+            assertEquals(0L, store.syncActivePayloadToDisk())
+            val afterCadence = latestIndex(root)
+            assertEquals(seeded.first + 1L to 72, afterCadence)
+            assertEquals(0L, store.syncActivePayloadToDisk())
+            assertEquals(afterCadence, latestIndex(root))
+
+            appendSpan(72)
+            store.sealCaptureGap()
+            appendSpan(73)
+            assertEquals(afterCadence, latestIndex(root))
+            assertEquals(span.size.toLong(), store.syncActivePayloadToDisk())
+            val withActive = latestIndex(root)
+            assertEquals(afterCadence.first + 1L to 74, withActive)
+            assertEquals(0L, store.syncActivePayloadToDisk())
+            assertEquals(withActive, latestIndex(root))
+
+            store.sealCaptureGap()
+            assertEquals(withActive, latestIndex(root))
+            store.sealActiveChunk()
+            val afterStop = latestIndex(root)
+            assertEquals(withActive.first + 1L to 74, afterStop)
+            assertEquals(0L, store.syncActivePayloadToDisk())
+            assertEquals(afterStop, latestIndex(root))
         }
     }
 
@@ -2145,6 +2241,16 @@ class PersistentAudioChunkStoreDurabilityTest {
             sampleFormat = PcmSampleFormat.PCM_16,
         )
     }
+
+    /** Each full index publication advances the on-disk generation on one of the two files. */
+    private fun latestIndex(root: File): Pair<Long, Int> = listOf(BUFFER_INDEX_A_FILE_NAME, BUFFER_INDEX_B_FILE_NAME)
+        .mapNotNull { name ->
+            val file = File(root, name)
+            if (!file.isFile) return@mapNotNull null
+            val header = ByteBuffer.wrap(file.readBytes()).order(ByteOrder.LITTLE_ENDIAN)
+            header.getLong(8) to header.getInt(20)
+        }
+        .maxBy { it.first }
 
     private fun readAllOrEmpty(store: PersistentAudioChunkStore): ByteArray {
         if (!store.hasData()) return byteArrayOf()

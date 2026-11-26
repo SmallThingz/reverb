@@ -57,6 +57,10 @@ internal class AudioVisualizationAnalyzer {
         sampleFormat: PcmSampleFormat,
         channelCount: Int,
         sampleRate: Int,
+        silenceSuppressed: Boolean = false,
+        bufferSlot: ReverbService.BufferSlot? = null,
+        captureCommandGeneration: Long = Long.MIN_VALUE,
+        captureContinuityGeneration: Long = Long.MIN_VALUE,
     ): ReverbService.VisualizationFrame {
         val channels = channelCount.coerceAtLeast(1)
         val bytesPerFrame = (sampleFormat.bytesPerSample * channels).coerceAtLeast(1)
@@ -180,6 +184,10 @@ internal class AudioVisualizationAnalyzer {
         return ReverbService.VisualizationFrame(
             activity = smoothedActivity,
             bins = smoothedBins.copyOf(),
+            silenceSuppressed = silenceSuppressed,
+            bufferSlot = bufferSlot,
+            captureCommandGeneration = captureCommandGeneration,
+            captureContinuityGeneration = captureContinuityGeneration,
         )
     }
 

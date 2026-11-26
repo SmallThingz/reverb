@@ -4,19 +4,23 @@ import android.app.Application
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.pm.ServiceInfo
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.Looper
 import android.os.PowerManager
 import app.smallthingz.reverb.actualserviceisolated.ActualServiceSandboxMarker
 import java.io.File
 import java.io.IOException
 import java.io.RandomAccessFile
+import java.util.concurrent.Callable
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CoroutineScope
@@ -60,6 +64,7 @@ class ActualServiceLifecycleTest {
 
     class NoMicService : ReverbService() {
         val inputAttempts = AtomicInteger()
+        @Volatile internal var configurationAtInputCreation: RecorderConfigurationSnapshot? = null
         @Volatile internal var syntheticInput: CaptureAudioInput? = null
         internal var afterCreate: (() -> Unit)? = null
 
@@ -72,6 +77,7 @@ class ActualServiceLifecycleTest {
 
         override fun createAudioRecord(): CaptureAudioInput? {
             inputAttempts.incrementAndGet()
+            configurationAtInputCreation = getConfigurationSnapshot()
             return syntheticInput ?: throw AssertionError("Unexpected microphone admission")
         }
     }
@@ -84,6 +90,14 @@ class ActualServiceLifecycleTest {
         lifecycle(capture = true, stopTimeout = StopTimeout.SEAL_FAILURE)
     @Test fun dataSyncTimeoutRevokesQueuedRestartAndStillDrainsThePendingStop() =
         lifecycle(capture = true, stopTimeout = StopTimeout.QUEUED_RESTART)
+    @Test fun homeStopCommitsBeforeHeldReadAndSupersedesOlderParkedToggle() =
+        lifecycle(capture = true, stopEntry = StopEntry.HOME)
+    @Test fun quickSettingsStopCommitsBeforeHeldReadAndUnblocksOlderSnapshotFence() =
+        lifecycle(capture = true, stopEntry = StopEntry.QUICK_SETTINGS)
+    @Test fun notificationQuickSaveKeepsMainResponsiveDuringNonRecordingBufferClear() =
+        lifecycle(capture = true, quickSaveAcrossClear = true)
+    @Test fun startUsesRolledBackRecorderSettingsWhenAFailedCommitOverlapsIt() =
+        lifecycle(capture = true, settingsRollbackDuringStart = true)
     @Test fun retiredFalseWakePreferenceDoesNotCreateCaptureLock() = lifecycle(true, legacyWake = false)
     @Test fun retiredTrueWakePreferenceDoesNotCreateCaptureLock() = lifecycle(true, legacyWake = true)
     @Test fun retiredMalformedWakePreferenceDoesNotCreateCaptureLock() = lifecycle(true, legacyWake = "invalid")
@@ -134,9 +148,11 @@ class ActualServiceLifecycleTest {
     }
 
     private enum class StopTimeout { DRAIN, SEAL_FAILURE, QUEUED_RESTART }
+    private enum class StopEntry { HOME, QUICK_SETTINGS }
 
     private fun lifecycle(capture: Boolean, rejectedStartThrows: Boolean? = null,
-        rejectNotificationQuickSave: Boolean = false, legacyWake: Any? = null, stopTimeout: StopTimeout? = null) {
+        rejectNotificationQuickSave: Boolean = false, legacyWake: Any? = null, stopTimeout: StopTimeout? = null,
+        stopEntry: StopEntry? = null, quickSaveAcrossClear: Boolean = false, settingsRollbackDuringStart: Boolean = false) {
         val app = RuntimeEnvironment.getApplication()
         val noBackup = app.noBackupFilesDir
         val appRoot = requireNotNull(app.filesDir.parentFile).canonicalFile
@@ -151,7 +167,7 @@ class ActualServiceLifecycleTest {
         assertSame(observedLock, ShadowPowerManager.getLatestWakeLock())
         assertFalse(observedLock.isHeld)
         ShadowPowerManager.clearWakeLocks()
-        if (rejectedStartThrows != null || rejectNotificationQuickSave)
+        if (rejectedStartThrows != null || rejectNotificationQuickSave || quickSaveAcrossClear)
             check(AppFeedbackCenter.events.value.isEmpty()) { "Feedback already owned" }
         check(ServiceStateOsShadow.fixtureRoot == null)
         JournalHostIoShadow.reset()
@@ -266,6 +282,13 @@ class ActualServiceLifecycleTest {
                 seed.configure(RetentionMode.SIZE, 4096, 8_000, 1, PcmSampleFormat.PCM_16)
                 if (!capture) assertEquals(pcm.size, seed.append(pcm, 0, pcm.size))
             }
+            if (quickSaveAcrossClear) {
+                val oneShotRoot = File(noBackup, ONE_SHOT_BUFFER_CACHE_FOLDER_NAME)
+                PersistentAudioChunkStore(oneShotRoot, overwriteOldest = false).use { seed ->
+                    seed.configure(RetentionMode.SIZE, 4096, 8_000, 1, PcmSampleFormat.PCM_16)
+                    assertEquals(pcm.size, seed.append(pcm, 0, pcm.size))
+                }
+            }
             controller = Robolectric.buildService(NoMicService::class.java)
             val actual = controller.get()
             service = actual
@@ -365,12 +388,15 @@ class ActualServiceLifecycleTest {
             assertEquals(false, getRecorderPreferences(actual).getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, true))
             if (capture) {
                 check(!SilenceGatePreferences.read(actual).config.enabled)
-                val first = ByteArray(512) { (it * 31 + 9).toByte() }
+                // Quick Save selects the live Looping destination, which has no retained audio.
+                val first = if (quickSaveAcrossClear) ByteArray(0) else ByteArray(512) { (it * 31 + 9).toByte() }
                 val rejected = ByteArray(512) { (it * 7 + 71).toByte() }
-                val packet = PacketInput(first, rejected)
+                val packet = PacketInput(first, rejected, holdFirst = quickSaveAcrossClear,
+                    holdStopCleanup = stopEntry == StopEntry.QUICK_SETTINGS)
                 packetInput = packet
                 actual.syntheticInput = packet
-                exercisePublicCapture(actual, handler, retained, packet, first, stopTimeout) { ownedFeedback = it }
+                exercisePublicCapture(actual, handler, retained, packet, first, stopTimeout,
+                    stopEntry, quickSaveAcrossClear, settingsRollbackDuringStart) { ownedFeedback = it }
                 captureEpoch = incidentEpochField.get(RecordingIncidentStore)
                 check(captureEpoch !== priorIncidentEpoch) { "Capture session was never armed" }
                 assertEquals(1, actual.inputAttempts.get())
@@ -388,8 +414,12 @@ class ActualServiceLifecycleTest {
                 assertFalse(RecordingIncidentStore.beginKnownCaptureStop(actual).armed)
                 PersistentAudioChunkStore(loopRoot).use { reopened ->
                     reopened.configure(RetentionMode.SIZE, 4096, 8_000, 1, PcmSampleFormat.PCM_16)
-                    requireNotNull(reopened.acquireRange(0.0, reopened.durationSeconds())).use {
-                        assertArrayEquals(first, readStoreTestPcm16Mono8Khz(it))
+                    if (first.isEmpty()) {
+                        assertEquals(0L, reopened.countFilledBytes())
+                    } else {
+                        requireNotNull(reopened.acquireRange(0.0, reopened.durationSeconds())).use {
+                            assertArrayEquals(first, readStoreTestPcm16Mono8Khz(it))
+                        }
                     }
                 }
             } else if (rejectedStartThrows != null) {
@@ -465,7 +495,7 @@ class ActualServiceLifecycleTest {
             if (destructionCalled && !destructionCompleted) failDrain(error) else primary = error
         }
         finally {
-            packetInput?.allowSecond?.countDown()
+            packetInput?.let { it.allowFirst.countDown(); it.allowSecond.countDown(); it.allowStopCleanup.countDown() }
             if ((capture || rejectedStartThrows != null) && service != null) try {
                 if (getRecorderPreferences(service!!).getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)) {
                     check(service!!.disableListening().accepted)
@@ -559,7 +589,7 @@ class ActualServiceLifecycleTest {
                 AppFeedbackCenter.acknowledge(requireNotNull(ownedFeedback).id)
                 assertTrue(AppFeedbackCenter.events.value.isEmpty())
             } catch (error: Throwable) { failCleanup(error) }
-            if (rejectNotificationQuickSave || stopTimeout == StopTimeout.SEAL_FAILURE) {
+            if (rejectNotificationQuickSave || stopTimeout == StopTimeout.SEAL_FAILURE || quickSaveAcrossClear) {
                 ownedFeedback?.let { AppFeedbackCenter.acknowledge(it.id) }
             }
             if (!ownerDrainFailed) try {
@@ -685,9 +715,14 @@ class ActualServiceLifecycleTest {
         }
     }
 
-    private class PacketInput(private val first: ByteArray, private val rejected: ByteArray) : CaptureAudioInput {
+    private class PacketInput(private val first: ByteArray, private val rejected: ByteArray,
+        holdFirst: Boolean = false, holdStopCleanup: Boolean = false) : CaptureAudioInput {
+        val firstEntered = CountDownLatch(1)
+        val allowFirst = CountDownLatch(if (holdFirst) 1 else 0)
         val secondEntered = CountDownLatch(1)
         val allowSecond = CountDownLatch(1)
+        val stopEntered = CountDownLatch(1)
+        val allowStopCleanup = CountDownLatch(if (holdStopCleanup) 1 else 0)
         val released = CountDownLatch(1)
         val reads = AtomicInteger()
         val stops = AtomicInteger()
@@ -700,7 +735,7 @@ class ActualServiceLifecycleTest {
         override fun read(buffer: java.nio.ByteBuffer, sizeInBytes: Int, readMode: Int): Int {
             val number = reads.incrementAndGet()
             val bytes = when (number) {
-                1 -> first
+                1 -> { firstEntered.countDown(); check(allowFirst.await(8, TimeUnit.SECONDS)); first }
                 2 -> { secondEntered.countDown(); check(allowSecond.await(8, TimeUnit.SECONDS)); rejected }
                 else -> throw AssertionError("Input read after Stop")
             }
@@ -708,17 +743,30 @@ class ActualServiceLifecycleTest {
             buffer.put(bytes)
             return bytes.size
         }
-        override fun stop() { check(stops.incrementAndGet() == 1); recording = false; allowSecond.countDown() }
+        override fun stop() {
+            check(stops.incrementAndGet() == 1)
+            recording = false
+            allowSecond.countDown()
+            stopEntered.countDown()
+            check(allowStopCleanup.await(8, TimeUnit.SECONDS))
+        }
         override fun release() { check(releases.incrementAndGet() == 1); released.countDown() }
     }
 
     private fun exercisePublicCapture(actual: NoMicService, handler: Handler,
         retained: MutableList<ReverbService.TimelineSnapshot>,
-        packet: PacketInput, first: ByteArray, stopTimeout: StopTimeout?, ownFeedback: (FeedbackEvent) -> Unit) {
+        packet: PacketInput, first: ByteArray, stopTimeout: StopTimeout?, stopEntry: StopEntry?,
+        quickSaveAcrossClear: Boolean, settingsRollbackDuringStart: Boolean, ownFeedback: (FeedbackEvent) -> Unit) {
         val wrapperField = android.content.ContextWrapper::class.java.getDeclaredField("mBase").apply { isAccessible = true }
         val oldBase = wrapperField.get(actual) as android.content.Context
         val starts = mutableListOf<Intent>()
+        val settingsRace = if (settingsRollbackDuringStart) StartAcrossSettingsRollback(handler.looper.thread) else null
         wrapperField.set(actual, object : android.content.ContextWrapper(oldBase) {
+            override fun getSharedPreferences(name: String, mode: Int): SharedPreferences {
+                settingsRace?.beforePreferenceRead()
+                return super.getSharedPreferences(name, mode)
+            }
+
             override fun checkSelfPermission(permission: String): Int =
                 if (permission == android.Manifest.permission.RECORD_AUDIO) android.content.pm.PackageManager.PERMISSION_GRANTED
                 else super.checkSelfPermission(permission)
@@ -726,6 +774,8 @@ class ActualServiceLifecycleTest {
                 starts += Intent(intent)
                 return android.content.ComponentName(actual, NoMicService::class.java)
             }
+            override fun startService(intent: Intent): android.content.ComponentName =
+                android.content.ComponentName(actual, NoMicService::class.java)
         })
         var failure: Throwable? = null
         try {
@@ -736,7 +786,18 @@ class ActualServiceLifecycleTest {
             assertEquals(android.content.ComponentName(actual, NoMicService::class.java), starts.single().component)
             assertEquals(Service.START_STICKY, actual.onStartCommand(starts.single(), 0, 37))
             assertNotNull(Shadow.extract<ShadowService>(actual).lastForegroundNotification)
+            settingsRace?.failAndRollBackSettings(actual)
+            if (quickSaveAcrossClear) exerciseQuickSaveWhileClear(actual, packet)
             assertTrue(packet.secondEntered.await(8, TimeUnit.SECONDS))
+            if (settingsRace != null) {
+                val published = actual.getConfigurationSnapshot()
+                assertEquals(8_000, published.sampleRate)
+                assertEquals(PcmSampleFormat.PCM_16, published.sampleFormat)
+                assertEquals(AudioSourceMode.VOICE_RECOGNITION, published.sourceMode)
+                assertEquals(published, actual.configurationAtInputCreation)
+                assertEquals(published, field(actual, "configuredCaptureSnapshot"))
+                assertEquals(AudioSourceMode.VOICE_RECOGNITION.sourceValue, field(actual, "audioSource"))
+            }
             assertNull(ShadowPowerManager.getLatestWakeLock())
             assertEquals(8_000, field(actual, "sampleRate"))
             assertEquals(2, packet.reads.get())
@@ -748,7 +809,10 @@ class ActualServiceLifecycleTest {
                 fence(handler)
                 failNextCaptureSeal(actual)
             }
-            assertTrue(actual.disableListening().accepted)
+            val deferredStop = stopEntry?.let {
+                enqueueHeldReadStop(actual, handler, packet, it, retained)
+            }
+            if (stopEntry == null) assertTrue(actual.disableListening().accepted)
             assertFalse(getRecorderPreferences(actual).getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, true))
             val incidentRoot = actual.applicationContext.noBackupFilesDir
             // Keep the ordinary Stop from attempting the injected seal before the timeout.
@@ -770,11 +834,16 @@ class ActualServiceLifecycleTest {
                     assertTrue(getRecorderPreferences(actual).getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false))
                 }
             }
-            packet.allowSecond.countDown()
+            // The QS case leaves native return to the Stop watchdog. The Home case
+            // acknowledges it explicitly after proving that listening=false is durable.
+            if (stopEntry == StopEntry.QUICK_SETTINGS) {
+                exerciseRestartWhileWatchdogReleases(actual, handler, packet)
+            } else packet.allowSecond.countDown()
             assertTrue(packet.released.await(8, TimeUnit.SECONDS))
             assertEquals(1, packet.stops.get())
             assertEquals(1, packet.releases.get())
             fence(handler)
+            deferredStop?.invoke()
             assertFalse(RecordingIncidentStore.beginKnownCaptureStop(actual).armed)
             assertNull(ShadowPowerManager.getLatestWakeLock())
             if (stopTimeout == StopTimeout.SEAL_FAILURE) {
@@ -792,6 +861,14 @@ class ActualServiceLifecycleTest {
                 assertTrue(actual.disableListening().accepted)
                 fence(handler)
             }
+            if (quickSaveAcrossClear) {
+                (field(actual, "durableSaveAdmissionExecutor") as ExecutorService).submit {}.get(8, TimeUnit.SECONDS)
+                ShadowLooper.idleMainLooper()
+                assertEquals(0, (field(actual, "durableSaveOwners") as Map<*, *>).size)
+                val feedback = AppFeedbackCenter.events.value.single().also(ownFeedback)
+                assertEquals(actual.getString(R.string.nothing_to_export), feedback.message)
+                return
+            }
             val snapshots = mutableListOf<ReverbService.TimelineSnapshot?>()
             actual.acquireTimelineSnapshot(ReverbService.BufferSlot.LOOPING) { snapshot ->
                 snapshot?.let(retained::add); snapshots += snapshot
@@ -804,18 +881,254 @@ class ActualServiceLifecycleTest {
             }
             snapshot.close(); retained.remove(snapshot)
             assertEquals(2, packet.reads.get())
-            assertEquals(if (queueRestart) 2 else 1, starts.size)
+            assertEquals(if (queueRestart || stopEntry == StopEntry.QUICK_SETTINGS) 2 else 1, starts.size)
         } catch (error: Throwable) {
             failure = error
             throw error
         } finally {
+            packet.allowFirst.countDown()
             packet.allowSecond.countDown()
+            packet.allowStopCleanup.countDown()
             try { wrapperField.set(actual, oldBase) } catch (error: Throwable) {
                 val firstFailure = failure
                 if (firstFailure == null) throw error
                 if (firstFailure !== error) firstFailure.addSuppressed(error)
             }
         }
+    }
+
+    private class StartAcrossSettingsRollback(private val writer: Thread) {
+        private val readingSilence = CountDownLatch(1)
+        private val allowSilenceRead = CountDownLatch(1)
+        private val transactionOwnsRetention = CountDownLatch(1)
+        private val attemptedValuesVisible = CountDownLatch(1)
+        private val allowCommitFailure = CountDownLatch(1)
+
+        fun beforePreferenceRead() {
+            if (Thread.currentThread() !== writer) return
+            val stack = writer.stackTrace
+            if (stack.any { it.className == SilenceGatePreferences::class.java.name && it.methodName == "read" } &&
+                readingSilence.count != 0L
+            ) {
+                // Start holds the silence-read lock. Let Settings get the retention lock first.
+                readingSilence.countDown()
+                check(allowSilenceRead.await(8, TimeUnit.SECONDS))
+            }
+            if (stack.any { it.className == ReverbService::class.java.name && it.methodName == "readConfiguredCaptureSnapshot" }) {
+                check(attemptedValuesVisible.await(8, TimeUnit.SECONDS))
+            }
+        }
+
+        fun failAndRollBackSettings(service: ReverbService) {
+            val prefs = getRecorderPreferences(service)
+            val attempted = mapOf(
+                PrefKey.SAMPLE_RATE to 16_000,
+                PrefKey.PCM_SAMPLE_FORMAT to PcmSampleFormat.PCM_FLOAT.storageCode.toInt(),
+                PrefKey.AUDIO_SOURCE to AudioSourceMode.MIC.storageCode.toInt(),
+            )
+            val before = attempted.keys.associateWith { prefs.snapshotDurablePreferenceValue(it) }
+            val transaction = FutureTask(Callable {
+                withRetentionPersistenceLock {
+                    transactionOwnsRetention.countDown()
+                    SilenceGatePreferences.withSettingsTransaction(service, expectedRaw = null) {
+                        val retention = retentionConfigurationForRead(service)
+                        persistRetentionTransaction(
+                            writeNewRecovery = { writeRetentionRecoveryConfiguration(service, retention) },
+                            commitNewPreferences = {
+                                val editor = prefs.edit()
+                                attempted.forEach { (key, value) -> editor.putInt(key, value) }
+                                // Model a commit that exposes its process-local values before failing.
+                                check(editor.commit())
+                                attemptedValuesVisible.countDown()
+                                check(allowCommitFailure.await(8, TimeUnit.SECONDS))
+                                false
+                            },
+                            restoreRecovery = { writeRetentionRecoveryConfiguration(service, retention) },
+                            restorePreferences = {
+                                val editor = prefs.edit()
+                                before.forEach { (key, value) -> editor.restoreDurablePreferenceValue(key, value) }
+                                editor.commit()
+                            },
+                        )
+                    }
+                }
+            })
+            val worker = Thread(transaction, "fixture-settings-rollback")
+            try {
+                assertTrue(readingSilence.await(8, TimeUnit.SECONDS))
+                worker.start()
+                assertTrue(transactionOwnsRetention.await(8, TimeUnit.SECONDS))
+                allowSilenceRead.countDown()
+                assertTrue(attemptedValuesVisible.await(8, TimeUnit.SECONDS))
+                attempted.forEach { (key, value) -> assertEquals(value, prefs.getInt(key, -1)) }
+                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(8)
+                while (writer.state != Thread.State.BLOCKED ||
+                    writer.stackTrace.none { it.methodName == "withRetentionPersistenceLock" }
+                ) {
+                    assertTrue("Start did not reach the retention boundary", System.nanoTime() < deadline)
+                    Thread.sleep(1)
+                }
+                // On the old path the recorder has already adopted the attempted settings here,
+                // and waits at its later retention sizing read. The fixed path waits before sampling.
+                allowCommitFailure.countDown()
+                assertFalse(transaction.get(8, TimeUnit.SECONDS))
+                before.forEach { (key, value) -> assertEquals(value, prefs.snapshotDurablePreferenceValue(key)) }
+            } finally {
+                allowSilenceRead.countDown()
+                allowCommitFailure.countDown()
+                attemptedValuesVisible.countDown()
+                worker.join(8_000)
+                check(!worker.isAlive)
+            }
+        }
+    }
+
+    private fun enqueueHeldReadStop(
+        service: NoMicService, handler: Handler, packet: PacketInput, entry: StopEntry,
+        retained: MutableList<ReverbService.TimelineSnapshot>,
+    ): () -> Unit {
+        val loop = ReverbService.BufferSlot.LOOPING
+        val results = mutableListOf<ReverbService.UiCaptureCommandResult>()
+        val snapshots = mutableListOf<ReverbService.TimelineSnapshot?>()
+        when (entry) {
+            StopEntry.HOME -> {
+                val oneShot = ReverbService.BufferSlot.ONE_SHOT
+                assertTrue(service.requestCaptureBlobTap(oneShot, CaptureCommandFeedback { results += it; true }))
+                assertTrue(service.requestCaptureBlobTap(loop, CaptureCommandFeedback { results += it; true }))
+            }
+            StopEntry.QUICK_SETTINGS -> {
+                service.acquireTimelineSnapshot(loop) { snapshot ->
+                    snapshot?.let(retained::add)
+                    snapshots += snapshot
+                }
+                service.onStartCommand(Intent(service, NoMicService::class.java)
+                    .setAction(ReverbService.ACTION_QUICK_TILE_COMMAND)
+                    .putExtra(ReverbService.EXTRA_QUICK_TILE_BUFFER_SLOT, loop.storageCode.toInt()), 0, 39)
+            }
+        }
+        val prefs = getRecorderPreferences(service)
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
+        while (prefs.getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, true)) {
+            assertTrue("Stop is parked behind the native read", System.nanoTime() < deadline)
+            fence(handler)
+        }
+        // The preference map changes before commit returns, so wait for the accepted boundary.
+        fence(handler)
+        assertEquals(false, field(service, "durableListeningIntentEnabled"))
+        assertEquals(1L, packet.allowSecond.count)
+        assertEquals(0, packet.releases.get())
+        assertTrue(RecordingIncidentStore.beginKnownCaptureStop(service).armed)
+        ShadowLooper.idleMainLooper()
+        assertTrue(snapshots.isEmpty())
+        return {
+            val commands = field(service, "captureCommands") as CaptureCommandAdmission
+            val settledBy = System.nanoTime() + TimeUnit.SECONDS.toNanos(8)
+            while (commands.isActive()) {
+                assertTrue("Stop did not settle after native return", System.nanoTime() < settledBy)
+                fence(handler)
+            }
+            if (entry == StopEntry.QUICK_SETTINGS) awaitLeaseCount(service, handler, 1)
+            ShadowLooper.idleMainLooper()
+            when (entry) {
+                StopEntry.HOME -> {
+                    assertEquals(CaptureBlobTapAction.STOP, results.single { it.bufferSlot == loop }.action)
+                    assertTrue(results.single { it.bufferSlot == loop }.command.accepted)
+                    val superseded = results.single { it.bufferSlot != loop }
+                    assertEquals(CaptureBlobTapAction.NONE, superseded.action)
+                    assertFalse(superseded.command.accepted)
+                }
+                StopEntry.QUICK_SETTINGS -> {
+                    val snapshot = requireNotNull(snapshots.single())
+                    snapshot.close()
+                    retained.remove(snapshot)
+                }
+            }
+            assertEquals(loop.storageCode.toInt(), prefs.getInt(PrefKey.CAPTURE_BUFFER_SLOT, -1))
+            assertFalse(prefs.getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, true))
+        }
+    }
+
+    private fun exerciseRestartWhileWatchdogReleases(service: NoMicService, handler: Handler, packet: PacketInput) {
+        assertTrue("Stop watchdog did not request native release", packet.stopEntered.await(8, TimeUnit.SECONDS))
+        val io = field(service, "captureIo") as CaptureIoCoordinator
+        val input = requireNotNull(io.currentInput())
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
+        while (io.inputIsReading()) {
+            assertTrue("Cancelled read did not acknowledge return", System.nanoTime() < deadline)
+            fence(handler)
+        }
+        assertTrue(service.enableListening(ReverbService.BufferSlot.LOOPING).accepted)
+        assertEquals(Service.START_STICKY, service.onStartCommand(Intent(service, NoMicService::class.java), 0, 40))
+        fence(handler)
+        assertEquals(1L, packet.allowStopCleanup.count)
+        assertEquals(0, packet.releases.get())
+        assertSame(input, io.currentInput())
+        assertEquals(1, service.inputAttempts.get())
+        // Keep the test focused on the old input and prevent a synthetic replacement.
+        assertTrue(service.disableListening().accepted)
+        packet.allowStopCleanup.countDown()
+    }
+
+    private fun exerciseQuickSaveWhileClear(service: NoMicService, packet: PacketInput) {
+        assertTrue(packet.firstEntered.await(8, TimeUnit.SECONDS))
+        val oneShot = field(service, "oneShotAudioChunkStore") as PersistentAudioChunkStore
+        val intentLock = requireNotNull(field(service, "listeningIntentLock"))
+        val syncField = PersistentAudioChunkStore::class.java.getDeclaredField("directorySync").apply { isAccessible = true }
+        @Suppress("UNCHECKED_CAST")
+        val sync = syncField.get(oneShot) as (File) -> Unit
+        val clearEntered = CountDownLatch(1)
+        val releaseClear = CountDownLatch(1)
+        val clearGated = AtomicBoolean()
+        syncField.set(oneShot, { directory: File ->
+            if (Thread.currentThread().name == "reverb-buffer-clear" && clearGated.compareAndSet(false, true)) {
+                check(Thread.holdsLock(intentLock))
+                clearEntered.countDown()
+                check(releaseClear.await(8, TimeUnit.SECONDS))
+            }
+            sync(directory)
+        })
+        val sentinel = CountDownLatch(1)
+        val reachedWhileClearHeld = AtomicBoolean()
+        val saveStart = FutureTask {
+            val action = Intent(service, NoMicService::class.java).setAction(ReverbService.ACTION_QUICK_SAVE)
+            assertEquals(Service.START_STICKY, service.onStartCommand(action, 0, 39))
+            assertEquals(service.getString(R.string.saving), Shadow.extract<ShadowService>(service)
+                .lastForegroundNotification.extras.getCharSequence(android.app.Notification.EXTRA_TEXT)?.toString())
+        }
+        // Even a failing baseline releases the gate so the main looper can exit and report.
+        val unblockOnFailure = Thread {
+            if (!sentinel.await(3, TimeUnit.SECONDS)) releaseClear.countDown()
+        }
+        val clearWorker = field(service, "bufferClearExecutor") as ExecutorService
+        val clearId = try {
+            val id = requireNotNull(service.startClearBuffer(ReverbService.BufferSlot.ONE_SHOT))
+            packet.allowFirst.countDown()
+            assertTrue(clearEntered.await(8, TimeUnit.SECONDS))
+            assertTrue(packet.secondEntered.await(8, TimeUnit.SECONDS))
+            val main = Handler(Looper.getMainLooper())
+            check(main.post(saveStart))
+            check(main.post {
+                reachedWhileClearHeld.set(releaseClear.count == 1L)
+                sentinel.countDown()
+            })
+            unblockOnFailure.start()
+            ShadowLooper.idleMainLooper()
+            saveStart.get(8, TimeUnit.SECONDS)
+            assertTrue("Notification Quick Save stalled main behind Clear", reachedWhileClearHeld.get())
+            assertEquals(id, service.currentBufferClearStatus()?.operationId)
+            assertEquals(BufferClearPhase.RUNNING, service.currentBufferClearStatus()?.phase)
+            id
+        } finally {
+            sentinel.countDown()
+            packet.allowFirst.countDown()
+            releaseClear.countDown()
+            unblockOnFailure.join(8_000)
+            clearWorker.submit {}.get(8, TimeUnit.SECONDS)
+            syncField.set(oneShot, sync)
+        }
+        assertEquals(clearId, service.currentBufferClearStatus()?.operationId)
+        assertEquals(BufferClearPhase.COMPLETED, service.currentBufferClearStatus()?.phase)
+        assertEquals(0L, oneShot.countFilledBytes())
     }
 
     private fun captureHistory(root: File): List<RecordingIncident> {

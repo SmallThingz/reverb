@@ -127,13 +127,20 @@ internal class NativeSettingsPersistence(
         // surviving recorder (or stopped tile fallback) before this section can terminate.
         val persisted = runDurableUiAttempt {
             processSettingsCommitBarrier.runAcceptedSave {
+                var retentionPublication: RetentionRecoveryPublication? = null
                 val committed = withContext(Dispatchers.IO) {
                 withRetentionPersistenceLock {
                     val settingsCommitted = withSilenceTransaction(submission.originalSilenceRaw, malformedSilence) {
                     // Roll back to the state that was actually durable when this transaction started,
                     // not to the UI's older edit snapshot. Another writer may have committed since
                     // Settings opened.
-                    val rollbackRetention = retentionConfigurationForRead(context)
+                    val retentionBaseline = readRetentionSettingsBaseline(context)
+                    // The save still publishes recovery first. Only unchanged durable retention
+                    // is eligible to carry that publication to the later recorder reload.
+                    val recordPublication: ((RetentionRecoveryPublication) -> Unit)? =
+                        if (retentionBaseline.matchingConfiguration == retentionConfiguration) {
+                            { retentionPublication = it }
+                        } else null
                     val oneShotFullRollback = if (invalidateCachedOneShotFull) {
                         RecordingQuickTileStateCache.snapshotOneShotFullPreferenceRollback(preferences)
                     } else {
@@ -154,7 +161,9 @@ internal class NativeSettingsPersistence(
                         transactionCommitted = persistRetentionTransaction(
                             // Recovery is the write-ahead side of the transaction. If the process dies before
                             // preferences commit, restart sees a mismatch and existing history fails closed.
-                            writeNewRecovery = { writeRetentionRecoveryConfiguration(context, retentionConfiguration) },
+                            writeNewRecovery = {
+                                writeRetentionRecoveryConfiguration(context, retentionConfiguration, recordPublication)
+                            },
                             commitNewPreferences = {
                                 // An untouched control follows a newer durable output preference;
                                 // an explicit selection owns its value in this atomic transaction.
@@ -172,7 +181,9 @@ internal class NativeSettingsPersistence(
                                     },
                                 )
                             },
-                            restoreRecovery = { writeRetentionRecoveryConfiguration(context, rollbackRetention) },
+                            restoreRecovery = {
+                                writeRetentionRecoveryConfiguration(context, retentionBaseline.rollbackConfiguration)
+                            },
                             restorePreferences = {
                                 val editor = preferences.edit()
                                 rollbackPreferences.forEach { (key, snapshot) ->
@@ -202,7 +213,7 @@ internal class NativeSettingsPersistence(
                     settingsCommitted
                 }
                 }
-                if (committed) applyCommittedSettingsToRuntime(transactionService)
+                if (committed) applyCommittedSettingsToRuntime(transactionService, retentionPublication)
                 committed
             }
         }
@@ -235,9 +246,12 @@ internal class NativeSettingsPersistence(
         )
     }
 
-    fun applyCommittedSettingsToRuntime(transactionService: ReverbService?) {
+    fun applyCommittedSettingsToRuntime(
+        transactionService: ReverbService?,
+        retentionPublication: RetentionRecoveryPublication? = null,
+    ) {
         val currentService = service ?: transactionService
-        if (currentService?.applyUpdatedPreferences() == true) return
+        if (currentService?.applyUpdatedPreferences(retentionPublication) == true) return
         val appContext = context.applicationContext
         if (getRecorderPreferences(appContext).safeBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)) {
             runCatching {
