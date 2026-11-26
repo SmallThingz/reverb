@@ -6,13 +6,18 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
+import android.system.Os
+import android.system.OsConstants
+import java.io.Closeable
 import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.Callable
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
 import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -41,6 +46,53 @@ import org.robolectric.shadow.api.Shadow
 @Config(sdk = [35], application = Application::class, shadows = [ServiceStateOsShadow::class])
 @LooperMode(LooperMode.Mode.PAUSED)
 class ReverbServiceStateDeliveryTest {
+    @Test
+    fun cleanDurabilitySyncLeavesFullCaptureMailboxListening() = withFixture { f ->
+        f.withFullCaptureMailbox { sync, _ ->
+            f.onAudio {
+                // The fixture starts at a chunk boundary. Dirty both stores without crossing retention.
+                for (store in listOf(f.loop, f.one)) {
+                    assertEquals(2, store.append(byteArrayOf(31, 32), 0, 2))
+                    assertFalse(store.retentionMaintenanceNeeded())
+                }
+            }
+            sync()
+            for (store in listOf(f.loop, f.one)) assertEquals(0L, store.syncActivePayloadToDisk())
+        }
+    }
+
+    @Test
+    @Config(shadows = [JournalHostIoShadow::class])
+    fun retentionCrossingSurvivesFullCaptureMailbox() = withRetentionHeaderIo { f ->
+        f.withFullCaptureMailbox { sync, drainRetention ->
+            // Exactly fill the looping store and complete a genuinely negative observation.
+            val fill = ByteArray(4096 - 512) { (it * 17).toByte() }
+            f.onAudio { assertEquals(fill.size, f.loop.append(fill, 0, fill.size)) }
+            sync()
+            assertFalse(f.loop.retentionMaintenanceNeeded())
+
+            val tail = ByteArray(256) { (it + 9).toByte() }
+            f.onAudio { assertEquals(tail.size, f.loop.append(tail, 0, tail.size)) }
+            assertTrue(f.loop.retentionMaintenanceNeeded())
+            val paused = f.pauseAudio()
+            try {
+                paused.awaitEntered()
+                sync()
+                sync() // Two successful ticks while the owner cannot deliver the first wake.
+            } finally {
+                paused.release()
+                paused.awaitFinished()
+            }
+            drainRetention()
+
+            assertFalse(f.loop.retentionMaintenanceNeeded())
+            val expected = ByteArray(256) { (it * 13 + 1).toByte() } + fill + tail
+            requireNotNull(f.loop.acquireRange(0.0, f.loop.durationSeconds())).use { lease ->
+                assertArrayEquals(expected, readStoreTestPcm16Mono8Khz(lease))
+            }
+        }
+    }
+
     @Test
     fun rejectedAudioQueueTerminatesEachPublicStateReadAndPreservesHealthyStorage() = withFixture { fixture ->
         fixture.proveHealthyThenReset()
@@ -388,7 +440,7 @@ class ReverbServiceStateDeliveryTest {
     }
 
     private class Fixture(val service: ReverbService, private val audio: Handler,
-        private val one: PersistentAudioChunkStore, val loop: PersistentAudioChunkStore) {
+        val one: PersistentAudioChunkStore, val loop: PersistentAudioChunkStore) {
         var beforeStoreClose: () -> Unit = {}
 
         private val audioPauses = mutableListOf<AudioPause>()
@@ -419,6 +471,70 @@ class ReverbServiceStateDeliveryTest {
             ))
             return starts
         }
+        fun withFullCaptureMailbox(body: (sync: () -> Unit, drainRetention: () -> Unit) -> Unit) {
+            // Hold only the coordinator's single pending drain. The real audio Handler and
+            // maintenance executor can run while every normal FIFO ticket remains occupied.
+            val pendingDrain = AtomicReference<Runnable>()
+            val completed = AtomicInteger()
+            val io = CaptureIoCoordinator(audio,
+                onPacket = { _, _, _ -> error("Unexpected PCM input") },
+                onInputFailure = { _, error -> throw AssertionError(error) },
+                onWriterFailure = { throw AssertionError(it) },
+                onDispatchFailure = { throw AssertionError(it) },
+                dispatchWriter = { pendingDrain.compareAndSet(null, it) },
+            )
+            val maintenance = Executors.newSingleThreadExecutor()
+            val syncWorker = Executors.newSingleThreadExecutor()
+            fun field(name: String) = ReverbService::class.java.getDeclaredField(name).apply { isAccessible = true }
+            val continuity = field("captureContinuityGeneration").get(service) as java.util.concurrent.atomic.AtomicLong
+            val generation = continuity.get()
+            val runSync = ReverbService::class.java.getDeclaredMethod("syncDirtyAudioPayloads").apply { isAccessible = true }
+            try {
+                setField("captureIo", io)
+                setField("bufferClearExecutor", maintenance)
+                setField("state", ReverbService.STATE_LISTENING)
+                setField("captureStoresAdmitted", true)
+                setField("durableListeningIntentEnabled", true)
+                setField("foregroundServiceTypes", ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+                onAudio { loop.enableDeferredRetentionCleanup(); one.enableDeferredRetentionCleanup() }
+                repeat(64) {
+                    assertEquals(CaptureControlMailbox.Admission.ACCEPTED, io.post(pauseInput = false,
+                        rejected = { error("Lost admitted control") }, work = { completed.incrementAndGet() }))
+                }
+                fun assertFull() {
+                    assertEquals(CaptureControlMailbox.Admission.FULL, io.post(pauseInput = false,
+                        rejected = {}, work = { error("Unexpected spare control ticket") }))
+                }
+                assertFull()
+                body({
+                    syncWorker.submit { runSync.invoke(service) }.get(8, TimeUnit.SECONDS)
+                    assertEquals(ReverbService.STATE_LISTENING, field("state").getInt(service))
+                    assertFalse(field("persistenceFailureBlocked").getBoolean(service))
+                    assertEquals(generation, continuity.get())
+                    assertFull()
+                }, {
+                    // One excess whole chunk. Allow its retirement and any follow-up unlink pass.
+                    repeat(3) {
+                        onAudio { }
+                        ShadowLooper.idleMainLooper()
+                        maintenance.submit {}.get(8, TimeUnit.SECONDS)
+                    }
+                    assertEquals(ReverbService.STATE_LISTENING, field("state").getInt(service))
+                    assertFull()
+                })
+                onAudio {
+                    repeat(65) { pendingDrain.getAndSet(null)?.run() }
+                    assertEquals(64, completed.get())
+                    assertTrue(pendingDrain.get() == null)
+                }
+            } finally {
+                syncWorker.shutdown()
+                maintenance.shutdown()
+                check(syncWorker.awaitTermination(8, TimeUnit.SECONDS))
+                check(maintenance.awaitTermination(8, TimeUnit.SECONDS))
+            }
+        }
+
         fun assertSettingsStarts(starts: List<Intent>, count: Int) {
             assertEquals(List(count) { ReverbService.ACTION_SETTINGS_RUNTIME_KEEPALIVE }, starts.map { it.action })
             assertEquals(List(count) { ComponentName(service, ReverbService::class.java) }, starts.map { it.component })
@@ -477,6 +593,33 @@ class ReverbServiceStateDeliveryTest {
             }
             failure?.let { throw it }
             storesClosedSuccessfully = true
+        }
+    }
+
+    private fun withRetentionHeaderIo(body: (Fixture) -> Unit) {
+        // Finalized-chunk retirement verifies the header through an owned Os.open/read descriptor.
+        JournalHostIoShadow.reset()
+        Closeable { JournalHostIoShadow.finishFixture()?.let { throw it } }.use {
+            withFixture { fixture ->
+                // Witness the selected method shadow on a real finalized fixture chunk before
+                // interpreting any later PAUSED transition as a capture scheduling failure.
+                val root = requireNotNull(ServiceStateOsShadow.fixtureRoot)
+                val dir = root.resolve("loop").resolve(BUFFER_CHUNKS_FOLDER_NAME).toFile()
+                val chunk = requireNotNull(dir.listFiles()).first { it.isFile }
+                val expected = chunk.inputStream().use { it.read() }
+                assertTrue("Missing fixture header", expected >= 0)
+                val fd = Os.open(chunk.path, OsConstants.O_RDONLY or OsConstants.O_NOFOLLOW or OsConstants.O_CLOEXEC, 0)
+                try {
+                    assertEquals("Fixture must own the open descriptor", 1, JournalHostIoShadow.outstandingOwners)
+                    val byte = ByteArray(1)
+                    assertEquals("No fixture header byte delivered", 1, Os.read(fd, byte, 0, 1))
+                    assertEquals(expected, byte[0].toInt() and 255)
+                } finally {
+                    Os.close(fd)
+                }
+                assertEquals(0, JournalHostIoShadow.outstandingOwners)
+                body(fixture)
+            }
         }
     }
 

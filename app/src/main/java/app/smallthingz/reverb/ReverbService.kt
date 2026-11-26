@@ -444,6 +444,12 @@ open class ReverbService : Service() {
     private var settingsAdmissionClosed = false
     private val captureControlFence = CaptureControlFence()
     private val retentionMaintenanceState = RetentionMaintenanceSchedulerState()
+    private val retentionObservationPosted = AtomicBoolean()
+    private val retentionObservation = Runnable {
+        // A wake during the observation must be able to request another pass.
+        retentionObservationPosted.set(false)
+        scheduleRetentionMaintenanceIfNeeded()
+    }
     @Volatile private var lastDurabilitySyncRequestNanos = 0L
     private lateinit var loopingAudioChunkStore: PersistentAudioChunkStore
     private lateinit var oneShotAudioChunkStore: PersistentAudioChunkStore
@@ -3857,7 +3863,11 @@ open class ReverbService : Service() {
             pauseListeningAfterPersistenceFailure("payload sync", error)
             return
         }
-        scheduleRetentionMaintenanceIfNeeded()
+        // Both stores were synced. A clean hint only suppresses this tick. Later writes
+        // have the next sync or seal, and parked maintenance still needs its wake.
+        if (retentionMaintenanceState.isActive() || loopingAudioChunkStore.hasLoadedRetentionBacklog() ||
+            oneShotAudioChunkStore.hasLoadedRetentionBacklog()
+        ) scheduleRetentionMaintenanceIfNeeded()
         if (RecordingQuickTiles.hasListeningServices()) {
             audioHandler.post {
                 if (state == STATE_LISTENING) {
@@ -5234,7 +5244,13 @@ open class ReverbService : Service() {
     private fun scheduleRetentionMaintenanceIfNeeded() {
         if (serviceDestroying || !::audioHandler.isInitialized) return
         if (Looper.myLooper() != audioHandler.looper) {
-            postCaptureWork post@ { scheduleRetentionMaintenanceIfNeeded() }
+            // This is a hint to inspect current stores on their owner. It has no PCM
+            // prefix to fence and must remain deliverable when all control tickets are in use.
+            if (retentionObservationPosted.compareAndSet(false, true) && !audioHandler.post(retentionObservation)) {
+                retentionObservationPosted.set(false)
+                // Preserve the capture coordinator's writer-dispatch failure handling.
+                if (!serviceDestroying) postCaptureWork { scheduleRetentionMaintenanceIfNeeded() }
+            }
             return
         }
         if (!captureStoresAdmitted || !retentionMaintenanceMayRun(serviceDestroying, foregroundServiceTimedOut) ||

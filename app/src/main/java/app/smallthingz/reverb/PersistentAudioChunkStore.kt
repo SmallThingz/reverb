@@ -1005,6 +1005,10 @@ internal class PersistentAudioChunkStore internal constructor(
         if (!deferGapIndex || retentionChanged) writeIndexLocked()
     }
 
+    /** Advisory only. Never load or reopen a store on the payload sync worker. */
+    @Synchronized
+    fun hasLoadedRetentionBacklog(): Boolean = loaded && !closed && retentionMaintenanceNeededLocked()
+
     @Synchronized
     fun retentionMaintenanceNeeded(): Boolean {
         ensureLoadedLocked()
