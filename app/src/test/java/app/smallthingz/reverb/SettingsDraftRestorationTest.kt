@@ -244,7 +244,7 @@ class SettingsDraftRestorationTest {
             quickSaveEnabled = false, quickSaveSeconds = 123, silenceHistogram = histogram))
             .copy(oneShotTimeText = "1:", loopingSizeText = "9.")
         for (version in listOf(1, 2)) for (oldWake in listOf(false, true)) {
-            val saved = current.save().toMutableList()
+            val saved = current.save().take(25).toMutableList()
             saved[0] = version
             saved[15] = oldWake
             if (version == 1) saved.removeAt(24)

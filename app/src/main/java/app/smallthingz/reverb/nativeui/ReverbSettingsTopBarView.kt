@@ -31,9 +31,10 @@ internal data class SettingsTopBarBinding(
     val onNavigation: () -> Unit,
     val onDone: () -> Unit,
     val backHint: Any? = null,
+    val autoStartPermissionPending: Boolean = false,
 ) {
     val doneEnabled get() = hasUnsavedChanges && !settingsPersisting && !calibrationRunning &&
-        !quickTileEditorOpen && !notificationDurationPending
+        !quickTileEditorOpen && !notificationDurationPending && !autoStartPermissionPending
 }
 
 /** Centered Settings title with the compact Reverb action slots and the existing input gate. */

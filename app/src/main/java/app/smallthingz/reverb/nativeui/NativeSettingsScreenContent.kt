@@ -109,10 +109,6 @@ internal class NativeSettingsScreenContent(
         if(started)publish()
     }
     fun dismissAudioChoices() = sections.dismissAudioChoices()
-    override fun onWindowFocusChanged(hasWindowFocus:Boolean) {
-        if(!hasWindowFocus)dismissAudioChoices()
-        super.onWindowFocusChanged(hasWindowFocus)
-    }
     fun savePosition():SettingsListSavedPosition = list?.savePosition()
         ?:savedPosition?:SettingsListSavedPosition(0,0)
 
@@ -141,12 +137,13 @@ internal class NativeSettingsScreenContent(
         }
         val bar=TopBarValues(state.activation,state.hasUnsavedChanges,state.persisting,
             owner.calibration.running,owner.quickTileEditorState.editorOpen,
-            owner.notificationDurationInteraction.pending,owner.backHint,environment)
+            owner.notificationDurationInteraction.pending,owner.backHint,environment,
+            owner.autoStartPermissionPending)
         if(lastTopBar!=bar) {
             lastTopBar=bar
             topBar.bind(environment,SettingsTopBarBinding(bar.changed,bar.persisting,bar.calibrating,
                 bar.tileOpen,bar.durationPending,{owner.navigationAction(bar.activation)},{owner.done(bar.activation)},
-                bar.backHint))
+                bar.backHint,bar.autoStartPermissionPending))
         }
         val insets = NativeTopBarInsets(input.insets.left,input.insets.top,input.insets.right)
         topBar.setRemainingWindowInsets(insets)
@@ -226,5 +223,5 @@ internal class NativeSettingsScreenContent(
         val focus:ReverbService.BufferSlot?)
     private data class TopBarValues(val activation:Any,val changed:Boolean,val persisting:Boolean,
         val calibrating:Boolean,val tileOpen:Boolean,val durationPending:Boolean,val backHint:Any?,
-        val environment:ReverbViewEnvironment)
+        val environment:ReverbViewEnvironment,val autoStartPermissionPending:Boolean)
 }

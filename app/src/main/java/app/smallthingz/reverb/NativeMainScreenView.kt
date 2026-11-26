@@ -519,9 +519,8 @@ internal class NativeMainScreenView private constructor(
         if (input.permissionsGranted) {
             permissionContent?.let { home.setBody(null); it.close() }; permissionContent = null
             if (captureOwner == null) {
-                val selected = if (captureRestorationAvailable)
-                    restored?.selectedBufferCode?.let { BufferSlot.fromStorageCode(it) } ?: BufferSlot.ONE_SHOT
-                    else BufferSlot.ONE_SHOT
+                val selected = restored?.selectedBufferCode?.takeIf { captureRestorationAvailable }
+                    ?.let { BufferSlot.fromStorageCode(it) }
                 captureRestorationAvailable = false
                 val owner = NativeCaptureUiOwner(context, lifecycleOwner, windowRoot, scope, selected,
                     navigation.homeVisualizerVisible, accessibilityManager, ::saveFeedbackVisible,

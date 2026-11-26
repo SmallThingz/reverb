@@ -122,54 +122,51 @@ class NativeSettingsForegroundCoverageTest {
         }
     }
 
-    @Test fun movedAutoStartKeepsLoadingPermissionCopyAndRejectsThePreviousActivation() {
-        @Suppress("UNCHECKED_CAST")
-        val state = field(AutoStartAfterRestart.policy, "mutable") as MutableStateFlow<AutoStartChoice>
-        val previous = state.value
-        try {
-            state.value = AutoStartChoice()
-            Fixture().use { f ->
-                val section = f.section(SettingsSectionKey.RECORDING)
-                val title = descendants(section.view).filterIsInstance<ParagraphView>().single {
-                    it.getText() == f.context.getString(R.string.auto_start_title)
-                }
-                val row = ancestors(title).filterIsInstance<NativeToggleRow>().first()
-                val toggle = descendants(row).filterIsInstance<NativeMaterialSwitchView>().single()
-                assertFalse(row.isEnabled)
-                assertFalse(row.performClick())
-                assertFalse(state.value.permissionPending)
+    @Test fun movedAutoStartKeepsLoadingPermissionCopyAndRejectsThePreviousActivation() = Fixture().use { f ->
+        f.owner.setActive(false)
+        f.owner.setActive(true) // Retained values are visible, but fresh hydration owns readiness.
+        val section = f.section(SettingsSectionKey.RECORDING)
+        val title = descendants(section.view).filterIsInstance<ParagraphView>().single {
+            it.getText() == f.context.getString(R.string.auto_start_title)
+        }
+        val row = ancestors(title).filterIsInstance<NativeToggleRow>().first()
+        val toggle = descendants(row).filterIsInstance<NativeMaterialSwitchView>().single()
+        assertFalse(row.isEnabled)
+        assertFalse(row.performClick())
+        assertFalse(f.owner.autoStartPermissionPending)
 
-                state.value = AutoStartChoice(loaded = true, permissionPending = true)
-                section.bind()
-                assertTrue(row.isEnabled)
-                assertEquals(true, field(toggle, "checked"))
-                assertTrue(descendants(row).filterIsInstance<ParagraphView>().any {
-                    it.getText() == f.context.getString(R.string.auto_start_permission_pending)
-                })
+        f.hydrate()
+        section.bind()
+        assertFalse(BootResumeActivity.overlayAvailable(f.context))
+        assertTrue(row.performClick()) // A real current action owns the permission request, not the global boot policy.
+        section.bind()
+        assertTrue(row.isEnabled)
+        assertEquals(true, field(toggle, "checked"))
+        assertTrue(descendants(row).filterIsInstance<ParagraphView>().any {
+            it.getText() == f.context.getString(R.string.auto_start_permission_pending)
+        })
+        assertTrue(row.performClick()) // Cancel the pending enable using the actual OFF callback.
+        assertFalse(f.owner.autoStartPermissionPending)
+        section.bind()
+        val oldActivation = f.owner.state.activation
+        f.owner.setActive(false)
+        f.owner.setActive(true)
+        f.hydrate()
+        assertNotSame(oldActivation, f.owner.state.activation)
+        assertTrue(f.owner.featureInputReady())
+        assertFalse(f.owner.acceptsInput(oldActivation))
+        val before = f.owner.autoStartChoice
+        val revision = AutoStartAfterRestart.policy.revision()
+        assertTrue(row.performClick()) // Actual moved row still carries the old section activation.
+        assertEquals(before, f.owner.autoStartChoice)
+        assertEquals(revision, AutoStartAfterRestart.policy.revision())
 
-                state.value = AutoStartChoice(loaded = true)
-                section.bind()
-                val oldActivation = f.owner.state.activation
-                f.owner.setActive(false)
-                f.owner.setActive(true)
-                f.hydrate()
-                assertNotSame(oldActivation, f.owner.state.activation)
-                assertTrue(f.owner.featureInputReady())
-                assertFalse(f.owner.acceptsInput(oldActivation))
-                val before = state.value
-                val revision = AutoStartAfterRestart.policy.revision()
-                assertTrue(row.performClick()) // Actual moved row still carries the old section activation.
-                assertEquals(before, state.value)
-                assertEquals(revision, AutoStartAfterRestart.policy.revision())
-
-                assertFalse(BootResumeActivity.overlayAvailable(f.context))
-                section.bind()
-                assertTrue(row.performClick()) // A current bind restores authority to request permission.
-                assertTrue(state.value.permissionPending)
-                assertFalse(state.value.saving)
-                assertSame(row, ancestors(title).filterIsInstance<NativeToggleRow>().first())
-            }
-        } finally { state.value = previous }
+        section.bind()
+        assertTrue(row.performClick())
+        assertTrue(f.owner.autoStartPermissionPending)
+        assertFalse(f.owner.autoStartChoice.saving)
+        assertEquals(revision, AutoStartAfterRestart.policy.revision())
+        assertSame(row, ancestors(title).filterIsInstance<NativeToggleRow>().first())
     }
 
     @Test fun recordingFactoryPlacesAutoStartDirectlyAfterNotificationInsideTheSameSurface() = Fixture().use { f ->

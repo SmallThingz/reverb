@@ -73,6 +73,7 @@ internal fun resolveNativeSettingsBaseline(
         flacCompression = stored.flacCompression,
         quickSaveEnabled = stored.quickSaveEnabled,
         quickSaveSeconds = stored.quickSaveSeconds,
+        autoStartAfterRestart = stored.autoStartAfterRestart,
         silenceGate = encodeSilenceGate(stored.silence.config),
         silenceHistogram = stored.silenceHistogram,
     )

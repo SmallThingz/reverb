@@ -179,10 +179,12 @@ internal class SettingsDraftController(
      * convergence inside barrier.runAcceptedSave, and publish its committed theme under the
      * retention lock. A retired Activity never calls this tail.
      */
-    fun committed(submission: Submission, committedFormat: ExportFormat): Boolean {
+    fun committed(submission: Submission, committedFormat: ExportFormat,
+        committedAutoStartAfterRestart: Boolean = submission.snapshot.autoStartAfterRestart): Boolean {
         check(persistence === submission.attempt)
         val editedWhileSaving = settingsEditedDuringPersistence(submission.editRevision, editRevision)
-        val durable = submission.snapshot.copy(format = committedFormat)
+        val durable = submission.snapshot.copy(format = committedFormat,
+            autoStartAfterRestart = committedAutoStartAfterRestart)
         baseline = durable
         silenceRaw = submission.snapshot.silenceGate
         val output = reconcileSettingsOutputAfterCommit(
@@ -192,7 +194,9 @@ internal class SettingsDraftController(
             currentOutputRevision = outputRevision,
         )
         displayed = if (editedWhileSaving) {
-            displayed.copy(snapshot = displayed.snapshot.copy(format = output))
+            // Auto-start edits (including permission returns) are blocked during persistence.
+            displayed.copy(snapshot = displayed.snapshot.copy(format = output,
+                autoStartAfterRestart = committedAutoStartAfterRestart))
         } else {
             SettingsUiDraft.normalized(durable)
         }

@@ -30,6 +30,7 @@ data class SettingsSnapshot(
     val quickSaveSeconds: Int = DEFAULT_QUICK_SAVE_SECONDS,
     val silenceGate: String = encodeSilenceGate(SilenceGateConfig()),
     val silenceHistogram: String? = null,
+    val autoStartAfterRestart: Boolean = false,
 )
 
 private val SETTINGS_ALWAYS_WRITTEN_PREFERENCE_KEYS = listOf(

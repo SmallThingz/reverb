@@ -19,8 +19,8 @@ internal data class SettingsUiDraft(
     }
 
     // Primitive saveable values keep byte counts exact and enum identity independent of labels.
-    fun save(): List<Any> = listOf(
-        2,
+    fun save(autoStart: Boolean? = snapshot.autoStartAfterRestart): List<Any> = listOf(
+        3,
         snapshot.themeMode.storageCode.toInt(),
         snapshot.retentionMode.storageCode.toInt(),
         snapshot.oneShotRetentionTime,
@@ -45,6 +45,7 @@ internal data class SettingsUiDraft(
         loopingTimeText,
         loopingSizeText,
         snapshot.silenceHistogram.orEmpty(),
+        autoStart ?: "", // Absent means untouched; join the next durable hydration, not a stale value.
     )
 
     companion object {
@@ -57,7 +58,9 @@ internal data class SettingsUiDraft(
         )
 
         fun restore(saved: List<Any>): SettingsUiDraft? = runCatching {
-            require((saved.size == 24 && saved[0] == 1) || (saved.size == 25 && saved[0] == 2))
+            require((saved.size == 24 && saved[0] == 1) || (saved.size == 25 && saved[0] == 2) ||
+                (saved.size == 26 && saved[0] == 3))
+            if (saved[0] == 3) require(saved[25] is Boolean || saved[25] == "")
             require(saved[15] is Boolean)
             fun <T> nullableCode(index: Int, decode: (Int) -> T?): T? {
                 val code = saved[index] as Int
@@ -85,7 +88,8 @@ internal data class SettingsUiDraft(
                     quickSaveEnabled = saved[17] as Boolean,
                     quickSaveSeconds = saved[18] as Int,
                     silenceGate = saved[19] as String,
-                    silenceHistogram = if (saved[0] == 2) (saved[24] as? String)
+                    autoStartAfterRestart = if (saved[0] == 3) saved[25] as? Boolean ?: false else false,
+                    silenceHistogram = if (saved[0] != 1) (saved[24] as? String)
                         ?.takeIf { decodeSilenceCalibrationHistogram(it) != null } else null,
                 ),
                 oneShotTimeText = saved[20] as String,
@@ -107,7 +111,10 @@ internal data class SettingsDraftHydration(
 }
 
 /** Pending restored values remain inert until a complete, current durable hydration succeeds. */
-internal class SettingsDraftRestoration(private var pending: SettingsUiDraft? = null) {
+internal class SettingsDraftRestoration(
+    private var pending: SettingsUiDraft? = null,
+    private var pendingAutoStart: Boolean? = pending?.snapshot?.autoStartAfterRestart,
+) {
     fun save(
         panelActive: Boolean,
         hydrated: Boolean,
@@ -116,12 +123,12 @@ internal class SettingsDraftRestoration(private var pending: SettingsUiDraft? = 
         currentDraft: () -> SettingsUiDraft,
     ): List<Any> {
         if (!panelActive) return emptyList()
-        if (!hydrated) return pending?.save().orEmpty()
+        if (!hydrated) return pending?.save(pendingAutoStart).orEmpty()
         val draft = currentDraft()
         // Preserve text-only/inactive edits too. During Save, even a reversal to the old
         // baseline can be a newer draft relative to the value the transaction will commit.
         return if (persisting || draft.snapshot != baseline || draft != SettingsUiDraft.normalized(draft.snapshot)) {
-            draft.save()
+            draft.save(draft.snapshot.autoStartAfterRestart.takeIf { it != baseline.autoStartAfterRestart })
         } else emptyList()
     }
 
@@ -132,16 +139,21 @@ internal class SettingsDraftRestoration(private var pending: SettingsUiDraft? = 
     ): SettingsDraftHydration? {
         if (!settingsHydrationMayApply(expectedEditRevision, currentEditRevision)) return null
         val baseline = readBaseline()
-        val restored = pending
+        val restored = pending?.let { it.copy(snapshot = it.snapshot.copy(
+            autoStartAfterRestart = pendingAutoStart ?: baseline.snapshot.autoStartAfterRestart,
+        )) }
         pending = null
+        pendingAutoStart = null
         return SettingsDraftHydration(baseline.snapshot, restored ?: baseline, restored != null)
     }
 
     fun discard() {
         pending = null
+        pendingAutoStart = null
     }
 
     companion object {
-        fun restore(saved: List<Any>) = SettingsDraftRestoration(SettingsUiDraft.restore(saved))
+        fun restore(saved: List<Any>) = SettingsDraftRestoration(SettingsUiDraft.restore(saved),
+            if (saved.firstOrNull() == 3) saved.getOrNull(25) as? Boolean else null)
     }
 }

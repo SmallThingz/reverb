@@ -59,7 +59,7 @@ internal class NativeCaptureUiOwner(
     private val lifecycleOwner: LifecycleOwner,
     private val view: View,
     hostScope: CoroutineScope,
-    restoredSelection: BufferSlot = BufferSlot.ONE_SHOT,
+    restoredSelection: BufferSlot? = null,
     visualizerVisible: Boolean = true,
     private val accessibilityManager: AccessibilityManager?,
     isSaveFeedbackVisible: () -> Boolean,
@@ -101,7 +101,8 @@ internal class NativeCaptureUiOwner(
     private var oneShotFull = false
     private var loopingEnabled = true
     private var resolvedRetentionMode: RetentionMode? = null
-    private var selectedBuffer = restoredSelection
+    private var bufferSelection = restoredSelection
+    private val selectedBuffer get() = bufferSelection ?: BufferSlot.ONE_SHOT
     private var visualizerVisible = visualizerVisible
     private var skipSilenceEnabled = false
     private val oneShotBlobController = NativeAudioBlobController()
@@ -121,7 +122,7 @@ internal class NativeCaptureUiOwner(
     private var errorMessage: String? = null
     private var saveStatus: CaptureSaveStatus? = null
     private class Bookkeeping {
-        var startupBufferChosen = false
+        var hasRecorderSelectionBaseline = false
         var latestListeningCommandGeneration = Long.MIN_VALUE
         var timelineSnapshotRequestGeneration = 0L
         var pendingCustomRangeBuffer: BufferSlot? = null
@@ -139,7 +140,7 @@ internal class NativeCaptureUiOwner(
     private val focus = ViewTreeObserver.OnWindowFocusChangeListener { refreshPresentationVisibility() }
 
     val actions = ReverbHomeActions(
-        selectBuffer = { selectedBuffer = it; publish() },
+        selectBuffer = { bufferSelection = it; publish() },
         activateBuffer = ::activateBuffer,
         openBufferSettings = { slot ->
             if (service?.isCaptureConfigurationUnavailable() == true) activateBuffer(slot)
@@ -234,7 +235,7 @@ internal class NativeCaptureUiOwner(
     fun refreshPresentationVisibility() {
         feedbackVisible.value = callbacks.isSaveFeedbackVisible() && view.hasWindowFocus()
     }
-    fun savedSelection(): BufferSlot = selectedBuffer
+    fun savedSelection(): BufferSlot? = bufferSelection
     fun sampledBlobActivity(slot: BufferSlot): Float = latestBlobActivity[if (slot == BufferSlot.ONE_SHOT) 0 else 1]
 
     private fun snapshot() = NativeCaptureUiState(
@@ -354,12 +355,15 @@ internal class NativeCaptureUiOwner(
                     cancellable = recorder.currentExportCancellable())
                 isSaving = captureExportUiBusy(exporting, receiverAttached, saveStatus)
                 serviceStateHydrated = true
-                if (!bookkeeping.startupBufferChosen) {
-                    selectedBuffer = activeBufferSlot ?: defaultStartupBufferSlot(
+                if (bookkeeping.hasRecorderSelectionBaseline) {
+                    bufferSelection = captureSelectedBufferAfterRecorderState(selectedBuffer,
+                        previousListening, previousActiveBuffer, listeningEnabled, activeBufferSlot)
+                } else {
+                    // The first snapshot establishes recorder history for later start/switch detection.
+                    bufferSelection = bufferSelection ?: activeBufferSlot ?: defaultStartupBufferSlot(
                         resolved.oneShotEnabled, resolved.oneShotFull, resolved.loopingEnabled)
-                    bookkeeping.startupBufferChosen = true
-                } else selectedBuffer = captureSelectedBufferAfterRecorderState(selectedBuffer,
-                    previousListening, previousActiveBuffer, listeningEnabled, activeBufferSlot)
+                    bookkeeping.hasRecorderSelectionBaseline = true
+                }
                 publish()
             }
         })

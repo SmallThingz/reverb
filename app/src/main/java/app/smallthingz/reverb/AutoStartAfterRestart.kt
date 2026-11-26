@@ -68,6 +68,15 @@ internal class AutoStartPolicy {
         if (current(change)) mutable.value = AutoStartChoice(loaded = true, enabled = storedEnabled == true,
             unavailable = storedEnabled == null)
     }
+    /** Settings calls these only under the shared durable retention/preferences lock. */
+    @Synchronized fun publishCommitted(enabled: Boolean) {
+        val committed = AutoStartChoice(loaded = true, enabled = enabled)
+        if (mutable.value != committed) { ++revision; mutable.value = committed }
+    }
+    @Synchronized fun markUnavailable() {
+        ++revision
+        mutable.value = AutoStartChoice(loaded = true, unavailable = true)
+    }
     @Synchronized fun admission(): Long? = revision.takeIf {
         mutable.value.let { it.loaded && it.enabled && !it.saving && !it.permissionPending && !it.unavailable }
     }
@@ -77,7 +86,6 @@ internal class AutoStartPolicy {
 /** Explicit opt-in, absent/invalid defaults OFF; no capture intent is written here. */
 internal object AutoStartAfterRestart {
     val policy = AutoStartPolicy()
-    private val storageLock = Any()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private fun read(context: Context): Boolean =
@@ -87,45 +95,13 @@ internal object AutoStartAfterRestart {
         val app = context.applicationContext
         val revision = policy.revision()
         scope.launch {
-            try { synchronized(storageLock) { policy.load(revision, read(app)) } }
+            try { withRetentionPersistenceLock { policy.load(revision, read(app)) } }
             catch (error: Exception) { report(app, error) }
         }
     }
 
-    fun request(context: Context, enabled: Boolean) {
-        val change = policy.request(enabled)
-        if (!enabled) BootResumeNotification.dismissAutomaticStatus(context)
-        persist(context, change)
-    }
-
-    fun persist(context: Context, change: AutoStartChange) {
-        val app = context.applicationContext
-        scope.launch {
-            try {
-                synchronized(storageLock) {
-                    if (!policy.current(change)) return@synchronized
-                    val preferences = getRecorderPreferences(app)
-                    val previous = preferences.snapshotDurablePreferenceValue(PrefKey.AUTO_START_AFTER_RESTART)
-                    val previousEnabled = previous.value == true
-                    if (change.enabled && !BootResumeActivity.overlayAvailable(app)) {
-                        policy.complete(change, previousEnabled)
-                        error("Display over other apps permission is required")
-                    }
-                    val result = writeAutoStartChoice(previousEnabled, change.enabled,
-                        commit = { preferences.edit().putBoolean(PrefKey.AUTO_START_AFTER_RESTART, change.enabled).commit() },
-                        restore = { preferences.edit().restoreDurablePreferenceValue(PrefKey.AUTO_START_AFTER_RESTART, previous).commit() })
-                    policy.complete(change, result.storedEnabled)
-                    result.failure?.let { throw it }
-                }
-            } catch (error: Exception) {
-                if (policy.current(change) && policy.state.value.saving) policy.complete(change, null)
-                report(app, error)
-            }
-        }
-    }
-
     /** Called on the boot worker, before any Activity launch is queued. */
-    fun admission(context: Context): Long? = synchronized(storageLock) {
+    fun admission(context: Context): Long? = withRetentionPersistenceLock {
         val revision = policy.revision()
         policy.load(revision, read(context))
         policy.admission()

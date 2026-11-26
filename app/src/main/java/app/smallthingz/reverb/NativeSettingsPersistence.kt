@@ -37,6 +37,7 @@ internal class NativeSettingsPersistence(
                 flacCompression = getConfiguredFlacCompression(context),
                 quickSaveEnabled = getConfiguredQuickSaveEnabled(context),
                 quickSaveSeconds = getConfiguredQuickSaveSeconds(context),
+                autoStartAfterRestart = preferences.safeBoolean(PrefKey.AUTO_START_AFTER_RESTART, false),
                 silence = SilenceGatePreferenceSnapshot(
                     rawPreferences[PrefKey.SILENCE_GATE.name] as? String,
                     silence.config,
@@ -55,10 +56,12 @@ internal class NativeSettingsPersistence(
         previous: SettingsSnapshot,
         submission: SettingsDraftController.Submission,
         malformedSilence: DurablePreferenceValueSnapshot?,
-    ): ExportFormat? {
+    ): NativeSettingsCommit? {
         val submittedSnapshot=submission.snapshot
         // Disabled presentation of corrupt data is not a request to replace it.
         val writeSilence = malformedSilence == null || submittedSnapshot.silenceGate != previous.silenceGate
+        val writeAutoStart = submittedSnapshot.autoStartAfterRestart != previous.autoStartAfterRestart
+        var committedAutoStart = submittedSnapshot.autoStartAfterRestart
         val originalSnapshot=previous
         val currentSnapshot=submittedSnapshot
         val activeRetentionMode=submittedSnapshot.retentionMode
@@ -130,6 +133,10 @@ internal class NativeSettingsPersistence(
                 var retentionPublication: RetentionRecoveryPublication? = null
                 val committed = withContext(Dispatchers.IO) {
                 withRetentionPersistenceLock {
+                    val previousAutoStart = preferences.snapshotDurablePreferenceValue(PrefKey.AUTO_START_AFTER_RESTART)
+                    committedAutoStart = if (writeAutoStart) submittedSnapshot.autoStartAfterRestart
+                        else previousAutoStart.value == true
+                    if (writeAutoStart) settingsEditor.putBoolean(PrefKey.AUTO_START_AFTER_RESTART, committedAutoStart)
                     val settingsCommitted = withSilenceTransaction(submission.originalSilenceRaw, malformedSilence) {
                     // Roll back to the state that was actually durable when this transaction started,
                     // not to the UI's older edit snapshot. Another writer may have committed since
@@ -150,13 +157,15 @@ internal class NativeSettingsPersistence(
                         rawPreferences = preferences.all,
                         invalidateCachedOneShotFull = invalidateCachedOneShotFull,
                         coordinatedOneShotFullSnapshot = oneShotFullRollback?.rawValue,
-                    )
+                    ).let { if (writeAutoStart) it + (PrefKey.AUTO_START_AFTER_RESTART to previousAutoStart) else it }
 
                     // A replacement can sample SharedPreferences' attempted value during commit.
                     // Retain the authoritative pre-write theme even if this first save rolls back.
                     processCommittedTheme.initializeBaseline(getConfiguredThemeMode(context))
 
                     var transactionCommitted = false
+                    var autoStartAttempted = false
+                    var autoStartRestored = false
                     try {
                         transactionCommitted = persistRetentionTransaction(
                             // Recovery is the write-ahead side of the transaction. If the process dies before
@@ -177,7 +186,14 @@ internal class NativeSettingsPersistence(
                                     sampleFormat = sampleFormat,
                                     commit = { output ->
                                         committedOutputFormat = output
-                                        settingsEditor.putInt(PrefKey.OUTPUT_FORMAT, output.storageCode.toInt()).commit()
+                                        settingsEditor.putInt(PrefKey.OUTPUT_FORMAT, output.storageCode.toInt())
+                                        // Recheck after recovery IO, immediately before the opt-in commit.
+                                        // Untouched durable ON does not gate unrelated Settings changes.
+                                        if (writeAutoStart && committedAutoStart && !BootResumeActivity.overlayAvailable(context)) {
+                                            throw IOException(context.getString(R.string.auto_start_permission_missing))
+                                        }
+                                        if (writeAutoStart) autoStartAttempted = true
+                                        settingsEditor.commit()
                                     },
                                 )
                             },
@@ -187,15 +203,22 @@ internal class NativeSettingsPersistence(
                             restorePreferences = {
                                 val editor = preferences.edit()
                                 rollbackPreferences.forEach { (key, snapshot) ->
-                                    if (key != PrefKey.SILENCE_GATE || writeSilence) {
+                                    if ((key != PrefKey.SILENCE_GATE || writeSilence) &&
+                                        (key != PrefKey.AUTO_START_AFTER_RESTART || autoStartAttempted)) {
                                         editor.restoreDurablePreferenceValue(key, snapshot)
                                     }
                                 }
-                                editor.commit()
+                                editor.commit().also { restored ->
+                                    if (autoStartAttempted) autoStartRestored = restored &&
+                                        durablePreferenceSnapshotIsExactlyRestorable(previousAutoStart)
+                                }
                             },
                         )
                         transactionCommitted
                     } finally {
+                        if (!transactionCommitted && autoStartAttempted && !autoStartRestored) {
+                            AutoStartAfterRestart.policy.markUnavailable()
+                        }
                         if (!transactionCommitted && oneShotFullRollback != null) {
                             RecordingQuickTileStateCache.reconcileOneShotFullAfterFailedSettings(
                                 preferences = preferences,
@@ -207,6 +230,18 @@ internal class NativeSettingsPersistence(
                     // Publish the exact durable value before releasing transaction ordering.
                     // Replacement Activities observe this independently of the old UI tail.
                     if (settingsCommitted) {
+                        // Fresh admissions share this lock; queued retries retain the last committed
+                        // token throughout an attempted write and proven rollback.
+                        if (writeAutoStart || !AutoStartAfterRestart.policy.state.value.unavailable) {
+                            AutoStartAfterRestart.policy.publishCommitted(committedAutoStart)
+                        }
+                        if (writeAutoStart && !committedAutoStart) {
+                            try { BootResumeNotification.dismissAutomaticStatus(context) }
+                            catch (error: Exception) {
+                                AppFeedbackCenter.post(actionableErrorMessage(context,
+                                    resources.getString(R.string.settings_apply_failed), error), FeedbackTone.ERROR)
+                            }
+                        }
                         processCommittedTheme.publishCommitted(submittedSnapshot.themeMode)
                         applyLaunchThemeMode(context, submittedSnapshot.themeMode)
                     }
@@ -221,7 +256,7 @@ internal class NativeSettingsPersistence(
             AppFeedbackCenter.post(actionableErrorMessage(context, resources.getString(R.string.recorder_state_persist_failed), persisted.failure),FeedbackTone.ERROR)
             return null
         }
-        return committedOutputFormat
+        return NativeSettingsCommit(committedOutputFormat, committedAutoStart)
     }
 
     private fun withSilenceTransaction(
@@ -273,6 +308,8 @@ internal class NativeSettingsPersistence(
 
 }
 
+internal data class NativeSettingsCommit(val format: ExportFormat, val autoStartAfterRestart: Boolean)
+
 internal data class NativeSettingsStoredConfiguration(
     val format: ExportFormat,
     val themeMode: AppThemeMode,
@@ -289,5 +326,6 @@ internal data class NativeSettingsStoredConfiguration(
     val silence: SilenceGatePreferenceSnapshot,
     val silenceHistogram: String?,
     val malformedSilence: DurablePreferenceValueSnapshot?,
+    val autoStartAfterRestart: Boolean = false,
 )
 

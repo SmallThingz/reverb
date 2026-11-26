@@ -120,7 +120,7 @@ class OneShotSettingsReloadTest {
             val result = runBlocking {
                 withTimeout(WAIT_MILLIS) { persistence.persist(previous, submission, stored.malformedSilence) }
             }
-            assertEquals(previous.format, result)
+            assertEquals(previous.format, result?.format)
             assertEquals(AppThemeMode.DARK, getConfiguredThemeMode(fixture.app))
             val keepalive = checkNotNull(service.settingsStart)
             assertEquals(start.component, keepalive.component)

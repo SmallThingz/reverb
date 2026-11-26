@@ -76,8 +76,15 @@ internal class NativeSettingsOwner(
         private set
     var restartAccessMissing = !BootResumeActivity.overlayAvailable(context)
         private set
-    val autoStartChoice get() = AutoStartAfterRestart.policy.state.value
-    private var autoStartPermissionRequest: Long? = null
+    val autoStartPermissionPending get() = autoStartPermissionRequest != null
+    val autoStartChoice get(): AutoStartChoice {
+        val current = state
+        return AutoStartChoice(loaded = current.hydrated && current.interactionReady,
+            enabled = current.displayed.snapshot.autoStartAfterRestart, saving = current.persisting,
+            permissionPending = autoStartPermissionPending,
+            unavailable = AutoStartAfterRestart.policy.state.value.unavailable)
+    }
+    private var autoStartPermissionRequest: Any? = null
     var allFilesAllowed = hasAllFilesAccess()
         private set
     var audioReadAllowed = hasRecordingAudioReadPermission(context)
@@ -140,10 +147,10 @@ internal class NativeSettingsOwner(
                 refreshBattery()
                 val request = autoStartPermissionRequest
                 autoStartPermissionRequest = null
-                if (request != null) {
-                    AutoStartAfterRestart.policy.permissionReturned(request,
-                        state.active && !restartAccessMissing)?.let { AutoStartAfterRestart.persist(context, it) }
+                if (request != null && featureOwnerReady(request) && !restartAccessMissing) {
+                    editSnapshot(snapshot.copy(autoStartAfterRestart = true))
                 }
+                notifyChanged()
                 AutoStartAfterRestart.refresh(context)
             }
             else -> Unit
@@ -229,7 +236,7 @@ internal class NativeSettingsOwner(
 
     val settingsCommitBlocked: Boolean
         get() = state.persisting || calibration.running || quickTileEditorState.editorOpen ||
-            notificationDurationInteraction.pending
+            notificationDurationInteraction.pending || autoStartPermissionRequest != null
 
     suspend fun persistSettings(): Boolean {
         if (settingsCommitBlocked) return false
@@ -252,9 +259,10 @@ internal class NativeSettingsOwner(
             validated.feedback?.let(::feedback)
             val submittedDraft = validated.draft ?: run { notifyChanged(); return false }
             val submission = draft.submission(attempt, submittedDraft)
-            val committedFormat = persistence.persist(current.baseline, submission, malformedSilence) ?: return false
+            val committed = persistence.persist(current.baseline, submission, malformedSilence) ?: return false
+            val committedFormat = committed.format
             if (submission.snapshot.silenceGate != current.baseline.silenceGate) malformedSilence = null
-            val mayContinue = draft.committed(submission, committedFormat)
+            val mayContinue = draft.committed(submission, committedFormat, committed.autoStartAfterRestart)
             val saved = submission.snapshot
             val outputLimit = exportDurationLimitExactSeconds(
                 committedFormat, ExportCodec.PCM_16, saved.sampleRate,
@@ -323,6 +331,7 @@ internal class NativeSettingsOwner(
     }
 
     private fun undo() {
+        cancelAutoStartPermissionRequest()
         resetBackConfirmation()
         val current = state
         if (!current.hasUnsavedChanges) return
@@ -565,11 +574,11 @@ internal class NativeSettingsOwner(
         if (enabled && autoStartChoice.saving) return
         cancelAutoStartPermissionRequest()
         if (!enabled || BootResumeActivity.overlayAvailable(context)) {
-            AutoStartAfterRestart.request(context, enabled)
+            editSnapshot(snapshot.copy(autoStartAfterRestart = enabled))
             return
         }
-        val request = AutoStartAfterRestart.policy.requestPermission()
-        autoStartPermissionRequest = request
+        autoStartPermissionRequest = owner
+        notifyChanged()
         try {
             context.startActivity(BootResumeActivity.overlayReviewIntent(context))
         } catch (error: ActivityNotFoundException) {
@@ -582,8 +591,9 @@ internal class NativeSettingsOwner(
     }
 
     private fun cancelAutoStartPermissionRequest() {
-        autoStartPermissionRequest?.let(AutoStartAfterRestart.policy::cancelPermission)
+        if (autoStartPermissionRequest == null) return
         autoStartPermissionRequest = null
+        notifyChanged()
     }
 
     fun moveExistingRecordings(renderedActivation: Any) {
