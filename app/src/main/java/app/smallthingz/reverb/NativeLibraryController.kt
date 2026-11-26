@@ -24,6 +24,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.withContext
 
@@ -70,6 +71,7 @@ internal class NativeLibraryController(
     initial: NativeLibraryInput,
     private val submitBackgroundDeletion: (Context, List<RecordingEntity>) -> Deferred<RecordingDeletionBatchResult> =
         RecordingRepository::deleteInBackground,
+    private val playbackState: StateFlow<RecordingPlaybackState> = RecordingPlayback.state,
     private val publish: (NativeLibraryPresentation) -> Unit,
 ) : AutoCloseable {
     private val scope = CoroutineScope(parentScope.coroutineContext + Job(parentScope.coroutineContext[Job]))
@@ -87,11 +89,19 @@ internal class NativeLibraryController(
     private val refreshGeneration = LibraryRefreshGeneration { isRefreshing = it }
     private val selectedIds = ObservedRecordingMap(::invalidate)
     private val pendingDeletions = ObservedRecordingMap(::visibleChanged)
-    private val localOperationBusyIds = LinkedHashSet<String>()
+    private val localTrimBusyOwners = mutableMapOf<Any, String>()
     private val deletionState = LibraryDeletionState()
     private var renameRecording by observed<RecordingEntity?>(null)
     private var infoRecording by observed<RecordingEntity?>(null)
     private var expandedRecordingOwner by observed<InlinePlaybackRowOwner?>(null)
+    private var openingPlayback = playbackState.value.takeIf { initial.active && it.playing }
+    private var playbackRestoreReady = false
+    private var playbackRestoreRefreshFinished = false
+    private var playbackRestoreCatalog: List<RecordingEntity>? = null
+    private var playbackRestoreReveal: RecordingEntity? = null
+    private var automaticPlaybackOwner: InlinePlaybackRowOwner? = null
+    private var waveformCatalogReady = false
+    private var playingRecording = playbackState.value.let { state -> state.recording.takeIf { state.playing } }
     private var trimRequestRecordingId by observed<String?>(null)
     private var undoNotice by observed<NativeLibraryUndoNotice?>(null)
     private val deletionJob = arrayOfNulls<Job>(1)
@@ -166,6 +176,18 @@ internal class NativeLibraryController(
                 invalidate()
             }
         }
+        scope.launch {
+            playbackState.collect { state ->
+                val next = state.recording.takeIf { state.playing }
+                val previous = playingRecording
+                // Position/anchor ticks never publish row state or rebuild the catalog.
+                if (previous !== next && (previous == null || next == null ||
+                        !samePlaybackRecording(previous, next))) {
+                    playingRecording = next
+                    if (input.active) invalidate()
+                }
+            }
+        }
         launchInitialEffect(initial.initialRecordings)
         launchActiveEffect(initial.active)
         input.callbacks.onUndoVisibleChange(initial.active && undoNotice != null)
@@ -205,7 +227,16 @@ internal class NativeLibraryController(
         val previous = input
         // rememberUpdatedState already exposes the new active/callback values during effect cleanup.
         input = next
+        if (!previous.active && next.active) {
+            val playback = playbackState.value
+            openingPlayback = playback.takeIf { it.playing }
+            playingRecording = playback.recording.takeIf { playback.playing }
+            playbackRestoreCatalog = null
+            playbackRestoreRefreshFinished = false
+        }
         if (previous.active != next.active) {
+            playbackRestoreReady = false
+            waveformCatalogReady = false
             var failure = if (!next.active) closePreservingPrimaryFailure(null) { finishPlaybackRequest(null) } else null
             // Source active-keyed DisposableEffect is disposed before its successor effects.
             // Finish old accepted handoffs even if a callback closes the new UI lifetime.
@@ -292,6 +323,9 @@ internal class NativeLibraryController(
             }
         }
 
+        playbackRestoreReady = true
+        invalidate()
+
         // Guarantee a first frame from the local DB before any SAF/filesystem work.
         // Parent snapshots and pull-to-refresh requests wait here too, so they cannot start
         // an eager scan followed by a duplicate first-entry scan.
@@ -359,6 +393,7 @@ internal class NativeLibraryController(
             val callback = input.callbacks.onVisibleRecordingsChanged
             visibleEffect = scope.launch { callback(visible) }
         }
+        if (playbackRestoreReady) restorePlayingRecordingOnOpen(visible)
         if (dateHeadersDirty) {
             dateHeadersDirty = false
             finishedListItems = buildLibraryListItems(context, visible)
@@ -394,8 +429,10 @@ internal class NativeLibraryController(
         }
         publish(NativeLibraryPresentation(
             list = LibraryNativeListState(lastListItems, selectedIds.keys.toSet(), selected,
-                activeMutationRecordingIds, localOperationBusyIds.toSet(), expandedRecordingOwner,
-                trimRequestRecordingId, input.active, infoRecording?.id, renameRecording?.id),
+                activeMutationRecordingIds, localTrimBusyOwners.values.toSet(), expandedRecordingOwner,
+                trimRequestRecordingId, input.active, infoRecording?.id, renameRecording?.id, playingRecording,
+                waveformReadAllowed = automaticPlaybackOwner == null ||
+                    expandedRecordingOwner !== automaticPlaybackOwner || waveformCatalogReady),
             recordings = visible,
             hasLoaded = hasLoaded && saveJobsReadiness.loaded,
             loadFailed = loadFailed || saveJobsReadiness.recoveryFailure != null,
@@ -410,12 +447,17 @@ internal class NativeLibraryController(
         ))
     }
 
-    /** Source row locals disappear with their keyed row, not with the process mutation reservation. */
-    fun localBusy(recordingId: String, busy: Boolean) {
-        val changed = if (busy) localOperationBusyIds.add(recordingId) else localOperationBusyIds.remove(recordingId)
+    /** A retired row lease can only clear its own lock. The process reservation is independent. */
+    fun localBusy(recordingId: String, busy: Boolean, lease: Any = recordingId) {
+        val changed = if (busy) localTrimBusyOwners.put(lease, recordingId) != recordingId
+            else localTrimBusyOwners.remove(lease) != null
         if (changed) invalidate()
     }
-    fun isCurrentPlaybackOwner(owner: InlinePlaybackRowOwner) = input.active && expandedRecordingOwner === owner
+    private fun isLocallyBusy(recordingId: String): Boolean = recordingId in localTrimBusyOwners.values
+    private fun expandedTrimSaveInFlight(): Boolean =
+        expandedRecordingOwner?.recordingId?.let(::isLocallyBusy) == true
+
+    fun isCurrentPlaybackOwner(owner: InlinePlaybackRowOwner) = !closed && input.active && expandedRecordingOwner === owner
     private fun pendingSaveOwns(recording: RecordingEntity): Boolean =
         recordingOwnedByPendingSave(recording, pendingSaveOutputIdentities(DurableSaveJobs.state.value))
     private fun actionableCatalogRows(rows: List<RecordingEntity>): List<RecordingEntity> {
@@ -424,10 +466,10 @@ internal class NativeLibraryController(
     }
     fun fallbackExpandedBack() = finishLibraryExpandedBack(expandedRecordingOwner,
         { input.active && selectedIds.isEmpty() && expandedRecordingOwner === it },
-        recordingMutations::isActive, { setExpandedRecording(null) })
+        { isLocallyBusy(it) || recordingMutations.isActive(it) }, { setExpandedRecording(null) })
 
     fun activate(recording: RecordingEntity) {
-        if (renameRecording != null) return
+        if (expandedTrimSaveInFlight() || renameRecording != null) return
         if (infoRecording != null) { dismissInfo(); return }
         if (pendingSaveOwns(recording)) return
         contextMenuRecordingId = null
@@ -435,20 +477,20 @@ internal class NativeLibraryController(
         else setExpandedRecording(if (expandedRecordingOwner?.recordingId == recording.id) null else recording.id)
     }
     fun leadingLongClick(recording: RecordingEntity) {
-        if (renameRecording != null || infoRecording != null) return
+        if (expandedTrimSaveInFlight() || renameRecording != null || infoRecording != null) return
         if (pendingSaveOwns(recording)) return
         contextMenuRecordingId = null
         setExpandedRecording(null)
         toggleSelection(recording)
     }
     fun longClick(recording: RecordingEntity) {
-        if (renameRecording != null || infoRecording != null) return
+        if (renameRecording != null || infoRecording != null || isLocallyBusy(recording.id)) return
         if (pendingSaveOwns(recording)) return
         if (selectedIds.isNotEmpty()) toggleSelection(recording) else contextMenuRecordingId = recording.id
     }
     fun dismissMenu() { contextMenuRecordingId = null }
     fun rename(recording: RecordingEntity) {
-        if (pendingSaveOwns(recording)) return
+        if (expandedTrimSaveInFlight() || pendingSaveOwns(recording)) return
         contextMenuRecordingId = null
         infoRecording = null
         renameRecording = recording
@@ -457,8 +499,8 @@ internal class NativeLibraryController(
     fun info(recording: RecordingEntity) {
         // A menu callback may outlive its published enabled state. Check live ownership before
         // collapsing any player/trim presentation or installing Info.
-        if (renameRecording != null || pendingSaveOwns(recording) ||
-            recordingMutations.isActive(recording.id) || recording.id in localOperationBusyIds) return
+        if (expandedTrimSaveInFlight() || renameRecording != null || pendingSaveOwns(recording) ||
+            recordingMutations.isActive(recording.id) || isLocallyBusy(recording.id)) return
         contextMenuRecordingId = null
         infoRecording = recording
         setExpandedRecording(null)
@@ -466,7 +508,7 @@ internal class NativeLibraryController(
     fun share(recording: RecordingEntity) { contextMenuRecordingId = null; shareRecordings(listOf(recording)) }
     fun shareSelection() = shareRecordings(selectedIds.values.toList())
     fun trim(recording: RecordingEntity) {
-        if (pendingSaveOwns(recording)) return
+        if (expandedTrimSaveInFlight() || pendingSaveOwns(recording)) return
         contextMenuRecordingId = null
         if (!recordingHasStableTrimIdentity(recording)) {
             showPassiveNotice(resources.getString(R.string.recording_unavailable), FeedbackTone.ERROR)
@@ -476,11 +518,13 @@ internal class NativeLibraryController(
         }
     }
     fun multiSelect(recording: RecordingEntity) {
-        if (pendingSaveOwns(recording)) return
+        if (expandedTrimSaveInFlight() || pendingSaveOwns(recording)) return
         contextMenuRecordingId = null; setExpandedRecording(null)
         selectedIds[recording.id] = recording; syncSelectionActive()
     }
-    fun collapse() = setExpandedRecording(null)
+    fun collapse() {
+        if (!expandedTrimSaveInFlight()) setExpandedRecording(null)
+    }
     fun trimRequestConsumed(recordingId: String) {
         if (trimRequestRecordingId == recordingId) trimRequestRecordingId = null
     }
@@ -492,6 +536,7 @@ internal class NativeLibraryController(
         }
     }
     fun playbackFailed(recording: RecordingEntity, failure: Throwable? = null) {
+        if (isLocallyBusy(recording.id)) return
         finishInlinePlaybackFailure(
             retireFailedPlayer = {
                 val current = expandedRecordingOwner?.recordingId == recording.id
@@ -544,7 +589,59 @@ internal class NativeLibraryController(
         input.callbacks.onUndoVisibleChange(false)
     }
 
-    fun setExpandedRecording(id: String?) {
+    private fun restorePlayingRecordingOnOpen(visible: List<RecordingEntity>) {
+        val opening = openingPlayback ?: return
+        if (!input.active) return
+        val playback = playbackState.value
+        val source = opening.recording
+        if (source == null || !playback.playing || !playback.matches(source) ||
+            playback.generation != opening.generation ||
+            playback.transportIntentRevision != opening.transportIntentRevision ||
+            expandedRecordingOwner != null || renameRecording != null || infoRecording != null ||
+            contextMenuRecordingId != null || selectedIds.isNotEmpty() || trimRequestRecordingId != null) {
+            cancelPlaybackRestore()
+            return
+        }
+        // A cheap catalog miss may recover on the first authoritative refresh. Other UI
+        // publications reuse this same list and must not scan it again while waiting.
+        if (playbackRestoreCatalog === visible && !playbackRestoreRefreshFinished) return
+        playbackRestoreCatalog = visible
+        val recording = visible.firstOrNull(playback::matches)
+        if (recording == null) {
+            if (playbackRestoreRefreshFinished) cancelPlaybackRestore()
+            return
+        }
+        cancelPlaybackRestore()
+        if (recording.id in pendingDeletions || pendingSaveOwns(recording) ||
+            recordingMutations.isActive(recording.id) || isLocallyBusy(recording.id)) return
+        // Restoring presentation cannot grant an initial seek or restart service playback.
+        val owner = InlinePlaybackRowOwner(recording.id, automaticRestore = true).apply { consumeInitialAutoStart() }
+        playbackRestoreReveal = recording
+        automaticPlaybackOwner = owner
+        expandedRecordingOwner = owner
+    }
+
+    /** Existing list input cancellation also retires the deferred reopen intent. */
+    fun cancelPlaybackRestore() {
+        openingPlayback = null
+        playbackRestoreCatalog = null
+        playbackRestoreReveal = null
+    }
+
+    /** One keyed viewport request after the restored row has entered the adapter. */
+    fun takePlaybackRestoreReveal(): String? {
+        val recording = playbackRestoreReveal ?: return null
+        playbackRestoreReveal = null
+        val playback = playbackState.value
+        return recording.id.takeIf { input.active && expandedRecordingOwner?.recordingId == it &&
+            playback.playing && playback.matches(recording) }
+    }
+
+    private fun setExpandedRecording(id: String?, cancelRestore: Boolean = true) {
+        if (cancelRestore) {
+            cancelPlaybackRestore()
+            automaticPlaybackOwner = null
+        }
         if (expandedRecordingOwner?.recordingId != id) {
             expandedRecordingOwner = id?.let(::InlinePlaybackRowOwner)
         }
@@ -557,7 +654,8 @@ internal class NativeLibraryController(
     }
 
     fun toggleSelection(recording: RecordingEntity) {
-        if (pendingSaveOwns(recording)) return
+        if (expandedTrimSaveInFlight() || pendingSaveOwns(recording)) return
+        cancelPlaybackRestore()
         if (selectedIds.containsKey(recording.id)) selectedIds.remove(recording.id)
         else selectedIds[recording.id] = recording
         syncSelectionActive()
@@ -596,7 +694,7 @@ internal class NativeLibraryController(
         }
 
         val retainedExpandedId = retainId(expandedRecordingOwner?.recordingId)
-        setExpandedRecording(retainedExpandedId)
+        setExpandedRecording(retainedExpandedId, cancelRestore = false)
         trimRequestRecordingId = retainId(trimRequestRecordingId)?.takeIf { it == retainedExpandedId }
     }
 
@@ -615,13 +713,14 @@ internal class NativeLibraryController(
     fun requestPlayback(request: RecordingPlaybackRequest, beforePlayback: () -> Unit,
                         finished: (RecordingEntity?) -> Unit) {
         if (closed || !playbackRoute.submit(request)) return
+        cancelPlaybackRestore()
         beforeRequestedPlayback = beforePlayback
         playbackRequestFinished = finished
         refresh(showSpinner = false)
     }
 
     private fun deliverPlaybackRequest() {
-        val request = playbackRoute.takeIfReady(navigationAllowed()) ?: return
+        val request = playbackRoute.takeIfReady(!expandedTrimSaveInFlight() && navigationAllowed()) ?: return
         val recording = recordings.firstOrNull(request::matches)?.takeUnless {
             it.id in pendingDeletions || pendingSaveOwns(it) || recordingMutations.isActive(it.id)
         }
@@ -675,6 +774,9 @@ internal class NativeLibraryController(
                 if (!refreshGeneration.isCurrent(generation)) return@request
                 val previousById = recordings.associateBy { it.id }
                 recordings = stored
+                playbackRestoreRefreshFinished = true
+                waveformCatalogReady = true
+                if (openingPlayback != null || automaticPlaybackOwner != null) invalidate()
                 hasLoaded = true
                 val storedById = stored.associateBy { it.id }
                 reconcileSelection(storedById)
@@ -723,6 +825,8 @@ internal class NativeLibraryController(
                 throw cancelled
             } catch (error: Exception) {
                 if (refreshGeneration.isCurrent(generation)) {
+                    playbackRestoreRefreshFinished = true
+                    if (openingPlayback != null) invalidate()
                     hasLoaded = false
                     loadFailed = true
                     showPassiveNotice(
@@ -875,9 +979,10 @@ internal class NativeLibraryController(
     }
 
     fun deleteRecordings(targets: Collection<RecordingEntity>) {
-        if (targets.any(::pendingSaveOwns)) return
+        if (targets.any { isLocallyBusy(it.id) || recordingMutations.isActive(it.id) || pendingSaveOwns(it) }) return
         if (targets.isEmpty()) return
         val undoWindow = deletionState.extendUndoWindow() ?: return
+        cancelPlaybackRestore()
         targets.forEach(RecordingPlayback::stop)
         if (targets.any { it.id == expandedRecordingOwner?.recordingId }) {
             setExpandedRecording(null)

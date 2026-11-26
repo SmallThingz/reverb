@@ -1,5 +1,6 @@
 """Bounded brand-generation regressions; all mutations stay in temporary fixtures."""
 import shutil
+import importlib.util
 import subprocess
 import sys
 import tempfile
@@ -16,6 +17,12 @@ class BrandGenerationTest(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         sources = ["scripts/generate_brand_assets.py", brand.SOURCE]
+        spec = importlib.util.spec_from_file_location("brand_plate", brand.ROOT / brand.PLATE_CHECKER)
+        plate = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(plate)
+        sources += [brand.PLATE_CHECKER]
+        sources += ["native-ui/" + path for path in plate.SOURCE_FILES]
+        sources += ["native-ui/" + path for path in plate.outputs()]
         sources += [path.relative_to(brand.ROOT).as_posix() for path in
                     (brand.ROOT / "native-ui/src/main/res").glob("values*/reverb_brand_colors.xml")]
         for name in sources:
@@ -65,6 +72,54 @@ class BrandGenerationTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("Brand color override outside canonical/generated palette", result.stderr)
 
+    def test_app_cannot_shadow_library_brand_plate_color(self):
+        override = self.root / "app/src/main/res/values/brand_override.xml"
+        override.write_text('<resources><color name="reverb_brand_background">#123456</color></resources>')
+        result = self.run_generator()
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("Brand color override outside canonical/generated palette", result.stderr)
+        self.assertIn("brand_override.xml", result.stderr)
+
+    def test_launcher_background_references_only_the_library_plate(self):
+        plate = ET.parse(self.root / "app/src/main/res/drawable/ic_launcher_background.xml").getroot()
+        self.assertEqual("layer-list", plate.tag)
+        self.assertEqual(["item"], [item.tag for item in plate])
+        self.assertEqual(brand.android(drawable="@drawable/reverb_brand_plate"), plate[0].attrib)
+        for path in (self.root / "native-ui/src/main/res").glob("values*/reverb_brand_colors.xml"):
+            colors = {item.get("name"): item.text for item in ET.parse(path).getroot()}
+            self.assertEqual("@color/reverb_brand_surface", colors["reverb_brand_background"])
+            self.assertEqual("@color/reverb_brand_surface_main", colors["reverb_brand_main"])
+            self.assertEqual("@color/reverb_brand_surface_accent", colors["reverb_brand_accent"])
+
+    def test_shared_raw_grain_drift_is_rejected_by_library_checker(self):
+        tile = self.root / "native-ui/src/main/res/drawable-nodpi/reverb_brand_grain_tile.png"
+        tile.write_bytes(tile.read_bytes() + b"drift")
+        result = self.run_generator()
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("Shared brand plate export is stale", result.stderr)
+        self.assertIn("reverb_brand_grain_tile.png", result.stderr)
+
+    def test_changed_central_noise_requires_new_library_export(self):
+        self.replace("native-ui/src/main/kotlin/smallthingz/ui/graphics/ProceduralNoise.kt",
+                     "0x52455642", "0x52455643")
+        result = self.run_generator()
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("Shared brand plate export is stale", result.stderr)
+
+    def test_plain_launcher_background_drift_is_rejected(self):
+        self.replace("app/src/main/res/drawable/ic_launcher_background.xml",
+                     "@drawable/reverb_brand_plate", "@color/launcher_background")
+        result = self.run_generator()
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("ic_launcher_background.xml", result.stderr)
+
+    def test_app_cannot_shadow_library_surface_role(self):
+        override = self.root / "app/src/main/res/values/brand_override.xml"
+        override.write_text('<resources><item type="color" name="reverb_brand_surface">#123456</item></resources>')
+        result = self.run_generator()
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("Brand color override outside canonical/generated palette", result.stderr)
+
     def assert_geometry_override_rejected(self, relative, content):
         override = self.root / relative
         override.parent.mkdir(parents=True, exist_ok=True)
@@ -99,6 +154,16 @@ class BrandGenerationTest(unittest.TestCase):
             with self.subTest(kind=kind):
                 content = f'<resources><item type="{kind}" name="{name}">@{kind}/other</item></resources>'
                 self.assert_geometry_override_rejected("app/src/debug/res/values-night/brand.xml", content.encode())
+
+    def test_plate_and_grain_cannot_be_replaced_by_app_or_qualified_resources(self):
+        for path in ("app/src/debug/res/drawable/reverb_brand_plate.xml",
+                     "app/src/main/res/drawable-night/ic_launcher_background.xml",
+                     "native-ui/src/main/res/drawable-night/reverb_brand_grain.xml",
+                     "app/src/main/res/drawable-nodpi/reverb_brand_grain_tile.png"):
+            with self.subTest(path=path):
+                self.assert_geometry_override_rejected(path, b"replacement")
+        alias = '<resources><item type="drawable" name="reverb_brand_plate">@drawable/other</item></resources>'
+        self.assert_geometry_override_rejected("app/src/main/res/values/plate_alias.xml", alias.encode())
 
     def test_unsupported_svg_transform_is_rejected(self):
         self.replace(brand.SOURCE, 'id="body" d=', 'id="body" transform="translate(1 0)" d=')

@@ -1,13 +1,23 @@
 package app.smallthingz.reverb
 
+import android.Manifest
 import android.app.Application
+import android.content.pm.ProviderInfo
+import android.database.Cursor
+import android.database.MatrixCursor
 import android.media.AudioManager
 import android.media.MediaPlayer
 import android.media.session.MediaSession
+import android.net.Uri
+import android.os.CancellationSignal
 import android.os.Handler
 import android.os.Looper
 import android.os.Message
+import android.os.ParcelFileDescriptor
 import android.os.SystemClock
+import android.provider.DocumentsContract
+import android.provider.DocumentsContract.Document
+import android.provider.DocumentsProvider
 import android.system.ErrnoException
 import android.system.Os
 import android.system.OsConstants
@@ -18,7 +28,11 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import org.junit.Assert.assertEquals
@@ -36,6 +50,7 @@ import org.robolectric.annotation.Implementation
 import org.robolectric.annotation.Implements
 import org.robolectric.annotation.LooperMode
 import org.robolectric.shadow.api.Shadow
+import org.robolectric.shadows.ShadowContentResolver
 import org.robolectric.shadows.ShadowLooper
 import org.robolectric.shadows.ShadowMediaPlayer
 import org.robolectric.shadows.ShadowPausedMessageQueue
@@ -165,6 +180,121 @@ class RecordingPlaybackServiceCallbackBoundaryTest {
             assertEquals(1_450, anchor.positionAt(SystemClock.elapsedRealtime()))
         }
 
+    @Test fun blockedDocumentOpenAdmitsOnlyTheLatestReplacement() =
+        exerciseBlockedProvider(blockInVerification = false)
+
+    @Test fun blockedPostOpenVerificationRetiresDescriptorAcrossServiceRecreation() =
+        exerciseBlockedProvider(blockInVerification = true)
+
+    private fun exerciseBlockedProvider(blockInVerification: Boolean) {
+        val app = RuntimeEnvironment.getApplication()
+        val file = File.createTempFile("playback-open", ".wav", app.cacheDir)
+        val provider = BlockingPlaybackDocuments(file, blockInVerification)
+        provider.attachInfo(app, ProviderInfo().apply {
+            authority = provider.authority
+            exported = true
+            grantUriPermissions = true
+            readPermission = Manifest.permission.MANAGE_DOCUMENTS
+            writePermission = Manifest.permission.MANAGE_DOCUMENTS
+        })
+        ShadowContentResolver.registerProviderInternal(provider.authority, provider)
+        val jobs = mutableListOf<Job>()
+        fun createService() = Robolectric.buildService(RecordingPlaybackService::class.java).create().also {
+            jobs += checkNotNull((readField(it.get(), "scope") as CoroutineScope).coroutineContext[Job])
+        }
+        var controller = createService()
+        val players = mutableListOf<ShadowMediaPlayer>()
+        var startId = 0
+        fun start(row: RecordingEntity) {
+            assertTrue(RecordingPlayback.play(app, row))
+            controller.withIntent(checkNotNull(Shadows.shadowOf(app).nextStartedService)).startCommand(0, ++startId)
+        }
+        try {
+            writePcm16Wav(file, sampleRate = 48_000, durationMillis = 2_000)
+            ShadowMediaPlayer.setMediaInfoProvider { ShadowMediaPlayer.MediaInfo(2_000, 60_000) }
+            ShadowMediaPlayer.setCreateListener { _, media -> players.add(media) }
+            start(provider.recording("first"))
+            assertTrue("First open did not reach the held provider call", provider.entered.await(8, TimeUnit.SECONDS))
+            // Before replacement the opening job has exactly one live branch, ending at
+            // the IO worker held inside the provider. Observe its actual Job completion.
+            val opening = readField(controller.get(), "opening") as Job
+            val worker = generateSequence(opening) { it.children.singleOrNull() }.last()
+            val workerDone = CountDownLatch(1)
+            worker.invokeOnCompletion { workerDone.countDown() }
+            start(provider.recording("second"))
+            if (blockInVerification) {
+                controller.destroy()
+                controller = createService()
+                PlaybackSessionOsShadow.targetPath = file.absolutePath
+                val local = fileRecording(file)
+                start(local)
+                awaitPlayer(controller.get())
+                RecordingPlayback.pause(local)
+                players.single().invokePreparedListener()
+                assertTrue(RecordingPlayback.state.value.matches(local) && RecordingPlayback.state.value.prepared)
+            }
+            val localPlayerCount = if (blockInVerification) 1 else 0
+            start(provider.recording("third"))
+            val latest = provider.recording("latest")
+            start(latest)
+            ShadowLooper.idleMainLooper()
+            assertTrue("Retirement must signal the blocked request", provider.cancelled.await(8, TimeUnit.SECONDS))
+            assertEquals(localPlayerCount, players.size)
+            assertEquals(setOf("first"), provider.queries.toSet())
+            provider.release.countDown()
+            if (blockInVerification) {
+                assertTrue("Retired IO worker must finish while cancellation is still held",
+                    workerDone.await(8, TimeUnit.SECONDS))
+                ShadowLooper.idleMainLooper()
+                assertEquals(1, provider.closes.getValue("first").get())
+                assertEquals(listOf("first"), provider.opens.toList())
+                assertEquals(setOf("first"), provider.queries.toSet())
+                // Also detect a successor dispatched to IO but not yet scheduled by the host.
+                val waiting = readField(controller.get(), "opening") as Job
+                assertTrue(waiting.isActive && waiting.children.none())
+            }
+            provider.finishCancel.countDown()
+
+            val player = awaitPlayer(controller.get())
+            assertEquals(localPlayerCount + 1, players.size)
+            assertSame(players.last(), Shadow.extract<ShadowMediaPlayer>(player))
+            assertTrue(RecordingPlayback.state.value.matches(latest))
+            assertEquals(listOf("first", "latest"), provider.opens.toList())
+            assertEquals(setOf("first", "latest"), provider.queries.toSet())
+            assertEquals(1, provider.peak.get())
+            assertEquals(1, provider.closes.getValue("first").get())
+            assertEquals(0, provider.closes.getValue("latest").get())
+            RecordingPlayback.pause(latest)
+            players.last().invokePreparedListener()
+            assertTrue(RecordingPlayback.state.value.prepared)
+            RecordingPlayback.stop(latest)
+            assertEquals(1, provider.closes.getValue("latest").get())
+        } finally {
+            provider.release.countDown()
+            provider.finishCancel.countDown()
+            controller.destroy()
+            jobs.forEach(::awaitServiceCompletion)
+            ShadowMediaPlayer.resetStaticState()
+            PlaybackSessionOsShadow.targetPath = ""
+            check(file.delete())
+        }
+    }
+
+    private fun fileRecording(source: File) = RecordingEntity(
+        id = source.absolutePath,
+        displayName = source.name,
+        mimeType = "audio/wav",
+        startedAtMillis = 1L,
+        durationMillis = 2_000L,
+        sizeBytes = source.length(),
+        codecSummary = "PCM",
+        storageType = RecordingStorageType.FILE,
+        directoryId = source.parentFile!!.absolutePath,
+        fileIdentity = resolveFileIdentity(source),
+        createdAtMillis = 1L,
+        lastSeenAtMillis = 1L,
+    )
+
     private fun withPlaybackService(
         startPosition: Int? = null,
         exercise: (ShadowMediaPlayer, Handler, MediaSession.Callback, Handler) -> Unit,
@@ -179,20 +309,7 @@ class RecordingPlaybackServiceCallbackBoundaryTest {
             writePcm16Wav(source, sampleRate = 48_000, durationMillis = 2_000)
             PlaybackSessionOsShadow.targetPath = source.absolutePath
             ShadowMediaPlayer.setMediaInfoProvider { ShadowMediaPlayer.MediaInfo(2_000, 60_000) }
-            val selectedRecording = RecordingEntity(
-                id = source.absolutePath,
-                displayName = source.name,
-                mimeType = "audio/wav",
-                startedAtMillis = 1L,
-                durationMillis = 2_000L,
-                sizeBytes = source.length(),
-                codecSummary = "PCM",
-                storageType = RecordingStorageType.FILE,
-                directoryId = source.parentFile!!.absolutePath,
-                fileIdentity = resolveFileIdentity(source),
-                createdAtMillis = 1L,
-                lastSeenAtMillis = 1L,
-            )
+            val selectedRecording = fileRecording(source)
             recording = selectedRecording
             val createdController = Robolectric.buildService(RecordingPlaybackService::class.java)
             serviceController = createdController
@@ -296,6 +413,86 @@ class RecordingPlaybackServiceCallbackBoundaryTest {
         tag("data"); buffer.putInt(payloadBytes)
         repeat(frames) { buffer.putShort(1_000) }
         file.writeBytes(buffer.array())
+    }
+}
+
+private class BlockingPlaybackDocuments(
+    private val file: File,
+    private val blockInVerification: Boolean,
+) : DocumentsProvider() {
+    val authority = "app.smallthingz.reverb.blockedplayback"
+    private val tree = DocumentsContract.buildTreeDocumentUri(authority, "root")
+    val entered = CountDownLatch(1)
+    val cancelled = CountDownLatch(1)
+    val release = CountDownLatch(1)
+    val finishCancel = CountDownLatch(1)
+    val opens = ConcurrentLinkedQueue<String>()
+    val queries = ConcurrentLinkedQueue<String>()
+    val closes = ConcurrentHashMap<String, AtomicInteger>()
+    private val active = AtomicInteger()
+    val peak = AtomicInteger()
+
+    fun recording(name: String): RecordingEntity {
+        val id = DocumentsContract.buildDocumentUriUsingTree(tree, name).toString()
+        return RecordingEntity(id = id, displayName = "$name.wav", mimeType = "audio/wav", startedAtMillis = 1,
+            durationMillis = 2_000, sizeBytes = file.length(), codecSummary = "PCM",
+            storageType = RecordingStorageType.DOCUMENT, directoryId = tree.toString(),
+            fileIdentity = providerRecordingIdentity(RecordingStorageType.DOCUMENT, id, file.length(), 100))
+    }
+
+    override fun onCreate() = true
+    override fun isChildDocument(parentDocumentId: String, documentId: String) = parentDocumentId == "root"
+    override fun queryRoots(projection: Array<out String>?): Cursor = error("Unexpected roots query")
+    override fun queryChildDocuments(parentDocumentId: String, projection: Array<out String>?, sortOrder: String?): Cursor =
+        error("Unexpected listing")
+
+    // Robolectric forwards the six-argument query directly. Use the platform document router
+    // and observe the request signal at the resolver boundary, even if openDocument ignores it.
+    override fun query(uri: Uri, projection: Array<out String>?, selection: String?, selectionArgs: Array<out String>?,
+        sortOrder: String?, cancellationSignal: CancellationSignal?): Cursor? {
+        if (DocumentsContract.getDocumentId(uri) == "first") {
+            checkNotNull(cancellationSignal).setOnCancelListener {
+                check(Looper.myLooper() != Looper.getMainLooper())
+                cancelled.countDown()
+                if (blockInVerification) check(finishCancel.await(20, TimeUnit.SECONDS))
+            }
+        }
+        return super.query(uri, projection, null, cancellationSignal)
+    }
+
+    override fun queryDocument(documentId: String, projection: Array<out String>?): Cursor = providerCall {
+        queries.add(documentId)
+        if (blockInVerification && documentId == "first" && documentId in opens) block()
+        val values = mapOf(Document.COLUMN_DOCUMENT_ID to documentId, Document.COLUMN_DISPLAY_NAME to "$documentId.wav",
+            Document.COLUMN_MIME_TYPE to "audio/wav", Document.COLUMN_SIZE to file.length(),
+            Document.COLUMN_LAST_MODIFIED to 100L)
+        val columns = checkNotNull(projection)
+        MatrixCursor(columns).apply { addRow(columns.map(values::getValue)) }
+    }
+
+    override fun openDocument(documentId: String, mode: String, signal: CancellationSignal?): ParcelFileDescriptor =
+        providerCall {
+            check(mode == "r")
+            opens.add(documentId)
+            if (!blockInVerification && documentId == "first") block()
+            val calls = AtomicInteger()
+            check(closes.putIfAbsent(documentId, calls) == null)
+            object : ParcelFileDescriptor(ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)) {
+                override fun close() {
+                    calls.incrementAndGet()
+                    super.close()
+                }
+            }
+        }
+
+    private fun block() {
+        entered.countDown()
+        check(release.await(20, TimeUnit.SECONDS)) { "Playback test did not release provider" }
+    }
+
+    private fun <T> providerCall(call: () -> T): T {
+        peak.accumulateAndGet(active.incrementAndGet(), ::maxOf)
+        return try { call() } finally { active.decrementAndGet() }
     }
 }
 

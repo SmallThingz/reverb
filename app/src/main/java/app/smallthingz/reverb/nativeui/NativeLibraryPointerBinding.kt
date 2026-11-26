@@ -49,6 +49,8 @@ internal class NativeLibraryPointerBinding(
     private var listView: ReverbLibraryRecyclerView? = null
     private var listScroll: NativeLibraryScrollOwner? = null
     private var listNodes = emptyList<NativeViewPhasePointerNode>()
+    private var indicatorHit: NativeScrollIndicatorHitLayout? = null
+    private var bodyHasPointer = false
     private var emptyView: NativeVerticalViewport? = null
     private var emptyScroll: NativeVerticalPhaseBinding? = null
     private var emptyNodes = emptyList<NativeViewPhasePointerNode>()
@@ -65,8 +67,15 @@ internal class NativeLibraryPointerBinding(
     )
     private val edgeNode = object : NativeViewPhasePointerNode {
         override val view get() = content.bodyPointerView
-        override fun dispatch(event: NativeDragPointerEvent, pass: NativePointerPass) = edge.dispatch(event, pass)
-        override fun cancel() = edge.restart()
+        override fun dispatch(event: NativeDragPointerEvent, pass: NativePointerPass) {
+            // This ancestor sees every ordinary body pointer, including drags waiting for slop.
+            if (pass == NativePointerPass.INITIAL) bodyHasPointer = event.changes.any { it.pressed }
+            edge.dispatch(event, pass)
+        }
+        override fun cancel() {
+            bodyHasPointer = false
+            edge.restart()
+        }
     }
     private val edgeNodes = listOf(edgeNode)
     // FilesScreen's transparent Scaffold still owns Surface's inert pointerInput(Unit) node.
@@ -88,7 +97,11 @@ internal class NativeLibraryPointerBinding(
         override val minimumTouchTarget get() = Size(ReverbLibraryLayout.minimumTouchTargetPx(density), ReverbLibraryLayout.minimumTouchTargetPx(density))
         override val nodes get(): List<NativeViewPhasePointerNode> { refresh(); return scaffoldNodes }
         override val childrenInHitOrder: List<NativeViewPointerHitLayout>
-            get() { refresh(); return children(content) }
+            get() {
+                refresh()
+                // A thumb press bypasses Body's edge recognizer and the row/refresh path.
+                return children(content, first = indicatorHit)
+            }
         override fun screenToLocal(screen: Offset) = geometry.coordinates(content).local(screen)
         override fun withinLayerBounds(local: Offset) = true
     }
@@ -96,13 +109,14 @@ internal class NativeLibraryPointerBinding(
 
     fun refresh() {
         if (closed) return
-        if (inputRevision != content.inlinePointerRevision) {
+        val inputChanged = inputRevision != content.inlinePointerRevision
+        if (inputChanged) {
             inputRevision = content.inlinePointerRevision
             // One retired prefix removes the entire old Library path (including edge, click
             // and scrim). The root prunes it before adding any newly pressed pointer.
             scaffoldNodes = scaffoldNodes()
             layouts.values.forEach { it.cancelInput() }
-            edge.restart()
+            edgeNode.cancel()
         }
         val nextDistance = ReverbLibraryLayout.edgeDismissDistancePx(density)
         if (dismissKey != content.pointerDismissKey || dismissDistance != nextDistance) {
@@ -111,7 +125,8 @@ internal class NativeLibraryPointerBinding(
             edge.restart() // exact pointerInput(onDismissLibrary, edgeDismissDistancePx) lifetime
         }
         val nextList = content.listViewport
-        if (nextList !== listView) {
+        val listChanged = nextList !== listView
+        if (listChanged) {
             listScroll?.close()
             listView = nextList
             listScroll = nextList?.let {
@@ -119,6 +134,7 @@ internal class NativeLibraryPointerBinding(
             }
             rebuildListNodes()
         }
+        if (listChanged || inputChanged) rebuildIndicatorHit(nextList)
         // The Info cutout uses View geometry; Android 12+ stretch deforms its card in a RenderNode.
         listView?.sourceOverscroll?.setEffectsEnabled(
             Build.VERSION.SDK_INT < Build.VERSION_CODES.S || !content.inlineInfoActive)
@@ -148,9 +164,10 @@ internal class NativeLibraryPointerBinding(
             event.action == KeyEvent.ACTION_DOWN, event.isCtrlPressed) == true
     }
 
-    private fun children(view: View): List<NativeViewPointerHitLayout> {
+    private fun children(view: View, first: NativeViewPointerHitLayout? = null): List<NativeViewPointerHitLayout> {
         if (view !is ViewGroup) return emptyList()
-        val result = ArrayList<NativeViewPointerHitLayout>(view.childCount)
+        val result = ArrayList<NativeViewPointerHitLayout>(view.childCount + if (first == null) 0 else 1)
+        if (first != null) result.add(first)
         for (index in view.childCount - 1 downTo 0) {
             val child = view.getChildAt(index)
             if (child.visibility == View.VISIBLE) result += layouts.getOrPut(child) { Layout(child) }
@@ -181,6 +198,15 @@ internal class NativeLibraryPointerBinding(
             ?: emptyList()
     }
 
+    private fun rebuildIndicatorHit(viewport: ReverbLibraryRecyclerView?) {
+        indicatorHit?.retire()
+        indicatorHit = viewport?.let {
+            NativeScrollIndicatorHitLayout(it, geometry, inHitRegion = { !bodyHasPointer }) {
+                !closed && content.pointerInputActive && !content.inlineModalActive && content.listViewport === it
+            }
+        }
+    }
+
     private inner class Layout(private val view: View) : NativeViewPointerHitLayout {
         private val click = (view as? NativeClickPhaseHost)?.let {
             NativeClickPhaseNode(view, it.nativeClickEndpoint) { change -> interested(view, change) }
@@ -204,12 +230,21 @@ internal class NativeLibraryPointerBinding(
         private var scrimScrollNodes = emptyList<NativeViewPhasePointerNode>()
         private val clickNodes = click?.let(::listOf) ?: emptyList()
         private val shieldNodes = shield?.let(::listOf) ?: emptyList()
-        override val placed get() = view.isAttachedToWindow && view.isLaidOut && view.visibility == View.VISIBLE
-        override val size get() = Size(view.width.toFloat(), view.height.toFloat())
+        // New contacts during a thumb drag stop at Scaffold; they cannot join Body after lift.
+        override val placed get() = view.isAttachedToWindow && view.isLaidOut && view.visibility == View.VISIBLE &&
+            (view !== content.bodyPointerView || indicatorHit?.ownsPointer != true)
+        // The source scroll observer and rows keep the original inset hit bounds.
+        private val listInsetLeft get() = if (view === listView) view.paddingLeft else 0
+        private val listInsetRight get() = if (view === listView) view.paddingRight else 0
+        override val size get() = Size((view.width - listInsetLeft - listInsetRight).coerceAtLeast(0).toFloat(),
+            view.height.toFloat())
         override val minimumTouchTarget get() = (view as? PlayerTimeline)?.minimumTouchTarget
             ?: Size(ReverbLibraryLayout.minimumTouchTargetPx(density), ReverbLibraryLayout.minimumTouchTargetPx(density))
         override val childrenInHitOrder get() = children(view)
-        override fun screenToLocal(screen: Offset) = geometry.coordinates(view).local(screen)
+        override fun screenToLocal(screen: Offset): Offset {
+            val local = geometry.coordinates(view).local(screen)
+            return Offset(local.x - listInsetLeft, local.y)
+        }
         override val nodes: List<NativeViewPhasePointerNode>
             get() {
                 if (view === content.bodyPointerView) return if (content.inlineModalActive) emptyList() else edgeNodes
@@ -236,7 +271,7 @@ internal class NativeLibraryPointerBinding(
             view is NativePointerLayerShape -> view.containsPointerLayer(local.x, local.y)
             view === listView || view === emptyView -> {
                 val extra = ReverbLibraryLayout.horizontalOverflowPx(density)
-                local.x >= -extra && local.x < view.width + extra && local.y >= 0f && local.y < view.height
+                local.x >= -extra && local.x < size.width + extra && local.y >= 0f && local.y < view.height
             }
             view is LibraryExpansionViewport || view is LibraryPlayerView<*> || view is ReverbLibraryRecordingRow ->
                 local.x >= 0f && local.x < view.width && local.y >= 0f && local.y < view.height
@@ -248,12 +283,14 @@ internal class NativeLibraryPointerBinding(
     override fun close() {
         if (closed) return
         closed = true
+        indicatorHit?.retire()
+        indicatorHit = null
         listScroll?.close(); listScroll = null; listView = null
         listNodes = emptyList()
         emptyScroll?.close(); emptyScroll = null; emptyView = null
         emptyNodes = emptyList()
         layouts.values.forEach { it.close() }
         layouts.clear()
-        edge.restart()
+        edgeNode.cancel()
     }
 }

@@ -1,10 +1,14 @@
 package app.smallthingz.reverb
 
-/** Immutable publication: progress replaces the small prefix, never copies the finished catalog. */
+/**
+ * Pending save/status rows precede the immutable date-header and recording section.
+ * [structure] includes prefix membership and order. [finishedIdentity] tracks only [finished].
+ */
 internal class LibraryListSnapshot private constructor(
     val pending: List<LibraryListItem>,
     val finished: List<LibraryListItem>,
     val structure: Any,
+    val finishedIdentity: Any,
 ) : AbstractList<LibraryListItem>(), java.util.RandomAccess {
     override val size: Int get() = pending.size + finished.size
     override fun get(index: Int): LibraryListItem {
@@ -15,9 +19,9 @@ internal class LibraryListSnapshot private constructor(
     companion object {
         fun publish(previous: List<LibraryListItem>, pending: List<LibraryListItem>,
             finished: List<LibraryListItem>): LibraryListSnapshot {
-            val old = previous as? LibraryListSnapshot
-            if (old != null && old.finished === finished && old.pending == pending) return old
-            val sameStructure = old != null && old.finished === finished &&
+            val old = (previous as? LibraryListSnapshot)?.takeIf { it.finished === finished }
+            if (old != null && old.pending == pending) return old
+            val sameStructure = old != null &&
                 old.pending.size == pending.size && pending.indices.all { index ->
                     val before = old.pending[index]
                     val after = pending[index]
@@ -25,7 +29,8 @@ internal class LibraryListSnapshot private constructor(
                         before.save.id == after.save.id
                     else before == after
                 }
-            return LibraryListSnapshot(pending, finished, if (sameStructure) checkNotNull(old).structure else Any())
+            return LibraryListSnapshot(pending, finished,
+                if (sameStructure) checkNotNull(old).structure else Any(), old?.finishedIdentity ?: Any())
         }
     }
 }

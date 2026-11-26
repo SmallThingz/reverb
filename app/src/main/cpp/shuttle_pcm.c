@@ -9,6 +9,7 @@ _Static_assert(FLT_RADIX == 2 && FLT_MANT_DIG == 24 && DBL_MANT_DIG == 53,
                "Shuttle FIR requires IEEE binary32/binary64");
 _Static_assert(sizeof(float) == 4 && sizeof(double) == 8 && FLT_EVAL_METHOD == 0,
                "Shuttle FIR must not use excess intermediate precision");
+_Static_assert(sizeof(intptr_t) <= sizeof(jlong), "Shuttle FIR handle must fit in a JNI long");
 
 #define SHUTTLE_MAX_SOURCE_FRAMES 6913
 #define SHUTTLE_MAX_CHANNELS 2
@@ -26,6 +27,11 @@ typedef struct {
 static void throw_named(JNIEnv *env, const char *name, const char *message) {
     jclass type = (*env)->FindClass(env, name);
     if (type != NULL) (*env)->ThrowNew(env, type, message);
+}
+
+static jmethodID checkpoint_method(JNIEnv *env, jobject checkpoint) {
+    jclass type = (*env)->GetObjectClass(env, checkpoint);
+    return type == NULL ? NULL : (*env)->GetMethodID(env, type, "run", "()V");
 }
 
 static int admitted(JNIEnv *env, jobject checkpoint, jmethodID run) {
@@ -52,13 +58,45 @@ static double kernel(const float *table, double distance) {
     return (double)table[first] + (double)difference * fraction;
 }
 
-JNIEXPORT jfloatArray JNICALL
-Java_app_smallthingz_reverb_ShuttlePcmNative_filterNative(
-        JNIEnv *env, jobject receiver, jbyteArray input, jint first_source_frame,
-        jint source_frames, jint channels, jboolean reverse, jint output_frames,
-        jint sample_frames, jdouble source_step, jfloatArray table, jobject checkpoint) {
+JNIEXPORT jlong JNICALL
+Java_app_smallthingz_reverb_ShuttlePcmNative_createScratchNative(
+        JNIEnv *env, jobject receiver, jfloatArray table, jobject checkpoint) {
     (void)receiver;
-    if (input == NULL || table == NULL || checkpoint == NULL ||
+    if (table == NULL || checkpoint == NULL ||
+            (*env)->GetArrayLength(env, table) != SHUTTLE_TABLE_COUNT) {
+        throw_named(env, "java/lang/IllegalArgumentException", "Invalid shuttle FIR scratch inputs");
+        return 0;
+    }
+    jmethodID run = checkpoint_method(env, checkpoint);
+    if (run == NULL || !admitted(env, checkpoint, run)) return 0;
+    ShuttleScratch *scratch = malloc(sizeof(*scratch));
+    if (scratch == NULL) {
+        throw_named(env, "java/lang/OutOfMemoryError", "Cannot allocate bounded shuttle FIR scratch");
+        return 0;
+    }
+    (*env)->GetFloatArrayRegion(env, table, 0, SHUTTLE_TABLE_COUNT, scratch->table);
+    if ((*env)->ExceptionCheck(env)) {
+        free(scratch);
+        return 0;
+    }
+    return (jlong)(intptr_t)scratch;
+}
+
+JNIEXPORT void JNICALL
+Java_app_smallthingz_reverb_ShuttlePcmNative_releaseScratchNative(
+        JNIEnv *env, jobject receiver, jlong handle) {
+    (void)env;
+    (void)receiver;
+    free((ShuttleScratch *)(intptr_t)handle);
+}
+
+JNIEXPORT jfloatArray JNICALL
+Java_app_smallthingz_reverb_ShuttlePcmNative_filterWithScratchNative(
+        JNIEnv *env, jobject receiver, jlong handle, jbyteArray input, jint first_source_frame,
+        jint source_frames, jint channels, jboolean reverse, jint output_frames,
+        jint sample_frames, jdouble source_step, jobject checkpoint) {
+    (void)receiver;
+    if (handle == 0 || input == NULL || checkpoint == NULL ||
             channels < 1 || channels > SHUTTLE_MAX_CHANNELS || first_source_frame < 0 ||
             source_frames < 1 || source_frames > SHUTTLE_MAX_SOURCE_FRAMES ||
             output_frames < 1 || output_frames > source_frames ||
@@ -70,34 +108,24 @@ Java_app_smallthingz_reverb_ShuttlePcmNative_filterNative(
     }
     int64_t first_byte = (int64_t)first_source_frame * channels * 2;
     int byte_count = source_frames * channels * 2;
-    if (first_byte + byte_count > (*env)->GetArrayLength(env, input) ||
-            (*env)->GetArrayLength(env, table) != SHUTTLE_TABLE_COUNT) {
+    if (first_byte + byte_count > (*env)->GetArrayLength(env, input)) {
         throw_named(env, "java/lang/IllegalArgumentException", "Invalid shuttle FIR input bounds");
         return NULL;
     }
-    jclass checkpoint_class = (*env)->GetObjectClass(env, checkpoint);
-    if (checkpoint_class == NULL) return NULL;
-    jmethodID run = (*env)->GetMethodID(env, checkpoint_class, "run", "()V");
+    jmethodID run = checkpoint_method(env, checkpoint);
     if (run == NULL || !admitted(env, checkpoint, run)) return NULL;
 
-    /* No primitive array stays pinned across a callback. This call is the sole native owner. */
-    ShuttleScratch *scratch = malloc(sizeof(*scratch));
-    if (scratch == NULL) {
-        throw_named(env, "java/lang/OutOfMemoryError", "Cannot allocate bounded shuttle FIR scratch");
-        return NULL;
-    }
-    jfloatArray result = NULL;
+    /* The Kotlin worker owns scratch exclusively. No array stays pinned across a callback. */
+    ShuttleScratch *scratch = (ShuttleScratch *)(intptr_t)handle;
     (*env)->GetByteArrayRegion(env, input, (jsize)first_byte, byte_count, (jbyte *)scratch->pcm);
-    if ((*env)->ExceptionCheck(env)) goto done;
-    (*env)->GetFloatArrayRegion(env, table, 0, SHUTTLE_TABLE_COUNT, scratch->table);
-    if ((*env)->ExceptionCheck(env)) goto done;
+    if ((*env)->ExceptionCheck(env)) return NULL;
 
     int radius = source_step > 1.0 ? (int)ceil(32.0 * source_step / 0.9) : 0;
     double cutoff = radius > 0 ? 0.9 / source_step : 1.0;
     double previous_fraction = NAN;
     double weight_sum = 1.0;
     for (int frame = 0; frame < sample_frames; ++frame) {
-        if (frame % SHUTTLE_TILE_FRAMES == 0 && !admitted(env, checkpoint, run)) goto done;
+        if (frame % SHUTTLE_TILE_FRAMES == 0 && !admitted(env, checkpoint, run)) return NULL;
         /* Prefix length never changes full-grain output geometry or source endpoint support. */
         double position = output_frames == 1 ? (double)(source_frames / 2) :
                 (double)frame * (double)(source_frames - 1) / (double)(output_frames - 1);
@@ -141,12 +169,9 @@ Java_app_smallthingz_reverb_ShuttlePcmNative_filterNative(
             scratch->output[frame * channels + channel] = (float)(sums[channel] / weight_sum);
         }
     }
-    if (!admitted(env, checkpoint, run)) goto done;
-    result = (*env)->NewFloatArray(env, sample_frames * channels);
-    if (result == NULL) goto done;
+    if (!admitted(env, checkpoint, run)) return NULL;
+    jfloatArray result = (*env)->NewFloatArray(env, sample_frames * channels);
+    if (result == NULL) return NULL;
     (*env)->SetFloatArrayRegion(env, result, 0, sample_frames * channels, scratch->output);
-    if ((*env)->ExceptionCheck(env)) result = NULL;
-done:
-    free(scratch);
-    return result;
+    return (*env)->ExceptionCheck(env) ? NULL : result;
 }

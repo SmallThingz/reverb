@@ -54,11 +54,13 @@ internal class NativeLibraryPlayerLease(
     private var presentation: NativeInlinePlayerPresentation? = null
     private var closed = false
     private var attached = false
+    private val trimBusyLease = Any()
     private var input: NativeInlinePlayerInput? = null
     private var back: NativeLibraryPredictiveBack? = null
     private var backOwner: InlinePlaybackRowOwner? = null
     private var backKeyInitialized = false
     private val motion = NativeInlineWaveformMotion(frames, scope, durationScale, player::setWaveformFrame)
+        .apply { setPresentationActive(false) }
 
     /** The window updates the expansion-keyed predictive registration from these source values. */
     val playbackOwner: InlinePlaybackRowOwner? get() = input?.playbackOwner
@@ -71,7 +73,11 @@ internal class NativeLibraryPlayerLease(
     }
 
     override fun bind(recording: RecordingEntity, owner: InlinePlaybackRowOwner?, expanded: Boolean,
-                      screenActive: Boolean, trimRequested: Boolean) {
+                      screenActive: Boolean, trimRequested: Boolean) =
+        bind(recording, owner, expanded, screenActive, trimRequested, waveformReadAllowed = true)
+
+    override fun bind(recording: RecordingEntity, owner: InlinePlaybackRowOwner?, expanded: Boolean,
+                      screenActive: Boolean, trimRequested: Boolean, waveformReadAllowed: Boolean) {
         if (closed) return
         require(recording.id == recordingId)
         val callbacks = NativeInlinePlayerCallbacks(
@@ -82,11 +88,12 @@ internal class NativeLibraryPlayerLease(
             onCollapse = library::collapse,
             // Source callback captures this bound revision; accepted work never redirects its target.
             onPlaybackFailed = { library.playbackFailed(recording, it) },
-            onBusyChange = { library.localBusy(recordingId, it) })
+            onBusyChange = { library.localBusy(recordingId, it, trimBusyLease) })
         val next = NativeInlinePlayerInput(recording, trimRequested,
             screenActive && expanded && attached, owner,
-            library::isCurrentPlaybackOwner, callbacks)
+            library::isCurrentPlaybackOwner, callbacks, waveformReadAllowed)
         input = next
+        motion.setPresentationActive(next.screenActive)
         val previousController = controller
         controller = bindAttachedLibraryPlayer(previousController, attached,
             create = {
@@ -125,9 +132,11 @@ internal class NativeLibraryPlayerLease(
         presentation?.let { player.bind(environment, it.state, it.actions, it.fineSeek) }
     }
     override fun setPresentationAttached(attached: Boolean) {
+        if (closed) return
         this.attached = attached
-        // The list immediately follows with bind(screenActive && attached). Do not invent another
-        // visibility signal or retire the accepted trim receiver on a transient native detach.
+        // Detach stops decoration immediately. The following bind admits it using fresh screen
+        // and expansion state, and still delivers the detached input to the retained controller.
+        if (!attached) motion.setPresentationActive(false)
     }
     fun backFrame(active: Boolean, progress: Float, direction: Float) {
         controller?.backFrame(active, progress, direction)

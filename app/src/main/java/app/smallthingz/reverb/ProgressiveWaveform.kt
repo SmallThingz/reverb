@@ -1,5 +1,6 @@
 package app.smallthingz.reverb
 
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
@@ -19,13 +20,16 @@ internal const val RANGE_WAVEFORM_SETTLED_ENVELOPE_FRACTION =
 internal suspend fun buildProgressiveWaveform(
     readPass: (RangeWaveformPass, (Int, Float) -> Boolean) -> Unit,
     onPassStarted: (RangeWaveformPass) -> Unit = {},
+    firstPass: RangeWaveformPass = RangeWaveformPass.COARSE,
+    ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     onSnapshot: (RangeWaveformPass, ProgressiveWaveformSnapshot) -> Unit,
 ) = coroutineScope {
     for (pass in RangeWaveformPass.entries) {
-        if (pass == RangeWaveformPass.DETAIL) delay(280L)
+        if (pass.ordinal < firstPass.ordinal) continue
+        if (pass == RangeWaveformPass.DETAIL && firstPass == RangeWaveformPass.COARSE) delay(280L)
         onPassStarted(pass)
         val updates = Channel<ProgressiveWaveformSnapshot>(Channel.CONFLATED)
-        val worker = launch(Dispatchers.IO) {
+        val worker = launch(ioDispatcher) {
             val accumulator = ProgressiveWaveformAccumulator(pass.bucketCount)
             try {
                 readPass(pass) { index, magnitude ->

@@ -1121,6 +1121,7 @@ internal class TimelineAudioPreviewController(
     ) {
         var track: AudioTrack? = null
         var authorityHandle: PreviewTrackScrubHandle? = null
+        var nativeScratchRun: Closeable? = null
         fun checkShuttleCurrent() {
             checkCurrent(token)
             if (ordinaryAuthority?.active == false) throw PreviewCancelled()
@@ -1173,6 +1174,7 @@ internal class TimelineAudioPreviewController(
                 activeTrack = shuttleTrack
                 activeTrackEpoch = token
             }
+            nativeScratchRun = ShuttlePcmNative.openRun()
             val overlapFrames = (SHUTTLE_CROSSFADE_SECONDS * shuttleSampleRate.toDouble())
                 .roundToInt()
                 .coerceAtLeast(1)
@@ -1366,26 +1368,30 @@ internal class TimelineAudioPreviewController(
             // already-open player instead of leaving the gesture silent until finger-up.
             resumeAfterFailure = startedCallbackSent && onFailureAfterStart != null && isShuttleCurrent(token, ordinaryAuthority)
         } finally {
-            // Register quiet proof before detaching: ordinary resume must never see a
-            // ticketless retiring track after its authority registration disappears.
-            track?.let { quietOwner(it).retire() }
-            authorityHandle?.let { ordinaryAuthority?.detach(it) }
-            // Register proof ownership before a fallback can request normal playback.
-            if (resumeAfterFailure && onFailureAfterStart != null) postIfCurrent(token) {
-                if (ordinaryAuthority?.active != false) onFailureAfterStart()
-            }
-            // A retiring worker must not clear a newer gesture published by the UI thread.
-            activeShuttleToken.compareAndSet(token, 0L)
-            if (track != null) {
-                synchronized(trackLock) {
-                    if (activeTrack === track) { activeTrack = null; activeTrackEpoch = 0L }
+            try {
+                nativeScratchRun?.close()
+            } finally {
+                // Register quiet proof before detaching: ordinary resume must never see a
+                // ticketless retiring track after its authority registration disappears.
+                track?.let { quietOwner(it).retire() }
+                authorityHandle?.let { ordinaryAuthority?.detach(it) }
+                // Register proof ownership before a fallback can request normal playback.
+                if (resumeAfterFailure && onFailureAfterStart != null) postIfCurrent(token) {
+                    if (ordinaryAuthority?.active != false) onFailureAfterStart()
                 }
-                retireTrack(track)
+                // A retiring worker must not clear a newer gesture published by the UI thread.
+                activeShuttleToken.compareAndSet(token, 0L)
+                if (track != null) {
+                    synchronized(trackLock) {
+                        if (activeTrack === track) { activeTrack = null; activeTrackEpoch = 0L }
+                    }
+                    retireTrack(track)
+                }
+                runCleanupReportingThrowable(
+                    cleanup = source::close,
+                    onFailure = onSourceCloseFailure,
+                )
             }
-            runCleanupReportingThrowable(
-                cleanup = source::close,
-                onFailure = onSourceCloseFailure,
-            )
         }
     }
 

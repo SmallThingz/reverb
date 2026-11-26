@@ -10,10 +10,14 @@ import android.os.Looper
 import android.view.Choreographer
 import android.view.View
 import android.widget.FrameLayout
+import androidx.recyclerview.widget.LinearLayoutManager
 import app.smallthingz.reverb.InlinePlaybackRowOwner
 import app.smallthingz.reverb.LibraryListItem
+import app.smallthingz.reverb.LibraryListSnapshot
+import app.smallthingz.reverb.PendingSave
 import app.smallthingz.reverb.RecordingEntity
 import app.smallthingz.reverb.RecordingStorageType
+import app.smallthingz.reverb.SavePhase
 import java.time.Duration
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -31,7 +35,13 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import smallthingz.ui.MotionDurationScale
+import smallthingz.ui.geometry.Offset
+import smallthingz.ui.input.phase.NativeDragPointerChange
+import smallthingz.ui.input.phase.NativeDragPointerEvent
+import smallthingz.ui.input.phase.NativePointerPass
+import smallthingz.ui.input.pointer.PointerType
 import smallthingz.ui.platform.AndroidUiFrameClock
+import smallthingz.ui.scroll.NativeScrollIndicatorStyle
 import smallthingz.ui.text.font.createFontFamilyResolver
 import smallthingz.ui.unit.Density
 
@@ -44,17 +54,21 @@ class NativeLibraryScrollIndicatorTest {
         viewport.layoutDirection = View.LAYOUT_DIRECTION_RTL
         f.place()
         val light = f.light.palette.muted
-        val defaultColumn = viewport.width - 3
-        assertFalse(viewport.hasColorInColumn(defaultColumn, light))
+        val appearance = f.light.appearance
+        val defaultColumn = f.view.thumbColumn(checkNotNull(appearance.scrollIndicator))
+        assertFalse(viewport.scrollIndicatorPresentationActive)
+        assertFalse(f.view.hasColorInColumn(defaultColumn, light))
 
         val rows = List(20, f::recording)
         f.submit(rows)
         f.place()
+        assertTrue(viewport.scrollIndicatorPresentationActive)
         assertEquals(View.LAYOUT_DIRECTION_RTL, viewport.layoutDirection)
         assertTrue(viewport.canScrollVertically(1))
         assertTrue(viewport.childCount in 1 until rows.size)
-        assertTrue(viewport.hasColorInColumn(defaultColumn, light))
-        assertFalse(viewport.hasColorInColumn(2, light))
+        viewport.scrollBy(0, 1)
+        assertTrue(f.view.hasColorInColumn(defaultColumn, light))
+        assertFalse(f.view.hasColorInColumn(f.view.width - 1 - defaultColumn, light))
 
         val anchor = NativeListSavedPosition(6, 17)
         f.view.restorePosition(anchor)
@@ -62,15 +76,17 @@ class NativeLibraryScrollIndicatorTest {
         assertEquals(anchor, f.view.savePosition())
         val rowId = rows[anchor.firstVisibleItemIndex].recording.id
         val rowBounds = checkNotNull(f.view.attachedRecordingAnchor(rowId)).bounds()
-        val expectedViewportBounds = Rect(16, 0, 384, 500)
+        val expectedViewportBounds = Rect(0, 0, 400, 500)
+        val expectedRowInsets = Rect(16, 0, 16, 0)
         assertEquals(expectedViewportBounds, viewport.bounds())
-        assertEquals(Rect(), viewport.padding())
+        assertEquals(expectedRowInsets, viewport.padding())
+        assertEquals(16, rowBounds.left)
+        assertEquals(384, rowBounds.right)
         val adapter = checkNotNull(viewport.adapter)
         val layoutManager = checkNotNull(viewport.layoutManager)
         val onUserScroll = checkNotNull(viewport.sourceOnUserScroll)
 
-        val appearance = f.light.appearance
-        val inset = appearance.scrollIndicator.copy(rightInsetDp = 8f)
+        val inset = checkNotNull(appearance.scrollIndicator).copy(rightInsetDp = 8f)
         val dark = ReverbViewEnvironment.withTestAppearance(f.light.textDensity, f.light.sharedFontResolver,
             ReverbPalette.fallback(true), appearance.copy(scrollIndicator = inset))
         f.view.setEnvironment(dark)
@@ -79,24 +95,81 @@ class NativeLibraryScrollIndicatorTest {
         assertSame(adapter, viewport.adapter)
         assertSame(layoutManager, viewport.layoutManager)
         assertSame(onUserScroll, viewport.sourceOnUserScroll)
-        assertFalse(viewport.isVerticalScrollBarEnabled)
+        assertTrue(viewport.isVerticalScrollBarEnabled)
         assertEquals(expectedViewportBounds, viewport.bounds())
-        assertEquals(Rect(), viewport.padding())
+        assertEquals(expectedRowInsets, viewport.padding())
         assertEquals(anchor, f.view.savePosition())
         assertEquals(rowBounds, checkNotNull(f.view.attachedRecordingAnchor(rowId)).bounds())
-        val reboundColumn = viewport.width - 9
-        assertTrue(viewport.hasColorInColumn(reboundColumn, dark.palette.muted))
-        assertFalse(viewport.hasColorInColumn(defaultColumn, dark.palette.muted))
-        assertFalse(viewport.hasColorInColumn(defaultColumn, light))
+        val reboundColumn = f.view.thumbColumn(inset)
+        viewport.scrollBy(0, 1)
+        assertTrue(f.view.hasColorInColumn(reboundColumn, dark.palette.muted))
+        assertFalse(f.view.hasColorInColumn(defaultColumn, dark.palette.muted))
+        assertFalse(f.view.hasColorInColumn(defaultColumn, light))
 
         viewport.scrollBy(0, 31)
         assertNotEquals(anchor, f.view.savePosition())
+        f.submit(rows, screenActive = false)
+        assertFalse(viewport.scrollIndicatorPresentationActive)
+        f.submit(rows)
+        assertTrue(viewport.scrollIndicatorPresentationActive)
         f.view.clearListComposition()
         f.place()
         assertSame(viewport, f.view.scrollView)
+        assertFalse(viewport.scrollIndicatorPresentationActive)
         assertEquals(0, adapter.itemCount)
         assertFalse(viewport.canScrollVertically(1))
-        assertFalse(viewport.hasColorInColumn(reboundColumn, dark.palette.muted))
+        assertFalse(f.view.hasColorInColumn(reboundColumn, dark.palette.muted))
+    }
+
+    @Test fun thumbEndPlacementSurvivesAPendingSavePrefixAndLiftBeforeLayout() {
+        for (prefixBeforeMove in listOf(false, true)) Fixture().use { f ->
+            val viewport = f.view.scrollView
+            val adapter = checkNotNull(viewport.adapter)
+            val layout = viewport.layoutManager as LinearLayoutManager
+            val finished = buildList<LibraryListItem> {
+                repeat(6) { day ->
+                    add(LibraryListItem.Header("Day $day"))
+                    repeat(5) { add(f.recording(day * 5 + it)) }
+                }
+            }
+            val original = LibraryListSnapshot.publish(emptyList(), emptyList(), finished)
+            val pending = PendingSave(id = "pending", displayName = "Pending save",
+                startedAtMillis = 1_700_000_000_000L, durationMillis = 1_000L, phase = SavePhase.QUEUED)
+            val prefix = listOf(LibraryListItem.Header("Pending saves"), LibraryListItem.Pending(pending))
+            val withPrefix = LibraryListSnapshot.publish(original, prefix, finished)
+            assertSame(original.finishedIdentity, withPrefix.finishedIdentity)
+            f.submit(original)
+            f.place()
+            val originalCount = adapter.itemCount
+            val top = NativeListSavedPosition(0, 0)
+            viewport.scrollBy(0, 1)
+            viewport.scrollBy(0, -1)
+            assertEquals(top, f.view.savePosition())
+            val style = checkNotNull(f.light.appearance.scrollIndicator)
+            assertTrue(f.view.hasColorInColumn(f.view.thumbColumn(style), f.light.palette.muted))
+            val start = Offset(viewport.width - viewport.paddingRight / 2f, style.minThumbHeightDp / 2f)
+            val end = Offset(start.x, viewport.height * 2f)
+            viewport.thumbChange(start, previouslyPressed = false)
+            assertTrue(viewport.isScrollIndicatorDragging)
+
+            // Exercise an automatic top queued both after and before the user's jump.
+            if (prefixBeforeMove) f.submit(withPrefix)
+            viewport.thumbChange(end, previous = start)
+            assertTrue(viewport.hasPendingScrollIndicatorPlacement)
+            if (!prefixBeforeMove) f.submit(withPrefix)
+            assertEquals(originalCount + prefix.size, adapter.itemCount)
+            assertEquals(top, f.view.savePosition())
+            viewport.thumbChange(end, pressed = false)
+            assertFalse(viewport.isScrollIndicatorDragging)
+            assertTrue(viewport.hasPendingScrollIndicatorPlacement)
+
+            f.place()
+
+            val last = checkNotNull(layout.findViewByPosition(adapter.itemCount - 1))
+            assertEquals(viewport.height - viewport.paddingBottom, layout.getDecoratedBottom(last))
+            assertFalse(viewport.canScrollVertically(1))
+            assertFalse(viewport.hasPendingScrollIndicatorPlacement)
+        }
     }
 
     @Test fun inlineInfoCanCreateAndRemoveOverflowInTheSameRow() = Fixture().use { f ->
@@ -107,16 +180,17 @@ class NativeLibraryScrollIndicatorTest {
         f.settle()
         val viewport = f.view.scrollView
         val row = checkNotNull(f.view.attachedRecordingAnchor(id))
-        val column = viewport.width - 3
+        val column = f.view.thumbColumn(checkNotNull(f.light.appearance.scrollIndicator))
         val color = f.light.palette.muted
         assertFalse(viewport.canScrollVertically(1))
-        assertFalse(viewport.hasColorInColumn(column, color))
+        assertFalse(f.view.hasColorInColumn(column, color))
 
         f.submit(items, infoId = id)
         f.settle()
         assertSame(row, f.view.attachedRecordingAnchor(id))
         assertTrue(viewport.canScrollVertically(1))
-        assertTrue(viewport.hasColorInColumn(column, color))
+        viewport.scrollBy(0, 1)
+        assertTrue(f.view.hasColorInColumn(column, color))
         checkNotNull(viewport.sourceOnUserScroll).invoke()
         viewport.scrollBy(0, viewport.height)
         assertTrue(viewport.canScrollVertically(-1))
@@ -126,7 +200,7 @@ class NativeLibraryScrollIndicatorTest {
         assertSame(viewport, f.view.scrollView)
         assertFalse(viewport.canScrollVertically(-1))
         assertFalse(viewport.canScrollVertically(1))
-        assertFalse(viewport.hasColorInColumn(column, color))
+        assertFalse(f.view.hasColorInColumn(column, color))
     }
 
     private fun View.hasColorInColumn(x: Int, color: Int): Boolean {
@@ -141,6 +215,16 @@ class NativeLibraryScrollIndicatorTest {
 
     private fun View.bounds() = Rect(left, top, right, bottom)
     private fun View.padding() = Rect(paddingLeft, paddingTop, paddingRight, paddingBottom)
+    private fun View.thumbColumn(style: NativeScrollIndicatorStyle) =
+        (width - (style.rightInsetDp + style.widthDp / 2f) * resources.displayMetrics.density).toInt()
+
+    private fun ReverbLibraryRecyclerView.thumbChange(position: Offset, previous: Offset = position,
+        pressed: Boolean = true, previouslyPressed: Boolean = true) {
+        val change = NativeDragPointerChange(0L, 0L, position, previous, pressed, previouslyPressed,
+            PointerType.Touch, position)
+        scrollIndicatorPointerNode.dispatch(NativeDragPointerEvent(listOf(change), Offset.Zero),
+            NativePointerPass.INITIAL)
+    }
 
     private class Fixture : AutoCloseable {
         private val activity = Robolectric.buildActivity(Activity::class.java).setup()
@@ -175,9 +259,9 @@ class NativeLibraryScrollIndicatorTest {
             startedAtMillis = 1_700_000_000_000L, durationMillis = 1_000L, sizeBytes = 32_044L,
             codecSummary = "PCM", storageType = RecordingStorageType.FILE, directoryId = "/synthetic-scroll-indicator"))
 
-        fun submit(items: List<LibraryListItem>, infoId: String? = null) {
+        fun submit(items: List<LibraryListItem>, infoId: String? = null, screenActive: Boolean = true) {
             view.submit(LibraryNativeListState(items, emptySet(), false, emptySet(), emptySet(),
-                null, null, true, infoRecordingId = infoId))
+                null, null, screenActive, infoRecordingId = infoId))
         }
 
         fun place() {

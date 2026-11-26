@@ -1,6 +1,7 @@
 package app.smallthingz.reverb
 
 import android.content.Context
+import android.os.CancellationSignal
 import androidx.core.net.toUri
 import java.io.Closeable
 import java.io.FileDescriptor
@@ -113,6 +114,7 @@ internal fun openInlinePlayerMediaSource(
     context: Context,
     recording: RecordingEntity,
     cleanup: RecordingReadCleanup,
+    cancellationSignal: CancellationSignal? = null,
 ): InlinePlayerMediaSource = when (recording.storageType) {
     RecordingStorageType.FILE -> {
         val stream = openVerifiedFileInputStream(recording, cleanup)
@@ -123,22 +125,22 @@ internal fun openInlinePlayerMediaSource(
     RecordingStorageType.MEDIASTORE,
     -> {
         if (!recordingReadIdentityIsStable(recording) ||
-            !recordingContentIdentityMatches(context, recording)
+            !recordingContentIdentityMatches(context, recording, cancellationSignal)
         ) {
             throw IllegalStateException("Recording changed in provider")
         }
-        val descriptor = context.contentResolver.openFileDescriptor(recording.id.toUri(), "r")
+        val descriptor = context.contentResolver.openFileDescriptor(recording.id.toUri(), "r", cancellationSignal)
             ?: throw IllegalStateException("Recording unavailable in provider")
-        if (!recordingContentIdentityMatches(context, recording) ||
-            !providerDescriptorMatchesIdentity(recording.fileIdentity, descriptor.fileDescriptor)
-        ) {
-            throwAfterClosePreservingPrimary(
-                IllegalStateException("Recording changed in provider while opening"),
+        cleanup.open(descriptor) { opened ->
+            cancellationSignal?.throwIfCanceled()
+            if (!recordingContentIdentityMatches(context, recording, cancellationSignal) ||
+                !providerDescriptorMatchesIdentity(recording.fileIdentity, opened.fileDescriptor)
             ) {
-                cleanup.close { descriptor.close() }
+                throw IllegalStateException("Recording changed in provider while opening")
             }
+            cancellationSignal?.throwIfCanceled()
+            InlinePlayerMediaSource(opened.fileDescriptor, opened)
         }
-        InlinePlayerMediaSource(descriptor.fileDescriptor, descriptor)
     }
 }
 
@@ -235,7 +237,7 @@ internal class InlinePlayerBookkeeping {
 }
 
 // The expansion itself owns playback; an animated outgoing row may still be composed.
-internal class InlinePlaybackRowOwner(val recordingId: String) {
+internal class InlinePlaybackRowOwner(val recordingId: String, val automaticRestore: Boolean = false) {
     // The expansion survives lazy-row disposal; its initial playback grant must too.
     private var initialAutoStartAvailable = true
 

@@ -1,5 +1,7 @@
 package app.smallthingz.reverb
 
+import java.io.Closeable
+
 /** Shuttle-only FIR batching. Null preserves the Kotlin path when this ABI is unavailable. */
 internal object ShuttlePcmNative {
     // A 24 ms grain at 96 kHz and the 3x audible cap, plus independently rounded endpoints.
@@ -14,6 +16,47 @@ internal object ShuttlePcmNative {
             false
         } catch (_: SecurityException) {
             false
+        }
+    }
+
+    private val workerScratch = ThreadLocal<Scratch>()
+
+    /** Both phase alignment and full-grain rendering run synchronously on this worker. */
+    fun openRun(): Closeable {
+        check(workerScratch.get() == null)
+        val scratch = Scratch()
+        val run = Closeable {
+            check(workerScratch.get() === scratch)
+            workerScratch.remove()
+            scratch.close()
+        }
+        workerScratch.set(scratch)
+        return run
+    }
+
+    private class Scratch : Closeable {
+        private var handle = 0L
+        private var inUse = false
+
+        inline fun render(action: (Long) -> FloatArray): FloatArray? {
+            // JNI invokes admission on this thread. A nested call can use Kotlin without
+            // overwriting the outer filter's PCM or weights.
+            if (inUse) return null
+            inUse = true
+            try {
+                if (handle == 0L) {
+                    handle = createScratchNative(PcmRateConverter.kernelTableForShuttle(), admissionCheckpoint)
+                }
+                return action(handle)
+            } finally {
+                inUse = false
+            }
+        }
+
+        override fun close() {
+            val owned = handle
+            handle = 0L
+            if (owned != 0L) releaseScratchNative(owned)
         }
     }
 
@@ -36,14 +79,26 @@ internal object ShuttlePcmNative {
         checkPcmConversionNotInterrupted()
         // Short rounding geometries reach a step of six even though audible speed is capped at three.
         if (sourceStep <= 1.0 || sourceFrames > MAX_SOURCE_FRAMES || sourceStep > 6.0 || !available) return null
-        val result = filterNative(input, firstSourceFrame, sourceFrames, channelCount, reverse,
-            outputFrames, sampleFrames, sourceStep, PcmRateConverter.kernelTableForShuttle(),
-            admissionCheckpoint)
+        val run = workerScratch.get()
+        val scratch = run ?: Scratch()
+        val result = try {
+            scratch.render { handle ->
+                filterWithScratchNative(handle, input, firstSourceFrame, sourceFrames, channelCount, reverse,
+                    outputFrames, sampleFrames, sourceStep, admissionCheckpoint)
+            }
+        } finally {
+            if (run == null) scratch.close()
+        }
         checkPcmConversionNotInterrupted()
         return result
     }
 
-    private external fun filterNative(
+    private external fun createScratchNative(kernelTable: FloatArray, checkpoint: Runnable): Long
+
+    private external fun releaseScratchNative(handle: Long)
+
+    private external fun filterWithScratchNative(
+        handle: Long,
         input: ByteArray,
         firstSourceFrame: Int,
         sourceFrames: Int,
@@ -52,7 +107,6 @@ internal object ShuttlePcmNative {
         outputFrames: Int,
         sampleFrames: Int,
         sourceStep: Double,
-        kernelTable: FloatArray,
         checkpoint: Runnable,
     ): FloatArray
 }

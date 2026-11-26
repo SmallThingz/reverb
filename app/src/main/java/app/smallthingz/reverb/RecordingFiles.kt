@@ -13,6 +13,7 @@ import android.media.MediaMetadataRetriever
 import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
+import android.os.CancellationSignal
 import android.os.Environment
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
@@ -1853,10 +1854,12 @@ internal fun resolveProviderRecordingIdentity(
     storageType: RecordingStorageType,
     uri: Uri,
     preferredIdentity: String? = null,
+    cancellationSignal: CancellationSignal? = null,
 ): String = when (storageType) {
     RecordingStorageType.FILE -> ""
     RecordingStorageType.DOCUMENT -> readDocumentCatalogObservation(
         context, uri, preferNative = preferredIdentity?.let(::parseDocumentNativeIdentity) != null,
+        cancellationSignal = cancellationSignal,
     )?.identity.orEmpty()
     RecordingStorageType.MEDIASTORE -> runCatching {
         val useGeneration = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
@@ -1874,7 +1877,7 @@ internal fun resolveProviderRecordingIdentity(
                 MediaStore.MediaColumns.RELATIVE_PATH,
             )
         }
-        context.contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
+        context.contentResolver.query(uri, projection, null, null, null, cancellationSignal)?.use { cursor ->
             if (!cursor.moveToFirst()) return@use ""
             val relativePathIndex = if (useGeneration) 3 else 2
             if (cursor.isNull(relativePathIndex) ||
@@ -1972,14 +1975,20 @@ internal fun documentProviderIdentitiesShareTree(before: String, after: String):
         beforeScope.authority == afterScope.authority && beforeScope.treeId == afterScope.treeId
 }
 
-internal fun recordingContentIdentityMatches(context: Context, recording: RecordingEntity): Boolean {
+internal fun recordingContentIdentityMatches(
+    context: Context,
+    recording: RecordingEntity,
+    cancellationSignal: CancellationSignal? = null,
+): Boolean {
     return when (val storageType = recording.storageType) {
         RecordingStorageType.FILE -> recordingFileIdentityMatches(recording)
         RecordingStorageType.DOCUMENT,
         RecordingStorageType.MEDIASTORE,
         -> {
             if (recording.fileIdentity.isBlank()) return true
-            val current = resolveProviderRecordingIdentity(context, storageType, recording.id.toUri(), recording.fileIdentity)
+            val current = resolveProviderRecordingIdentity(context, storageType, recording.id.toUri(),
+                recording.fileIdentity, cancellationSignal)
+            cancellationSignal?.throwIfCanceled()
             providerRecordingIdentityMatches(recording.fileIdentity, current)
         }
     }

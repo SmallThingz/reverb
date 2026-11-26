@@ -136,10 +136,74 @@ class NativeInlineWaveformMotionTest {
         } finally { motion.close() }
     }
 
+    @Test fun detachedLoadingMotionWaitsWithoutIntegratingHiddenTimeAndKeepsLatestTargets() = runBlocking {
+        val clock = ManualFrames()
+        val published = mutableListOf<ProgressiveWaveformFrame>()
+        val motion = NativeInlineWaveformMotion(clock, CoroutineScope(coroutineContext), { 1f }) { published += it }
+        try {
+            motion.bind(data(2, 1), loading = true, morphStarted = true)
+            yield()
+            assertEquals(1, clock.pendingCount)
+            clock.frame(1_000_000_000L); yield()
+            clock.frame(1_100_000_000L); yield()
+            val visible = published.last()
+            val visibleCount = published.size
+            assertEquals(.1f, visible.wobblePhaseSeconds, .000001f)
+            assertTrue(visible.morphProgress > 0f && visible.morphProgress < 1f)
+
+            motion.setPresentationActive(false)
+            assertEquals(0, clock.pendingCount)
+            motion.bind(data(4, 4), loading = true, morphStarted = true)
+            clock.frame(20_000_000_000L); yield()
+            assertEquals(0, clock.pendingCount)
+            assertEquals(visibleCount, published.size)
+
+            motion.setPresentationActive(true)
+            motion.setPresentationActive(true)
+            yield()
+            assertEquals(1, clock.pendingCount)
+            clock.frame(30_000_000_000L); yield()
+            assertEquals(visibleCount, published.size)
+            assertEquals(visible, published.last())
+            clock.frame(30_100_000_000L); yield()
+            assertEquals(.2f, published.last().wobblePhaseSeconds, .000001f)
+            assertTrue(published.last().morphProgress > visible.morphProgress)
+            assertTrue(published.last().morphProgress < 1f)
+            clock.frame(31_000_000_000L); yield()
+            assertEquals(1f, published.last().visibleCoarseFraction, 0f)
+            assertEquals(1f, published.last().visibleDetailFraction, 0f)
+            assertEquals(1f, published.last().morphProgress, 0f)
+            motion.close()
+            assertEquals(0, clock.pendingCount)
+        } finally { motion.close() }
+    }
+
+    @Test fun aCapturedFrameFromBeforeDeactivationCannotSampleAfterReactivation() = runBlocking {
+        val clock = ManualFrames()
+        val published = mutableListOf<ProgressiveWaveformFrame>()
+        val motion = NativeInlineWaveformMotion(clock, CoroutineScope(coroutineContext), { 1f }) { published += it }
+        try {
+            motion.bind(data(4, 4), loading = true, morphStarted = true)
+            yield()
+            clock.frame(1_000_000_000L); yield()
+            val stale = clock.captureFrame(1_100_000_000L)
+            motion.setPresentationActive(false)
+            motion.setPresentationActive(true)
+            yield()
+            assertEquals(1, clock.pendingCount)
+            val beforeStale = published.toList()
+            stale(); yield()
+            assertEquals(beforeStale, published)
+            assertEquals(1, clock.pendingCount)
+            clock.frame(30_000_000_000L); yield()
+            assertEquals(beforeStale, published)
+        } finally { motion.close() }
+    }
+
     private fun data(coarse: Int, detail: Int) = ProgressiveWaveformData(
         FloatArray(4), coarse, FloatArray(4), detail, detailAvailable = true)
 
-    private class ManualFrames : MonotonicFrameClock {
+    internal class ManualFrames : MonotonicFrameClock {
         private class Request(val deliver: (Long) -> Unit)
         private val requests = mutableListOf<Request>()
         val pendingCount get() = requests.size
@@ -148,10 +212,11 @@ class NativeInlineWaveformMotionTest {
             requests.add(request)
             continuation.invokeOnCancellation { requests.remove(request) }
         }
-        fun frame(time: Long) {
+        fun captureFrame(time: Long): () -> Unit {
             val ready = requests.toList()
             requests.clear()
-            ready.forEach { it.deliver(time) }
+            return { ready.forEach { it.deliver(time) } }
         }
+        fun frame(time: Long) = captureFrame(time)()
     }
 }

@@ -1,15 +1,27 @@
 #!/usr/bin/env python3
-"""Generate Reverb brand assets from the UI library SVG; --android-only needs only Python."""
+"""Generate Reverb brand assets from library artwork and foreground exports; Python only."""
 from pathlib import Path
 import argparse
 import math
 import re
 import subprocess
+import sys
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = "native-ui/src/main/brand/reverb.svg"
+PLATE_CHECKER = "native-ui/scripts/generate_reverb_brand_plate.py"
 MARK_SIZE_DP = 108
+# Library-owned exports of the recording-info foreground and its deterministic icon grain.
+BRAND_SURFACE_FILES = {
+    f"native-ui/src/main/res/{qualifier}/reverb_brand_surface.xml"
+    for qualifier in ("values", "values-night", "values-v31", "values-night-v31", "values-v34", "values-night-v34")
+}
+BRAND_PLATE_FILES = {
+    "native-ui/src/main/res/drawable/reverb_brand_plate.xml",
+    "native-ui/src/main/res/drawable/reverb_brand_grain.xml",
+    "native-ui/src/main/res/drawable-nodpi/reverb_brand_grain_tile.png",
+}
 SVG = "{http://www.w3.org/2000/svg}"
 ANDROID = "http://schemas.android.com/apk/res/android"
 ET.register_namespace("android", ANDROID)
@@ -74,7 +86,9 @@ import smallthingz.ui.components.nativeLayeredMarkBounds
 
 /** Canonical Reverb artwork in the retained native renderer; palette ownership stays in this library. */
 class ReverbBrandMarkView(context: Context, description: CharSequence? = null) :
-    NativeLayeredMarkView(context, description, reverbBrandArt, ::readReverbBrandPalette)
+    NativeLayeredMarkView(context, description, reverbBrandArt, ::readReverbBrandPalette) {{
+    init {{ bindDefaultReverbBrandSurface() }}
+}}
 
 private const val BRAND_SIZE_DP = {MARK_SIZE_DP}f
 
@@ -102,6 +116,11 @@ fun reverbBrandFillBounds(density: Float, width: Int, height: Int) = nativeLayer
 
 
 def assets(android_only=False):
+    # The library owns the color/texture derivation, including source and output drift checks.
+    plate_check = subprocess.run([sys.executable, "-B", str(ROOT / PLATE_CHECKER), "--check"],
+                                 capture_output=True, text=True, timeout=30)
+    if plate_check.returncode != 0:
+        raise ValueError("Shared brand plate export is stale: " + plate_check.stdout + plate_check.stderr)
     source = ROOT / SOURCE
     document = ET.parse(source).getroot()
     glyph = document.find(f"{SVG}defs/{SVG}g[@id='r']")
@@ -160,6 +179,10 @@ def assets(android_only=False):
                                   + source.read_bytes()),
         "native-ui/src/main/kotlin/smallthingz/ui/reverb/ReverbBrandMarkView.kt": native_mark(glyph, mark, translation[1]),
     }
+    # The launcher cannot instantiate an app View: consume the library's resource plate directly.
+    background = ET.Element("layer-list")
+    ET.SubElement(background, "item", android(drawable="@drawable/reverb_brand_plate"))
+    output["app/src/main/res/drawable/ic_launcher_background.xml"] = encode(background)
     for variant, filename in (("color", "ic_launcher_foreground"),
                               ("mono", "ic_launcher_monochrome"),
                               ("compat_splash", "reverb_splash_foreground"),
@@ -193,8 +216,9 @@ def assets(android_only=False):
             valueFrom=start, valueTo=end, valueType="floatType",
         )))
     colors = ET.Element("resources")
-    for name, value in (("background", circle.attrib["fill"]),
-                        ("accent", near.attrib["stroke"]), ("main", main.attrib["stroke"])):
+    for name, value in (("background", "@color/reverb_brand_surface"),
+                        ("accent", "@color/reverb_brand_surface_accent"),
+                        ("main", "@color/reverb_brand_surface_main")):
         ET.SubElement(colors, "color", {"name": "reverb_brand_" + name}).text = value
     output["native-ui/src/main/res/values/reverb_brand_colors.xml"] = encode(colors)
     # Runtime palette ownership stays in native-ui. Android resolves each alias through the
@@ -207,6 +231,11 @@ def assets(android_only=False):
             palette = ET.parse(ROOT / f"native-ui/src/main/res/{qualifier}/reverb_brand_colors.xml").getroot()
             if {entry.get("name") for entry in palette} != roles:
                 raise ValueError(f"{qualifier} must define the three canonical brand color roles")
+            # All configurations use one shared foreground/content chain, including fallback ink.
+            for entry in palette:
+                role = entry.get("name")[len("reverb_brand_"):]
+                entry.text = "@color/reverb_brand_surface" + ("" if role == "background" else "_" + role)
+            output[f"native-ui/src/main/res/{qualifier}/reverb_brand_colors.xml"] = encode(palette)
         aliases = ET.Element("resources")
         for role in ("background", "accent", "main"):
             ET.SubElement(aliases, "color", {"name": "launcher_" + role}).text = "@color/reverb_brand_" + role
@@ -215,9 +244,11 @@ def assets(android_only=False):
     for module, prefix, managed in (
         ("app", "launcher_", set(output)),
         ("native-ui", "reverb_brand_", {
-            f"native-ui/src/main/res/{qualifier}/reverb_brand_colors.xml" for qualifier in qualifiers}),
+            f"native-ui/src/main/res/{qualifier}/reverb_brand_colors.xml" for qualifier in qualifiers} | BRAND_SURFACE_FILES),
     ):
-        for path in (ROOT / module).glob("src/*/res/values*/*.xml"):
+        # The app can shadow a library resource too; ownership crosses the merge boundary.
+        for path in (path for owner in ("app", "native-ui")
+                     for path in (ROOT / owner).glob("src/*/res/values*/*.xml")):
             for entry in ET.parse(path).getroot():
                 is_color = entry.tag == "color" or (entry.tag == "item" and entry.get("type") == "color")
                 if is_color and entry.get("name", "").startswith(prefix) and path.relative_to(ROOT).as_posix() not in managed:
@@ -226,13 +257,16 @@ def assets(android_only=False):
     # Only the generated main files may define these drawable/animator names.
     geometry = {(Path(name).parent.name, Path(name).stem) for name in output
                 if name.startswith("app/src/main/res/") and Path(name).parent.name in ("drawable", "animator")}
-    for path in (ROOT / "app").glob("src/*/res/*/*"):
+    geometry |= {("drawable", Path(name).stem) for name in BRAND_PLATE_FILES}
+    managed_geometry = set(output) | BRAND_PLATE_FILES
+    for path in (path for owner in ("app", "native-ui")
+                 for path in (ROOT / owner).glob("src/*/res/*/*")):
         if not path.is_file():
             continue
         resource_type = path.parent.name.split("-", 1)[0]
         key = (resource_type, path.name.split(".", 1)[0])
         relative = path.relative_to(ROOT).as_posix()
-        if key in geometry and relative not in output:
+        if key in geometry and relative not in managed_geometry:
             raise ValueError(f"Brand geometry override outside generated resources: {relative}")
         if resource_type == "values" and path.suffix == ".xml":
             for entry in ET.parse(path).getroot():
@@ -256,12 +290,12 @@ def main():
     if args.check:
         if changed:
             raise SystemExit("Regenerate brand assets: " + ", ".join(changed))
-        print(f"All {len(output)} generated brand assets match the canonical SVG")
+        print(f"All {len(output)} generated brand assets match the canonical library sources")
     else:
         for name in changed:
             (ROOT / name).parent.mkdir(parents=True, exist_ok=True)
             (ROOT / name).write_bytes(output[name])
-        print(f"Updated {len(changed)} brand assets from the canonical SVG")
+        print(f"Updated {len(changed)} brand assets from the canonical library sources")
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@ package app.smallthingz.reverb
 
 import android.content.Context
 import android.net.Uri
+import android.os.CancellationSignal
 import android.provider.DocumentsContract
 import android.system.Os
 import android.system.OsConstants
@@ -61,7 +62,11 @@ private data class DocumentIdentityMetadata(
     val modifiedMillis: Long?,
 )
 
-private fun queryDocumentIdentityMetadata(context: Context, uri: Uri): DocumentIdentityMetadata? {
+private fun queryDocumentIdentityMetadata(
+    context: Context,
+    uri: Uri,
+    cancellationSignal: CancellationSignal?,
+): DocumentIdentityMetadata? {
     val columns = arrayOf(
         DocumentsContract.Document.COLUMN_DOCUMENT_ID,
         DocumentsContract.Document.COLUMN_DISPLAY_NAME,
@@ -69,7 +74,7 @@ private fun queryDocumentIdentityMetadata(context: Context, uri: Uri): DocumentI
         DocumentsContract.Document.COLUMN_SIZE,
         DocumentsContract.Document.COLUMN_LAST_MODIFIED,
     )
-    return context.contentResolver.query(uri, columns, null, null, null)?.use { cursor ->
+    return context.contentResolver.query(uri, columns, null, null, null, cancellationSignal)?.use { cursor ->
         requireCompleteDocumentListing(
             cursor.extras.getBoolean(DocumentsContract.EXTRA_LOADING, false),
             cursor.extras.getString(DocumentsContract.EXTRA_ERROR),
@@ -93,8 +98,9 @@ internal fun readDocumentCatalogObservation(
     context: Context,
     uri: Uri,
     preferNative: Boolean = false,
+    cancellationSignal: CancellationSignal? = null,
 ): ProviderCatalogObservation? = runCatching {
-    val before = queryDocumentIdentityMetadata(context, uri) ?: return@runCatching null
+    val before = queryDocumentIdentityMetadata(context, uri, cancellationSignal) ?: return@runCatching null
     val metadataIdentity = documentProviderIdentityFromMetadata(
         uri.toString(), before.sizeBytes != null, before.sizeBytes ?: 0L,
         before.modifiedMillis != null, before.modifiedMillis ?: 0L,
@@ -103,14 +109,14 @@ internal fun readDocumentCatalogObservation(
         return@runCatching ProviderCatalogObservation(before.displayName, metadataIdentity)
     }
     val cleanup = optionalRecordingProbeCleanup(context, "Recording identity descriptor cleanup")
-    val descriptor = context.contentResolver.openFileDescriptor(uri, "r") ?: return@runCatching null
+    val descriptor = context.contentResolver.openFileDescriptor(uri, "r", cancellationSignal) ?: return@runCatching null
     cleanup.use(
         owner = descriptor,
         release = { it.close() },
     ) { opened ->
         val native = documentNativeIdentity(uri.toString(), opened.fileDescriptor) ?: return@use null
         if (before.sizeBytes != null && before.sizeBytes != native.sizeBytes) return@use null
-        if (before != queryDocumentIdentityMetadata(context, uri) ||
+        if (before != queryDocumentIdentityMetadata(context, uri, cancellationSignal) ||
             native != documentNativeIdentity(uri.toString(), opened.fileDescriptor)
         ) return@use null
         ProviderCatalogObservation(before.displayName, native.encode())

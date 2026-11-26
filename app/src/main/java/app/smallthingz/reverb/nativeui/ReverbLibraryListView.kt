@@ -23,6 +23,7 @@ import app.smallthingz.reverb.InlinePlaybackRowOwner
 import app.smallthingz.reverb.LibraryListItem
 import app.smallthingz.reverb.LibraryListSnapshot
 import app.smallthingz.reverb.RecordingEntity
+import app.smallthingz.reverb.samePlaybackRecording
 import app.smallthingz.reverb.PendingSave
 import app.smallthingz.reverb.R
 import app.smallthingz.reverb.formatRecordingStartTimestamp
@@ -43,6 +44,8 @@ internal data class LibraryNativeListState(
     val screenActive: Boolean,
     val infoRecordingId: String? = null,
     val renameRecordingId: String? = null,
+    val playingRecording: RecordingEntity? = null,
+    val waveformReadAllowed: Boolean = true,
 )
 
 /** Optional fixture work witness; normal screens do not install one. */
@@ -71,6 +74,9 @@ internal interface LibraryInlineExpansionLease {
     val view: View
     fun bind(recording: RecordingEntity, owner: InlinePlaybackRowOwner?, expanded: Boolean,
         screenActive: Boolean, trimRequested: Boolean)
+    fun bind(recording: RecordingEntity, owner: InlinePlaybackRowOwner?, expanded: Boolean,
+        screenActive: Boolean, trimRequested: Boolean, waveformReadAllowed: Boolean) =
+        bind(recording, owner, expanded, screenActive, trimRequested)
     fun setEnvironment(environment: ReverbViewEnvironment)
     fun setPresentationAttached(attached: Boolean)
     fun closePresentation()
@@ -158,10 +164,17 @@ internal class ReverbLibraryListView(
             post(revealExpansion)
         }
     }
-    private val layout = object : LinearLayoutManager(context, RecyclerView.VERTICAL, false) {
+    private val layout: LinearLayoutManager = object : LinearLayoutManager(context, RecyclerView.VERTICAL, false) {
         override fun onLayoutChildren(recycler: RecyclerView.Recycler, state: RecyclerView.State) {
-            if (!state.isPreLayout) pendingPosition.pendingForPlacement(state.itemCount, recordingIndexForPlacement)?.let { target ->
-                scrollToPositionWithOffset(target.firstVisibleItemIndex, -target.firstVisibleItemScrollOffset)
+            if (!state.isPreLayout) {
+                if (list.applyPendingScrollIndicatorPlacement(this, state.itemCount)) {
+                    // A top request queued before the thumb moved must not win a later layout pass.
+                    pendingPosition = NativePendingListPosition(null)
+                } else {
+                    pendingPosition.pendingForPlacement(state.itemCount, recordingIndexForPlacement)?.let { target ->
+                        scrollToPositionWithOffset(target.firstVisibleItemIndex, -target.firstVisibleItemScrollOffset)
+                    }
+                }
             }
             super.onLayoutChildren(recycler, state)
         }
@@ -184,6 +197,7 @@ internal class ReverbLibraryListView(
         itemAnimator = null
         isVerticalScrollBarEnabled = false
         isHorizontalScrollBarEnabled = false
+        scrollIndicatorPresentationActive = false
         bindScrollIndicator(initialEnvironment.appearance.scrollIndicator, initialEnvironment.palette.muted)
         setHasFixedSize(false)
         addOnScrollListener(object : RecyclerView.OnScrollListener() {
@@ -247,9 +261,11 @@ internal class ReverbLibraryListView(
     /** One main-thread immutable presentation update; no operation, playback or Undo side effects. */
     fun submit(value: LibraryNativeListState) {
         if (disposed || clearingListComposition) return
+        list.scrollIndicatorPresentationActive = value.screenActive
         expansionReveal.update(if (value.screenActive && value.renameRecordingId == null)
             value.infoRecordingId ?: value.expandedOwner?.recordingId else null, value.infoRecordingId != null)
-        val update = rowUpdates.submit((value.items as? LibraryListSnapshot)?.structure ?: value.items, NativeLibraryRowState(
+        val snapshot = value.items as? LibraryListSnapshot
+        val update = rowUpdates.submit(snapshot?.finishedIdentity ?: value.items, NativeLibraryRowState(
             selectedIds = value.selectedIds,
             selectionActive = value.selectionActive,
             blockedIds = value.activeMutationIds + value.localOperationBusyIds,
@@ -259,11 +275,15 @@ internal class ReverbLibraryListView(
             screenActive = value.screenActive,
             infoRecordingId = value.infoRecordingId,
             renameRecordingId = value.renameRecordingId,
+            playingRecording = value.playingRecording,
+            waveformReadAllowed = value.waveformReadAllowed,
         ))
-        val preserveTop = update?.catalogChanged == true && !pendingPosition.hasKeyedRequest &&
+        val structureChanged = update?.catalogChanged == true || rowAdapter.pendingStructureChanged(snapshot)
+        val preserveTop = structureChanged && !pendingPosition.hasKeyedRequest &&
+            !list.hasPendingScrollIndicatorPlacement &&
             savePosition() == NativeListSavedPosition(0, 0)
         blockedRecordingIds = checkNotNull(rowUpdates.current).blockedIds
-        rowAdapter.submit(value.items, update)
+        rowAdapter.submit(value.items, snapshot, update)
         // DiffUtil otherwise preserves the old first row as its stable-ID anchor when a fresh
         // save/header arrives after Home's open-at-top request was already laid out.
         if (preserveTop) {
@@ -274,6 +294,7 @@ internal class ReverbLibraryListView(
 
     /** Called once when this source branch consumes its restored rememberLazyListState slot. */
     fun restorePosition(position: NativeListSavedPosition, cancelRecordingReveal: Boolean = true) {
+        list.cancelPendingScrollIndicatorPlacement()
         if (cancelRecordingReveal) cancelPendingRecordingReveal()
         pendingPosition.request(position)
         // Catalog membership can change again before measurement. Normalize against the actual
@@ -290,6 +311,7 @@ internal class ReverbLibraryListView(
     fun revealRecording(recordingId: String): Boolean {
         val index = rowAdapter.recordingIndex(recordingId)
         if (index < 0) return false
+        list.cancelPendingScrollIndicatorPlacement()
         list.sourceStopScroll?.invoke()
         list.stopScroll()
         pendingPosition.request(NativeListSavedPosition(index, 0), key = recordingId)
@@ -348,6 +370,7 @@ internal class ReverbLibraryListView(
         if (clearingListComposition) return
         clearingListComposition = true
         try {
+            list.scrollIndicatorPresentationActive = false
             expansionReveal.update(null, false)
             removeCallbacks(revealExpansion)
             expansionRevealPosted = false
@@ -414,8 +437,8 @@ internal class ReverbLibraryListView(
 
     private fun admit(id: String) = rowAdapter.containsRecording(id) && id !in blockedRecordingIds
     private fun updateInsets() {
-        // Source modifier.padding(horizontal=16.dp) shrinks the viewport; it is not scroll content padding.
-        ReverbLibraryLayout.applyListInsets(this, environment.textDensity.density)
+        // The thumb uses the full safe viewport; the rows retain the source horizontal inset.
+        ReverbLibraryLayout.applyListInsets(list, environment.textDensity.density)
     }
     private inline fun forEachRecordingHolder(block: (RecordingHolder) -> Unit) {
         for (index in 0 until list.childCount) {
@@ -433,23 +456,35 @@ internal class ReverbLibraryListView(
         val key: String,
         val stableId: Long,
         val header: String? = null,
-        val compactHeader: Boolean = false,
+        val alwaysCompactHeader: Boolean = false,
         val recording: RecordingEntity? = null,
         val pendingSave: PendingSave? = null,
         val retryFailedSaves: Boolean = false,
         val edges: NativeGroupEdges? = null,
         val row: LibraryRecordingRow? = null,
         val expandedOwner: InlinePlaybackRowOwner? = null,
+        val waveformReadAllowed: Boolean = true,
         val trimRequested: Boolean = false,
         val screenActive: Boolean = false,
         val info: Boolean = false,
         val rename: Boolean = false,
         val modalHidden: Boolean = false,
         val footer: Boolean = false,
-    )
+    ) {
+        fun isCompactHeader(position: Int) = alwaysCompactHeader || (header != null && position == 0)
+    }
+
+    private class AdapterEntries(
+        val pending: MutableList<Entry> = mutableListOf(),
+        val finished: List<Entry> = emptyList(),
+    ) : AbstractList<Entry>(), RandomAccess {
+        override val size: Int get() = pending.size + finished.size
+        override fun get(index: Int): Entry =
+            if (index < pending.size) pending[index] else finished[index - pending.size]
+    }
 
     private inner class LibraryRowsAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
-        private var entries = ArrayList<Entry>()
+        private var entries = AdapterEntries()
         private var recordingsById = emptyMap<String, Entry>()
         private var snapshot: LibraryListSnapshot? = null
         private var nextStableId = 0L
@@ -458,17 +493,22 @@ internal class ReverbLibraryListView(
         fun containsRecording(id: String): Boolean = id in recordingsById
         fun recordingIndex(id: String): Int = entries.indexOfFirst { it.recording?.id == id }
 
-        fun submit(items: List<LibraryListItem>, update: NativeLibraryListUpdate?) {
-            if (update?.catalogChanged == true) submitCatalog(items)
-            else (items as? LibraryListSnapshot)?.let { next ->
-                if (snapshot !== next) next.pending.forEachIndexed { index, item ->
-                    if (item is LibraryListItem.Pending && entries[index].pendingSave != item.save) {
-                        entries[index] = entries[index].copy(pendingSave = item.save)
+        fun pendingStructureChanged(next: LibraryListSnapshot?): Boolean =
+            next != null && snapshot?.structure !== next.structure
+
+        fun submit(items: List<LibraryListItem>, next: LibraryListSnapshot?, update: NativeLibraryListUpdate?) {
+            when {
+                update?.catalogChanged == true -> submitCatalog(items, next?.pending?.size ?: 0)
+                next != null && pendingStructureChanged(next) -> submitPending(next.pending)
+                next != null && snapshot !== next -> next.pending.forEachIndexed { index, item ->
+                    val entry = entries.pending[index]
+                    if (item is LibraryListItem.Pending && entry.pendingSave != item.save) {
+                        entries.pending[index] = entry.copy(pendingSave = item.save)
                         notifyItemChanged(index)
                     }
                 }
             }
-            snapshot = items as? LibraryListSnapshot
+            snapshot = next
             if (update == null) return
             forEachPendingHolder { it.presentation.setPresentationActive(rowUpdates.current?.screenActive == true) }
             // Only bound visible rows need a transient update. Cached/prefetched holders sample the
@@ -480,47 +520,79 @@ internal class ReverbLibraryListView(
             }
         }
 
-        private fun submitCatalog(items: List<LibraryListItem>) {
+        private fun submitPending(items: List<LibraryListItem>) {
+            val previous = entries
+            val previousByKey = previous.pending.associateBy { it.key }
+            val pending = ArrayList<Entry>(items.size)
+            items.forEachIndexed { index, item -> pending.add(makeEntry(items, index, item, previousByKey)) }
+            val diff = calculateDiff(previous.pending, pending)
+            entries = AdapterEntries(pending, previous.finished)
+            diff.dispatchUpdatesTo(this)
+
+            // Only the leading date header's top inset depends on whether a prefix is present.
+            val firstFinished = entries.finished.firstOrNull()
+            if (previous.pending.isEmpty() != pending.isEmpty() &&
+                firstFinished?.header != null && !firstFinished.alwaysCompactHeader) {
+                notifyItemChanged(pending.size)
+            }
+        }
+
+        private fun submitCatalog(items: List<LibraryListItem>, pendingSize: Int) {
             val previous = entries
             val previousByKey = previous.associateBy { it.key }
-            val next = ArrayList<Entry>(items.size + 1)
-            val nextRecordings = HashMap<String, Entry>(items.size)
+            val pending = ArrayList<Entry>(pendingSize)
+            val finished = ArrayList<Entry>(items.size - pendingSize + 1)
+            val nextRecordings = HashMap<String, Entry>(items.size - pendingSize)
             items.forEachIndexed { index, item ->
-                val key = libraryListItemKey(item)
-                val id = previousByKey[key]?.stableId ?: nextStableId++
-                next.add(when (item) {
-                    is LibraryListItem.Header -> Entry(key, id, header = item.dateLabel, compactHeader = index == 0)
-                    is LibraryListItem.Pending -> Entry(key, id, pendingSave = item.save,
-                        edges = NativeGroupEdges(
-                            first = items.getOrNull(index - 1) !is LibraryListItem.Pending,
-                            last = items.getOrNull(index + 1) !is LibraryListItem.Pending))
-                    is LibraryListItem.SaveRecoveryStatus -> Entry(key, id, header = item.message, compactHeader = true)
-                    LibraryListItem.RetryFailedSaves -> Entry(key, id, retryFailedSaves = true)
-                    is LibraryListItem.Recording -> Entry(key, id, recording = item.recording,
-                        edges = NativeGroupEdges(
-                            first = items.getOrNull(index - 1) !is LibraryListItem.Recording,
-                            last = items.getOrNull(index + 1) !is LibraryListItem.Recording))
-                        .also {
-                            nextRecordings[item.recording.id] = it
-                            workObserver?.finishedEntryCreated()
-                        }
-                })
+                val entry = makeEntry(items, index, item, previousByKey)
+                if (index < pendingSize) pending.add(entry) else finished.add(entry)
+                entry.recording?.let {
+                    nextRecordings[it.id] = entry
+                    workObserver?.finishedEntryCreated()
+                }
             }
             // Released LazyColumn always appends item { Spacer(Modifier.height(84.dp)) }.
-            next.add(Entry("library-footer", previousByKey["library-footer"]?.stableId ?: nextStableId++, footer = true))
+            finished.add(Entry("library-footer", previousByKey["library-footer"]?.stableId ?: nextStableId++, footer = true))
+            val next = AdapterEntries(pending, finished)
             workObserver?.catalogDiff()
-            val diff = DiffUtil.calculateDiff(object : DiffUtil.Callback() {
-                override fun getOldListSize() = previous.size
-                override fun getNewListSize() = next.size
-                override fun areItemsTheSame(oldItemPosition: Int, newItemPosition: Int) =
-                    previous[oldItemPosition].key == next[newItemPosition].key
-                override fun areContentsTheSame(oldItemPosition: Int, newItemPosition: Int) =
-                    previous[oldItemPosition] == next[newItemPosition]
-            })
+            val diff = calculateDiff(previous, next)
             entries = next
             recordingsById = nextRecordings
             diff.dispatchUpdatesTo(this)
         }
+
+        private fun makeEntry(items: List<LibraryListItem>, index: Int, item: LibraryListItem,
+            previousByKey: Map<String, Entry>): Entry {
+            val key = libraryListItemKey(item)
+            val id = previousByKey[key]?.stableId ?: nextStableId++
+            return when (item) {
+                is LibraryListItem.Header -> Entry(key, id, header = item.dateLabel)
+                is LibraryListItem.Pending -> Entry(key, id, pendingSave = item.save,
+                    edges = NativeGroupEdges(
+                        first = items.getOrNull(index - 1) !is LibraryListItem.Pending,
+                        last = items.getOrNull(index + 1) !is LibraryListItem.Pending))
+                is LibraryListItem.SaveRecoveryStatus -> Entry(key, id, header = item.message, alwaysCompactHeader = true)
+                LibraryListItem.RetryFailedSaves -> Entry(key, id, retryFailedSaves = true)
+                is LibraryListItem.Recording -> Entry(key, id, recording = item.recording,
+                    edges = NativeGroupEdges(
+                        first = items.getOrNull(index - 1) !is LibraryListItem.Recording,
+                        last = items.getOrNull(index + 1) !is LibraryListItem.Recording))
+            }
+        }
+
+        private fun calculateDiff(previous: List<Entry>, next: List<Entry>) =
+            DiffUtil.calculateDiff(object : DiffUtil.Callback() {
+                override fun getOldListSize() = previous.size
+                override fun getNewListSize() = next.size
+                override fun areItemsTheSame(oldItemPosition: Int, newItemPosition: Int) =
+                    previous[oldItemPosition].key == next[newItemPosition].key
+                override fun areContentsTheSame(oldItemPosition: Int, newItemPosition: Int): Boolean {
+                    val before = previous[oldItemPosition]
+                    val after = next[newItemPosition]
+                    return before == after &&
+                        before.isCompactHeader(oldItemPosition) == after.isCompactHeader(newItemPosition)
+                }
+            })
 
         private fun presentation(entry: Entry, previous: LibraryRecordingRow? = null): Entry {
             val recording = checkNotNull(entry.recording)
@@ -541,21 +613,29 @@ internal class ReverbLibraryListView(
                     (modalId == null || modalId == recording.id),
                 edges = checkNotNull(entry.edges),
                 expanded = expanded,
+                isPlaying = state.playingRecording?.let { samePlaybackRecording(it, recording) } == true,
                 activationLabel = if (info) context.getString(R.string.recording_details_hide) else null,
             ), expandedOwner = state.expandedOwner?.takeIf { expanded },
+                waveformReadAllowed = state.waveformReadAllowedFor(recording.id),
                 trimRequested = state.trimRequestRecordingId == recording.id,
                 screenActive = state.screenActive, info = info, rename = rename,
                 modalHidden = modalId != null && modalId != recording.id)
         }
 
         private fun refresh(holder: RecordingHolder) {
-            val id = holder.binding?.recording?.id ?: return
-            val entry = recordingsById[id]
-            if (entry == null) holder.retire()
-            else if (holder.boundRevision != rowUpdates.revision || holder.boundFormattingRevision != formattingRevision) {
+            val binding = holder.binding ?: return
+            val id = binding.recording?.id ?: return
+            val entry = recordingsById[id] ?: return holder.retire()
+            val state = checkNotNull(rowUpdates.current)
+            if (holder.boundRevision != rowUpdates.bindingRevision ||
+                holder.boundFormattingRevision != formattingRevision ||
+                binding.waveformReadAllowed != state.waveformReadAllowedFor(id) ||
+                binding.row?.isPlaying != (state.playingRecording?.let {
+                    samePlaybackRecording(it, checkNotNull(entry.recording))
+                } == true)) {
                 // Transient updates can reuse the text already owned by this holder. Full catalog
                 // binds and changes to Android's formatting inputs sample fresh text.
-                val previous = holder.binding?.takeIf {
+                val previous = binding.takeIf {
                     holder.boundFormattingRevision == formattingRevision && it.recording === entry.recording
                 }?.row
                 holder.bind(presentation(entry, previous))
@@ -565,7 +645,7 @@ internal class ReverbLibraryListView(
         fun rebindAll() { notifyItemRangeChanged(0, itemCount) }
         fun clear() {
             val count = entries.size
-            entries = ArrayList()
+            entries = AdapterEntries()
             recordingsById = emptyMap()
             snapshot = null
             if (count > 0) notifyItemRangeRemoved(0, count)
@@ -610,7 +690,7 @@ internal class ReverbLibraryListView(
             } else if (holder is RecordingHolder) holder.bind(presentation(entry)) else {
                 (holder.itemView as ReverbLibraryHeaderView).apply {
                     setEnvironment(environment)
-                    bind(checkNotNull(entry.header), entry.compactHeader)
+                    bind(checkNotNull(entry.header), entry.isCompactHeader(position))
                 }
             }
             rowNodesChanged()
@@ -657,7 +737,7 @@ internal class ReverbLibraryListView(
             if (binding?.key != entry.key) retire()
             if (expansion != null && entry.row?.expanded == true && binding?.info != entry.info) releaseExpansion()
             binding = entry
-            boundRevision = rowUpdates.revision
+            boundRevision = rowUpdates.bindingRevision
             boundFormattingRevision = formattingRevision
             row.setEnvironment(environment)
             val model = checkNotNull(entry.row)
@@ -686,7 +766,7 @@ internal class ReverbLibraryListView(
             expansion?.apply {
                 setEnvironment(environment)
                 bind(checkNotNull(entry.recording), entry.expandedOwner, model.expanded,
-                    entry.screenActive && model.expanded && attached, entry.trimRequested)
+                    entry.screenActive && model.expanded && attached, entry.trimRequested, entry.waveformReadAllowed)
             }
         }
 
@@ -696,7 +776,7 @@ internal class ReverbLibraryListView(
             val entry = binding ?: return
             expansion?.bind(checkNotNull(entry.recording), entry.expandedOwner,
                 entry.row?.expanded == true, entry.screenActive && entry.row?.expanded == true && value,
-                entry.trimRequested)
+                entry.trimRequested, entry.waveformReadAllowed)
         }
 
         private fun releaseExpansion() {

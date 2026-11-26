@@ -19,6 +19,7 @@ import kotlin.properties.ReadWriteProperty
 import kotlin.reflect.KProperty
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -44,6 +45,7 @@ internal data class NativeInlinePlayerInput(
     val playbackOwner: InlinePlaybackRowOwner?,
     val isCurrentPlaybackOwner: (InlinePlaybackRowOwner) -> Boolean,
     val callbacks: NativeInlinePlayerCallbacks,
+    val waveformReadAllowed: Boolean = true,
 )
 internal data class NativeInlinePlayerPresentation(
     val state: LibraryPlayerUiState,
@@ -53,6 +55,8 @@ internal data class NativeInlinePlayerPresentation(
     val waveformLoading: Boolean,
     val waveformMorphStarted: Boolean,
 )
+
+private enum class WaveformReadAdmission { PENDING, CLAIMED, REVOKED }
 
 /** Called only after the row's fixed recording ID has been checked. */
 internal fun sameNativeInlinePlayerRevision(previous: RecordingEntity, next: RecordingEntity): Boolean =
@@ -71,6 +75,8 @@ internal class NativeRecordingInlinePlayerController(
     parentScope: CoroutineScope,
     initial: NativeInlinePlayerInput,
     private val publish: (NativeInlinePlayerPresentation) -> Unit,
+    private val waveformIoDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val saveTrimCopy: suspend (Context, RecordingEntity, Int, Int) -> RecordingEntity = ::saveTrimmedRecordingCopy,
 ) : AutoCloseable {
     private val appContext = context.applicationContext
     private val rowScope = CoroutineScope(parentScope.coroutineContext + Job(parentScope.coroutineContext[Job]))
@@ -82,8 +88,6 @@ internal class NativeRecordingInlinePlayerController(
     private var deliveryPosted = false
     private var trimSaving by observed(false)
     private val activeTrimReceiver = AtomicReference<InlineTrimResultReceiver?>(null)
-    private var busyEffectValue: Boolean? = null
-    private var busyEffect: Job? = null
     private var backActive = false
     private var backProgress = 0f
     private var backDirection = 1f
@@ -127,7 +131,7 @@ internal class NativeRecordingInlinePlayerController(
         require(next.recording.id == recordingId) { "A player row cannot adopt another recording" }
         val previous = input
         val revisionChanged = !sameNativeInlinePlayerRevision(session.recording, next.recording)
-        if (revisionChanged) session.close()
+        if (revisionChanged) session.close() else session.checkPendingWaveformBinding(next)
         input = next
         if (!next.screenActive) RecordingPlayback.observePosition(positionObservation, false)
         // A queued trim terminal may run before the coalesced presentation is delivered.
@@ -145,6 +149,7 @@ internal class NativeRecordingInlinePlayerController(
                 if (!next.screenActive) session.pauseForLifecycle()
             }
         }
+        session.startWaveformIfAllowed()
         if (previous.playbackOwner !== next.playbackOwner) { backActive = false; backProgress = 0f }
         invalidate()
     }
@@ -171,13 +176,6 @@ internal class NativeRecordingInlinePlayerController(
         RecordingPlayback.observePosition(positionObservation,
             input.screenActive && lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
         activeTrimReceiver.get()?.setUiVisible(input.screenActive && lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
-        if (busyEffectValue != trimSaving) {
-            busyEffect?.cancel()
-            busyEffectValue = trimSaving
-            val saving = trimSaving
-            val callback = input.callbacks.onBusyChange
-            busyEffect = rowScope.launch { callback(saving) }
-        }
         current.reconcileEffects()
         if (!closed && session === current) publish(current.presentation())
     }
@@ -185,20 +183,21 @@ internal class NativeRecordingInlinePlayerController(
     override fun close() {
         if (closed) return
         closed = true
+        session.revokePendingWaveformRead()
         val receiver = activeTrimReceiver.getAndSet(null)
-        val previousBusyEffect = busyEffect
-        busyEffect = null
         deliveryPosted = false
         var failure = closePreservingPrimaryFailure(null) { RecordingPlayback.observePosition(positionObservation, false) }
         failure = closePreservingPrimaryFailure(failure) { receiver?.detachUi() }
         failure = closePreservingPrimaryFailure(failure) { input.callbacks.onBusyChange(false) }
         failure = closePreservingPrimaryFailure(failure, session::close)
-        failure = closePreservingPrimaryFailure(failure) { previousBusyEffect?.cancel() }
         failure = closePreservingPrimaryFailure(failure) { rowScope.cancel() }
         closePreservingPrimaryFailure(failure) { main.removeCallbacks(delivery) }?.let { throw it }
     }
 
     private inner class Revision(val recording: RecordingEntity) : AutoCloseable {
+        private val deferredWaveform = !input.waveformReadAllowed || input.playbackOwner?.automaticRestore == true
+        private var waveformStarted = false
+        private var deferredRead: AtomicReference<WaveformReadAdmission>? = null
         val key = revisionKey(recording)
         val playbackBookkeeping = InlinePlayerBookkeeping()
         private val revisionScope = CoroutineScope(rowScope.coroutineContext + Job(rowScope.coroutineContext[Job]))
@@ -223,7 +222,7 @@ internal class NativeRecordingInlinePlayerController(
         private var detailWaveform by observed(FloatArray(RANGE_WAVEFORM_DETAIL_BUCKETS))
         private var detailBuiltCount by observed(0)
         private var waveformPass by observed(RangeWaveformPass.COARSE)
-        private var waveformLoading by observed(true)
+        private var waveformLoading by observed(!deferredWaveform)
         private var waveformMorphStarted by observed(false)
         private var lastWaveform: ProgressiveWaveformData? = null
         private var lastCoarse: FloatArray? = null
@@ -248,6 +247,8 @@ internal class NativeRecordingInlinePlayerController(
         )
         private val lifecycleObserver = LifecycleEventObserver { _, event ->
             when (event) {
+                Lifecycle.Event.ON_START -> startWaveformIfAllowed()
+                Lifecycle.Event.ON_STOP -> revokePendingWaveformRead()
                 Lifecycle.Event.ON_RESUME -> {
                     activeTrimReceiver.get()?.setUiVisible(input.screenActive)
                     submitInlinePlaybackAutoStart(playbackBookkeeping, input.playbackOwner, prepared, true,
@@ -672,7 +673,7 @@ internal class NativeRecordingInlinePlayerController(
                     adoptOrdinaryState()
                 }
             }
-            buildWaveform()
+            startWaveformIfAllowed()
         }
 
         private fun startTrimPlayer() {
@@ -707,7 +708,52 @@ internal class NativeRecordingInlinePlayerController(
             }
         }
 
-        private fun buildWaveform() = revisionScope.launch {
+        fun checkPendingWaveformBinding(next: NativeInlinePlayerInput) {
+            if (deferredRead?.get() != WaveformReadAdmission.PENDING) return
+            if (input.playbackOwner !== next.playbackOwner || !next.waveformReadAllowed ||
+                !next.screenActive || next.playbackOwner?.let(next.isCurrentPlaybackOwner) != true
+            ) revokePendingWaveformRead()
+        }
+
+        fun revokePendingWaveformRead() {
+            deferredRead?.compareAndSet(WaveformReadAdmission.PENDING, WaveformReadAdmission.REVOKED)
+        }
+
+        private fun mayReadWaveform(): Boolean = !closed && !disposed && input.waveformReadAllowed &&
+            (!deferredWaveform || (input.screenActive && ownsPlaybackRow() &&
+                lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)))
+
+        fun startWaveformIfAllowed() {
+            if (waveformStarted || !mayReadWaveform()) return
+            waveformStarted = true
+            val admission = if (deferredWaveform) AtomicReference(WaveformReadAdmission.PENDING) else null
+            deferredRead = admission
+            // Same-revision reconciliation can add a verified cache; use that current binding.
+            val recording = input.recording
+            revisionScope.launch {
+                try {
+                    if (!mayReadWaveform()) {
+                        waveformStarted = false
+                    } else if (admission?.get() != WaveformReadAdmission.REVOKED) {
+                        buildWaveform(recording, admission)
+                    }
+                } finally {
+                    deferredRead = null
+                    if (admission?.get() == WaveformReadAdmission.REVOKED) {
+                        waveformLoading = false
+                        waveformMorphStarted = false
+                        waveformStarted = false
+                        // START or reattach may already have arrived while this attempt was queued.
+                        startWaveformIfAllowed()
+                    }
+                }
+            }
+        }
+
+        private suspend fun buildWaveform(
+            recording: RecordingEntity,
+            admission: AtomicReference<WaveformReadAdmission>?,
+        ) {
             waveformMorphStarted = true
             val expectedRevision = recordingWaveformRevision(recording)
             val cachedDetail = if (
@@ -724,7 +770,7 @@ internal class NativeRecordingInlinePlayerController(
                 coarseBuiltCount = coarseWaveform.size
                 waveformPass = RangeWaveformPass.DETAIL
                 waveformLoading = false
-                return@launch
+                return
             }
 
             coarseWaveform = FloatArray(RANGE_WAVEFORM_COARSE_BUCKETS)
@@ -736,13 +782,18 @@ internal class NativeRecordingInlinePlayerController(
 
             try {
                 buildProgressiveWaveform(
-                    readPass = { pass, onBucket ->
+                    ioDispatcher = waveformIoDispatcher,
+                    readPass = read@{ pass, onBucket ->
+                        if (admission != null &&
+                            !admission.compareAndSet(WaveformReadAdmission.PENDING, WaveformReadAdmission.CLAIMED)
+                        ) return@read
                         readRecordingWaveformEnvelopeProgressive(
                             appContext, recording, pass,
                             RecordingReadCleanup(::reportPlaybackCleanupFailure), onBucket,
                         )
                     },
                     onPassStarted = { waveformPass = it },
+                    firstPass = if (deferredWaveform) RangeWaveformPass.DETAIL else RangeWaveformPass.COARSE,
                 ) { pass, update ->
                     when (pass) {
                         RangeWaveformPass.COARSE -> if (update.values.size == coarseWaveform.size) {
@@ -754,6 +805,12 @@ internal class NativeRecordingInlinePlayerController(
                             detailBuiltCount = update.builtCount.coerceIn(0, detailWaveform.size)
                         }
                     }
+                }
+                if (admission?.get() == WaveformReadAdmission.REVOKED) return
+                if (deferredWaveform && detailBuiltCount == detailWaveform.size) {
+                    // The renderer gates detail by coarse extent; derive it without another read.
+                    coarseWaveform = coarseWaveformFromDetail(detailWaveform)
+                    coarseBuiltCount = coarseWaveform.size
                 }
                 val encoded = encodeRecordingWaveform(detailWaveform)
                 if (encoded.isNotBlank() && RecordingRepository.cacheWaveform(
@@ -881,39 +938,35 @@ internal class NativeRecordingInlinePlayerController(
 
         private fun saveTrim() {
             val acceptedInput = input
-            if (!trimSaving && trimEndMillis > trimStartMillis) {
+            if (!closed && !disposed && trimMode && !trimSaving && trimEndMillis > trimStartMillis &&
+                trimResultCanReachRow()) {
                 pauseInlinePlayback()
                 trimSaving = true
                 trimError = null
+                // Establish the Library's local lock before any queued row command can run.
                 acceptedInput.callbacks.onBusyChange(true)
                 // Keep only accepted operation values outside the detachable UI callback gate.
                 val trimContext = appContext
+                val saveCopy = saveTrimCopy
                 val targetRecording = recording
                 val startMillis = trimStartMillis
                 val endMillis = trimEndMillis
                 val receiverSlot = activeTrimReceiver
                 val receiver = InlineTrimResultReceiver(
                     onSaved = { trimmed ->
-                        trimSaving = false
-                        acceptedInput.callbacks.onBusyChange(false)
-                        leaveTrimMode()
-                        if (
-                            input.screenActive &&
-                            lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
-                        ) {
-                            acceptedInput.callbacks.onTrimSaved(trimmed)
+                        finishTrimSave(acceptedInput.callbacks) {
+                            leaveTrimMode()
+                            if (trimResultCanReachRow()) acceptedInput.callbacks.onTrimSaved(trimmed)
+                            else receiverSlot.get()?.setUiVisible(false)
                         }
                     },
                     onFailed = { error ->
-                        trimSaving = false
-                        acceptedInput.callbacks.onBusyChange(false)
-                        trimError = recordingTrimFailureMessage(appContext, error)
-                        if (
-                            error is RecordingCatalogIdentityChangedException &&
-                            input.screenActive &&
-                            lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
-                        ) {
-                            acceptedInput.callbacks.onTrimStateUncertain()
+                        finishTrimSave(acceptedInput.callbacks) {
+                            trimError = recordingTrimFailureMessage(appContext, error)
+                            if (!trimResultCanReachRow()) receiverSlot.get()?.setUiVisible(false)
+                            else if (error is RecordingCatalogIdentityChangedException) {
+                                acceptedInput.callbacks.onTrimStateUncertain()
+                            }
                         }
                     },
                     uiVisible = input.screenActive &&
@@ -934,18 +987,20 @@ internal class NativeRecordingInlinePlayerController(
                 receiverSlot.set(receiver)
                 rowScope.launch(start = CoroutineStart.UNDISPATCHED) {
                     runCommittedInlineTrim(
-                        save = {
-                            saveTrimmedRecordingCopy(
-                                context = trimContext,
-                                recording = targetRecording,
-                                startMillis = startMillis,
-                                endMillis = endMillis,
-                            )
-                        },
+                        save = { saveCopy(trimContext, targetRecording, startMillis, endMillis) },
                         onTerminal = receiver::terminal,
                     )
                 }
             }
+        }
+
+        private fun trimResultCanReachRow(): Boolean = input.screenActive && ownsPlaybackRow() &&
+            lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+
+        private fun finishTrimSave(callbacks: NativeInlinePlayerCallbacks, deliverResult: () -> Unit) {
+            val failure = closePreservingPrimaryFailure(null, deliverResult)
+            trimSaving = false
+            closePreservingPrimaryFailure(failure) { callbacks.onBusyChange(false) }?.let { throw it }
         }
 
         // These callbacks belong to this exact revision and read its live fields when invoked.
@@ -1015,6 +1070,7 @@ internal class NativeRecordingInlinePlayerController(
             if (disposed) return
             // Reentrant callbacks must see the terminal revision before any cleanup calls out.
             disposed = true
+            revokePendingWaveformRead()
             var failure = closePreservingPrimaryFailure(null, ::pauseForLifecycle)
             failure = closePreservingPrimaryFailure(failure, fineSeekPreviewController::close)
             failure = closePreservingPrimaryFailure(failure, ::releasePlayer)

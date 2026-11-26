@@ -1,6 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
 import smallthingz.ui.reverb.ReverbTopBarLayout
+import smallthingz.ui.reverb.bindReverbBrandSurface
 import smallthingz.ui.components.NativePathMorph
 import smallthingz.ui.components.NativeToolbarActionTone
 import smallthingz.ui.reverb.ReverbToolbarContentActionView
@@ -234,7 +235,7 @@ private class ReverbTopBarBrandAction(
 ) : ReverbToolbarContentActionView(context, mark, context.getString(R.string.app_name), inputRoot,
     environment.textDensity.density, environment.palette) {
     fun bind(value: ReverbViewEnvironment, callback: () -> Unit) {
-        mark.refreshResourcePalette()
+        mark.bindReverbBrandSurface(value.palette)
         bindToolbarContent(value.textDensity.density, value.palette, callback)
     }
 }

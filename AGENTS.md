@@ -118,12 +118,14 @@
   the marker armed for the rest of the live process. Checked/unchecked incident taps transfer their durable history
   mutation to process lifetime before the UI callback returns; Activity/Compose disposal cannot revoke an accepted
   toggle, and storage failure is queued through process feedback.
-- `native-ui/src/main/brand/reverb.svg` is the single Reverb brand geometry and baseline-color source, owned by the UI
-  library. `scripts/generate_brand_assets.py` derives the fast shared native mark, `app/src/main/icon.svg` mirror,
-  foreground, monochrome, splash and Fastlane assets. Run `--check --android-only` after runtime changes; full `--check`
-  also verifies the store PNG with librsvg. App `preBuild` enforces runtime parity with standard Python. Launcher colors
-  alias the library's `reverb_brand_*` resources, including dynamic day/night qualifiers; never add independent app
-  brand palettes or override generated drawable/animator names in a source variant or resource qualifier. Balance the
+- `native-ui/src/main/brand/reverb.svg` is the single Reverb brand geometry and store-baseline-color source, owned by the
+  UI library. Its `scripts/generate_reverb_brand_plate.py` exports the shared recording-info foreground, ink/primary
+  roles and raw deterministic icon grain; foreground opacity is applied once by each consumer. App
+  `scripts/generate_brand_assets.py` requires the library export check and generates runtime color aliases, the fast
+  shared native mark, `app/src/main/icon.svg` mirror, foreground, monochrome, splash and Fastlane assets. Run
+  `--check --android-only` after runtime changes; full `--check` also verifies the store PNG with librsvg. App `preBuild`
+  enforces runtime parity with standard Python. Never add independent app brand palettes or override generated/shared
+  brand color, drawable or animator names in a source variant or resource qualifier. Balance the
   primary R and both echoes in circular and rounded-rectangle launcher masks, without local logo offsets. Keep the
   existing `NativeLayeredMarkView` renderer and in-app layout. The splash's main R stays at its final anchor throughout
   the echo reveal, and its completed geometry matches the launcher exactly.

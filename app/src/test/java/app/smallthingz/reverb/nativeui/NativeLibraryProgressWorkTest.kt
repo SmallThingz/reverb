@@ -135,18 +135,18 @@ class NativeLibraryProgressWorkTest {
         }
         f.infoId = null
         f.deliver(listOf(f.job.copy(phase = SavePhase.FAILED, error = "retry")))
-        assertEquals(diffs + 1, f.work.diffs) // Retry membership is structural.
+        assertEquals(diffs, f.work.diffs) // Retry membership only changes the pending prefix.
         assertTrue(f.snapshot.pending.any { it === LibraryListItem.RetryFailedSaves })
         f.deliver(listOf(f.job, f.job.copy(id = "second")))
-        assertEquals(diffs + 2, f.work.diffs)
+        assertEquals(diffs, f.work.diffs)
         f.deliver(listOf(f.job.copy(id = "second"), f.job))
-        assertEquals(diffs + 3, f.work.diffs) // Same count, changed order.
+        assertEquals(diffs, f.work.diffs) // Same count, changed prefix order.
         val oldStructure = f.snapshot.structure
         val renamed = f.recordings[0].copy(displayName = "enriched name")
         f.catalog(listOf(renamed) + f.recordings.drop(1))
         f.deliver(listOf(f.job.copy(id = "second"), f.job))
         assertNotSame(oldStructure, f.snapshot.structure)
-        assertEquals(diffs + 4, f.work.diffs)
+        assertEquals(diffs + 1, f.work.diffs)
         assertSame(renamed, f.snapshot.finished.filterIsInstance<LibraryListItem.Recording>().first().recording)
         f.set("saveJobsReadiness", DurableSaveJobs.Readiness(recoveryFailure = "unavailable"))
         f.deliver(listOf(f.job))
@@ -163,6 +163,198 @@ class NativeLibraryProgressWorkTest {
         assertEquals(anchorId, f.adapter.getItemId(f.view.savePosition().firstVisibleItemIndex))
     }
 
+    @Test fun pendingStructureReusesFinishedEntriesAndInvalidatesOnlyTheBoundaryHeader() =
+        Fixture(1000, true).use { f ->
+            f.deliver(emptyList())
+            f.place()
+            val initial = f.snapshot
+            val entries = f.entries().toList()
+            val ids = entries.indices.map { f.adapter.getItemId(it) }
+            val recordings = f.recordingsMap()
+            val revision = f.revision()
+            val diffs = f.work.diffs
+            val created = f.work.created
+            assertEquals(1000, created)
+            assertEquals(8, f.headerLabelTop(0))
+
+            fun assertFinishedRetained(prefixSize: Int) {
+                assertEquals(prefixSize, f.snapshot.pending.size)
+                assertSame(initial.finished, f.snapshot.finished)
+                assertSame(recordings, f.recordingsMap())
+                assertEquals(revision, f.revision())
+                assertEquals(created, f.work.created)
+                assertEquals(diffs, f.work.diffs)
+                val current = f.entries()
+                assertEquals(entries.size + prefixSize, current.size)
+                for (index in entries.indices) {
+                    assertSame(entries[index], current[index + prefixSize])
+                    assertEquals(ids[index], f.adapter.getItemId(index + prefixSize))
+                }
+            }
+
+            f.changes.clear()
+            f.deliver(listOf(f.job))
+            assertFinishedRetained(1)
+            assertEquals(listOf(1 to 1), f.changes)
+            f.place()
+            assertEquals(NativeListSavedPosition(0, 0), f.view.savePosition())
+            assertEquals(28, f.headerLabelTop(1))
+            val jobId = f.adapter.getItemId(0)
+
+            f.deliver(listOf(f.job.copy(phase = SavePhase.FAILED, error = "retry")))
+            assertFinishedRetained(2)
+            assertSame(LibraryListItem.RetryFailedSaves, f.snapshot.pending.first())
+            assertEquals(jobId, f.adapter.getItemId(1))
+            val retryId = f.adapter.getItemId(0)
+
+            f.set("saveJobsReadiness", DurableSaveJobs.Readiness(recoveryFailure = "unavailable"))
+            f.deliver(listOf(f.job))
+            assertFinishedRetained(3)
+            assertTrue(f.snapshot.pending.first() is LibraryListItem.SaveRecoveryStatus)
+            assertEquals(retryId, f.adapter.getItemId(1))
+            assertEquals(jobId, f.adapter.getItemId(2))
+
+            f.set("saveJobsReadiness", DurableSaveJobs.Readiness(loaded = true))
+            val second = f.job.copy(id = "second")
+            f.deliver(listOf(f.job, second))
+            assertFinishedRetained(2)
+            val secondId = f.adapter.getItemId(1)
+            f.deliver(listOf(second, f.job))
+            assertFinishedRetained(2)
+            assertEquals(secondId, f.adapter.getItemId(0))
+            assertEquals(jobId, f.adapter.getItemId(1))
+
+            f.place()
+            f.changes.clear()
+            f.deliver(emptyList())
+            assertFinishedRetained(0)
+            assertEquals(listOf(0 to 1), f.changes)
+            f.place()
+            assertEquals(NativeListSavedPosition(0, 0), f.view.savePosition())
+            assertEquals(8, f.headerLabelTop(0))
+
+            f.deliver(listOf(f.job))
+            val anchorIndex = 60
+            val anchorId = ids[anchorIndex]
+            assertTrue(f.view.revealRecording(f.recordings[anchorIndex - 1].id))
+            f.place()
+            assertEquals(anchorId, f.adapter.getItemId(f.view.savePosition().firstVisibleItemIndex))
+            f.deliver(emptyList())
+            f.place()
+            assertFinishedRetained(0)
+            assertEquals(anchorIndex, f.view.savePosition().firstVisibleItemIndex)
+            assertEquals(anchorId, f.adapter.getItemId(anchorIndex))
+        }
+
+    @Test fun playingOnlyChangesRefreshAffectedCachedRowsWithoutRebindingUnrelatedRows() = Fixture(100, true).use { f ->
+        f.deliver(emptyList())
+        @Suppress("UNCHECKED_CAST")
+        val adapter = f.adapter as RecyclerView.Adapter<RecyclerView.ViewHolder>
+        val targets = f.recordings.take(3).map { it.copy(fileIdentity = "identity-${it.id}") }
+        f.catalog(targets + f.recordings.drop(3))
+        f.deliver(emptyList())
+        val holders = targets.map { recording ->
+            val index = f.entries().indexOfFirst { Fixture.get(checkNotNull(it), "recording") == recording }
+            assertTrue(index >= 0)
+            adapter.createViewHolder(f.view.scrollView, adapter.getItemViewType(index)).also {
+                adapter.bindViewHolder(it, index)
+            }
+        }
+        try {
+            val diffs = f.work.diffs
+            val created = f.work.created
+            f.work.binds.clear()
+            f.view.submit(f.presentation.list.copy(playingRecording = targets[0]))
+            adapter.onViewAttachedToWindow(holders[2])
+            assertTrue("Unrelated cached row must not fully bind for playback", f.work.binds.isEmpty())
+            adapter.onViewAttachedToWindow(holders[0])
+            assertEquals(1, f.work.binds.size)
+            assertTrue((Fixture.get(checkNotNull(Fixture.get(holders[0], "binding")), "row") as LibraryRecordingRow).isPlaying)
+            f.work.binds.clear()
+            f.view.submit(f.presentation.list.copy(playingRecording = targets[1]))
+            adapter.onViewAttachedToWindow(holders[2])
+            assertTrue(f.work.binds.isEmpty())
+            adapter.onViewAttachedToWindow(holders[0])
+            adapter.onViewAttachedToWindow(holders[1])
+            assertEquals(2, f.work.binds.size)
+            assertFalse((Fixture.get(checkNotNull(Fixture.get(holders[0], "binding")), "row") as LibraryRecordingRow).isPlaying)
+            assertTrue((Fixture.get(checkNotNull(Fixture.get(holders[1], "binding")), "row") as LibraryRecordingRow).isPlaying)
+            assertEquals(diffs, f.work.diffs)
+            assertEquals(created, f.work.created)
+        } finally { holders.forEach(adapter::onViewRecycled) }
+    }
+
+    @Test fun waveformProofRefreshesOnlyTheExpandedCachedHolder() =
+        Fixture(100, true, allowPlayback = true).use { f ->
+            f.deliver(emptyList())
+            val target = f.recordings[0]
+            val owner = InlinePlaybackRowOwner(target.id, automaticRestore = true).apply { consumeInitialAutoStart() }
+            val waiting = f.presentation.list.copy(expandedOwner = owner, waveformReadAllowed = false)
+            f.view.submit(waiting)
+
+            @Suppress("UNCHECKED_CAST")
+            val adapter = f.adapter as RecyclerView.Adapter<RecyclerView.ViewHolder>
+            val holders = f.recordings.take(2).map { recording ->
+                val index = f.entries().indexOfFirst { Fixture.get(checkNotNull(it), "recording") == recording }
+                assertTrue(index >= 0)
+                adapter.createViewHolder(f.view.scrollView, adapter.getItemViewType(index)).also {
+                    adapter.bindViewHolder(it, index)
+                    adapter.onViewAttachedToWindow(it)
+                    adapter.onViewDetachedFromWindow(it)
+                }
+            }
+            try {
+                assertEquals(listOf(false), f.playbackWaveformAdmissions)
+                val bindingRevision = f.bindingRevision()
+                val diffs = f.work.diffs
+                val created = f.work.created
+                f.work.binds.clear()
+
+                f.view.submit(waiting.copy(waveformReadAllowed = true))
+                assertEquals(bindingRevision, f.bindingRevision())
+                adapter.onViewAttachedToWindow(holders[1])
+                assertTrue(f.work.binds.isEmpty())
+                assertEquals(listOf(false), f.playbackWaveformAdmissions)
+
+                adapter.onViewAttachedToWindow(holders[0])
+                assertEquals(listOf("recording:${target.id}"), f.work.binds)
+                assertEquals(listOf(false, true), f.playbackWaveformAdmissions)
+                assertEquals(diffs, f.work.diffs)
+                assertEquals(created, f.work.created)
+            } finally { holders.forEach(adapter::onViewRecycled) }
+        }
+
+    @Test fun keyedReopenRevealAttachesOffscreenControlsAndExistingCancellationStopsLaterJump() =
+        Fixture(100, true, allowPlayback = true).use { f ->
+            val host = Robolectric.buildActivity(Activity::class.java).setup()
+            try {
+                host.get().setContentView(f.view)
+                val target = f.recordings[80].copy(fileIdentity = "playing-identity")
+                f.catalog(f.recordings.map { if (it.id == target.id) target else it })
+                f.deliver(emptyList())
+                f.place()
+                assertNull(f.view.attachedRecordingAnchor(target.id))
+                val owner = InlinePlaybackRowOwner(target.id).apply { consumeInitialAutoStart() }
+                f.view.submit(f.presentation.list.copy(expandedOwner = owner, playingRecording = target))
+                val diffs = f.work.diffs
+                assertTrue(f.view.revealRecording(target.id))
+                f.place()
+                assertNotNull(f.view.attachedRecordingAnchor(target.id))
+                assertTrue("The restored controls must receive visible-owner admission",
+                    f.playbackBindings.any { it.first == target.id && it.second })
+                assertFalse("Viewport work must not renew autoplay", owner.consumeInitialAutoStart())
+                assertEquals(diffs, f.work.diffs)
+                f.view.openAtTop()
+                f.place()
+                assertNull(f.view.attachedRecordingAnchor(target.id))
+                assertTrue(f.view.revealRecording(target.id))
+                f.view.cancelPendingRecordingReveal()
+                f.place()
+                assertNull(f.view.pendingRecordingRevealId)
+                assertNull(f.view.attachedRecordingAnchor(target.id))
+            } finally { host.pause().stop().destroy() }
+        }
+
     private class Work : LibraryListWorkObserver {
         var diffs = 0
         var created = 0
@@ -172,7 +364,7 @@ class NativeLibraryProgressWorkTest {
         override fun rowBound(key: String) { binds.add(key) }
     }
 
-    private class Fixture(count: Int, var active: Boolean) : LifecycleOwner, AutoCloseable {
+    private class Fixture(count: Int, var active: Boolean, private val allowPlayback: Boolean = false) : LifecycleOwner, AutoCloseable {
         override val lifecycle = LifecycleRegistry(this)
         private val context = RuntimeEnvironment.getApplication()
         private val frames = AndroidUiFrameClock(Choreographer.getInstance())
@@ -186,22 +378,35 @@ class NativeLibraryProgressWorkTest {
         val job = PendingSave("pending", "Saving", 1_700_000_000_000L, 1000L, SavePhase.SAVING, 0f)
         var infoId: String? = null
         val leases = mutableListOf<LibraryInlineExpansionLease>()
+        val playbackBindings = mutableListOf<Pair<String, Boolean>>()
+        val playbackWaveformAdmissions = mutableListOf<Boolean>()
         val leaseCloses = java.util.IdentityHashMap<LibraryInlineExpansionLease, Int>()
         val work = Work()
         val changes = mutableListOf<Pair<Int, Int>>()
         val view = ReverbLibraryListView(context,
             ReverbViewEnvironment(Density(1f), createFontFamilyResolver(context), ReverbPalette.fallback(false)),
             viewScope, View(context), LibraryRecordingRowActions(null, null, null), object : LibraryInlineExpansionHost {
-                override fun create(context: Context, recordingId: String): LibraryInlineExpansionLease = error("No playback")
-                override fun createInfo(context: Context, recordingId: String) = object : LibraryInlineExpansionLease {
-                    override val view = View(context)
-                    override fun bind(recording: RecordingEntity, owner: InlinePlaybackRowOwner?, expanded: Boolean,
-                        screenActive: Boolean, trimRequested: Boolean) = Unit
-                    override fun setEnvironment(environment: ReverbViewEnvironment) = Unit
-                    override fun setPresentationAttached(attached: Boolean) = Unit
-                    override fun closePresentation() { leaseCloses[this] = checkNotNull(leaseCloses[this]) + 1 }
-                }.also { leases.add(it); leaseCloses[it] = 0 }
+                override fun create(context: Context, recordingId: String): LibraryInlineExpansionLease {
+                    check(allowPlayback)
+                    return createLease(playback = true)
+                }
+                override fun createInfo(context: Context, recordingId: String) = createLease(playback = false)
             }, {})
+        private fun createLease(playback: Boolean) = object : LibraryInlineExpansionLease {
+            override val view = View(context).apply { if (playback) minimumHeight = 80 }
+            override fun bind(recording: RecordingEntity, owner: InlinePlaybackRowOwner?, expanded: Boolean,
+                screenActive: Boolean, trimRequested: Boolean) =
+                bind(recording, owner, expanded, screenActive, trimRequested, waveformReadAllowed = true)
+            override fun bind(recording: RecordingEntity, owner: InlinePlaybackRowOwner?, expanded: Boolean,
+                screenActive: Boolean, trimRequested: Boolean, waveformReadAllowed: Boolean) {
+                if (!playback) return
+                playbackBindings.add(recording.id to (expanded && screenActive))
+                if (expanded && screenActive) playbackWaveformAdmissions.add(waveformReadAllowed)
+            }
+            override fun setEnvironment(environment: ReverbViewEnvironment) = Unit
+            override fun setPresentationAttached(attached: Boolean) = Unit
+            override fun closePresentation() { leaseCloses[this] = checkNotNull(leaseCloses[this]) + 1 }
+        }.also { leases.add(it); leaseCloses[it] = 0 }
         val adapter get() = checkNotNull(view.scrollView.adapter)
         lateinit var presentation: NativeLibraryPresentation
         val snapshot get() = presentation.list.items as LibraryListSnapshot
@@ -243,11 +448,18 @@ class NativeLibraryProgressWorkTest {
         }
         fun entries() = get(adapter, "entries") as List<*>
         fun recordingsMap() = get(adapter, "recordingsById")
+        fun headerLabelTop(position: Int): Int {
+            val header = checkNotNull(view.scrollView.findViewHolderForAdapterPosition(position))
+                .itemView as ReverbLibraryHeaderView
+            return header.getChildAt(0).top
+        }
         fun pendingTarget(): Float {
             val holder = checkNotNull(view.scrollView.findViewHolderForAdapterPosition(0))
             return get(checkNotNull(get(holder, "presentation")), "target") as Float
         }
-        fun revision() = (get(view, "rowUpdates") as NativeLibraryListUpdates<*>).revision
+        private fun rowUpdates() = get(view, "rowUpdates") as NativeLibraryListUpdates<*>
+        fun revision() = rowUpdates().revision
+        fun bindingRevision() = rowUpdates().bindingRevision
         fun place() {
             view.measure(View.MeasureSpec.makeMeasureSpec(400, View.MeasureSpec.EXACTLY),
                 View.MeasureSpec.makeMeasureSpec(500, View.MeasureSpec.EXACTLY))

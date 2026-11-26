@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import app.smallthingz.reverb.RecordingEntity
+
 /** Presentation-only state. The owner token is compared by identity, including same-recording renewals. */
 internal data class NativeLibraryRowState<Owner : Any>(
     val selectedIds: Set<String>,
@@ -11,7 +13,11 @@ internal data class NativeLibraryRowState<Owner : Any>(
     val screenActive: Boolean,
     val infoRecordingId: String? = null,
     val renameRecordingId: String? = null,
-)
+    val playingRecording: RecordingEntity? = null,
+    val waveformReadAllowed: Boolean = true,
+) {
+    fun waveformReadAllowedFor(recordingId: String) = waveformReadAllowed || expandedRecordingId != recordingId
+}
 
 internal data class NativeLibraryListUpdate(
     val catalogChanged: Boolean,
@@ -24,7 +30,7 @@ internal data class NativeLibraryListUpdate(
 /**
  * The controller publishes an immutable catalog and replaces its list on metadata/membership changes.
  * Compare that reference, never list equality: a local row-state publication must not traverse it.
- * Detached RecyclerView caches read [current] when they attach at a newer [revision].
+ * Detached caches compare [bindingRevision] and their row’s Playing and waveform proof flags on attach.
  */
 internal class NativeLibraryListUpdates<Owner : Any> {
     private var catalog: Any? = null
@@ -32,13 +38,16 @@ internal class NativeLibraryListUpdates<Owner : Any> {
         private set
     var revision = 0L
         private set
+    var bindingRevision = 0L
+        private set
 
     fun submit(catalog: Any, state: NativeLibraryRowState<Owner>): NativeLibraryListUpdate? {
         val previous = current
         val catalogChanged = this.catalog !== catalog
         val selectedChanged = previous == null || previous.selectedIds != state.selectedIds
         val blockedChanged = previous == null || previous.blockedIds != state.blockedIds
-        if (!catalogChanged && previous != null &&
+        val waveformProofChanged = previous?.waveformReadAllowed != state.waveformReadAllowed
+        val sameBinding = !catalogChanged && previous != null &&
             !selectedChanged &&
             previous.selectionActive == state.selectionActive &&
             !blockedChanged &&
@@ -47,7 +56,8 @@ internal class NativeLibraryListUpdates<Owner : Any> {
             previous.trimRequestRecordingId == state.trimRequestRecordingId &&
             previous.screenActive == state.screenActive &&
             previous.infoRecordingId == state.infoRecordingId &&
-            previous.renameRecordingId == state.renameRecordingId) return null
+            previous.renameRecordingId == state.renameRecordingId
+        if (sameBinding && !waveformProofChanged && previous?.playingRecording == state.playingRecording) return null
 
         val next = state.copy(
             selectedIds = if (previous != null && !selectedChanged) previous.selectedIds else state.selectedIds.toSet(),
@@ -58,7 +68,8 @@ internal class NativeLibraryListUpdates<Owner : Any> {
             if (selectedChanged) changedMembers(previous.selectedIds, next.selectedIds, affected)
             if (blockedChanged) changedMembers(previous.blockedIds, next.blockedIds, affected)
             if (previous.expandedRecordingId != next.expandedRecordingId ||
-                previous.expandedOwner !== next.expandedOwner) {
+                previous.expandedOwner !== next.expandedOwner ||
+                waveformProofChanged) {
                 previous.expandedRecordingId?.let(affected::add)
                 next.expandedRecordingId?.let(affected::add)
             }
@@ -75,9 +86,14 @@ internal class NativeLibraryListUpdates<Owner : Any> {
             previous?.renameRecordingId?.let(affected::add)
             next.renameRecordingId?.let(affected::add)
         }
+        if (previous?.playingRecording != next.playingRecording) {
+            previous?.playingRecording?.id?.let(affected::add)
+            next.playingRecording?.id?.let(affected::add)
+        }
         this.catalog = catalog
         current = next
         revision++
+        if (!sameBinding) bindingRevision++
         return NativeLibraryListUpdate(catalogChanged,
             previous == null || previous.selectionActive != next.selectionActive ||
                 previous.screenActive != next.screenActive ||
@@ -90,6 +106,7 @@ internal class NativeLibraryListUpdates<Owner : Any> {
         catalog = null
         current = null
         revision++
+        bindingRevision++
     }
 
     private fun changedMembers(previous: Set<String>, next: Set<String>, result: MutableSet<String>) {

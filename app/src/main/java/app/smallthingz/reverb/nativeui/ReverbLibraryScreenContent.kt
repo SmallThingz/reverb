@@ -79,6 +79,7 @@ internal class ReverbLibraryScreenContent(
     private val playbackReveal = NativeRecordingRevealRequest(
         scrollRestoration.consumeReveal(), scrollRestoration.consumeCancelledReveal())
     private var pendingRevealNeedsReconciliation = playbackReveal.pendingRecordingId != null
+    private var pendingListRevealIsAutomatic = false
     private class RenameLifetime(val recordingId: String, val presentation: NativeLibraryRenamePresentation)
     private var renameHeader: RenameLifetime? = null
     private var startRenamePending = false
@@ -176,6 +177,7 @@ internal class ReverbLibraryScreenContent(
         list.onViewportGeometryChanged = { spotlight?.invalidate() }
         list.onDateFormattingChanged = owner::dateFormattingChanged
         list.onPendingRecordingRevealCancelled = {
+            owner.cancelPlaybackRestore()
             playbackReveal.cancel()
             pendingRevealNeedsReconciliation = false
         }
@@ -215,7 +217,8 @@ internal class ReverbLibraryScreenContent(
     fun saveScrollPosition(): NativeLibrarySavedScrollPosition = scrollRestoration.save(
         currentList = if (listVisible) list.savePosition() else null,
         currentEmpty = if (bodyMode == LibraryBodyMode.EMPTY) status?.emptyScrollPosition else null,
-        currentReveal = playbackReveal.pendingRecordingId ?: list.pendingRecordingRevealId,
+        currentReveal = playbackReveal.pendingRecordingId ?:
+            list.pendingRecordingRevealId.takeUnless { pendingListRevealIsAutomatic },
         currentCancelledRevealToken = playbackReveal.cancelledRequestToken,
     )
 
@@ -286,8 +289,15 @@ internal class ReverbLibraryScreenContent(
             }
             list.submit(value.list)
             restoredList?.let { list.restorePosition(it, cancelRecordingReveal = false) }
+            // Reopening playback reveals only within this screen lifetime; never persist its key.
+            owner.takePlaybackRestoreReveal()?.let { id ->
+                if (list.revealRecording(id)) pendingListRevealIsAutomatic = true
+            }
             if (!pendingRevealNeedsReconciliation) playbackReveal.pendingRecordingId?.let { id ->
-                if (list.revealRecording(id)) playbackReveal.clearPending()
+                if (list.revealRecording(id)) {
+                    pendingListRevealIsAutomatic = false
+                    playbackReveal.clearPending()
+                }
             }
         } else {
             if (listVisible) {
@@ -437,11 +447,11 @@ internal class ReverbLibraryScreenContent(
         // The natural surface can exceed the animated row, and the row can cross the viewport.
         // Intersect AFTER transforming the actual surface, never recreate its joined corners.
         intersectSpotlightClip(out, row)
-        intersectSpotlightClip(out, viewport)
+        intersectSpotlightClip(out, viewport, viewport.paddingLeft, viewport.width - viewport.paddingRight)
     }
-    private fun intersectSpotlightClip(out: Path, clip: View) {
+    private fun intersectSpotlightClip(out: Path, clip: View, left: Int = 0, right: Int = clip.width) {
         spotlightClipPath.rewind()
-        spotlightClipPath.addRect(0f, 0f, clip.width.toFloat(), clip.height.toFloat(), Path.Direction.CW)
+        spotlightClipPath.addRect(left.toFloat(), 0f, right.toFloat(), clip.height.toFloat(), Path.Direction.CW)
         mapSpotlightPath(spotlightClipPath, clip)
         if (!out.op(spotlightClipPath, Path.Op.INTERSECT)) out.rewind()
     }
@@ -553,8 +563,10 @@ internal class ReverbLibraryScreenContent(
             view===this || view is ReverbLibraryRecordingRow || view is LibraryExpansionViewport -> rectangle()
             view===listViewport || view===emptyViewport -> {
                 val extra=ReverbLibraryLayout.horizontalOverflowPx(environment.textDensity.density).toFloat()
-                NativeTextSemanticsClip.Rectangle(smallthingz.ui.geometry.Rect(-extra,0f,
-                    view.width+extra,view.height.toFloat()))
+                val contentLeft = if (view === listViewport) view.paddingLeft else 0
+                val contentRight = if (view === listViewport) view.width - view.paddingRight else view.width
+                NativeTextSemanticsClip.Rectangle(smallthingz.ui.geometry.Rect(contentLeft - extra, 0f,
+                    contentRight + extra, view.height.toFloat()))
             }
             view.parent is NativeGroupLayout && (view.parent as NativeGroupLayout).pointerContent===view -> rectangle()
             view is NativePointerLayerShape && view.clipToOutline -> rectangle()

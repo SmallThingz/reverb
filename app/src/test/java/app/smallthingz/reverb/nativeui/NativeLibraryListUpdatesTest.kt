@@ -1,5 +1,7 @@
 package app.smallthingz.reverb.nativeui
 
+import app.smallthingz.reverb.RecordingEntity
+import app.smallthingz.reverb.RecordingStorageType
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -13,6 +15,20 @@ class NativeLibraryListUpdatesTest {
         trim: String? = null,
         active: Boolean = true,
     ) = NativeLibraryRowState(selected, selecting, blocked, owner?.id, owner, trim, active)
+
+    @Test fun waveformProofBindsOnlyExpandedOwnerWithoutCatalogWork() {
+        val updates = NativeLibraryListUpdates<Owner>()
+        val catalog = Any()
+        val owner = Owner("A")
+        val waiting = state(owner = owner).copy(waveformReadAllowed = false)
+        updates.submit(catalog, waiting)
+        val change = checkNotNull(updates.submit(catalog, waiting.copy(waveformReadAllowed = true)))
+        assertFalse(change.catalogChanged)
+        assertFalse(change.allVisibleRows)
+        assertEquals(setOf("A"), change.recordingIds)
+        assertSame(owner, updates.current!!.expandedOwner)
+        assertNull(updates.submit(catalog, waiting.copy(waveformReadAllowed = true)))
+    }
 
     @Test fun inlineInfoRetainsItsOwnerlessExpansionWithoutCatalogWork() {
         val updates = NativeLibraryListUpdates<Owner>()
@@ -207,4 +223,131 @@ class NativeLibraryListUpdatesTest {
         }
         assertEquals(0, catalog.reads)
     }
+
+    @Test fun playbackStartSwitchAndStopInvalidateOnlyOldAndNewRecordingIds() {
+        val updates = NativeLibraryListUpdates<Owner>()
+        val catalog = Any()
+        val a = playingRecording("A")
+        val b = playingRecording("B")
+        updates.submit(catalog, state())
+        val cachedBinding = updates.bindingRevision
+        for ((playing, affected) in listOf(a to setOf("A"), b to setOf("A", "B"), null to setOf("B"))) {
+            val before = updates.revision
+            val change = checkNotNull(updates.submit(catalog, state().copy(playingRecording = playing)))
+            assertFalse(change.catalogChanged)
+            assertFalse(change.allVisibleRows)
+            assertEquals(affected, change.recordingIds)
+            assertFalse(change.affects("unrelated"))
+            assertEquals(before + 1, updates.revision)
+            assertEquals("Playback must not rebind unrelated cached holders", cachedBinding, updates.bindingRevision)
+            assertEquals(playing, updates.current!!.playingRecording)
+        }
+    }
+
+    @Test fun sameIdPlaybackReplacementRefreshesThatRowAndCachedRevision() {
+        val updates = NativeLibraryListUpdates<Owner>()
+        val catalog = Any()
+        val a = playingRecording("A")
+        updates.submit(catalog, state().copy(playingRecording = a))
+        val cachedBinding = updates.bindingRevision
+        for (replacement in listOf(a.copy(fileIdentity = "replacement"),
+            a.copy(sizeBytes = a.sizeBytes + 1), a.copy(storageType = RecordingStorageType.DOCUMENT))) {
+            val cachedRevision = updates.revision
+            val change = checkNotNull(updates.submit(catalog, state().copy(playingRecording = replacement)))
+            assertEquals(setOf("A"), change.recordingIds)
+            assertFalse(change.catalogChanged)
+            assertFalse(change.allVisibleRows)
+            assertEquals(cachedRevision + 1, updates.revision)
+            assertEquals(cachedBinding, updates.bindingRevision)
+            assertEquals(replacement, updates.current!!.playingRecording)
+            assertNull(updates.submit(catalog, state().copy(playingRecording = replacement.copy())))
+            assertEquals(cachedRevision + 1, updates.revision)
+        }
+        val beforeClear = updates.revision
+        updates.clear()
+        assertNull(updates.current)
+        assertEquals(beforeClear + 1, updates.revision)
+        assertEquals(cachedBinding + 1, updates.bindingRevision)
+        assertTrue(updates.submit(catalog, state())!!.catalogChanged)
+        assertNull(updates.current!!.playingRecording)
+    }
+
+    @Test fun playbackOnlyUpdatePreservesEditorSelectionTrimAndOwnerIdentity() {
+        val updates = NativeLibraryListUpdates<Owner>()
+        val catalog = Any()
+        val owner = Owner("editor")
+        for (editor in listOf(
+            state(owner = owner, trim = "editor"),
+            state(selected = setOf("editor"), selecting = true),
+            state().copy(infoRecordingId = "editor"),
+            state().copy(renameRecordingId = "editor"),
+        )) {
+            updates.submit(catalog, editor)
+            val current = checkNotNull(updates.current)
+            val binding = updates.bindingRevision
+            val change = checkNotNull(updates.submit(catalog, editor.copy(playingRecording = playingRecording("A"))))
+            assertEquals(setOf("A"), change.recordingIds)
+            assertFalse(change.catalogChanged)
+            assertFalse(change.allVisibleRows)
+            assertSame(current.expandedOwner, updates.current!!.expandedOwner)
+            assertSame(current.selectedIds, updates.current!!.selectedIds)
+            assertEquals(current, updates.current!!.copy(playingRecording = null))
+            assertEquals(binding, updates.bindingRevision)
+        }
+    }
+
+    @Test fun playbackPayloadNeverTraversesCatalogAndNoOpKeepsCachedRevision() {
+        val catalog = object : AbstractList<String>() {
+            override val size: Int get() = error("Playback payload must not read catalog size")
+            override fun get(index: Int): String = error("Playback payload must not read catalog rows")
+            override fun equals(other: Any?): Boolean = error("Catalog comparison must use reference identity")
+        }
+        val updates = NativeLibraryListUpdates<Owner>()
+        val a = playingRecording("A")
+        updates.submit(catalog, state().copy(playingRecording = a))
+        val cached = updates.revision
+        val cachedBinding = updates.bindingRevision
+        assertNull(updates.submit(catalog, state().copy(playingRecording = a.copy())))
+        assertEquals(cached, updates.revision)
+        assertEquals(cachedBinding, updates.bindingRevision)
+        val changed = checkNotNull(updates.submit(catalog, state().copy(playingRecording = playingRecording("B"))))
+        assertFalse(changed.catalogChanged)
+        assertEquals(setOf("A", "B"), changed.recordingIds)
+        assertEquals(cached + 1, updates.revision)
+        assertEquals(cachedBinding, updates.bindingRevision)
+        assertEquals("B", updates.current!!.playingRecording?.id)
+    }
+
+    @Test fun bindingRevisionStillAdvancesForOwnerCatalogAndOtherPresentationChanges() {
+        val updates = NativeLibraryListUpdates<Owner>()
+        val catalog = Any()
+        val a = playingRecording("A")
+        val initial = state().copy(playingRecording = a)
+        updates.submit(catalog, initial)
+        var binding = updates.bindingRevision
+        for (next in listOf(
+            state(blocked = setOf("B")),
+            state(selected = setOf("B"), selecting = true),
+            state(owner = Owner("B")),
+            state(owner = Owner("B")), // A renewed owner for the same ID must rebind.
+            state(trim = "B"),
+            state(active = false),
+            state().copy(infoRecordingId = "B"),
+            state().copy(renameRecordingId = "B"),
+        )) {
+            val current = next.copy(playingRecording = a)
+            assertNotNull(updates.submit(catalog, current))
+            assertEquals(++binding, updates.bindingRevision)
+            assertNull(updates.submit(catalog, current.copy()))
+            assertEquals(binding, updates.bindingRevision)
+        }
+        assertTrue(updates.submit(Any(), checkNotNull(updates.current))!!.catalogChanged)
+        assertEquals(++binding, updates.bindingRevision)
+        updates.clear()
+        assertEquals(++binding, updates.bindingRevision)
+    }
+
+    private fun playingRecording(id: String) = RecordingEntity(id, "$id.wav", "audio/wav", 1L,
+        2_000L, 192_044L, "PCM", RecordingStorageType.FILE, "/fixture", "identity-$id",
+        createdAtMillis = 1L, lastSeenAtMillis = 1L)
 }

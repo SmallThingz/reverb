@@ -17,6 +17,7 @@ import android.media.MediaPlayer
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
 import android.os.Build
+import android.os.CancellationSignal
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
@@ -30,9 +31,13 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /** Saved-file transport only. Capture, durable saves and previews retain their own owners. */
@@ -159,10 +164,7 @@ class RecordingPlaybackService : Service() {
         opening = scope.launch {
             val opened = AtomicReference<InlinePlayerMediaSource?>(null)
             try {
-                withContext(Dispatchers.IO) {
-                    opened.set(openInlinePlayerMediaSource(applicationContext, next,
-                        RecordingReadCleanup(::reportCleanup)))
-                }
+                openPlaybackSource(next, opened)
                 if (!ownership.current(token) || destroyed) return@launch
                 val pinned = opened.getAndSet(null) ?: return@launch
                 source = pinned
@@ -221,6 +223,30 @@ class RecordingPlaybackService : Service() {
                 if (ownership.current(token)) fail(error)
             } finally {
                 cleanup { opened.getAndSet(null)?.close() }
+            }
+        }
+    }
+
+    private suspend fun openPlaybackSource(next: RecordingEntity, opened: AtomicReference<InlinePlayerMediaSource?>) {
+        // Replacements cancel their predecessor on Main, including any waiter for this lane.
+        fun open(signal: CancellationSignal?) {
+            opened.set(openInlinePlayerMediaSource(applicationContext, next, RecordingReadCleanup(::reportCleanup), signal))
+        }
+        if (next.storageType == RecordingStorageType.FILE) {
+            fileOpenLane.withLock { withContext(Dispatchers.IO) { open(null) } }
+            return
+        }
+        providerOpenLane.withLock {
+            coroutineScope {
+                val signal = CancellationSignal()
+                val worker = launch(Dispatchers.IO) { open(signal) }
+                try {
+                    worker.join()
+                } finally {
+                    // A provider may block in its cancellation callback, or ignore it altogether.
+                    // Keep both operations off Main and hold admission until both have returned.
+                    if (!worker.isCompleted) withContext(NonCancellable + Dispatchers.IO) { signal.cancel() }
+                }
             }
         }
     }
@@ -536,6 +562,9 @@ class RecordingPlaybackService : Service() {
     }
 
     companion object {
+        // A recreated service must also wait for any retired provider call.
+        private val providerOpenLane = Mutex()
+        private val fileOpenLane = Mutex()
         internal const val EXTRA_REQUEST = "playback_request"
         private const val EXTRA_GENERATION = "playback_generation"
         private const val EXTRA_INSTANCE = "playback_instance"
