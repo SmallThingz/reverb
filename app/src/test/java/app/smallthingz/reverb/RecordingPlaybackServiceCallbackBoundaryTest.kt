@@ -9,6 +9,7 @@ import android.content.pm.ProviderInfo
 import android.database.Cursor
 import android.database.MatrixCursor
 import android.media.AudioManager
+import android.media.AudioTrack
 import android.media.MediaPlayer
 import android.media.MediaMetadata
 import android.media.session.MediaSession
@@ -35,8 +36,11 @@ import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import org.junit.Assert.assertEquals
@@ -54,11 +58,14 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.Implementation
 import org.robolectric.annotation.Implements
 import org.robolectric.annotation.LooperMode
+import org.robolectric.annotation.RealObject
 import org.robolectric.shadow.api.Shadow
 import org.robolectric.shadows.ShadowContentResolver
+import org.robolectric.shadows.ShadowAudioTrack
 import org.robolectric.shadows.ShadowLooper
 import org.robolectric.shadows.ShadowMediaPlayer
 import org.robolectric.shadows.ShadowPausedMessageQueue
+import smallthingz.ui.util.closePreservingPrimaryFailure
 
 /** Exercises registered service callbacks on their real Handler; platform routing is not qualified. */
 @RunWith(org.robolectric.RobolectricTestRunner::class)
@@ -383,6 +390,205 @@ class RecordingPlaybackServiceCallbackBoundaryTest {
         }
 
     @Test
+    fun scrubAuthorityCarriesOnlyTheMatchingPreparedPlayerSession() {
+        ShadowMediaPlayer.setCreateListener { player, _ -> player.audioSessionId = 273 }
+        withPlaybackService(startPosition = 300) { media, _, _, _ ->
+            val row = checkNotNull(RecordingPlayback.state.value.recording)
+            assertNull(RecordingPlayback.acquireScrub(row))
+            media.setSeekDelay(-1)
+            media.invokePreparedListener()
+            val authority = checkNotNull(RecordingPlayback.acquireScrub(row))
+            assertEquals(273, authority.playbackAudioSessionId)
+            assertNull(RecordingPlayback.acquireScrub(row.copy(fileIdentity = row.fileIdentity + "-different")))
+
+            RecordingPlayback.pause(row)
+            assertFalse(authority.active)
+            val paused = checkNotNull(RecordingPlayback.acquireScrub(row))
+            assertEquals(273, paused.playbackAudioSessionId)
+            RecordingPlayback.stop(row)
+            assertFalse(paused.active)
+            assertNull(RecordingPlayback.acquireScrub(row))
+        }
+    }
+
+    @Test
+    @Config(shadows = [JournalHostIoShadow::class, ShuttleEndpointAudioTrackShadow::class,
+        ServiceReplacementTrackBuilderShadow::class])
+    fun serviceReplacementRevokesHeldSharedSessionBeforeNextRecordingScrub() {
+        val app = RuntimeEnvironment.getApplication()
+        val secondFile = File.createTempFile("service-builder-replacement-", ".wav", app.cacheDir)
+        check(ServiceStateOsShadow.fixtureRoot == null)
+        JournalHostIoShadow.reset()
+        ServiceStateOsShadow.fixtureRoot = app.cacheDir.toPath().toAbsolutePath().normalize()
+        ShuttleEndpointAudioTrackShadow.reset()
+        ShuttleEndpointAudioTrackShadow.allowFirstWrite.countDown()
+        ServiceReplacementTrackBuilderShadow.reset()
+        ShadowAudioTrack.setMinBufferSize(256)
+        val players = CopyOnWriteArrayList<MediaPlayer>()
+        ShadowMediaPlayer.setCreateListener { player, _ ->
+            player.audioSessionId = if (players.isEmpty()) 273 else 487
+            players += player
+        }
+        var previewWorkersStopped = true
+        var serviceJob: Job? = null
+        var primary: Throwable? = null
+        try {
+            withPlaybackService(additionalSource = secondFile,
+                additionalOwnersStopped = { previewWorkersStopped }) { firstMedia, _, _, _ ->
+                val service = readField(RecordingPlayback, "service") as RecordingPlaybackService
+                serviceJob = checkNotNull((readField(service, "scope") as CoroutineScope).coroutineContext[Job])
+                val audio = checkNotNull(app.getSystemService(AudioManager::class.java))
+                Shadows.shadowOf(audio).setNextFocusRequestResponse(AudioManager.AUDIOFOCUS_REQUEST_GRANTED)
+                firstMedia.invokePreparedListener()
+                assertTrue(firstMedia.isReallyPlaying)
+                val first = checkNotNull(RecordingPlayback.state.value.recording)
+                val firstAuthority = checkNotNull(RecordingPlayback.acquireScrub(first))
+                assertEquals(273, players.single().audioSessionId)
+                assertEquals(players.single().audioSessionId, firstAuthority.playbackAudioSessionId)
+                assertTrue(firstAuthority.active)
+                val failures = ConcurrentLinkedQueue<Throwable>()
+                val firstHandoffs = AtomicInteger()
+                val secondHandoffs = AtomicInteger()
+                val clock = AtomicLong(1_000_000_000L)
+                val preview = TimelineAudioPreviewController(onTrackReleaseFailure = { failures += it },
+                    shuttleNowNanos = clock::get)
+                previewWorkersStopped = false
+                withOwnedResource(preview, release = { owner ->
+                    // Always release the builder gate before joining; no live worker sees reset shadows/files.
+                    ServiceReplacementTrackBuilderShadow.allowReturn.countDown()
+                    owner.close()
+                    for (name in listOf("executor", "controlExecutor", "releaseExecutor")) {
+                        val worker = readField(owner, name) as ExecutorService
+                        assertTrue("$name must terminate before fixture retirement",
+                            worker.awaitTermination(10, TimeUnit.SECONDS))
+                    }
+                    previewWorkersStopped = true
+                    ShadowLooper.idleMainLooper()
+                    assertTrue(failures.toString(), failures.isEmpty())
+                    ServiceReplacementTrackBuilderShadow.built.forEach { track ->
+                        assertEquals("Every native owner has one terminal release", 1,
+                            Shadow.extract<ShuttleEndpointAudioTrackShadow>(track).releaseCalls)
+                    }
+                }) { owner ->
+                    fun await(label: String, ready: () -> Boolean) {
+                        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(8)
+                        while (!ready() && System.nanoTime() < deadline) {
+                            ShadowLooper.idleMainLooper()
+                            failures.peek()?.let { throw it }
+                            Thread.sleep(1)
+                        }
+                        assertTrue(label, ready())
+                    }
+                    owner.startRecordingShuttle(app, first, .100, 1f,
+                        onStarted = {
+                            firstHandoffs.incrementAndGet()
+                            RecordingPlayback.suspendForGesture(first, firstAuthority)
+                        }, onFailureAfterStart = { failures += AssertionError("Stale A failure callback") },
+                        onSourceCloseFailure = { failures += it }, fromSeconds = .021, untilSeconds = .300,
+                        ordinaryAuthority = firstAuthority)
+                    await("A native builder held before returning") {
+                        ServiceReplacementTrackBuilderShadow.entered.count == 0L
+                    }
+                    val oldTrack = ServiceReplacementTrackBuilderShadow.built.single()
+                    val oldSink = Shadow.extract<ShuttleEndpointAudioTrackShadow>(oldTrack)
+                    assertEquals(players.single().audioSessionId, oldTrack.audioSessionId)
+                    assertEquals(0, oldSink.acceptedWrites)
+                    assertEquals(0, oldSink.playCalls)
+                    assertEquals(0, firstHandoffs.get())
+                    assertFalse(firstAuthority.playbackSuspended)
+                    assertTrue(firstMedia.isReallyPlaying)
+                    val previewEpoch = (readField(owner, "generation") as AtomicLong).get()
+
+                    File(first.id).copyTo(secondFile, overwrite = true)
+                    val second = fileRecording(secondFile)
+                    assertTrue(RecordingPlayback.play(app, second))
+                    assertFalse("Actual facade replacement must revoke A before service delivery", firstAuthority.active)
+                    service.onStartCommand(checkNotNull(Shadows.shadowOf(app).nextStartedService), 0, 2)
+                    await("B's actual MediaPlayer is created without advancing delayed media timers") {
+                        (readField(service, "player") as? MediaPlayer)?.let { it !== players[0] } == true
+                    }
+                    val secondPlayer = readField(service, "player") as MediaPlayer
+                    val secondMedia = Shadow.extract<ShadowMediaPlayer>(secondPlayer)
+                    secondMedia.invokePreparedListener()
+                    assertEquals(2, players.size)
+                    assertSame(players[1], secondPlayer)
+                    assertTrue(secondPlayer.audioSessionId > 0)
+                    assertTrue(secondPlayer.audioSessionId != oldTrack.audioSessionId)
+                    assertTrue(secondMedia.isReallyPlaying)
+                    val secondTransport = RecordingPlayback.state.value
+                    assertEquals(second, secondTransport.recording)
+                    assertTrue(secondTransport.prepared && secondTransport.playing && secondTransport.wantsPlayback)
+                    assertEquals(1L, ServiceReplacementTrackBuilderShadow.allowReturn.count)
+
+                    // Do NOT start B's preview or stop/update A's controller yet: either would hide
+                    // broken facade revocation by advancing the independent preview generation.
+                    ServiceReplacementTrackBuilderShadow.allowReturn.countDown()
+                    val worker = readField(owner, "executor") as ExecutorService
+                    val oldWorkerFinished = worker.submit { }
+                    await("A worker fully returns after its held native build") { oldWorkerFinished.isDone }
+                    oldWorkerFinished.get(1, TimeUnit.SECONDS)
+                    assertSame("A build must return its exact owner normally, not timeout-clean it",
+                        oldTrack, ServiceReplacementTrackBuilderShadow.returned.single())
+                    await("A native owner released") { oldSink.released }
+                    ShadowLooper.idleMainLooper()
+                    assertEquals(previewEpoch, (readField(owner, "generation") as AtomicLong).get())
+                    assertEquals(0, oldSink.acceptedWrites)
+                    assertEquals(0, oldSink.frameCount)
+                    assertEquals(0, oldSink.playCalls)
+                    assertEquals(0, firstHandoffs.get())
+                    assertEquals(1, oldSink.releaseCalls)
+                    assertFalse(firstAuthority.playbackSuspended)
+                    assertEquals(1, ServiceReplacementTrackBuilderShadow.built.size)
+                    assertEquals(secondTransport, RecordingPlayback.state.value)
+                    assertSame(secondPlayer, readField(service, "player"))
+                    assertTrue(secondMedia.isReallyPlaying)
+                    assertFalse(RecordingPlayback.hasPendingStart())
+                    assertTrue(failures.toString(), failures.isEmpty())
+
+                    val secondAuthority = checkNotNull(RecordingPlayback.acquireScrub(second))
+                    assertEquals(secondPlayer.audioSessionId, secondAuthority.playbackAudioSessionId)
+                    owner.startRecordingShuttle(app, second, .100, 1f,
+                        onStarted = {
+                            secondHandoffs.incrementAndGet()
+                            RecordingPlayback.suspendForGesture(second, secondAuthority)
+                        }, onFailureAfterStart = { failures += AssertionError("B scrub failure callback") },
+                        onSourceCloseFailure = { failures += it }, fromSeconds = .021, untilSeconds = .300,
+                        ordinaryAuthority = secondAuthority)
+                    await("Only B's shared session reaches playing after the actual handoff") {
+                        secondHandoffs.get() == 1 && ServiceReplacementTrackBuilderShadow.built.size == 2 &&
+                            Shadow.extract<ShuttleEndpointAudioTrackShadow>(ServiceReplacementTrackBuilderShadow.built[1]).playing
+                    }
+                    assertEquals(listOf(273, 487), ServiceReplacementTrackBuilderShadow.built.map { it.audioSessionId })
+                    val secondSink = Shadow.extract<ShuttleEndpointAudioTrackShadow>(ServiceReplacementTrackBuilderShadow.built[1])
+                    assertTrue(secondSink.acceptedWrites > 0)
+                    assertEquals(1, secondSink.playCalls)
+                    assertEquals(1, secondHandoffs.get())
+                    assertEquals(0, firstHandoffs.get())
+                    assertTrue(secondAuthority.playbackSuspended)
+                    assertTrue(RecordingPlayback.isScrubCurrent(second, secondAuthority))
+                    assertEquals(second, RecordingPlayback.state.value.recording)
+                    assertSame(secondPlayer, readField(service, "player"))
+                    assertFalse(secondMedia.isReallyPlaying)
+                    RecordingPlayback.stop(second)
+                }
+            }
+        } catch (failure: Throwable) {
+            primary = failure
+            throw failure
+        } finally {
+            ServiceReplacementTrackBuilderShadow.allowReturn.countDown()
+            // The existing service fixture separately joins its coroutine owner before deleting WAVs.
+            if (previewWorkersStopped && serviceJob?.isCompleted != false) {
+                val failure = closePreservingPrimaryFailure(primary) {
+                    try { JournalHostIoShadow.finishFixture()?.let { throw it } }
+                    finally { ServiceStateOsShadow.fixtureRoot = null }
+                }
+                if (primary == null && failure != null) throw failure
+            }
+        }
+    }
+
+    @Test
     fun matchingScrubAcknowledgesSuppressedPendingSeekResume() =
         withPlaybackService(startPosition = 300) { media, _, _, _ ->
             val audio = checkNotNull(RuntimeEnvironment.getApplication().getSystemService(AudioManager::class.java))
@@ -646,6 +852,7 @@ class RecordingPlaybackServiceCallbackBoundaryTest {
         declaredDuration: Long = 2_000,
         prepareDelay: Int = 60_000,
         additionalSource: File? = null,
+        additionalOwnersStopped: () -> Boolean = { true },
         exercise: (ShadowMediaPlayer, Handler, MediaSession.Callback, Handler) -> Unit,
     ) {
         val app = RuntimeEnvironment.getApplication()
@@ -698,7 +905,7 @@ class RecordingPlaybackServiceCallbackBoundaryTest {
             cleanup { serviceController?.destroy() }
             cleanup { serviceJob?.let(::awaitServiceCompletion) }
             // A timed-out IO owner must not observe reset shadows or a deleted fixture.
-            if (serviceJob?.isCompleted != false) {
+            if (serviceJob?.isCompleted != false && additionalOwnersStopped()) {
                 cleanup { ShadowLooper.idleMainLooper() }
                 cleanup { ShadowMediaPlayer.resetStaticState() }
                 cleanup { PlaybackSessionOsShadow.targetPath = "" }
@@ -881,5 +1088,40 @@ class PlaybackMetadataShadow {
     @Implementation
     fun setMetadata(metadata: MediaMetadata?) {
         updates.add(checkNotNull(metadata))
+    }
+}
+
+/** Hold the first actual platform build, without advancing/replacing the preview controller. */
+@Implements(AudioTrack.Builder::class)
+class ServiceReplacementTrackBuilderShadow {
+    @RealObject lateinit var builder: AudioTrack.Builder
+
+    @Implementation fun build(): AudioTrack {
+        val track = Shadow.directlyOn<AudioTrack, AudioTrack.Builder>(
+            builder, AudioTrack.Builder::class.java, "build")
+        built += track
+        if (built.size == 1) {
+            entered.countDown()
+            try {
+                check(allowReturn.await(15, TimeUnit.SECONDS)) { "A held builder was not released" }
+            } catch (failure: Throwable) {
+                throw checkNotNull(closePreservingPrimaryFailure(failure) { track.release() })
+            }
+        }
+        returned += track
+        return track
+    }
+
+    companion object {
+        val built = CopyOnWriteArrayList<AudioTrack>()
+        val returned = CopyOnWriteArrayList<AudioTrack>()
+        lateinit var entered: CountDownLatch
+        lateinit var allowReturn: CountDownLatch
+        fun reset() {
+            built.clear()
+            returned.clear()
+            entered = CountDownLatch(1)
+            allowReturn = CountDownLatch(1)
+        }
     }
 }

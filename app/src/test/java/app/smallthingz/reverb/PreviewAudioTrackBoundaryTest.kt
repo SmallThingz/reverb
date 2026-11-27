@@ -226,6 +226,46 @@ class PreviewAudioTrackBoundaryTest {
         }
     }
 
+    @Test fun actualLibraryShuttleKeepsPlayerSessionAcrossDirectionReversal() =
+        fixture(false, shuttleSource = true, shuttleSampleRate = 48_000) { controller, recording ->
+            val authority = RecordingScrubAuthority(RecordingScrubKey(7L, 3L), playbackAudioSessionId = 273)
+            var handedOff = 0
+            val initial = CountDownLatch(1)
+            val replacement = CountDownLatch(1)
+            controller.startRecordingShuttle(RuntimeEnvironment.getApplication(), recording, .010, 1f,
+                onStarted = {
+                    handedOff++
+                    if (handedOff == 1) initial.countDown() else replacement.countDown()
+                },
+                fromSeconds = .010, untilSeconds = .070, ordinaryAuthority = authority)
+            awaitMain(initial)
+            await(PreviewBoundaryTrackShadow.played, "first track playing")
+            PreviewBoundaryTrackShadow.played = CountDownLatch(1)
+            controller.updateShuttle(.040, -1f, .010, .070)
+            awaitMain(replacement)
+            await(PreviewBoundaryTrackShadow.played, "replacement track playing")
+            val tracks = PreviewBoundaryTrackShadow.instances()
+            assertEquals(listOf(273, 273), tracks.map { it.platformTrack.audioSessionId })
+            assertEquals(listOf(48_000, 48_000), tracks.map { it.formatRate() })
+        }
+
+    @Test fun rejectedSharedSessionKeepsTheNativeLibraryOutputWithAnIndependentSession() =
+        fixture(false, shuttleSource = true, shuttleSampleRate = 48_000, rejectedSessionId = 273) { controller, recording ->
+            val authority = RecordingScrubAuthority(RecordingScrubKey(7L, 3L), playbackAudioSessionId = 273)
+            val handoff = CountDownLatch(1)
+            controller.startRecordingShuttle(RuntimeEnvironment.getApplication(), recording, .010, 1f,
+                onStarted = { handoff.countDown() },
+                fromSeconds = .010, untilSeconds = .070, ordinaryAuthority = authority)
+            awaitMain(handoff)
+            await(PreviewBoundaryTrackShadow.played, "independent track playing")
+            val tracks = PreviewBoundaryTrackShadow.instances()
+            assertEquals(2, tracks.size)
+            assertEquals(273, tracks[0].platformTrack.audioSessionId)
+            assertNotEquals(273, tracks[1].platformTrack.audioSessionId)
+            assertEquals(listOf(48_000, 48_000), tracks.map { it.formatRate() })
+            assertTrue(tracks[0].acceptedBytes().isEmpty())
+        }
+
     @Test fun replacementFirstWriteFailureRequestsRecoveryAfterAcknowledgedSuspension() =
         checkReplacementFirstWriteFailure(acknowledged = true, revokeBeforeDelivery = false)
 
@@ -329,6 +369,8 @@ class PreviewAudioTrackBoundaryTest {
         blockFirstWrite: Boolean, acquiredOnlyCleanup: Boolean = false, shuttleSource: Boolean = false,
         shuttleClock: () -> Long = { 0L }, prepareSource: Boolean = true,
         onShuttleTargetWait: ((Float) -> Unit)? = null,
+        shuttleSampleRate: Int = 96_000,
+        rejectedSessionId: Int? = null,
         test: (TimelineAudioPreviewController, RecordingEntity) -> Unit,
     ) {
         check(ServiceStateOsShadow.fixtureRoot == null)
@@ -341,10 +383,11 @@ class PreviewAudioTrackBoundaryTest {
         try {
             ServiceStateOsShadow.fixtureRoot = root
             PreviewBoundaryTrackShadow.reset(blockFirstWrite)
+            PreviewBoundaryTrackShadow.rejectedSessionId = rejectedSessionId
             trackFixtureStarted = true
             ShadowAudioTrack.setMinBufferSize(256)
             val source = root.resolve("source.wav").toFile()
-            writeWav(source, shuttleSource)
+            writeWav(source, shuttleSource, shuttleSampleRate)
             val sourceDurationMillis = if (shuttleSource) 80 else 10
             val recording = RecordingEntity(id = source.absolutePath, displayName = source.name, mimeType = "audio/wav",
                 startedAtMillis = 1L, durationMillis = sourceDurationMillis.toLong(), sizeBytes = source.length(), codecSummary = "PCM",
@@ -382,7 +425,9 @@ class PreviewAudioTrackBoundaryTest {
             if (workersStopped) {
                 clean {
                     for (track in PreviewBoundaryTrackShadow.instances()) {
-                        if (acquiredOnlyCleanup) assertAcquiredReleaseOnce(track) else assertTerminalOnce(track)
+                        if (acquiredOnlyCleanup || track.platformTrack.audioSessionId == rejectedSessionId) {
+                            assertAcquiredReleaseOnce(track)
+                        } else assertTerminalOnce(track)
                     }
                 }
                 clean { JournalHostIoShadow.finishFixture()?.let { throw it } }
@@ -437,9 +482,9 @@ class PreviewAudioTrackBoundaryTest {
 
     private fun shuttleFixtureSample(frame: Int): Int = if (frame in 960 until 6720) 500 + frame % 2_000 else 30_000
 
-    private fun writeWav(file: File, shuttleSource: Boolean = false) {
-        val rate = if (shuttleSource) 96_000 else 48_000
-        val frames = if (shuttleSource) 7680 else 480
+    private fun writeWav(file: File, shuttleSource: Boolean, shuttleSampleRate: Int) {
+        val rate = if (shuttleSource) shuttleSampleRate else 48_000
+        val frames = rate * (if (shuttleSource) 80 else 10) / 1000
         val payload = frames * 2
         val buffer = ByteBuffer.allocate(44 + payload).order(ByteOrder.LITTLE_ENDIAN)
         fun tag(text: String) { text.forEach { buffer.put(it.code.toByte()) } }
@@ -472,7 +517,7 @@ class PreviewBoundaryTrackShadow : ShadowAudioTrack() {
     @Implementation fun setStartThresholdInFrames(value: Int): Int {
         check(value == 1)
         synchronized(tracks) { if (!tracks.contains(this)) tracks += this }
-        return thresholdResult
+        return if (platformTrack.audioSessionId == rejectedSessionId) 0 else thresholdResult
     }
     @Implementation fun setVolume(value: Float): Int { check(value == expectedVolume); return AudioTrack.SUCCESS }
     @Implementation fun write(bytes: ByteArray, offset: Int, size: Int, mode: Int): Int {
@@ -509,6 +554,7 @@ class PreviewBoundaryTrackShadow : ShadowAudioTrack() {
         @Volatile var failWriteAt = 0
         @Volatile var failTrackNumber = 0
         @Volatile var thresholdResult = 1
+        @Volatile var rejectedSessionId: Int? = null
         lateinit var writeEntered: CountDownLatch
         lateinit var allowWriteReturn: CountDownLatch
         lateinit var quiet: CountDownLatch
@@ -525,6 +571,7 @@ class PreviewBoundaryTrackShadow : ShadowAudioTrack() {
             failWriteAt = 0
             failTrackNumber = 0
             thresholdResult = 1
+            rejectedSessionId = null
             writeEntered = CountDownLatch(1); allowWriteReturn = CountDownLatch(1)
             quiet = CountDownLatch(1); released = CountDownLatch(1)
         }

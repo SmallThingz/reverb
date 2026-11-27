@@ -101,8 +101,11 @@ internal object RecordingPlayback {
     fun acquireScrub(recording: RecordingEntity): RecordingScrubAuthority? {
         val key = currentScrubKey(recording) ?: return null
         val value = mutableState.value
-        return scrubAuthorities.acquire(key,
-            resumePlayback = !key.retainedIdle && (value.playing || value.wantsPlayback))
+        return scrubAuthorities.acquire(
+            key,
+            resumePlayback = !key.retainedIdle && (value.playing || value.wantsPlayback),
+            playbackAudioSessionId = service?.scrubAudioSessionId(recording, key),
+        )
     }
     fun isScrubCurrent(recording: RecordingEntity, authority: RecordingScrubAuthority): Boolean =
         scrubAuthorities.owns(authority) && currentScrubKey(recording) == authority.key

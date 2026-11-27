@@ -777,7 +777,11 @@ internal fun shuttleSampleRateCandidates(preferredMinBufferBytes: Int): List<Int
         listOf(SHUTTLE_FALLBACK_SAMPLE_RATE)
     }
 
-private data class ShuttleTrackRequest(val sampleRate: Int, val useLibraryOutput: Boolean = false)
+private data class ShuttleTrackRequest(
+    val sampleRate: Int,
+    val useLibraryOutput: Boolean = false,
+    val audioSessionId: Int? = null,
+)
 
 internal fun <T> createShuttleWithSampleRateFallback(
     preferredMinBufferBytes: Int,
@@ -791,10 +795,15 @@ private inline fun <T> createShuttleTrackWithFallback(
     preferredMinBufferBytes: Int,
     noinline onConfigurationReleaseFailure: (Throwable) -> Unit,
     libraryPlaybackRate: Int? = null,
+    libraryPlaybackAudioSessionId: Int? = null,
     create: (ShuttleTrackRequest, (Throwable) -> Unit) -> T,
 ): Pair<T, Int> {
     val requests = buildList {
-        libraryPlaybackRate?.let { add(ShuttleTrackRequest(it, useLibraryOutput = true)) }
+        libraryPlaybackRate?.let { rate ->
+            // Try the ordinary session on the matching output before the existing independent path.
+            libraryPlaybackAudioSessionId?.let { add(ShuttleTrackRequest(rate, useLibraryOutput = true, audioSessionId = it)) }
+            add(ShuttleTrackRequest(rate, useLibraryOutput = true))
+        }
         shuttleSampleRateCandidates(preferredMinBufferBytes).forEach { add(ShuttleTrackRequest(it)) }
     }
     var earlierFailure: Exception? = null
@@ -1604,7 +1613,8 @@ internal class TimelineAudioPreviewController(
                     preferredMinBufferBytes = preferredMinBufferBytes,
                     onConfigurationReleaseFailure = ::reportTrackReleaseFailure,
                     libraryPlaybackRate = libraryPlaybackRate,
-                ) { (sampleRate, useLibraryOutput), onConfigurationReleaseFailure ->
+                    libraryPlaybackAudioSessionId = ordinaryAuthority?.playbackAudioSessionId,
+                ) { (sampleRate, useLibraryOutput, audioSessionId), onConfigurationReleaseFailure ->
                     val grainBufferBytes = (SHUTTLE_GRAIN_OUTPUT_SECONDS * sampleRate).roundToInt() * frameBytes
                     createTrack(
                         token = token,
@@ -1616,6 +1626,7 @@ internal class TimelineAudioPreviewController(
                         contentType = if (useLibraryOutput) AudioAttributes.CONTENT_TYPE_MUSIC
                             else AudioAttributes.CONTENT_TYPE_SPEECH,
                         onConfigurationReleaseFailure = onConfigurationReleaseFailure,
+                        audioSessionId = audioSessionId,
                         checkAdmission = ::checkShuttleCurrent,
                     )
                 }
@@ -2259,6 +2270,7 @@ internal class TimelineAudioPreviewController(
         sampleRate: Int = PREVIEW_SAMPLE_RATE,
         contentType: Int = AudioAttributes.CONTENT_TYPE_SPEECH,
         onConfigurationReleaseFailure: (Throwable) -> Unit,
+        audioSessionId: Int? = null,
         checkAdmission: () -> Unit = {},
     ): AudioTrack {
         while (!trackSlots.tryAcquire(16L, TimeUnit.MILLISECONDS)) {
@@ -2270,7 +2282,9 @@ internal class TimelineAudioPreviewController(
         try {
             checkCurrent(token)
             checkAdmission()
-            return createConfiguredTrack(volume, channelCount, minimumBufferBytes, lowLatency, sampleRate, contentType) { error ->
+            return createConfiguredTrack(
+                volume, channelCount, minimumBufferBytes, lowLatency, sampleRate, contentType, audioSessionId,
+            ) { error ->
                 releaseFailed = true
                 failedTrackReleases.incrementAndGet()
                 onConfigurationReleaseFailure(error)
@@ -2288,6 +2302,7 @@ internal class TimelineAudioPreviewController(
         lowLatency: Boolean,
         sampleRate: Int,
         contentType: Int,
+        audioSessionId: Int?,
         onConfigurationReleaseFailure: (Throwable) -> Unit,
     ): AudioTrack {
         val channelMask = playbackChannelMask(channelCount)
@@ -2317,6 +2332,7 @@ internal class TimelineAudioPreviewController(
             .setBufferSizeInBytes(minBuffer)
             .apply {
                 if (lowLatency) setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+                if (audioSessionId != null) setSessionId(audioSessionId)
             }
             .build()
         return configureRangePreviewTrackOrRelease(

@@ -17,6 +17,7 @@ internal class RecordingScrubAuthority internal constructor(
     val key: RecordingScrubKey,
     /** Playback intent at admission; gesture-induced suspension must not overwrite it. */
     val resumePlayback: Boolean = false,
+    val playbackAudioSessionId: Int? = null,
 ) {
     private val lock = Any()
     private var handle: RecordingScrubQuietHandle? = null
@@ -63,9 +64,13 @@ internal class RecordingScrubAuthority internal constructor(
 internal class RecordingScrubAuthorities {
     private var current: RecordingScrubAuthority? = null
 
-    fun acquire(key: RecordingScrubKey, resumePlayback: Boolean = false): RecordingScrubAuthority {
+    fun acquire(
+        key: RecordingScrubKey,
+        resumePlayback: Boolean = false,
+        playbackAudioSessionId: Int? = null,
+    ): RecordingScrubAuthority {
         revoke()
-        return RecordingScrubAuthority(key, resumePlayback).also { current = it }
+        return RecordingScrubAuthority(key, resumePlayback, playbackAudioSessionId).also { current = it }
     }
 
     fun published(key: RecordingScrubKey?) {

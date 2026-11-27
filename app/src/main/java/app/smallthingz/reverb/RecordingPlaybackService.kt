@@ -279,6 +279,12 @@ class RecordingPlaybackService : Service() {
     internal fun ownsRecording(expected: RecordingEntity): Boolean = ownership.active &&
         recording?.let { samePlaybackRecording(it, expected) } == true
 
+    internal fun scrubAudioSessionId(expected: RecordingEntity, key: RecordingScrubKey): Int? {
+        if (key.retainedIdle || destroyed || !prepared || !ownsRecording(expected) ||
+            !ownership.currentGesture(key.generation, key.transportIntentRevision)) return null
+        return player?.audioSessionId?.takeIf { it > 0 }
+    }
+
     internal fun positionObservationChanged() {
         main.removeCallbacks(progress)
         if (playing && RecordingPlayback.positionObserved()) main.post(progress)
