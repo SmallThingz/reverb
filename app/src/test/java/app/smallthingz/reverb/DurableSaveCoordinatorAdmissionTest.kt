@@ -246,7 +246,7 @@ class DurableSaveCoordinatorAdmissionTest {
             val writesBeforeRecovery = provider.updates
             val recoveryPosts = mutableListOf<String>()
             for (handle in scanned) {
-                coordinator.materialize(handle.id, fromRecovery = true, onReady = { recoveryPosts += it.id }) {}
+                coordinator.materialize(handle.id, onReady = { recoveryPosts += it.id }) {}
             }
 
             assertEquals(listOf(provider.retryUri.toString()), originalPosts)
@@ -257,6 +257,49 @@ class DurableSaveCoordinatorAdmissionTest {
             assertEquals(0, coordinator.pendingCount())
         }
     }
+
+    @Test fun recoveryFinishesFirstAndRetiredSaveGetsCachedResultWithoutReplayingSuccess() =
+        withFixture { context, root, store, pcm ->
+            withOwnedMedia(context, root) { provider ->
+                val coordinator = coordinator(context)
+                val handle = requireNotNull(store.acquireRange(0.0, store.durationSeconds())).use {
+                    coordinator.admit(it, managedWavRequest())
+                }
+                provider.ownedJobIds += handle.id
+                val journal = DurableSaveJournal(File(root, "durable-saves"))
+                val queued = journal.read(handle.id)
+                assertEquals(DurableSaveStage.QUEUED, queued.stage)
+                val source = queued.source.objects
+                assertTrue(source.all { DurablePcmPins.isProtected(File(it.sourcePath)) })
+
+                val originalPosts = mutableListOf<RecordingEntity>()
+                // Retain the original invocation until recovery has completed on the same coordinator.
+                val drainRetiredOriginal = {
+                    coordinator.materialize(handle.id, onReady = { originalPosts += it }) {
+                        error("The retired generation cannot start materialization")
+                    }
+                }
+                val recoveryPosts = mutableListOf<RecordingEntity>()
+                val recovered = coordinator.recover().single()
+                assertEquals(handle.id, recovered.id)
+                val recording = coordinator.materialize(recovered.id, onReady = { recoveryPosts += it }) {}
+                assertEquals(listOf(recording), recoveryPosts)
+                assertEquals(provider.uri.toString(), recording.id)
+
+                val writes = provider.updates
+                assertSame(recording, drainRetiredOriginal())
+                assertTrue("The retired original must not replay success", originalPosts.isEmpty())
+                assertEquals(listOf(recording), recoveryPosts)
+                assertEquals(1, provider.inserts)
+                assertEquals(writes, provider.updates)
+                assertEquals(0, provider.pending)
+                assertArrayEquals(expectedWav(pcm), File(root, "provider-output.wav").readBytes())
+                assertFalse(journal.directory(handle.id).exists())
+                assertTrue(source.none { DurablePcmPins.isProtected(File(it.sourcePath)) })
+                assertEquals(0, coordinator.pendingCount())
+                provider.assertClosed()
+            }
+        }
 
     @Test fun publishedBoundaryInterruptionRecoversWithoutSecondProviderUpdate() = withFixture { context, root, store, pcm ->
         withOwnedMedia(context, root) { provider ->

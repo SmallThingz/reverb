@@ -2573,10 +2573,10 @@ open class ReverbService : Service() {
         closeLeaseOnce()
         // Main observes the new generation before queued delivery, so older busy snapshots resample.
         mainHandler.post { owner.receiver.saveQueued(handle.id) }
-        queueDurableMaterialization(owner, fromRecovery = false)
+        queueDurableMaterialization(owner)
     }
 
-    private fun queueDurableMaterialization(owner: DurableSaveOwner, fromRecovery: Boolean) {
+    private fun queueDurableMaterialization(owner: DurableSaveOwner) {
         val jobId = owner.jobId ?: throw IllegalStateException("Save job was not durably admitted")
         try {
             synchronized(exportStateLock) {
@@ -2588,7 +2588,6 @@ open class ReverbService : Service() {
                     try {
                         durableSaveCoordinator.materialize(jobId,
                             onFailurePublished = { owner.failurePublication = it },
-                            fromRecovery = fromRecovery,
                             onReady = { recording ->
                                 if (owner.terminalDelivered.compareAndSet(false, true)) {
                                     mainHandler.post { owner.receiver.fileReady(recording) }
@@ -2637,7 +2636,7 @@ open class ReverbService : Service() {
                             val lifetimeFailure = protectDurableSaveLifetime(generation).failure
                             if (lifetimeFailure != null) {
                                 owners.forEach { failDurableSaveOwner(it, lifetimeFailure) }
-                            } else owners.forEach { queueDurableMaterialization(it, fromRecovery = true) }
+                            } else owners.forEach(::queueDurableMaterialization)
                         } finally {
                             finishRecovery()
                         }

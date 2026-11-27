@@ -169,7 +169,15 @@ class ProviderPublicationBoundaryTest {
     fun failedRenameConsentLaunchReachesDurableUnexpectedIncidentHistory() =
         renameConsentIncidentBoundary(RenameConsentTerminal.LAUNCH_FAILED)
 
-    private enum class RenameConsentTerminal { DENIED, HOST_RETIRED, LAUNCH_FAILED }
+    @Test
+    @Config(shadows = [JournalHostIoShadow::class],
+        instrumentedPackages = ["app.smallthingz.reverb.incidentcontextisolated"])
+    fun acceptedRenameLaunchFailureSurvivesLastHostRetirement() =
+        renameConsentIncidentBoundary(RenameConsentTerminal.LAUNCH_FAILED_THEN_HOST_RETIRED)
+
+    private enum class RenameConsentTerminal(val launchFailed: Boolean = false) {
+        DENIED, HOST_RETIRED, LAUNCH_FAILED(true), LAUNCH_FAILED_THEN_HOST_RETIRED(true),
+    }
 
     private fun renameConsentIncidentBoundary(terminal: RenameConsentTerminal) = runBlocking {
         val loader = IncidentContextSandboxMarker::class.java.classLoader
@@ -231,13 +239,19 @@ class ProviderPublicationBoundaryTest {
                         RenameConsentTerminal.DENIED ->
                             RecordingDeletionConsent.finish(context, prompt.token, granted = false)
                         RenameConsentTerminal.HOST_RETIRED -> hosts.clear()
-                        RenameConsentTerminal.LAUNCH_FAILED -> {
+                        RenameConsentTerminal.LAUNCH_FAILED,
+                        RenameConsentTerminal.LAUNCH_FAILED_THEN_HOST_RETIRED -> {
                             val error = runCatching {
                                 prompt.launchAfterStoppingPlayback { throw launchFailure }
                             }.exceptionOrNull()
                             assertSame(launchFailure, error)
-                            RecordingDeletionConsent.finish(context, prompt.token, granted = false,
-                                launchFailed = true, launchFailure = error)
+                            val finish = {
+                                RecordingDeletionConsent.finish(context, prompt.token, granted = false,
+                                    launchFailed = true, launchFailure = error)
+                            }
+                            if (terminal == RenameConsentTerminal.LAUNCH_FAILED_THEN_HOST_RETIRED) {
+                                finishRenameLaunchThenRetireHost(hosts, finish)
+                            } else finish()
                         }
                     }
                     val failure = withTimeout(5_000L) { result.await() }.exceptionOrNull()
@@ -246,9 +260,10 @@ class ProviderPublicationBoundaryTest {
                     assertEquals(when (terminal) {
                         RenameConsentTerminal.DENIED -> RecordingRenameConsentRejection.DENIED
                         RenameConsentTerminal.HOST_RETIRED -> RecordingRenameConsentRejection.HOST_RETIRED
-                        RenameConsentTerminal.LAUNCH_FAILED -> null
+                        RenameConsentTerminal.LAUNCH_FAILED,
+                        RenameConsentTerminal.LAUNCH_FAILED_THEN_HOST_RETIRED -> null
                     }, failure.expectedConsentRejection)
-                    if (terminal == RenameConsentTerminal.LAUNCH_FAILED) assertSame(launchFailure, failure.cause)
+                    if (terminal.launchFailed) assertSame(launchFailure, failure.cause)
                     awaitRenameBoundaryWork()
                     assertFalse(RecordingDeletionConsent.owns(prompt.token))
                     assertFalse(recordingMutations.isActive(selected.id))
@@ -257,7 +272,7 @@ class ProviderPublicationBoundaryTest {
                     assertArrayEquals(bytes, provider.payload.readBytes())
                     assertEquals(1, provider.updates.size)
                     val incidents = RecordingIncidentStore.readIncidents(context)
-                    if (terminal == RenameConsentTerminal.LAUNCH_FAILED) {
+                    if (terminal.launchFailed) {
                         val incident = incidents.single()
                         assertEquals(RecordingIncidentKind.UNEXPECTED_ERROR, incident.kind)
                         assertTrue(checkNotNull(incident.description).contains("Rename recording"))
@@ -303,6 +318,29 @@ class ProviderPublicationBoundaryTest {
                 if (owner != null) owner.addSuppressed(error) else cleanupFailure = error
             }
             if (primary == null) cleanupFailure?.let { throw it }
+        }
+    }
+
+    private fun finishRenameLaunchThenRetireHost(hosts: ViewModelStore, finish: () -> Unit) {
+        val coordinator = RecordingDeletionConsent
+        val work = synchronized(coordinator) {
+            val field = coordinator.javaClass.getDeclaredField("renames").apply { isAccessible = true }
+            (field.get(coordinator) as Map<*, *>).values.single() as RecordingRenameConsentWork
+        }
+        val finishThread = Thread.currentThread()
+        var completedOnFinishThread = false
+        // Observe only completion on the caller thread. An IO worker winning the race
+        // cannot satisfy the check, and a completion during clear() is already too late.
+        val observation = work.result.invokeOnCompletion {
+            if (Thread.currentThread() === finishThread) completedOnFinishThread = true
+        }
+        try {
+            finish()
+            val publishedBeforeRetirement = completedOnFinishThread
+            hosts.clear()
+            assertTrue("accepted failure must settle before last-host retirement", publishedBeforeRetirement)
+        } finally {
+            observation.dispose()
         }
     }
 

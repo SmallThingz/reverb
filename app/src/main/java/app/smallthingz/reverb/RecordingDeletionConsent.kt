@@ -233,13 +233,18 @@ internal object RecordingDeletionConsent {
         val execution = checkNotNull(active).also { check(it.request === request) }
         val appContext = context.applicationContext
         request.rename?.let { work ->
-            work.granted = granted && !work.cancelled && !launchFailed
+            if (!granted || work.cancelled || launchFailed) {
+                val failure = recordingRenameConsentFailure(work.proof,
+                    if (work.cancelled) RecordingRenameConsentRejection.HOST_RETIRED
+                    else RecordingRenameConsentRejection.DENIED, launchFailed, launchFailure)
+                // Settle the accepted result before the last host can retire the request.
+                completeRename(execution, failure)
+                return
+            }
+            work.granted = true
             scope.launch {
                 try {
-                    if (work.granted) work.result.complete(work.retry())
-                    else work.result.completeExceptionally(recordingRenameConsentFailure(work.proof,
-                        if (work.cancelled) RecordingRenameConsentRejection.HOST_RETIRED
-                        else RecordingRenameConsentRejection.DENIED, launchFailed, launchFailure))
+                    work.result.complete(work.retry())
                 } catch (error: Exception) {
                     work.result.completeExceptionally(error)
                 } finally { completeRename(execution) }
@@ -384,16 +389,16 @@ internal object RecordingDeletionConsent {
         }, error))
     }
 
-    private fun completeRename(execution: Execution) {
+    private fun completeRename(execution: Execution, failure: Exception? = null) {
         synchronized(this) {
             if (active !== execution || execution.completed) return
             execution.completed = true
             val work = checkNotNull(execution.request.rename)
-            if (!work.result.isCompleted) work.result.completeExceptionally(
-                SecurityException("Rename permission request did not complete", work.proof))
             renames.remove(execution.request.token)
             pending.complete(execution.request.token)
             active = null
+            if (!work.result.isCompleted) work.result.completeExceptionally(failure ?:
+                SecurityException("Rename permission request did not complete", work.proof))
             signal()
         }
     }

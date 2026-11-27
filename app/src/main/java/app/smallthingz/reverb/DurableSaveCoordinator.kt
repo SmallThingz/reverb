@@ -124,15 +124,14 @@ internal class DurableSaveCoordinator private constructor(private val context: C
     fun materialize(
         id: String,
         onFailurePublished: (DurableSavePublicationReceipt) -> Unit = {},
-        fromRecovery: Boolean = false,
         onReady: (RecordingEntity) -> Unit = {},
         checkActive: () -> Unit,
     ): RecordingEntity {
         val recording = synchronized(materializerLock) {
-            val cached = completed[id]
-            // A recovery scan can outlive the worker that already owns terminal delivery.
-            if (fromRecovery && cached != null) return cached
-            cached ?: materializeLocked(id, onFailurePublished, checkActive)
+            // The worker that first completed this job owns terminal delivery, even if its
+            // callback has not run yet. Later callers can read the result without replaying it.
+            completed[id]?.let { return it }
+            materializeLocked(id, onFailurePublished, checkActive)
         }
         onReady(recording)
         return recording
