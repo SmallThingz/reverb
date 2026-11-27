@@ -4,7 +4,16 @@ internal data class RecordingScrubKey(
     val generation: Long,
     val transportIntentRevision: Long,
     val retainedIdle: Boolean = false,
-)
+) {
+    // The service sees this exact admission key before the registry installs its lease.
+    private var registry: RecordingScrubAuthorities? = null
+
+    fun bindRegistry(registry: RecordingScrubAuthorities) {
+        this.registry = registry
+    }
+
+    val hasLiveLease: Boolean get() = registry?.ownsKey(this) == true
+}
 
 /** Implementations contain native quiet ownership only, never a row, controller or UI callback. */
 internal interface RecordingScrubQuietHandle {
@@ -70,7 +79,10 @@ internal class RecordingScrubAuthorities {
         playbackAudioSessionId: Int? = null,
     ): RecordingScrubAuthority {
         revoke()
-        return RecordingScrubAuthority(key, resumePlayback, playbackAudioSessionId).also { current = it }
+        return RecordingScrubAuthority(key, resumePlayback, playbackAudioSessionId).also {
+            current = it
+            key.bindRegistry(this)
+        }
     }
 
     fun published(key: RecordingScrubKey?) {
@@ -78,6 +90,8 @@ internal class RecordingScrubAuthorities {
     }
 
     fun owns(authority: RecordingScrubAuthority): Boolean = current === authority && authority.active
+
+    fun ownsKey(key: RecordingScrubKey): Boolean = current?.let { it.key === key && it.active } == true
 
     fun finish(authority: RecordingScrubAuthority) {
         if (current === authority) current = null

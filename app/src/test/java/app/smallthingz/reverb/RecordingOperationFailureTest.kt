@@ -41,4 +41,43 @@ class RecordingOperationFailureTest {
         repeat(100) { deep = IOException("wrapper", deep) }
         assertTrue(unexpectedRecordingOperationFailure(deep))
     }
+
+    @Test fun explicitRenameConsentRejectionsStayInlineWithoutUnexpectedIncidents() {
+        val proof = SecurityException("Original write consent required")
+        for (reason in RecordingRenameConsentRejection.values()) {
+            val failure = recordingRenameConsentFailure(proof, reason)
+            assertSame(reason, failure.expectedConsentRejection)
+            assertSame(proof, failure.cause!!.cause)
+            assertFalse(unexpectedRecordingOperationFailure(failure))
+            assertFalse(unexpectedRecordingOperationFailure(IOException("Rename not completed", failure)))
+            var inline = 0
+            routeRecordingRenameFailure(failure, onDefinite = { assertSame(failure, it); inline++ },
+                onReconcile = { fail("Expected consent termination must retain its editor outcome") })
+            assertEquals(1, inline)
+        }
+    }
+
+    @Test fun genuineRenameSecurityAndConsentLaunchFailuresRemainIncidents() {
+        val proof = SecurityException("Original write consent required")
+        for (reason in RecordingRenameConsentRejection.values()) {
+            val noDetail = recordingRenameConsentFailure(proof, reason, launchFailed = true)
+            assertNull(noDetail.expectedConsentRejection)
+            assertTrue(unexpectedRecordingOperationFailure(noDetail))
+            for (error in listOf(SecurityException("Launcher denied"), IllegalStateException("Launcher invariant"))) {
+                for (launchFailed in listOf(false, true)) {
+                    val failure = recordingRenameConsentFailure(proof, reason, launchFailed, error)
+                    assertSame(error, failure.cause)
+                    assertNull(failure.expectedConsentRejection)
+                    assertTrue(unexpectedRecordingOperationFailure(failure))
+                }
+                val senderFailure = try {
+                    prepareRecordingRenameConsentSender<Any> { throw error }
+                    throw AssertionError("Sender failure was swallowed")
+                } catch (failure: RecordingRenameDefiniteFailure) { failure }
+                assertSame(error, senderFailure.cause)
+                assertTrue(unexpectedRecordingOperationFailure(senderFailure))
+            }
+        }
+        assertTrue(unexpectedRecordingOperationFailure(SecurityException("Genuine write failure")))
+    }
 }

@@ -6,6 +6,7 @@ import android.app.Application
 import android.app.PendingIntent
 import android.content.ContentProvider
 import android.content.ContentValues
+import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
 import android.content.ClipData
@@ -16,6 +17,10 @@ import android.database.MatrixCursor
 import android.net.Uri
 import android.os.Bundle
 import android.os.ParcelFileDescriptor
+import android.os.Process
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.ViewModelStore
+import app.smallthingz.reverb.incidentcontextisolated.IncidentContextSandboxMarker
 import android.provider.MediaStore
 import java.io.File
 import java.io.FileDescriptor
@@ -24,11 +29,18 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.security.MessageDigest
 import java.util.Base64
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.mapNotNull
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.*
 import org.junit.Test
@@ -39,6 +51,8 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowContentResolver
 import org.robolectric.shadows.ShadowEnvironment
+import org.robolectric.shadows.ShadowProcess
+import org.robolectric.shadows.ShadowSystemClock
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], application = Application::class, shadows = [PlaybackSessionOsShadow::class])
@@ -134,6 +148,173 @@ class ProviderPublicationBoundaryTest {
             assertEquals(selected, dao.findById(selected.id))
             assertArrayEquals(bytes, checkNotNull(provider.retainedOriginal).readBytes())
             assertArrayEquals(replacement, provider.payload.readBytes())
+        }
+    }
+
+    @Test
+    @Config(shadows = [JournalHostIoShadow::class],
+        instrumentedPackages = ["app.smallthingz.reverb.incidentcontextisolated"])
+    fun deniedRenameConsentReachesRepositoryWithoutAnUnexpectedIncident() =
+        renameConsentIncidentBoundary(RenameConsentTerminal.DENIED)
+
+    @Test
+    @Config(shadows = [JournalHostIoShadow::class],
+        instrumentedPackages = ["app.smallthingz.reverb.incidentcontextisolated"])
+    fun retiredRenameHostReachesRepositoryWithoutAnUnexpectedIncident() =
+        renameConsentIncidentBoundary(RenameConsentTerminal.HOST_RETIRED)
+
+    @Test
+    @Config(shadows = [JournalHostIoShadow::class],
+        instrumentedPackages = ["app.smallthingz.reverb.incidentcontextisolated"])
+    fun failedRenameConsentLaunchReachesDurableUnexpectedIncidentHistory() =
+        renameConsentIncidentBoundary(RenameConsentTerminal.LAUNCH_FAILED)
+
+    private enum class RenameConsentTerminal { DENIED, HOST_RETIRED, LAUNCH_FAILED }
+
+    private fun renameConsentIncidentBoundary(terminal: RenameConsentTerminal) = runBlocking {
+        val loader = IncidentContextSandboxMarker::class.java.classLoader
+        assertSame(loader, javaClass.classLoader)
+        assertSame(loader, RecordingDeletionConsent::class.java.classLoader)
+        assertSame(loader, RecordingIncidentStore::class.java.classLoader)
+        val app = RuntimeEnvironment.getApplication()
+        val previousRoot = ServiceStateOsShadow.fixtureRoot
+        val previousPid = Process.myPid()
+        check(previousRoot == null)
+        JournalHostIoShadow.reset()
+        var primary: Throwable? = null
+        try {
+            // Use the existing incident sandbox's borrowed PID and clock setup. Keep it
+            // separate from the ordinary provider/classifier lane; do not reset production statics.
+            ShadowProcess.setPid(4242)
+            val started = Process.getStartElapsedRealtime()
+            ShadowSystemClock.advanceBy(
+                (started - android.os.SystemClock.elapsedRealtime()).coerceAtLeast(0L), TimeUnit.MILLISECONDS)
+            check(Process.myPid() > 0 && started >= 0L &&
+                android.os.SystemClock.elapsedRealtime() >= started && System.currentTimeMillis() > 0L)
+            ServiceStateOsShadow.fixtureRoot = checkNotNull(app.filesDir.parentFile).canonicalFile.toPath()
+            fixture { _, provider, target, fingerprint, bytes, dao ->
+                val historyRoot = File(provider.payload.parentFile, "incidents").apply { check(mkdir()) }
+                val context = object : ContextWrapper(app) {
+                    override fun getApplicationContext(): Context = this
+                    override fun getNoBackupFilesDir(): File = historyRoot
+                }
+                val selected = registerPublishedSelection(app, provider, target, fingerprint, bytes)
+                provider.expectedNameQuery = "renamed.wav"
+                // Only the external provider refuses mutation. Real stable-byte/postcondition
+                // verification must produce the consent proof; no synthetic proof or reporter call.
+                provider.failureBeforeUpdateCommit = SecurityException("provider requires rename consent")
+                assertTrue(RecordingIncidentStore.readIncidents(context).isEmpty())
+                assertTrue("real incident process publication must cross a journal barrier",
+                    JournalHostIoShadow.directorySyncAttempts > 0)
+                val hosts = ViewModelStore()
+                ViewModelProvider(hosts, ViewModelProvider.NewInstanceFactory())[
+                    RecordingRenameConsentHostViewModel::class.java]
+                val lifetime = RecordingDeletionConsent.renameLifetime()
+                val result = async(start = CoroutineStart.UNDISPATCHED) {
+                    runCatching { RecordingRepository.rename(context, selected, "renamed", lifetime) }
+                }
+                var launch: RecordingDeletionConsentLaunch? = null
+                var bodyFailure: Throwable? = null
+                try {
+                    val prompt = withTimeout(5_000L) {
+                        RecordingDeletionConsent.changes.mapNotNull { RecordingDeletionConsent.claim(context) }.first()
+                    }
+                    launch = prompt
+                    assertTrue(RecordingDeletionConsent.owns(prompt.token))
+                    assertTrue(recordingMutations.isActive(selected.id))
+                    assertFalse(result.isCompleted)
+                    assertEquals(listOf(selected.id), provider.writeRequestUris)
+                    assertTrue(provider.didThrow)
+                    provider.assertRenameRequest()
+                    val launchFailure = SecurityException("fixture genuine activity launch failure")
+                    when (terminal) {
+                        RenameConsentTerminal.DENIED ->
+                            RecordingDeletionConsent.finish(context, prompt.token, granted = false)
+                        RenameConsentTerminal.HOST_RETIRED -> hosts.clear()
+                        RenameConsentTerminal.LAUNCH_FAILED -> {
+                            val error = runCatching {
+                                prompt.launchAfterStoppingPlayback { throw launchFailure }
+                            }.exceptionOrNull()
+                            assertSame(launchFailure, error)
+                            RecordingDeletionConsent.finish(context, prompt.token, granted = false,
+                                launchFailed = true, launchFailure = error)
+                        }
+                    }
+                    val failure = withTimeout(5_000L) { result.await() }.exceptionOrNull()
+                    assertTrue(failure is RecordingRenameDefiniteFailure)
+                    failure as RecordingRenameDefiniteFailure
+                    assertEquals(when (terminal) {
+                        RenameConsentTerminal.DENIED -> RecordingRenameConsentRejection.DENIED
+                        RenameConsentTerminal.HOST_RETIRED -> RecordingRenameConsentRejection.HOST_RETIRED
+                        RenameConsentTerminal.LAUNCH_FAILED -> null
+                    }, failure.expectedConsentRejection)
+                    if (terminal == RenameConsentTerminal.LAUNCH_FAILED) assertSame(launchFailure, failure.cause)
+                    awaitRenameBoundaryWork()
+                    assertFalse(RecordingDeletionConsent.owns(prompt.token))
+                    assertFalse(recordingMutations.isActive(selected.id))
+                    assertEquals(selected, dao.findById(selected.id))
+                    assertEquals("clip.wav", provider.name)
+                    assertArrayEquals(bytes, provider.payload.readBytes())
+                    assertEquals(1, provider.updates.size)
+                    val incidents = RecordingIncidentStore.readIncidents(context)
+                    if (terminal == RenameConsentTerminal.LAUNCH_FAILED) {
+                        val incident = incidents.single()
+                        assertEquals(RecordingIncidentKind.UNEXPECTED_ERROR, incident.kind)
+                        assertTrue(checkNotNull(incident.description).contains("Rename recording"))
+                        assertTrue(checkNotNull(incident.description).contains(launchFailure.message!!))
+                        assertEquals(Process.myPid(), incident.pid)
+                        assertTrue(JournalHostIoShadow.directorySyncAttempts > 0)
+                    } else assertTrue(incidents.isEmpty())
+                    // A late duplicate result must neither retry the rename nor append an incident.
+                    RecordingDeletionConsent.finish(context, prompt.token, granted = false,
+                        launchFailed = true, launchFailure = launchFailure)
+                    awaitRenameBoundaryWork()
+                    assertEquals(incidents, RecordingIncidentStore.readIncidents(context))
+                    assertEquals(1, provider.updates.size)
+                } catch (error: Throwable) { bodyFailure = error; throw error }
+                finally {
+                    // Finish the real coordinator before the existing fixture retires its files/DB.
+                    withContext(NonCancellable) {
+                        val cleanup = listOf<suspend () -> Unit>(
+                            { hosts.clear() },
+                            { withTimeout(5_000L) { result.join() } },
+                            { awaitRenameBoundaryWork() },
+                            { launch?.let { assertFalse(RecordingDeletionConsent.owns(it.token)) } },
+                        )
+                        var cleanupFailure: Throwable? = null
+                        for (step in cleanup) try { step() } catch (error: Throwable) {
+                            val owner = bodyFailure ?: cleanupFailure
+                            if (owner != null) owner.addSuppressed(error) else cleanupFailure = error
+                        }
+                        if (bodyFailure == null) cleanupFailure?.let { throw it }
+                    }
+                }
+            }
+        } catch (error: Throwable) { primary = error; throw error }
+        finally {
+            val cleanup = listOf<() -> Unit>(
+                { JournalHostIoShadow.finishFixture()?.let { throw it } },
+                { ServiceStateOsShadow.fixtureRoot = previousRoot },
+                { ShadowProcess.setPid(previousPid) },
+            )
+            var cleanupFailure: Throwable? = null
+            for (step in cleanup) try { step() } catch (error: Throwable) {
+                val owner = primary ?: cleanupFailure
+                if (owner != null) owner.addSuppressed(error) else cleanupFailure = error
+            }
+            if (primary == null) cleanupFailure?.let { throw it }
+        }
+    }
+
+    private suspend fun awaitRenameBoundaryWork() {
+        // Extend IncidentContextRecoveryV2Test's read-only scope fence to the coordinator:
+        // owns(token) stops at result acceptance, before completeRename's finally retirement.
+        // These scopes belong to this isolated sandbox; no production state is replaced/reset.
+        for ((owner, name) in listOf(RecordingDeletionConsent to "scope",
+            RecordingIncidentStore to "historyMutationScope")) {
+            val field = owner.javaClass.getDeclaredField(name).apply { isAccessible = true }
+            val scope = field.get(owner) as CoroutineScope
+            withTimeout(8_000L) { checkNotNull(scope.coroutineContext[Job]).children.toList().forEach { it.join() } }
         }
     }
 
@@ -344,6 +525,110 @@ class ProviderPublicationBoundaryTest {
                     RecordingDeletionConsent.finish(app, launch.token, false)
                     withTimeout(5_000L) { receipt.await() }
                 }
+            }
+        }
+    }
+
+    @Test fun consentProofReadAllowsCatalogWorkAndRejectsAReplacementRow() = runBlocking {
+        for (queued in listOf(false, true)) fixture { app, provider, target, fingerprint, bytes, dao ->
+            val selected = registerPublishedSelection(app, provider, target, fingerprint, bytes)
+            val original = if (queued) checkNotNull(RecordingRepository.snapshotDeletionConsentTarget(app, selected))
+            else null
+            val opened = CountDownLatch(1)
+            val allowOpen = CountDownLatch(1)
+            provider.beforeReadOpen = {
+                opened.countDown()
+                assertTrue("Provider open was not released", allowOpen.await(15L, TimeUnit.SECONDS))
+            }
+            val proof = async(start = CoroutineStart.UNDISPATCHED) {
+                RecordingRepository.snapshotDeletionConsentTarget(app, selected, original)
+            }
+            val replacement = selected.copy(
+                fileIdentity = providerIdentity(Uri.parse(selected.id), selected.sizeBytes, provider.generation + 1))
+            try {
+                assertTrue("Consent proof never reached the provider", opened.await(5L, TimeUnit.SECONDS))
+                val known = withTimeout(5_000L) { RecordingRepository.listKnown(app) }
+                assertTrue(known.any { sameRecordingActionTarget(selected, it) })
+                assertFalse(proof.isCompleted)
+                // Change only the catalog. The provider can still prove the originally selected
+                // bytes and identity, so only the final catalog recheck can reject this result.
+                dao.upsert(replacement)
+            } finally {
+                allowOpen.countDown()
+            }
+            assertNull(withTimeout(5_000L) { proof.await() })
+            assertEquals(replacement, dao.findById(selected.id))
+            assertArrayEquals(bytes, provider.payload.readBytes())
+            assertTrue(getRecorderPreferences(app).requireDurableStringSet(PrefKey.PENDING_RECORDING_DELETIONS).isEmpty())
+            assertTrue(provider.writeRequestUris.isEmpty())
+        }
+    }
+
+    @Test
+    @org.robolectric.annotation.LooperMode(org.robolectric.annotation.LooperMode.Mode.PAUSED)
+    fun ordinaryPlaybackRejectsHeldApprovedTargetUntilConsentSettles() = runBlocking {
+        fixture(expectedDeletes = 1) { app, provider, target, fingerprint, bytes, dao ->
+            val selected = registerPublishedSelection(app, provider, target, fingerprint, bytes)
+            val earlierUri = Uri.parse("content://media/external/audio/media/730033")
+            val earlier = selected.copy(id = earlierUri.toString(),
+                fileIdentity = providerIdentity(earlierUri, selected.sizeBytes, provider.generation))
+            provider.alternateRowAvailable = true
+            dao.upsert(earlier)
+            val priorFeedback = AppFeedbackCenter.events.value.map { it.id }.toSet()
+            try {
+                val proofs = listOf(earlier, selected).map {
+                    checkNotNull(RecordingRepository.snapshotDeletionConsentTarget(app, it))
+                }
+                val receipt = RecordingDeletionConsent.enqueueImmediate(proofs)
+                val launch = withTimeout(5_000L) {
+                    RecordingDeletionConsent.changes.mapNotNull { RecordingDeletionConsent.claim(app) }.first()
+                }
+                val opened = CountDownLatch(1)
+                val allowOpen = CountDownLatch(1)
+                val appShadow = shadowOf(app)
+                val replacement = selected.copy(
+                    fileIdentity = providerIdentity(Uri.parse(selected.id), selected.sizeBytes, provider.generation + 1))
+                fun assertAdmitted(recording: RecordingEntity) {
+                    assertTrue(RecordingPlayback.play(app, recording))
+                    val intent = checkNotNull(appShadow.nextStartedService)
+                    val token = intent.getLongExtra(RecordingPlaybackService.EXTRA_REQUEST, -1L)
+                    assertEquals(recording, checkNotNull(RecordingPlayback.takeStart(token)).recording)
+                }
+                try {
+                    assertEquals(listOf(earlier, selected), launch.targets.map { it.recording })
+                    provider.beforeReadOpen = { uri ->
+                        if (uri == earlierUri) {
+                            opened.countDown()
+                            assertTrue("Earlier approved read was not released", allowOpen.await(15L, TimeUnit.SECONDS))
+                            throw IOException("Earlier approved source temporarily unavailable")
+                        }
+                    }
+                    RecordingDeletionConsent.finish(app, launch.token, granted = true)
+                    assertTrue("Earlier approved retry never reached its provider", opened.await(5L, TimeUnit.SECONDS))
+                    assertFalse(receipt.isCompleted)
+                    assertFalse(recordingMutations.isActive(selected.id))
+                    assertFalse(RecordingPlayback.play(app, selected))
+                    assertFalse(RecordingPlayback.hasPendingStart())
+                    assertNull(appShadow.nextStartedService)
+                    assertAdmitted(replacement)
+                } finally {
+                    allowOpen.countDown()
+                    try {
+                        RecordingDeletionConsent.finish(app, launch.token, granted = false)
+                        withTimeout(5_000L) { receipt.await() }
+                    } finally {
+                        RecordingPlayback.stop(selected)
+                        RecordingPlayback.stop(replacement)
+                    }
+                }
+                // The test provider rejects deletion without removing this recording.
+                assertEquals(selected, dao.findById(selected.id))
+                assertArrayEquals(bytes, provider.payload.readBytes())
+                assertAdmitted(selected)
+            } finally {
+                AppFeedbackCenter.events.value.filterNot { it.id in priorFeedback }
+                    .forEach { AppFeedbackCenter.acknowledge(it.id) }
+                dao.deleteById(earlier.id)
             }
         }
     }
@@ -759,6 +1044,7 @@ private class PublicationMediaProvider(val payload: File) : ContentProvider() {
     var churnPublishedRevision = false
     var publishedOpens = 0
     var alternateRowAvailable = false
+    @Volatile var beforeReadOpen: ((Uri) -> Unit)? = null
     var replacementOnUpdate: ByteArray? = null
     var retainedOriginal: File? = null
     var removeOnDelete = false
@@ -803,6 +1089,7 @@ private class PublicationMediaProvider(val payload: File) : ContentProvider() {
     }
     override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor {
         check((uri.lastPathSegment == "730031" || (alternateRowAvailable && uri.lastPathSegment == "730033")) && mode == "r")
+        beforeReadOpen?.invoke(uri)
         trace += "open:$mode"
         if (updated && pending == 0) {
             publishedOpens++

@@ -390,23 +390,32 @@ object RecordingRepository {
         recording: RecordingEntity,
         original: RecordingDeletionConsentTarget? = null,
     ): RecordingDeletionConsentTarget? = withContext(Dispatchers.IO) {
+        if (recording.storageType != RecordingStorageType.MEDIASTORE) return@withContext null
+        val tracked = mutex.withLock {
+            if (recordingMutations.isActive(recording.id)) return@withLock null
+            dao(context).findById(recording.id)?.takeIf {
+                sameRecordingActionTarget(recording, it) &&
+                    (original == null || sameRecordingActionTarget(original.recording, it))
+            }
+        } ?: return@withContext null
+
+        // The stable provider read checks identity around the payload. It can complete or stall
+        // independently of catalog work because this advisory proof carries no delete authority.
+        val target = if (original == null) {
+            val fingerprint = createPendingDeletionIntent(context, tracked) ?: return@withContext null
+            RecordingDeletionConsentTarget(tracked, fingerprint)
+        } else {
+            if (!recordingDeletionIdentityMatches(context, tracked)) return@withContext null
+            revalidateConsentedDeletionIntent(tracked.id, original.fingerprint) {
+                pendingDeletionMatchesCurrentAsset(context, tracked, original.fingerprint)
+            } ?: return@withContext null
+            original
+        }
+
         mutex.withLock {
-            if (recording.storageType != RecordingStorageType.MEDIASTORE ||
-                recordingMutations.isActive(recording.id)
-            ) return@withLock null
-            val tracked = dao(context).findById(recording.id) ?: return@withLock null
-            if (!sameRecordingActionTarget(recording, tracked)) return@withLock null
-            if (original == null) {
-                val fingerprint = createPendingDeletionIntent(context, tracked) ?: return@withLock null
-                RecordingDeletionConsentTarget(tracked, fingerprint)
-            } else {
-                if (!sameRecordingActionTarget(original.recording, tracked) ||
-                    !recordingDeletionIdentityMatches(context, tracked)) return@withLock null
-                original.takeIf {
-                    revalidateConsentedDeletionIntent(tracked.id, it.fingerprint) {
-                        pendingDeletionMatchesCurrentAsset(context, tracked, it.fingerprint)
-                    } != null
-                }
+            val current = dao(context).findById(recording.id) ?: return@withLock null
+            target.takeIf {
+                !recordingMutations.isActive(recording.id) && sameRecordingActionTarget(tracked, current)
             }
         }
     }

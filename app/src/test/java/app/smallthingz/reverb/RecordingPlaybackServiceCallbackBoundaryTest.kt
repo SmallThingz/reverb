@@ -411,6 +411,92 @@ class RecordingPlaybackServiceCallbackBoundaryTest {
         }
     }
 
+    @Test fun pausedScrubCrossesOriginalIdleDeadlineAndCommitsSeek() =
+        withPlaybackService(prepareDelay = 180_000) { media, _, callback, _ ->
+            val service = readField(RecordingPlayback, "service") as RecordingPlaybackService
+            val session = readField(service, "session") as MediaSession
+            callback.onPause()
+            media.setSeekDelay(-1)
+            media.invokePreparedListener()
+            val paused = RecordingPlayback.state.value
+            val row = checkNotNull(paused.recording)
+            assertTrue(paused.prepared)
+            assertFalse(paused.wantsPlayback)
+
+            ShadowLooper.idleMainLooper(59_999L, TimeUnit.MILLISECONDS)
+            val scrub = checkNotNull(RecordingPlayback.acquireScrub(row))
+            assertFalse(scrub.resumePlayback)
+            ShadowLooper.idleMainLooper(1L, TimeUnit.MILLISECONDS)
+            assertTrue(RecordingPlayback.isScrubCurrent(row, scrub))
+            assertEquals(paused.generation, RecordingPlayback.state.value.generation)
+            assertSame(session, readField(service, "session"))
+
+            RecordingPlayback.finishScrub(scrub)
+            RecordingPlayback.seek(row, 900, resume = false)
+            assertEquals(900, media.pendingSeek)
+            media.invokeSeekCompleteListener()
+            assertEquals(900, RecordingPlayback.state.value.positionMillis)
+            assertFalse(media.isReallyPlaying)
+
+            ShadowLooper.idleMainLooper(60_000L, TimeUnit.MILLISECONDS)
+            assertFalse(service.ownsRecording(row))
+            assertNull(readField(service, "session"))
+            assertEquals(row, RecordingPlayback.state.value.recording)
+            assertEquals(900, RecordingPlayback.state.value.positionMillis)
+        }
+
+    @Test fun suspendedPlayingScrubCrossesIdleDeadlineAndResumesOnRelease() =
+        withPlaybackService(startPosition = 300, prepareDelay = 180_000) { media, _, _, _ ->
+            val audio = checkNotNull(RuntimeEnvironment.getApplication().getSystemService(AudioManager::class.java))
+            Shadows.shadowOf(audio).setNextFocusRequestResponse(AudioManager.AUDIOFOCUS_REQUEST_GRANTED)
+            media.setSeekDelay(-1)
+            media.invokePreparedListener()
+            media.invokeSeekCompleteListener()
+            ShadowLooper.idleMainLooper()
+            assertTrue(media.isReallyPlaying)
+            val playing = RecordingPlayback.state.value
+            val row = checkNotNull(playing.recording)
+            val scrub = checkNotNull(RecordingPlayback.acquireScrub(row))
+            assertTrue(scrub.resumePlayback)
+
+            RecordingPlayback.suspendForGesture(row, scrub)
+            assertTrue(scrub.playbackSuspended)
+            assertFalse(media.isReallyPlaying)
+            ShadowLooper.idleMainLooper(60_000L, TimeUnit.MILLISECONDS)
+            assertTrue(RecordingPlayback.isScrubCurrent(row, scrub))
+            assertEquals(playing.generation, RecordingPlayback.state.value.generation)
+            assertFalse(media.isReallyPlaying)
+
+            RecordingPlayback.finishScrub(scrub)
+            RecordingPlayback.seek(row, 1_100, resume = scrub.resumePlayback)
+            assertEquals(1_100, media.pendingSeek)
+            assertFalse(media.isReallyPlaying)
+            media.invokeSeekCompleteListener()
+            ShadowLooper.idleMainLooper()
+            assertTrue(media.isReallyPlaying)
+            assertEquals(1_100, RecordingPlayback.state.value.positionMillis)
+        }
+
+    @Test fun deferredIdleDeadlineRetiresInactiveScrubWithoutTransportCommand() =
+        withPlaybackService(prepareDelay = 240_000) { media, _, callback, _ ->
+            val service = readField(RecordingPlayback, "service") as RecordingPlaybackService
+            callback.onPause()
+            media.invokePreparedListener()
+            val row = checkNotNull(RecordingPlayback.state.value.recording)
+            val scrub = checkNotNull(RecordingPlayback.acquireScrub(row))
+            ShadowLooper.idleMainLooper(60_000L, TimeUnit.MILLISECONDS)
+            assertTrue(RecordingPlayback.isScrubCurrent(row, scrub))
+
+            RecordingPlayback.finishScrub(scrub)
+            ShadowLooper.idleMainLooper(60_000L, TimeUnit.MILLISECONDS)
+            assertFalse(service.ownsRecording(row))
+            assertNull(readField(service, "player"))
+            assertNull(readField(service, "session"))
+            val retained = checkNotNull(RecordingPlayback.acquireScrub(row))
+            assertTrue(retained.key.retainedIdle)
+            RecordingPlayback.finishScrub(retained)
+        }
+
     @Test
     @Config(shadows = [JournalHostIoShadow::class, ShuttleEndpointAudioTrackShadow::class,
         ServiceReplacementTrackBuilderShadow::class])

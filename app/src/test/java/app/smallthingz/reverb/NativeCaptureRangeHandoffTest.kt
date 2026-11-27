@@ -20,6 +20,8 @@ import app.smallthingz.reverb.nativeui.NativeWindowTextAccessibilityOwner
 import app.smallthingz.reverb.nativeui.ReverbHomeBodyOwner
 import app.smallthingz.reverb.nativeui.ReverbRangeExportContent
 import app.smallthingz.reverb.nativeui.ReverbViewEnvironment
+import java.lang.reflect.Modifier
+import java.time.Duration
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -32,8 +34,11 @@ import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.LooperMode
+import org.robolectric.shadows.ShadowChoreographer
+import org.robolectric.shadows.ShadowSystemClock
 import smallthingz.ui.MotionDurationScale
 import smallthingz.ui.components.blob.AudioReactiveBlobView
 import smallthingz.ui.geometry.Offset
@@ -53,17 +58,108 @@ import smallthingz.ui.text.view.NativeTextSemanticsClipPolicy
 @LooperMode(LooperMode.Mode.PAUSED)
 class NativeCaptureRangeHandoffTest {
     @get:Rule val temporary = TemporaryFolder()
+    private val frameInterval = Duration.ofMillis(16)
 
     @Test fun rangeHandoffReleasesOnlyTheVisualizationLeaseAndHomeReacquiresItOnce() {
-        val activity = Robolectric.buildActivity(Activity::class.java).setup().visible()
+        val previousFrameDelay = ShadowChoreographer.getFrameDelay()
+        val previousVsyncPaused = ShadowChoreographer.isPaused()
         try {
-            Fixture(activity.get()).use { fixture ->
-                activity.windowFocusChanged(true)
-                fixture.verifyVisualizationLease()
+            // The focus helper drains due work. A reposted vsync must be due on a future tick.
+            ShadowChoreographer.setFrameDelay(frameInterval)
+            ShadowChoreographer.setPaused(true)
+            val activity = Robolectric.buildActivity(Activity::class.java).setup().visible()
+            try {
+                val decor = activity.get().window.decorView
+                awaitWindowState("Activity decor must attach") { decor.isAttachedToWindow }
+                Fixture(activity.get()).use { fixture ->
+                    activity.windowFocusChanged(true)
+                    awaitWindowState("Activity decor must gain window focus") { decor.hasWindowFocus() }
+                    fixture.verifyVisualizationLease()
+                }
+            } finally {
+                activity.pause().stop().destroy()
             }
         } finally {
-            activity.pause().stop().destroy()
+            ShadowChoreographer.setFrameDelay(previousFrameDelay)
+            ShadowChoreographer.setPaused(previousVsyncPaused)
         }
+    }
+
+    private fun awaitWindowState(description: String, reached: () -> Boolean) {
+        val looper = shadowOf(Looper.getMainLooper())
+        repeat(8) {
+            if (reached()) return
+            ShadowSystemClock.advanceBy(frameInterval)
+            var dispatched = 0
+            while (dispatched < 64 && !looper.isIdle) {
+                looper.runOneTask()
+                dispatched++
+            }
+            assertTrue("Main looper still has due work after 64 messages", looper.isIdle)
+        }
+        assertTrue("$description after eight frame steps", reached())
+    }
+
+    @Test fun heldVisualizationResetsDoNotRetainRetiredCallbacksAndOnlyApplyToCurrentEpoch() {
+        val recorder = Robolectric.buildService(ReverbService::class.java).get()
+        val mailbox = read<IdentityFrameMailbox<ReverbService.VisualizationCallback,
+            ReverbService.VisualizationFrame>>(recorder, "visualizationCallbacks")
+        val held = mutableListOf<Runnable>()
+        var acceptsPosts = true
+        write(recorder, "audioHandler", object : Handler(Looper.getMainLooper()) {
+            override fun sendMessageAtTime(msg: Message, uptimeMillis: Long): Boolean {
+                if (!acceptsPosts) return false
+                held += checkNotNull(msg.callback)
+                return true
+            }
+        })
+        val home = ReverbService.VisualizationCallback { error("No frames expected") }
+        val replacement = ReverbService.VisualizationCallback { error("No replacement frames expected") }
+
+        recorder.setVisualizationCallback(home)
+        recorder.setVisualizationCallback(replacement)
+        recorder.clearVisualizationCallback(replacement) // Queues a reset for fallback Home.
+        recorder.clearVisualizationCallback(home) // Retires both held Home epochs.
+        recorder.setVisualizationCallback(home) // Same callback, fresh epoch.
+        assertSame(home, mailbox.current())
+        assertEquals(5, held.size)
+
+        // Inspect the actual Handler payload while held. A stale no-op can still retain
+        // a Registration and its callback before dispatch. Avoid a GC-dependent assertion.
+        held.forEach { reset ->
+            reset.javaClass.declaredFields.filterNot { Modifier.isStatic(it.modifiers) }.forEach { field ->
+                field.isAccessible = true
+                val value = field.get(reset)
+                assertTrue("Unexpected reference in queued reset: ${field.type.name}",
+                    value == null || value === recorder || value is Long || value is Boolean)
+            }
+        }
+
+        write(recorder, "visualizationFaulted", true)
+        repeat(4) {
+            held.removeAt(0).run()
+            assertTrue(read<Boolean>(recorder, "visualizationFaulted"))
+            assertNull(read<AudioVisualizationAnalyzer?>(recorder, "visualizationAnalyzer"))
+        }
+        held.removeAt(0).run()
+        val analyzer = checkNotNull(read<AudioVisualizationAnalyzer?>(recorder, "visualizationAnalyzer"))
+        assertFalse(read<Boolean>(recorder, "visualizationFaulted"))
+
+        acceptsPosts = false
+        recorder.setVisualizationCallback(replacement)
+        assertSame(home, mailbox.current())
+        assertEquals(1, mailbox.size())
+        assertTrue(held.isEmpty())
+
+        acceptsPosts = true
+        recorder.clearVisualizationCallback(home)
+        assertNull(mailbox.current())
+        write(recorder, "visualizationFaulted", true)
+        write(analyzer, "smoothedActivity", .55f)
+        held.single().run()
+        assertFalse(read<Boolean>(recorder, "visualizationFaulted"))
+        assertSame(analyzer, read<AudioVisualizationAnalyzer?>(recorder, "visualizationAnalyzer"))
+        assertEquals(0f, read<Float>(analyzer, "smoothedActivity"), 0f)
     }
 
     @Test fun snapshotArrivalAndPredictiveCloseKeepThePreDetachSource() {

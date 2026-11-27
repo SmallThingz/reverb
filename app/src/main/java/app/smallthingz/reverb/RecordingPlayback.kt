@@ -42,6 +42,7 @@ internal object RecordingPlayback {
     internal data class Start(val token: Long, val recording: RecordingEntity, val positionMillis: Int?)
 
     fun play(context: Context, recording: RecordingEntity, positionMillis: Int? = null): Boolean {
+        if (RecordingDeletionConsent.holdsPlayback(recording)) return false
         val app = context.applicationContext
         val retained = state.value.takeIf { it.matches(recording) }
         val request = Start(++nextRequest, recording,

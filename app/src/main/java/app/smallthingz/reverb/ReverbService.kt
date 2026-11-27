@@ -4790,7 +4790,7 @@ open class ReverbService : Service() {
 
     fun setVisualizationCallback(callback: VisualizationCallback) {
         if (!serviceOwnerRegistrationMayApply(serviceDestroying, registering = true)) return
-        val registration = visualizationCallbacks.register(callback) ?: return
+        val epoch = visualizationCallbacks.register(callback)?.epoch ?: return
         // Teardown can win between the pre-check and registry mutation. Revoke this exact stale
         // owner rather than repopulating a registry on a dying Service.
         if (serviceDestroying) {
@@ -4798,12 +4798,7 @@ open class ReverbService : Service() {
             return
         }
         if (!::audioHandler.isInitialized) return
-        val accepted = audioHandler.post {
-            if (!serviceDestroying && visualizationCallbacks.isCurrent(registration)) {
-                visualizationAnalyzerForAudioOwner().reset()
-                visualizationFaulted = false
-            }
-        }
+        val accepted = postVisualizationReset(epoch, createAnalyzer = true)
         if (!accepted) {
             visualizationCallbacks.unregister(callback)
         }
@@ -4811,26 +4806,27 @@ open class ReverbService : Service() {
 
     fun clearVisualizationCallback(callback: VisualizationCallback) {
         if (!visualizationCallbacks.unregister(callback)) return
-        val fallback = visualizationCallbacks.currentRegistration()
+        val epoch = visualizationCallbacks.currentEpoch()
         if (serviceDestroying || !::audioHandler.isInitialized) return
-        audioHandler.post {
-            if (!serviceDestroying && visualizationCallbacks.isCurrent(fallback)) {
-                visualizationAnalyzer?.reset()
-                visualizationFaulted = false
-            }
-        }
+        postVisualizationReset(epoch)
     }
 
     private fun clearAllVisualizationCallbacks() {
         visualizationCallbacks.clearAll()
         if (serviceDestroying || !::audioHandler.isInitialized) return
+        postVisualizationReset(epoch = null)
+    }
+
+    // A stalled audio queue may outlive a UI lease. Carry only the epoch, since a
+    // Registration holds the callback (and its UI owner) even after it is retired.
+    private fun postVisualizationReset(epoch: Long?, createAnalyzer: Boolean = false): Boolean =
         audioHandler.post {
-            if (!serviceDestroying && visualizationCallbacks.current() == null) {
-                visualizationAnalyzer?.reset()
+            if (!serviceDestroying && visualizationCallbacks.currentEpoch() == epoch) {
+                val analyzer = if (createAnalyzer) visualizationAnalyzerForAudioOwner() else visualizationAnalyzer
+                analyzer?.reset()
                 visualizationFaulted = false
             }
         }
-    }
 
     private fun visualizationAnalyzerForAudioOwner(): AudioVisualizationAnalyzer =
         visualizationAnalyzer ?: AudioVisualizationAnalyzer().also { visualizationAnalyzer = it }

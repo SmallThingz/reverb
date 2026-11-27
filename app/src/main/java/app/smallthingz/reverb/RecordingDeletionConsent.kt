@@ -116,8 +116,8 @@ internal object RecordingDeletionConsent {
             val (token, work) = iterator.next()
             if (!work.granted) {
                 work.cancelled = true
-                work.result.completeExceptionally(RecordingRenameDefiniteFailure("Rename permission request was cancelled",
-                    SecurityException("Rename permission request was cancelled", work.proof)))
+                work.result.completeExceptionally(recordingRenameConsentFailure(
+                    work.proof, RecordingRenameConsentRejection.HOST_RETIRED))
                 if (pending.removeQueued(token) != null) iterator.remove()
             }
         }
@@ -132,8 +132,7 @@ internal object RecordingDeletionConsent {
         val work = RecordingRenameConsentWork(proof, retry)
         synchronized(this) {
             if (!renameHost.accepts(lifetime)) {
-                throw RecordingRenameDefiniteFailure("Rename permission request was cancelled",
-                    SecurityException("Rename permission request was cancelled", proof))
+                throw recordingRenameConsentFailure(proof, RecordingRenameConsentRejection.HOST_RETIRED)
             }
             val request = RecordingDeletionConsentRequest(emptyList(), rename = work)
             renames[request.token] = work
@@ -221,6 +220,11 @@ internal object RecordingDeletionConsent {
         group.targets.any { request.matches(it.recording) }
     }
 
+    /** Ordinary row playback observes the same hold as notification playback. */
+    @Synchronized fun holdsPlayback(recording: RecordingEntity): Boolean = pending.anyRequest { group ->
+        group.targets.any { sameRecordingActionTarget(recording, it.recording) }
+    }
+
     fun owns(token: String): Boolean = pending.contains(token)
 
     @Synchronized fun finish(context: Context, token: String, granted: Boolean, launchFailed: Boolean = false,
@@ -233,9 +237,9 @@ internal object RecordingDeletionConsent {
             scope.launch {
                 try {
                     if (work.granted) work.result.complete(work.retry())
-                    else work.result.completeExceptionally(RecordingRenameDefiniteFailure(
-                        "Write permission was not granted for this rename", launchFailure ?: SecurityException(
-                            "Write permission was not granted for this rename", work.proof)))
+                    else work.result.completeExceptionally(recordingRenameConsentFailure(work.proof,
+                        if (work.cancelled) RecordingRenameConsentRejection.HOST_RETIRED
+                        else RecordingRenameConsentRejection.DENIED, launchFailed, launchFailure))
                 } catch (error: Exception) {
                     work.result.completeExceptionally(error)
                 } finally { completeRename(execution) }

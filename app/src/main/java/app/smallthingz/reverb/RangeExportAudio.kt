@@ -1710,8 +1710,13 @@ internal class TimelineAudioPreviewController(
                         )
                         checkShuttleCurrent()
                         if (!quietOwner(shuttleTrack).play {
-                                playPrimedPreviewTrack(Build.VERSION.SDK_INT, written / frameBytes,
-                                    shuttleTrack::setBufferSizeInFrames, shuttleTrack::play)
+                                playPrimedPreviewTrack(
+                                    Build.VERSION.SDK_INT, written / frameBytes, shuttleTrack::setBufferSizeInFrames,
+                                ) {
+                                    // Legacy buffer sizing can return after the scrub was retired.
+                                    checkShuttleCurrent()
+                                    shuttleTrack.play()
+                                }
                             }) throw PreviewCancelled()
                     }
                 }
@@ -2183,8 +2188,12 @@ internal class TimelineAudioPreviewController(
                     submittedFrames += written / frameBytes
                     if (!startedCallbackSent) {
                         if (!quietOwner(track).play {
-                                playPrimedPreviewTrack(Build.VERSION.SDK_INT, written / frameBytes,
-                                    track::setBufferSizeInFrames, track::play)
+                                playPrimedPreviewTrack(
+                                    Build.VERSION.SDK_INT, written / frameBytes, track::setBufferSizeInFrames,
+                                ) {
+                                    checkCurrent(token)
+                                    track.play()
+                                }
                             }) throw PreviewCancelled()
                         startedCallbackSent = true
                         postIfCurrent(token, onStarted)

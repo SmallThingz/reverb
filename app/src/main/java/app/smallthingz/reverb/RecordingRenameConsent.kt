@@ -53,7 +53,26 @@ internal suspend fun <T> awaitCommittedRenameConsent(result: Deferred<T>): T =
     withContext(NonCancellable) { result.await() }
 
 /** Only positively unchanged rejection or permission-flow termination may keep the editor open. */
-internal class RecordingRenameDefiniteFailure(message: String, cause: Throwable) : IOException(message, cause)
+internal class RecordingRenameDefiniteFailure(
+    message: String,
+    cause: Throwable,
+    val expectedConsentRejection: RecordingRenameConsentRejection? = null,
+) : IOException(message, cause)
+
+internal enum class RecordingRenameConsentRejection { DENIED, HOST_RETIRED }
+
+/** Explicit user/lifecycle outcomes are expected; failure to launch consent is still an error. */
+internal fun recordingRenameConsentFailure(
+    proof: Throwable,
+    rejection: RecordingRenameConsentRejection,
+    launchFailed: Boolean = false,
+    launchFailure: Throwable? = null,
+): RecordingRenameDefiniteFailure {
+    val message = if (rejection == RecordingRenameConsentRejection.HOST_RETIRED)
+        "Rename permission request was cancelled" else "Write permission was not granted for this rename"
+    return RecordingRenameDefiniteFailure(message, launchFailure ?: SecurityException(message, proof),
+        expectedConsentRejection = rejection.takeUnless { launchFailed || launchFailure != null })
+}
 
 /** Called only after unchanged-source proof, before any permission prompt or approved retry. */
 internal inline fun <T> prepareRecordingRenameConsentSender(factory: () -> T): T = try {

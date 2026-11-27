@@ -226,6 +226,50 @@ class PreviewAudioTrackBoundaryTest {
         }
     }
 
+    @Test
+    @Config(sdk = [28])
+    fun revokingLibraryShuttleDuringLegacyBufferSizingPreventsNativePlay() =
+        fixture(false, shuttleSource = true, shuttleSampleRate = 48_000) { controller, recording ->
+            val app = RuntimeEnvironment.getApplication()
+            val authority = RecordingScrubAuthority(RecordingScrubKey(7L, 3L), resumePlayback = true)
+            val handoff = CountDownLatch(1)
+            var recoveries = 0
+            PreviewBoundaryTrackShadow.allowResizeReturn = CountDownLatch(1)
+            controller.startRecordingShuttle(app, recording, .010, 1f,
+                onStarted = {
+                    authority.acknowledgePlaybackSuspended()
+                    handoff.countDown()
+                },
+                onFailureAfterStart = { recoveries++ },
+                fromSeconds = .010, untilSeconds = .070, ordinaryAuthority = authority)
+            awaitMain(handoff)
+            await(PreviewBoundaryTrackShadow.resizeEntered, "legacy native buffer sizing")
+            val old = PreviewBoundaryTrackShadow.single()
+            val primedFrames = old.acceptedBytes().size / (Short.SIZE_BYTES * old.formatChannels())
+            assertTrue(primedFrames >= 16)
+            authority.revoke()
+            PreviewBoundaryTrackShadow.allowResizeReturn.countDown()
+            await(PreviewBoundaryTrackShadow.released, "retired legacy shuttle release")
+            drainMain()
+            assertEquals(
+                listOf("write", "resize", "resize-return:$primedFrames", "pause", "flush", "release"),
+                old.events.map { it.first },
+            )
+            assertEquals(0, recoveries)
+
+            val successor = RecordingScrubAuthority(RecordingScrubKey(8L, 3L))
+            val successorHandoff = CountDownLatch(1)
+            controller.startRecordingShuttle(app, recording, .010, 1f,
+                onStarted = { successorHandoff.countDown() },
+                fromSeconds = .010, untilSeconds = .070, ordinaryAuthority = successor)
+            awaitMain(successorHandoff)
+            await(PreviewBoundaryTrackShadow.played, "current legacy shuttle native play")
+            val tracks = PreviewBoundaryTrackShadow.instances()
+            assertEquals(2, tracks.size)
+            assertSame(old, tracks[0])
+            assertEquals(1, tracks[1].events.count { it.first == "play" })
+        }
+
     @Test fun actualLibraryShuttleKeepsPlayerSessionAcrossDirectionReversal() =
         fixture(false, shuttleSource = true, shuttleSampleRate = 48_000) { controller, recording ->
             val authority = RecordingScrubAuthority(RecordingScrubKey(7L, 3L), playbackAudioSessionId = 273)
@@ -409,7 +453,10 @@ class PreviewAudioTrackBoundaryTest {
         } catch (error: Throwable) {
             primary = error
         } finally {
-            if (trackFixtureStarted) PreviewBoundaryTrackShadow.allowWriteReturn.countDown()
+            if (trackFixtureStarted) {
+                PreviewBoundaryTrackShadow.allowWriteReturn.countDown()
+                PreviewBoundaryTrackShadow.allowResizeReturn.countDown()
+            }
             var workersStopped = controller == null
             fun clean(action: () -> Unit) {
                 try { action() } catch (error: Throwable) {
@@ -519,7 +566,18 @@ class PreviewBoundaryTrackShadow : ShadowAudioTrack() {
         synchronized(tracks) { if (!tracks.contains(this)) tracks += this }
         return if (platformTrack.audioSessionId == rejectedSessionId) 0 else thresholdResult
     }
-    @Implementation fun setVolume(value: Float): Int { check(value == expectedVolume); return AudioTrack.SUCCESS }
+    @Implementation fun setVolume(value: Float): Int {
+        check(value == expectedVolume)
+        synchronized(tracks) { if (!tracks.contains(this)) tracks += this }
+        return AudioTrack.SUCCESS
+    }
+    @Implementation fun setBufferSizeInFrames(value: Int): Int {
+        event("resize")
+        resizeEntered.countDown()
+        check(allowResizeReturn.await(10, TimeUnit.SECONDS))
+        event("resize-return:$value")
+        return value
+    }
     @Implementation fun write(bytes: ByteArray, offset: Int, size: Int, mode: Int): Int {
         check(size > 0 && offset >= 0 && offset + size <= bytes.size && size % 2 == 0)
         check(mode == AudioTrack.WRITE_BLOCKING || mode == AudioTrack.WRITE_NON_BLOCKING)
@@ -557,6 +615,8 @@ class PreviewBoundaryTrackShadow : ShadowAudioTrack() {
         @Volatile var rejectedSessionId: Int? = null
         lateinit var writeEntered: CountDownLatch
         lateinit var allowWriteReturn: CountDownLatch
+        lateinit var resizeEntered: CountDownLatch
+        lateinit var allowResizeReturn: CountDownLatch
         lateinit var quiet: CountDownLatch
         lateinit var released: CountDownLatch
         fun single(): PreviewBoundaryTrackShadow = synchronized(tracks) { tracks.single() }
@@ -573,6 +633,7 @@ class PreviewBoundaryTrackShadow : ShadowAudioTrack() {
             thresholdResult = 1
             rejectedSessionId = null
             writeEntered = CountDownLatch(1); allowWriteReturn = CountDownLatch(1)
+            resizeEntered = CountDownLatch(1); allowResizeReturn = CountDownLatch(0)
             quiet = CountDownLatch(1); released = CountDownLatch(1)
         }
     }

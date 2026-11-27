@@ -62,8 +62,19 @@ class RecordingPlaybackService : Service() {
     private var destroyed = false
     private var retainedPause = false
     private var externalCommandPending = false
-    private val idleRelease = Runnable {
-        if (ownership.idleRetirementAllowed && !playing) finishPlayback(retainPosition = true)
+    private var scrubAdmission: RecordingScrubKey? = null
+    private val idleRelease = object : Runnable {
+        override fun run() {
+            if (!ownership.idleRetirementAllowed || playing) return
+            val key = scrubAdmission
+            if (prepared && key != null && key.hasLiveLease &&
+                ownership.currentGesture(key.generation, key.transportIntentRevision)) {
+                // Keep a deadline armed even if the gesture ends without a transport command.
+                main.postDelayed(this, PAUSED_IDLE_TIMEOUT_MILLIS)
+            } else {
+                finishPlayback(retainPosition = true)
+            }
+        }
     }
     private var focus: AudioFocusRequest? = null
     private lateinit var audio: AudioManager
@@ -282,6 +293,7 @@ class RecordingPlaybackService : Service() {
     internal fun scrubAudioSessionId(expected: RecordingEntity, key: RecordingScrubKey): Int? {
         if (key.retainedIdle || destroyed || !prepared || !ownsRecording(expected) ||
             !ownership.currentGesture(key.generation, key.transportIntentRevision)) return null
+        scrubAdmission = key
         return player?.audioSessionId?.takeIf { it > 0 }
     }
 
@@ -472,7 +484,7 @@ class RecordingPlaybackService : Service() {
             foreground = false
         }
         main.removeCallbacks(idleRelease)
-        main.postDelayed(idleRelease, 60_000L)
+        main.postDelayed(idleRelease, PAUSED_IDLE_TIMEOUT_MILLIS)
     }
 
     private fun actionIntent(action: String): PendingIntent = PendingIntent.getService(this, 0,
@@ -546,6 +558,7 @@ class RecordingPlaybackService : Service() {
 
     private fun releaseTransport() {
         RecordingPlayback.retireServiceScrub(this)
+        scrubAdmission = null
         quietStart?.cancel()
         quietStart = null
         quietStartPending = false
@@ -620,5 +633,6 @@ class RecordingPlaybackService : Service() {
         private const val ACTION_STOP = "app.smallthingz.reverb.playback.STOP"
         private val CHANNEL = ReverbNotificationChannel.PLAYBACK.id
         private const val NOTIFICATION_ID = 7391
+        private const val PAUSED_IDLE_TIMEOUT_MILLIS = 60_000L
     }
 }
