@@ -492,24 +492,23 @@ private fun verifyReverbSurfaceProducer(context: Context, result: JSONObject) {
     val rows = JSONArray()
     result.put("samples", rows)
     var oldTransparentFailures = 0
-    fun verifyModal(label: String, source: Int, actual: Int) {
+    fun verifyModal(label: String, source: Int, actual: Int, grain: Float) {
         val amount = .08f
         val alpha = Color.alpha(source)
-        val retained = 1f - amount
-        // Independent black-blend RGB reference, preserving the source alpha verbatim.
-        val expectedRgb = ((Color.red(source) * retained).toInt() shl 16) or
-            ((Color.green(source) * retained).toInt() shl 8) or (Color.blue(source) * retained).toInt()
-        val expected = (alpha shl 24) or expectedRgb
+        // Current modal policy returns the exact background role, without a black lift.
+        // Keep the retired blend only as a historical alpha-mutation negative control.
+        val expectedRgb = source and 0x00ffffff
+        val expected = source
         val old = ColorUtils.blendARGB(source, Color.BLACK, amount)
-        val range = NoiseDrawable(actual).paintedTextSurface
-        val oldRange = NoiseDrawable(old).paintedTextSurface
+        val range = NoiseDrawable(actual).apply { setNoiseIntensity(grain) }.paintedTextSurface
+        val oldRange = NoiseDrawable(old).apply { setNoiseIntensity(grain) }.paintedTextSurface
         rows.put(JSONObject().put("label", label).put("source_argb", source.toLong() and 0xffffffffL)
-            .put("amount", amount.toDouble()).put("expected_rgb", expectedRgb).put("expected_alpha", alpha)
+            .put("policy", "background_identity").put("old_blend_amount", amount.toDouble())
+            .put("grain_intensity", grain.toDouble()).put("expected_rgb", expectedRgb).put("expected_alpha", alpha)
             .put("expected_argb", expected.toLong() and 0xffffffffL)
             .put("actual_argb", actual.toLong() and 0xffffffffL)
             .put("old_blend_argb", old.toLong() and 0xffffffffL)
             .put("known_surface", range != 0L).put("old_known_surface", oldRange != 0L))
-        check((old and 0x00ffffff) == expectedRgb) { "$label: independent RGB reference differs from old blend" }
         check(actual == expected && Color.alpha(actual) == alpha) { "$label: producer changed RGB or source alpha" }
         if (alpha == 255) {
             check(range != 0L && (range ushr 56).toInt() == 255 && (range.toInt() ushr 24) == 255) {
@@ -526,7 +525,8 @@ private fun verifyReverbSurfaceProducer(context: Context, result: JSONObject) {
             // Retain one resource snapshot for both resolvers, avoiding a changing system palette.
             val resources = HashMap<Int, Int>()
             val readColor: (Int) -> Int = { id ->
-                check(sdk >= 31 || id == NativeUiR.color.native_default_light_background) {
+                check(sdk >= 31 || id == NativeUiR.color.native_default_light_background ||
+                    id == NativeUiR.color.native_default_light_foreground || id == NativeUiR.color.native_default_light_popup) {
                     "Fallback palette requested unexpected resource $id"
                 }
                 resources.getOrPut(id) { context.resources.getColor(id, context.theme) }
@@ -537,22 +537,34 @@ private fun verifyReverbSurfaceProducer(context: Context, result: JSONObject) {
             val backdrop = if (dark) context.getColor(NativeUiR.color.native_default_amoled_background)
                 else readColor(NativeUiR.color.native_default_light_background)
             val expected = if (dark) NativeDarkSurfacePreset.Amoled.colorScheme().resolve(true, sdk, readColor)
-                else source.copy(background = backdrop, surface = backdrop,
-                    surfacePreset = NativeGrainPreset(backgroundGrain = 1f, foregroundGrain = .5f))
+                else {
+                    val foreground = readColor(NativeUiR.color.native_default_light_foreground)
+                    val popup = readColor(NativeUiR.color.native_default_light_popup)
+                    source.copy(background = backdrop, surface = backdrop, surfaceDim = backdrop,
+                        surfaceBright = popup, surfaceVariant = foreground,
+                        surfaceContainerLowest = popup, surfaceContainerLow = foreground,
+                        surfaceContainer = foreground, surfaceContainerHigh = foreground,
+                        surfaceContainerHighest = foreground,
+                        surfacePreset = NativeGrainPreset(backgroundGrain = .22f, foregroundGrain = .20f),
+                        popupFillOverride = popup)
+                }
             check(actual == expected) { "$label: default appearance palette differs from the shared policy" }
+            // The full value equality above already checked the resolved preset; avoid its internal getter.
+            val grain = if (dark) NativeDarkSurfacePreset.Amoled.backgroundGrain else .22f
             for ((role, color) in listOf("background" to actual.background, "surface" to actual.surface)) {
-                val range = NoiseDrawable(color).paintedTextSurface
+                val range = NoiseDrawable(color).apply { setNoiseIntensity(grain) }.paintedTextSurface
                 check(color == backdrop && Color.alpha(color) == 255 && range != 0L) {
                     "$label-$role: shared backdrop must be opaque and sampleable"
                 }
                 rows.put(JSONObject().put("label", "$label-$role")
                     .put("expected_argb", backdrop.toLong() and 0xffffffffL)
-                    .put("actual_argb", color.toLong() and 0xffffffffL).put("known_surface", true))
+                    .put("actual_argb", color.toLong() and 0xffffffffL)
+                    .put("grain_intensity", grain.toDouble()).put("known_surface", true))
             }
             for (alpha in listOf(0, 1, 127, 254, 255)) {
-                val modalSource = (source.surfaceContainerLow and 0x00ffffff) or (alpha shl 24)
+                val modalSource = (actual.background and 0x00ffffff) or (alpha shl 24)
                 verifyModal("$label-modal-alpha$alpha", modalSource,
-                    ReverbDesign.modalSurface(source.copy(surfaceContainerLow = modalSource)))
+                    ReverbDesign.modalSurface(actual.copy(background = modalSource)), grain)
             }
         }
     }

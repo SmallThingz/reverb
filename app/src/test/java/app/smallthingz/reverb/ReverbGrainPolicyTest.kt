@@ -14,22 +14,29 @@ import android.view.View
 @org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
 @org.robolectric.annotation.Config(sdk = [35], application = android.app.Application::class)
 class ReverbGrainPolicyTest {
-    private fun colors(dark: Boolean) = ReverbDesign.appearance.colorScheme.resolve(dark, 30) { 0xfff3edf4.toInt() }
+    private fun colors(dark: Boolean) = ReverbDesign.appearance.colorScheme.resolve(dark, 30) { RuntimeEnvironment.getApplication().getColor(it) }
 
-    @Test fun lightGrainDoesNotReplaceMaterialFillsInkOrOutlines() {
+    @Test fun lightNeutralSurfacesPreserveMaterialInkOutlinesAndPresetPropagation() {
         val base = NativeColorScheme.fallback(false)
         val light = colors(false)
-        // The pre-existing Reverb page darkening is the only color difference.
-        assertEquals(base, light.copy(background = base.background, surface = base.surface, surfacePreset = null))
+        val page = 0xfff6f6f6.toInt()
+        val field = 0xfffcfcfc.toInt()
+        val popup = 0xffffffff.toInt()
+        assertEquals(base.copy(background = page, surface = page, surfaceDim = page,
+            surfaceBright = popup, surfaceVariant = field, surfaceContainerLowest = popup,
+            surfaceContainerLow = field, surfaceContainer = field, surfaceContainerHigh = field,
+            surfaceContainerHighest = field, popupFillOverride = popup), light.copy(surfacePreset = null))
         assertEquals(base.border, light.border)
-        assertEquals(base.buttonPalette, light.buttonPalette.copy(surfacePreset = null))
-        assertEquals(base.settingsControls, light.settingsControls.copy(surfacePreset = null))
+        assertEquals(base.buttonPalette.copy(quietSurface = field, raisedSurface = field),
+            light.buttonPalette.copy(surfacePreset = null))
+        assertEquals(base.settingsControls.copy(surface = field, raised = field),
+            light.settingsControls.copy(surfacePreset = null))
         val preset = requireNotNull(preset(light))
         assertTrue(preset is NativeGrainPreset)
         assertNull(preset.borderColor)
         assertNull(preset.borderWidthDp)
-        assertEquals(.5f, preset.foregroundGrain, 0f)
-        assertEquals(1f, preset.backgroundGrain, 0f)
+        assertEquals(.20f, preset.foregroundGrain, 0f)
+        assertEquals(.22f, preset.backgroundGrain, 0f)
         assertSame(preset, preset(light.buttonPalette))
         assertSame(preset, preset(light.settingsControls))
         assertSame(preset, preset(light.pageControls))
@@ -45,7 +52,7 @@ class ReverbGrainPolicyTest {
         assertNull(preset(generic.buttonPalette))
     }
 
-    @Test fun menusCarryAllThemeGrainWithoutAmoledLiftInLight() {
+    @Test fun retainedMenusCarryLightElevationAndThemeGrainWithGenericOptOut() {
         val context = RuntimeEnvironment.getApplication()
         val recipe = NativeAnchoredMenuRecipe.Default
         val panel = recipe.createPanel(View(context), Density(1f), colors(false))
@@ -54,9 +61,16 @@ class ReverbGrainPolicyTest {
             val palette = colors(dark)
             panel.bindPalette(palette)
             val fill = recipe.surfaceColor(palette)
-            val expected = NoiseDrawable(fill).apply { setNoiseIntensity(.5f) }.paintedTextSurface
+            val expected = NoiseDrawable(fill).apply { setNoiseIntensity(if (dark) .5f else .20f) }.paintedTextSurface
             assertEquals(expected, surface.paintedTextSurface)
-            if (!dark) assertEquals(recipe.surfaceColor(palette.copy(surfacePreset = null)), fill)
+            if (!dark) {
+                assertEquals(0xffffffff.toInt(), fill)
+                val equal = palette.copy(surfacePreset = NativeGrainPreset(.22f, .20f))
+                assertEquals(palette, equal)
+                panel.bindPalette(equal)
+                assertEquals(expected, surface.paintedTextSurface)
+                assertNotEquals(recipe.surfaceColor(palette.copy(surfacePreset = null, popupFillOverride = null)), fill)
+            }
             assertSame(surface, panel.getChildAt(0))
         }
         val generic = NativeColorScheme.fallback(false)
