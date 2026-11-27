@@ -42,7 +42,7 @@ internal class NativeSettingsTileDeleteSheet(
         owner=currentOwner;target=next
         val value=environment()
         val sheet=createReverbActionSheet(anchor,value,anchor.context.getString(R.string.tiles_ui_delete)) {
-            currentOwner.dismissDelete()
+            currentOwner.dismissDelete(next)
         }
         dialog=sheet
         try {

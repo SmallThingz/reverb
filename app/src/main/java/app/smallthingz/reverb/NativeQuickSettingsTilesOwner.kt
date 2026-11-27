@@ -131,8 +131,9 @@ internal class NativeQuickSettingsTilesOwner(
         }
     }
 
-    fun dismissDelete() {
-        if (!editorState.deletingBusy) {
+    fun dismissDelete(target: QuickSettingsTileDeleteTarget) {
+        // A queued Cancel/Back from an old sheet must not retire its replacement.
+        if (attached && editorState.deleting === target && !editorState.deletingBusy) {
             editorState.deleting = null
             notifyChanged()
         }

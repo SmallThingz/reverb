@@ -22,7 +22,7 @@ internal class QuickTileDeleteContent(
 ) : AutoCloseable {
     private val presentation = ReverbTileDeleteSheetContent(context, environment, inputRoot,
         context.getString(R.string.tiles_ui_delete_confirmation), context.getString(R.string.cancel),
-        context.getString(R.string.delete_recording), owner::dismissDelete) {
+        context.getString(R.string.delete_recording), { owner.dismissDelete(target) }) {
         val view = sheetView()
         owner.confirmDelete(target, sheetLifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) &&
             view.isAttachedToWindow && view.isShown && hasWindowFocus())

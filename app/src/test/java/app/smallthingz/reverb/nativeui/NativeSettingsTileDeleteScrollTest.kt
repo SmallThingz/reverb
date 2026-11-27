@@ -184,6 +184,91 @@ class NativeSettingsTileDeleteScrollTest {
         }
     }
 
+    @Test fun retainedDismissAndCancelOnlyRetireTheirLiveExactTarget() {
+        val controller = Robolectric.buildActivity(Activity::class.java).setup().visible()
+        val activity = controller.get()
+        val lifecycleOwner = object : LifecycleOwner {
+            override val lifecycle = LifecycleRegistry(this).apply { currentState = Lifecycle.State.RESUMED }
+        }
+        val root = FrameLayout(activity).apply { setViewTreeLifecycleOwner(lifecycleOwner) }
+        activity.setContentView(root)
+        val environment = ReverbEnvironment(Density(1f, 1f), createFontFamilyResolver(activity), NativeColorScheme.fallback(false))
+        val parked = CoroutineScope(object : CoroutineDispatcher() {
+            override fun dispatch(context: CoroutineContext, block: Runnable) = Unit
+        })
+        val option = QuickSaveTileOption(0, "c".repeat(32))
+        val first = QuickSettingsTileDeleteTarget(option, 7L)
+        val reopened = QuickSettingsTileDeleteTarget(option, 7L)
+        assertNotSame(first, reopened) // Equal payload, separate confirmation lifetime.
+        val editor = QuickSettingsTilesEditorState().apply { deleting = first }
+        fun newOwner() = NativeQuickSettingsTilesOwner(activity, lifecycleOwner.lifecycle, parked, editor,
+            NativeQuickTilesInputs(true, true, true, 7L), { 7L }, { 7L }, { 7L }, { 7L })
+        val owner = newOwner()
+        var successor: NativeQuickSettingsTilesOwner? = null
+        val caller = NativeSettingsTileDeleteSheet(root) { environment }
+        // Retain actual installed actions, as a queued modal completion/input dispatch can do.
+        fun callbacks(): Pair<() -> Unit, () -> Unit> {
+            val dialog = field(caller, "dialog") as NativeActionSheet
+            val content = field(caller, "content") as QuickTileDeleteContent
+            val cancel = descendants(content.actions).filterIsInstance<NativeMaterialButtonView>().single {
+                it.label.getText() == activity.getString(R.string.cancel)
+            }
+            @Suppress("UNCHECKED_CAST")
+            val dismiss = field(dialog, "onOwnerDismiss") as () -> Unit
+            @Suppress("UNCHECKED_CAST")
+            val action = field(cancel, "action") as () -> Unit
+            return dismiss to action
+        }
+        try {
+            caller.bind(owner, first)
+            val old = callbacks()
+            editor.deleting = reopened
+            // Also cover the gap before the renderer replaces the old sheet.
+            old.first()
+            assertSame(reopened, editor.deleting)
+            old.second()
+            assertSame(reopened, editor.deleting)
+            caller.bind(owner, reopened)
+            val current = callbacks()
+            old.first()
+            old.second()
+            assertSame(reopened, editor.deleting)
+
+            editor.deletingBusy = true
+            current.first()
+            current.second()
+            assertSame(reopened, editor.deleting)
+            assertTrue(editor.deletingBusy)
+            editor.deletingBusy = false
+            current.first()
+            assertNull(editor.deleting)
+            editor.deleting = reopened
+            current.second()
+            assertNull(editor.deleting)
+
+            editor.deleting = reopened
+            owner.close()
+            val nextOwner = newOwner().also { successor = it }
+            caller.bind(nextOwner, reopened)
+            current.first()
+            current.second()
+            assertSame("A retired owner cannot dismiss a confirmation handed to its successor", reopened, editor.deleting)
+            val next = callbacks()
+            next.first()
+            assertNull(editor.deleting)
+            editor.deleting = reopened
+            next.second()
+            assertNull(editor.deleting)
+            assertFalse(editor.deletingBusy)
+        } finally {
+            caller.close()
+            successor?.close()
+            owner.close()
+            parked.cancel()
+            controller.pause().stop().destroy()
+        }
+    }
+
     private fun field(instance: Any, name: String): Any? = instance.javaClass.getDeclaredField(name)
         .apply { isAccessible = true }.get(instance)
     private fun exact(size: Int) = View.MeasureSpec.makeMeasureSpec(size, View.MeasureSpec.EXACTLY)
