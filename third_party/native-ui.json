@@ -3,5 +3,5 @@
   "path": "native-ui",
   "bundle": "third_party/native-ui.bundle",
   "commit": "709d991847f8f30440c3531db255942d398d4859",
-  "bundle_sha256": "719944560a84e5b8d02087e7f53995d21ab3f94c3ed0b252f3a6b769a2bc91f4"
+  "bundle_sha256": "09e98114d9e40228f3cc70ad4d1d988534a4344c0d0125b5662348051e73a736"
 }
