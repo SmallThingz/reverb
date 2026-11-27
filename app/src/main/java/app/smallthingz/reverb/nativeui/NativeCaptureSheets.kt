@@ -37,15 +37,8 @@ internal class NativeCaptureSheets(
             val message = anchor.context.getString(R.string.clear_buffer_confirmation)
             val existing = clear
             if (existing == null) {
-                clear = CaptureTextSheet(anchor, next, title, message, owner::dismissClearBuffer) { context ->
-                    listOf(
-                        LibrarySheetButton(anchor.context, context, next, false,
-                            anchor.context.getString(R.string.cancel), context.requestAnimatedDismiss, leadingIcon = ReverbIcon.Close),
-                        LibrarySheetButton(anchor.context, context, next, true,
-                            anchor.context.getString(R.string.clear_buffer), owner::confirmClearBuffer,
-                            leadingIcon = ReverbIcon.Delete, errorColors = true),
-                    )
-                }.also { it.show() }
+                clear = createDiscardBufferSheet(anchor, next, title, message,
+                    owner::dismissClearBuffer, owner::confirmClearBuffer).also { it.show() }
             } else existing.bind(title, message, next, owner::dismissClearBuffer)
         }
         val currentProgress = state.clearStatus
@@ -93,6 +86,23 @@ internal class NativeCaptureSheets(
         captureReleaseAll(owned.map { value -> { value.close() } })
     }
 }
+
+internal fun createDiscardBufferSheet(
+    anchor: View,
+    environment: ReverbViewEnvironment,
+    title: String,
+    message: String,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+): CaptureTextSheet = CaptureTextSheet(anchor, environment, title, message, onDismiss) { context ->
+    listOf(
+        LibrarySheetButton(anchor.context, context, environment, false,
+            anchor.context.getString(R.string.cancel), context.requestAnimatedDismiss, leadingIcon = ReverbIcon.Close),
+        LibrarySheetButton(anchor.context, context, environment, true,
+            anchor.context.getString(R.string.clear_buffer), onConfirm,
+            leadingIcon = ReverbIcon.Delete, errorColors = true),
+    )
+}.apply { guardActionsDuringDismissal() }
 
 internal typealias CaptureTextSheet = ReverbTextSheet
 

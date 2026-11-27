@@ -7,7 +7,10 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Rect
 import android.os.Looper
+import android.os.SystemClock
 import android.view.Choreographer
+import android.view.InputDevice
+import android.view.MotionEvent
 import android.view.View
 import android.widget.FrameLayout
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -39,6 +42,8 @@ import smallthingz.ui.geometry.Offset
 import smallthingz.ui.input.phase.NativeDragPointerChange
 import smallthingz.ui.input.phase.NativeDragPointerEvent
 import smallthingz.ui.input.phase.NativePointerPass
+import smallthingz.ui.input.phase.NativeWindowPointerCoordinates
+import smallthingz.ui.input.phase.PhasePointerRoot
 import smallthingz.ui.input.pointer.PointerType
 import smallthingz.ui.platform.AndroidUiFrameClock
 import smallthingz.ui.scroll.NativeScrollIndicatorStyle
@@ -172,6 +177,74 @@ class NativeLibraryScrollIndicatorTest {
         }
     }
 
+    @Test fun thumbUsesFinalYOnLiftBeforeLayout() = Fixture(routeThumbInput = true).use { f ->
+        val start = f.beginThumbDrag()
+        val viewport = f.view.scrollView
+        val middle = Offset(start.x, viewport.height / 2f)
+        val end = Offset(start.x, viewport.height - 1f)
+        f.touchThumb(MotionEvent.ACTION_MOVE, middle)
+        assertTrue(viewport.hasPendingScrollIndicatorPlacement)
+        f.place()
+        assertTrue(viewport.canScrollVertically(-1))
+        assertTrue(viewport.canScrollVertically(1))
+        assertFalse(viewport.hasPendingScrollIndicatorPlacement)
+
+        f.touchThumb(MotionEvent.ACTION_UP, end)
+        assertFalse(viewport.isScrollIndicatorDragging)
+        assertTrue("Only UP supplied the endpoint", viewport.hasPendingScrollIndicatorPlacement)
+        f.place()
+
+        val layout = viewport.layoutManager as LinearLayoutManager
+        val last = checkNotNull(layout.findViewByPosition(checkNotNull(viewport.adapter).itemCount - 1))
+        assertEquals(viewport.height - viewport.paddingBottom, layout.getDecoratedBottom(last))
+        assertFalse(viewport.canScrollVertically(1))
+        assertFalse(viewport.hasPendingScrollIndicatorPlacement)
+    }
+
+    @Test fun thumbCancellationDiscardsDeferredPlacement() {
+        for (split in listOf(false, true)) Fixture(routeThumbInput = true).use { f ->
+            val start = f.beginThumbDrag()
+            val viewport = f.view.scrollView
+            val middle = Offset(start.x, viewport.height / 2f)
+            val end = Offset(start.x, viewport.height - 1f)
+            f.touchThumb(MotionEvent.ACTION_MOVE, middle)
+            assertTrue(viewport.hasPendingScrollIndicatorPlacement)
+            if (split) {
+                val other = Offset(viewport.width / 2f, middle.y)
+                f.touchThumb(MotionEvent.ACTION_POINTER_DOWN or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT),
+                    middle, other)
+                assertTrue(viewport.isScrollIndicatorDragging)
+                assertTrue(viewport.hasPendingScrollIndicatorPlacement)
+                f.touchThumb(MotionEvent.ACTION_POINTER_UP, end, other, flags = MotionEvent.FLAG_CANCELED)
+            } else {
+                f.touchThumb(MotionEvent.ACTION_CANCEL, end)
+            }
+            assertFalse(viewport.isScrollIndicatorDragging)
+            assertFalse(viewport.hasPendingScrollIndicatorPlacement)
+            f.place()
+            assertEquals(NativeListSavedPosition(0, 0), f.view.savePosition())
+            assertFalse(viewport.canScrollVertically(-1))
+            assertTrue(viewport.canScrollVertically(1))
+        }
+    }
+
+    private fun Fixture.beginThumbDrag(): Offset {
+        submit(List(100, ::recording))
+        place()
+        val viewport = view.scrollView
+        viewport.scrollBy(0, 1)
+        viewport.scrollBy(0, -1)
+        assertEquals(NativeListSavedPosition(0, 0), view.savePosition())
+        assertTrue(viewport.canScrollVertically(1))
+        val style = checkNotNull(light.appearance.scrollIndicator)
+        assertTrue(view.hasColorInColumn(view.thumbColumn(style), light.palette.muted))
+        val start = Offset(viewport.width - viewport.paddingRight / 2f, style.minThumbHeightDp / 2f)
+        assertTrue(viewport.canStartScrollIndicatorDrag(start.x, start.y))
+        touchThumb(MotionEvent.ACTION_DOWN, start)
+        assertTrue(viewport.isScrollIndicatorDragging)
+        return start
+    }
+
     @Test fun inlineInfoCanCreateAndRemoveOverflowInTheSameRow() = Fixture().use { f ->
         val recording = f.recording(0)
         val items = listOf(recording)
@@ -226,7 +299,7 @@ class NativeLibraryScrollIndicatorTest {
             NativePointerPass.INITIAL)
     }
 
-    private class Fixture : AutoCloseable {
+    private class Fixture(routeThumbInput: Boolean = false) : AutoCloseable {
         private val activity = Robolectric.buildActivity(Activity::class.java).setup()
         private val context = activity.get()
         private val scale = object : MotionDurationScale { override val scaleFactor = 0f }
@@ -249,9 +322,42 @@ class NativeLibraryScrollIndicatorTest {
                 }
             }, onRetryFailedSaves = { error("The fixture has no save owner") })
 
+        private val pointerRoot = if (routeThumbInput) createThumbInputRoot() else null
+        private val contentRoot = pointerRoot ?: root
+        private var downTime = 0L
+        private var eventTime = SystemClock.uptimeMillis()
+
         init {
             root.addView(view, FrameLayout.LayoutParams(400, 500))
-            context.setContentView(root)
+            context.setContentView(contentRoot)
+        }
+
+        private fun createThumbInputRoot(): PhasePointerRoot {
+            lateinit var input: PhasePointerRoot
+            val geometry = NativeWindowPointerCoordinates { input }
+            val layout = NativeScrollIndicatorHitLayout(view.scrollView, geometry, { true }, { true })
+            input = PhasePointerRoot(context, geometry::rootToScreen, geometry::coordinates, layout, geometry::begin)
+            input.addView(root, FrameLayout.LayoutParams(-1, -1))
+            return input
+        }
+
+        fun touchThumb(action: Int, first: Offset, second: Offset? = null, flags: Int = 0) {
+            eventTime += 16
+            if (action == MotionEvent.ACTION_DOWN) downTime = eventTime
+            val points = listOfNotNull(first, second)
+            val properties = Array(points.size) { index ->
+                MotionEvent.PointerProperties().apply { id = index; toolType = MotionEvent.TOOL_TYPE_FINGER }
+            }
+            val coordinates = Array(points.size) { index ->
+                MotionEvent.PointerCoords().apply { x = points[index].x; y = points[index].y; pressure = 1f }
+            }
+            val event = MotionEvent.obtain(downTime, eventTime, action, points.size, properties, coordinates,
+                0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, flags)
+            try {
+                assertTrue(MotionEvent.actionToString(action), checkNotNull(pointerRoot).dispatchTouchEvent(event))
+            } finally {
+                event.recycle()
+            }
         }
 
         fun recording(index: Int) = LibraryListItem.Recording(RecordingEntity(
@@ -265,10 +371,10 @@ class NativeLibraryScrollIndicatorTest {
         }
 
         fun place() {
-            root.requestLayout()
-            root.measure(View.MeasureSpec.makeMeasureSpec(400, View.MeasureSpec.EXACTLY),
+            contentRoot.requestLayout()
+            contentRoot.measure(View.MeasureSpec.makeMeasureSpec(400, View.MeasureSpec.EXACTLY),
                 View.MeasureSpec.makeMeasureSpec(500, View.MeasureSpec.EXACTLY))
-            root.layout(0, 0, 400, 500)
+            contentRoot.layout(0, 0, 400, 500)
         }
 
         fun settle() {

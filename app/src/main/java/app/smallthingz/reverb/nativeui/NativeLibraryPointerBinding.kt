@@ -51,9 +51,9 @@ internal class NativeLibraryPointerBinding(
     private var listNodes = emptyList<NativeViewPhasePointerNode>()
     private var indicatorHit: NativeScrollIndicatorHitLayout? = null
     private var bodyHasPointer = false
-    private var emptyView: NativeVerticalViewport? = null
-    private var emptyScroll: NativeVerticalPhaseBinding? = null
-    private var emptyNodes = emptyList<NativeViewPhasePointerNode>()
+    private var statusView: NativeVerticalViewport? = null
+    private var statusScroll: NativeVerticalPhaseBinding? = null
+    private var statusNodes = emptyList<NativeViewPhasePointerNode>()
     private var dismissKey: Any? = null
     private var dismissDistance = Float.NaN
     private var inputRevision = content.inlinePointerRevision
@@ -138,15 +138,15 @@ internal class NativeLibraryPointerBinding(
         // The Info cutout uses View geometry; Android 12+ stretch deforms its card in a RenderNode.
         listView?.sourceOverscroll?.setEffectsEnabled(
             Build.VERSION.SDK_INT < Build.VERSION_CODES.S || !content.inlineInfoActive)
-        val nextEmpty = content.emptyViewport
-        if (nextEmpty !== emptyView) {
-            emptyScroll?.close()
-            emptyView = nextEmpty
-            emptyScroll = nextEmpty?.let {
+        val nextStatus = content.statusViewport
+        if (nextStatus !== statusView) {
+            statusScroll?.close()
+            statusView = nextStatus
+            statusScroll = nextStatus?.let {
                 NativeVerticalPhaseBinding(it, { configuration.scaledTouchSlop.toFloat() },
                     { configuration.scaledMaximumFlingVelocity.toFloat() }, parentInterested)
             }
-            emptyNodes = emptyScroll?.let { java.util.Collections.unmodifiableList(listOf(it.observerNode, scrollNode(it.dragNode))) }
+            statusNodes = statusScroll?.let { java.util.Collections.unmodifiableList(listOf(it.observerNode, scrollNode(it.dragNode))) }
                 ?: emptyList()
         }
         val obsolete = layouts.keys.filter { !it.isAttachedToWindow }
@@ -179,7 +179,7 @@ internal class NativeLibraryPointerBinding(
         var ancestor: View? = view
         while (ancestor != null && ancestor !== content) {
             if (ancestor === listView) return listScroll?.interested(change) == true || parentInterested(change)
-            if (ancestor === emptyView) return emptyScroll?.interested(change) == true || parentInterested(change)
+            if (ancestor === statusView) return statusScroll?.interested(change) == true || parentInterested(change)
             ancestor = ancestor.parent as? View
         }
         return parentInterested(change)
@@ -260,7 +260,7 @@ internal class NativeLibraryPointerBinding(
                 }
                 if (interop != null) return interopNodes
                 if (view === listView) return listNodes
-                if (view === emptyView) return emptyNodes
+                if (view === statusView) return statusNodes
                 val player = content.pointerNodes(view)
                 if (player.isNotEmpty()) return player
                 if (click != null && (view !is NativeLibrarySummaryInput || view.sourceClickPresent)) return clickNodes
@@ -269,7 +269,7 @@ internal class NativeLibraryPointerBinding(
         override fun withinLayerBounds(local: Offset): Boolean = when {
             view is NativeGroupLayout -> view.containsVisualPoint(local.x, local.y)
             view is NativePointerLayerShape -> view.containsPointerLayer(local.x, local.y)
-            view === listView || view === emptyView -> {
+            view === listView || view === statusView -> {
                 val extra = ReverbLibraryLayout.horizontalOverflowPx(density)
                 local.x >= -extra && local.x < size.width + extra && local.y >= 0f && local.y < view.height
             }
@@ -287,8 +287,8 @@ internal class NativeLibraryPointerBinding(
         indicatorHit = null
         listScroll?.close(); listScroll = null; listView = null
         listNodes = emptyList()
-        emptyScroll?.close(); emptyScroll = null; emptyView = null
-        emptyNodes = emptyList()
+        statusScroll?.close(); statusScroll = null; statusView = null
+        statusNodes = emptyList()
         layouts.values.forEach { it.close() }
         layouts.clear()
         edgeNode.cancel()

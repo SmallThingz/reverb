@@ -556,7 +556,7 @@ internal class ReverbLibraryScreenContent(
         }
         return false
     }
-    val emptyViewport: NativeVerticalViewport? get() = status?.emptyViewport
+    val statusViewport: NativeVerticalViewport? get() = status?.statusViewport
     val scrollIndicatorViewport: ReverbLibraryRecyclerView get() = list.scrollView
     val listViewport: ReverbLibraryRecyclerView? get() = scrollIndicatorViewport.takeIf { listVisible }
     val toolbarAccessibilityRoot: ViewGroup get() = toolbar
@@ -573,7 +573,7 @@ internal class ReverbLibraryScreenContent(
             0f,0f,view.width.toFloat(),view.height.toFloat()))}
         return when {
             view===this || view is ReverbLibraryRecordingRow || view is LibraryExpansionViewport -> rectangle()
-            view===listViewport || view===emptyViewport -> {
+            view===listViewport || view===statusViewport -> {
                 val extra=ReverbLibraryLayout.horizontalOverflowPx(environment.textDensity.density).toFloat()
                 val contentLeft = if (view === listViewport) view.paddingLeft else 0
                 val contentRight = if (view === listViewport) view.width - view.paddingRight else view.width

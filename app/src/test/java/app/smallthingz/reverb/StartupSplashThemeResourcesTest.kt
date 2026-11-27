@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.res.Configuration
 import android.util.TypedValue
 import android.view.ContextThemeWrapper
+import androidx.core.graphics.ColorUtils
 import androidx.core.splashscreen.R as SplashR
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -12,7 +13,10 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import org.xmlpull.v1.XmlPullParser
 import smallthingz.ui.R as NativeUiR
+
+private const val ANDROID_NS = "http://schemas.android.com/apk/res/android"
 
 /** Resolve the packaged starting theme before any Activity or splash installation changes it. */
 @RunWith(RobolectricTestRunner::class)
@@ -42,6 +46,7 @@ class StartupSplashThemeResourcesTest {
         context.assertBooleanAttribute(android.R.attr.windowLightNavigationBar, !dark)
         assertEquals(R.drawable.reverb_splash_foreground,
             context.attribute(SplashR.attr.windowSplashScreenAnimatedIcon).resourceId)
+        context.assertSplashMainStrokeContrast(R.drawable.reverb_splash_foreground, backdrop)
         assertEquals(R.style.Theme_Reverb, context.attribute(SplashR.attr.postSplashScreenTheme).resourceId)
     }
 
@@ -51,13 +56,40 @@ class StartupSplashThemeResourcesTest {
             else NativeUiR.color.native_default_light_background)
         assertEquals(backdrop, context.colorAttribute(android.R.attr.windowSplashScreenBackground))
         assertEquals(backdrop, context.colorAttribute(SplashR.attr.windowSplashScreenBackground))
-        assertEquals(R.drawable.reverb_splash_animated_icon,
-            context.attribute(android.R.attr.windowSplashScreenAnimatedIcon).resourceId)
+        val animatedIcon = context.attribute(android.R.attr.windowSplashScreenAnimatedIcon).resourceId
+        assertEquals(R.drawable.reverb_splash_animated_icon, animatedIcon)
         assertEquals(R.drawable.reverb_splash_animated_icon,
             context.attribute(SplashR.attr.windowSplashScreenAnimatedIcon).resourceId)
         assertEquals(960, context.attribute(android.R.attr.windowSplashScreenAnimationDuration).data)
         assertEquals(960, context.attribute(SplashR.attr.windowSplashScreenAnimationDuration).data)
         assertEquals(R.style.Theme_Reverb, context.attribute(SplashR.attr.postSplashScreenTheme).resourceId)
+        val vector = context.resources.getXml(animatedIcon).use { xml ->
+            var event = xml.next()
+            while (event != XmlPullParser.START_TAG && event != XmlPullParser.END_DOCUMENT) event = xml.next()
+            assertEquals("animated-vector", xml.name)
+            xml.getAttributeResourceValue(ANDROID_NS, "drawable", 0)
+        }
+        assertEquals(R.drawable.reverb_splash_vector, vector)
+        context.assertSplashMainStrokeContrast(vector, backdrop)
+    }
+
+    private fun ContextThemeWrapper.assertSplashMainStrokeContrast(vector: Int, backdrop: Int) {
+        val mainPaths = setOf("main_body", "main_leg")
+        val checked = mutableSetOf<String>()
+        resources.getXml(vector).use { xml ->
+            while (xml.next() != XmlPullParser.END_DOCUMENT) {
+                if (xml.eventType != XmlPullParser.START_TAG || xml.name != "path") continue
+                val name = xml.getAttributeValue(ANDROID_NS, "name") ?: continue
+                if (name !in mainPaths) continue
+                val ink = xml.getAttributeResourceValue(ANDROID_NS, "strokeColor", 0)
+                assertEquals(R.color.reverb_splash_compat_main, ink)
+                assertEquals(1f, xml.getAttributeFloatValue(ANDROID_NS, "strokeAlpha", 0f), 0f)
+                val contrast = ColorUtils.calculateContrast(getColor(ink), backdrop)
+                assertTrue("Splash $name contrast was $contrast", contrast >= 3.0)
+                checked += name
+            }
+        }
+        assertEquals(mainPaths, checked)
     }
 
     private fun splashContext(dark: Boolean): ContextThemeWrapper {

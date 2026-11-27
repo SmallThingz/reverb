@@ -204,17 +204,23 @@ class NativeToggleRowTest {
     }
 
     @Test fun platformDisableRejectsClickAndAccessibilityUntilReenabled() = fixture {
-        row, _, _, _, calls, _ ->
+        row, _, _, visual, calls, _ ->
+        val originalBounds = Rect(visual.left, visual.top, visual.right, visual.bottom)
+        assertTrue(visual.isEnabled)
         assertTrue(requireNotNull(row.createAccessibilityNodeInfo()).isEnabled)
         assertTrue(row.onKeyDown(KeyEvent.KEYCODE_ENTER, KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER)))
         row.isEnabled = false
+        assertFalse(visual.isEnabled)
         assertFalse(row.performClick())
         assertFalse(row.performAccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, null))
         val disabled = requireNotNull(row.createAccessibilityNodeInfo())
         assertFalse(disabled.isEnabled)
+        assertFalse(disabled.isChecked)
         assertFalse(disabled.actionList.any { it.id == AccessibilityNodeInfo.ACTION_CLICK })
         assertTrue(calls.isEmpty())
         row.isEnabled = true
+        assertTrue(visual.isEnabled)
+        assertEquals(originalBounds, Rect(visual.left, visual.top, visual.right, visual.bottom))
         row.onKeyUp(KeyEvent.KEYCODE_ENTER, KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER))
         assertTrue("platform disable retires the held key", calls.isEmpty())
         assertTrue(requireNotNull(row.createAccessibilityNodeInfo()).isEnabled)
@@ -225,8 +231,19 @@ class NativeToggleRowTest {
         assertEquals(listOf(true, true), calls)
         assertTrue(row.performAccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, null))
         assertEquals(listOf(true, true, true), calls)
+
+        row.bindToggle(true, false, row.resources.displayMetrics.density, Color.BLACK, palette)
+        row.isEnabled = true
+        assertFalse("Platform enable must not override the model for the mark", visual.isEnabled)
+        val modelDisabled = requireNotNull(row.createAccessibilityNodeInfo())
+        assertTrue(modelDisabled.isChecked)
+        assertFalse(modelDisabled.isEnabled)
+        assertFalse(row.performClick())
+        assertFalse(row.performAccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, null))
+
         row.close()
         row.isEnabled = true
+        assertFalse(visual.isEnabled)
         assertFalse(row.performClick())
         assertFalse(row.performAccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, null))
         assertEquals(listOf(true, true, true), calls)

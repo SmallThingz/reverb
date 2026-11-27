@@ -38,8 +38,8 @@ internal class NativeLibraryAccessibilityBinding(
     private val toolbarLeases=IdentityHashMap<View,AutoCloseable>()
     private var list:ReverbLibraryRecyclerView?=null
     private var listLease:NativeLibraryRecyclerAccessibility?=null
-    private var empty:NativeVerticalViewport?=null
-    private var emptyLease:AutoCloseable?=null
+    private var status:NativeVerticalViewport?=null
+    private var statusLease:AutoCloseable?=null
     private var closed=false
 
     fun refresh() {
@@ -51,15 +51,15 @@ internal class NativeLibraryAccessibilityBinding(
             listLease?.close();listLease=null;list=nextList
             listLease=nextList?.let {NativeLibraryRecyclerAccessibility(it,sourceNode,scrollEvents,admitChildren)}
         }
-        val nextEmpty=content.emptyViewport
-        if(empty!==nextEmpty) {
-            emptyLease?.close();emptyLease=null
-            empty?.let {it.sourceAccessibilityNode=null;it.sourceAccessibilityChildren=null}
-            empty=nextEmpty
-            if(nextEmpty!=null) {
-                nextEmpty.sourceAccessibilityNode={sourceNode(nextEmpty)}
-                nextEmpty.sourceAccessibilityChildren={sourceChildren(nextEmpty,sourceNode,admitChildren)}
-                emptyLease=NativeVerticalScrollAccessibilityBinding(nextEmpty,scrollEvents){sourceNode(nextEmpty).present}
+        val nextStatus=content.statusViewport
+        if(status!==nextStatus) {
+            statusLease?.close();statusLease=null
+            status?.let {it.sourceAccessibilityNode=null;it.sourceAccessibilityChildren=null}
+            status=nextStatus
+            if(nextStatus!=null) {
+                nextStatus.sourceAccessibilityNode={sourceNode(nextStatus)}
+                nextStatus.sourceAccessibilityChildren={sourceChildren(nextStatus,sourceNode,admitChildren)}
+                statusLease=NativeVerticalScrollAccessibilityBinding(nextStatus,scrollEvents){sourceNode(nextStatus).present}
             }
         }
     }
@@ -96,8 +96,8 @@ internal class NativeLibraryAccessibilityBinding(
         val previousToolbar=toolbarLeases.values.toList();toolbarLeases.clear()
         previousToolbar.forEach{release(it::close)}
         release{listLease?.close()};listLease=null;list=null
-        release{emptyLease?.close()};emptyLease=null
-        empty?.let {it.sourceAccessibilityNode=null;it.sourceAccessibilityChildren=null};empty=null
+        release{statusLease?.close()};statusLease=null
+        status?.let {it.sourceAccessibilityNode=null;it.sourceAccessibilityChildren=null};status=null
         failure?.let{throw it}
     }
 }

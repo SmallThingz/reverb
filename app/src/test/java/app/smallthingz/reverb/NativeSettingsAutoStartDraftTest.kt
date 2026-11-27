@@ -10,6 +10,9 @@ import android.content.ServiceConnection
 import android.content.SharedPreferences
 import android.provider.Settings
 import android.view.Choreographer
+import android.view.View
+import android.view.ViewGroup
+import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.FrameLayout
 import androidx.activity.OnBackPressedDispatcher
 import androidx.lifecycle.Lifecycle
@@ -19,6 +22,7 @@ import app.smallthingz.reverb.nativeui.NativeSettingsScreenContent
 import app.smallthingz.reverb.nativeui.NativeSettingsScreenInput
 import app.smallthingz.reverb.nativeui.ReverbPalette
 import app.smallthingz.reverb.nativeui.ReverbViewEnvironment
+import app.smallthingz.reverb.nativeui.SettingsSectionKey
 import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
@@ -27,9 +31,11 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
@@ -40,12 +46,19 @@ import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowSettings
+import smallthingz.ui.components.NativeMaterialSwitchView
+import smallthingz.ui.components.NativeToggleRow
 import smallthingz.ui.platform.AndroidUiFrameClock
 import smallthingz.ui.scroll.NativeVerticalNestedHost
 import smallthingz.ui.scroll.NativeVerticalScrollSource
 import smallthingz.ui.text.font.createFontFamilyResolver
 import smallthingz.ui.text.view.NativeMergedRowAccessibilityHost
+import smallthingz.ui.text.view.NativePlainTextViewGeometry
+import smallthingz.ui.text.view.NativeTextSemanticsClip
+import smallthingz.ui.text.view.NativeTextSemanticsClipPolicy
+import smallthingz.ui.text.view.ParagraphView
 import smallthingz.ui.unit.Density
+import smallthingz.ui.util.closePreservingPrimaryFailure
 
 @RunWith(RobolectricTestRunner::class)
 @Config(
@@ -296,6 +309,47 @@ class NativeSettingsAutoStartDraftTest {
         }
     }
 
+    @Test fun autoStartRowDisablesDuringSaveAndReenablesAfterFailure() = runBlocking {
+        Fixture(this).use { f ->
+            f.open()
+            f.theme(AppThemeMode.DARK)
+            val row = f.revealAutoStartRow()
+            val mark = (0 until row.childCount).map(row::getChildAt).filterIsInstance<NativeMaterialSwitchView>().single()
+            row.mergedRowAccessibility.bindGeometry(f.settingsGeometry()) { f.screen.inputAllowed }.use {
+                val action = AccessibilityNodeInfo.ACTION_CLICK
+                val before = requireNotNull(row.createAccessibilityNodeInfo())
+                assertTrue(before.isEnabled)
+                assertTrue(before.actionList.any { it.id == action })
+                assertTrue(mark.isEnabled)
+
+                f.holdSettingsCommit(succeeds = false).use { write ->
+                    val revision = f.owner.state.editRevision
+                    f.clickDone()
+                    f.awaitAttemptedValue(write)
+                    val busy = requireNotNull(row.createAccessibilityNodeInfo())
+                    assertFalse(row.isEnabled)
+                    assertFalse(mark.isEnabled)
+                    assertFalse(busy.isEnabled)
+                    assertFalse(busy.actionList.any { it.id == action })
+                    assertFalse(row.performClick())
+                    assertFalse(row.performAccessibilityAction(action, null))
+                    assertEquals(revision, f.owner.state.editRevision)
+                    assertFalse(f.owner.autoStartChoice.enabled)
+                }
+                f.awaitSave()
+                val after = requireNotNull(row.createAccessibilityNodeInfo())
+                assertTrue(after.isEnabled)
+                assertTrue(after.actionList.any { it.id == action })
+                assertTrue(mark.isEnabled)
+                val revision = f.owner.state.editRevision
+                assertTrue(row.performAccessibilityAction(action, null))
+                assertTrue(f.owner.autoStartChoice.enabled)
+                assertEquals(revision + 1, f.owner.state.editRevision)
+                assertNull(f.rawAutoStart)
+            }
+        }
+    }
+
     private class Fixture(
         private val scope: CoroutineScope,
         overlayGranted: Boolean = true,
@@ -314,6 +368,10 @@ class NativeSettingsAutoStartDraftTest {
         private val animations = CoroutineScope(Dispatchers.Main.immediate + frames)
         private val environment = ReverbViewEnvironment(Density(1f), createFontFamilyResolver(context), ReverbPalette.fallback(false))
         private var panelActive = true
+        private val settingsJobs = mutableListOf<Job>()
+        private val databaseSingleton = RecordingDatabase::class.java.getDeclaredField("instance").apply {
+            isAccessible = true
+        }
         lateinit var back: OnBackPressedDispatcher
             private set
         lateinit var screen: NativeSettingsScreenContent
@@ -323,6 +381,7 @@ class NativeSettingsAutoStartDraftTest {
             private set
 
         init {
+            check(databaseSingleton.get(null) == null) { "RecordingDatabase already owned before Settings fixture" }
             JournalHostIoShadow.reset()
             ServiceStateOsShadow.fixtureRoot = root.toPath()
             ShadowSettings.setCanDrawOverlays(overlayGranted)
@@ -339,6 +398,7 @@ class NativeSettingsAutoStartDraftTest {
             val owner = NativeSettingsOwner(context, window, lifecycle, scope, true, savedDraft = savedDraft,
                 isPanelActive = { panelActive }, onThemePreview = {}, releaseInputFocus = {},
                 launchDirectory = { error("Unexpected directory launch") }, onBack = { navigations++ })
+            settingsJobs += checkNotNull(owner.scope.coroutineContext[Job])
             screen = NativeSettingsScreenContent(
                 context, owner, NativeSettingsScreenInput(active = true), environment, this, back, window,
                 frames, animations, NoNestedScroll, parentInterested = { false }, changedNodes = {},
@@ -352,6 +412,31 @@ class NativeSettingsAutoStartDraftTest {
             panelActive = active
             screen.bind(NativeSettingsScreenInput(active))
         }
+
+        fun revealAutoStartRow(): NativeToggleRow {
+            val restricted = owner.batteryOptimizationRestricted || owner.resumeNotificationBlocked || owner.restartAccessMissing
+            val recording = SettingsSectionKey.visible(restricted).indexOf(SettingsSectionKey.RECORDING)
+            val list = checkNotNull(screen.listViewport)
+            list.scrollToPosition(recording)
+            val decor = activity.get().window.decorView
+            val exact = View.MeasureSpec.EXACTLY
+            decor.measure(View.MeasureSpec.makeMeasureSpec(420, exact), View.MeasureSpec.makeMeasureSpec(1600, exact))
+            decor.layout(0, 0, 420, 1600)
+            val section = checkNotNull(list.findViewHolderForItemId(SettingsSectionKey.RECORDING.ordinal.toLong())).itemView
+            fun descendants(view: View): Sequence<View> = sequence {
+                yield(view)
+                if (view is ViewGroup) for (i in 0 until view.childCount) yieldAll(descendants(view.getChildAt(i)))
+            }
+            val title = descendants(section).filterIsInstance<ParagraphView>().single {
+                it.getText() == context.getString(R.string.auto_start_title)
+            }
+            return (title.parent as NativeToggleRow).also { row ->
+                assertTrue(row.isAttachedToWindow && row.isShown && row.width > 0 && row.height > 0)
+            }
+        }
+
+        fun settingsGeometry() = NativePlainTextViewGeometry(window,
+            NativeTextSemanticsClipPolicy { NativeTextSemanticsClip.Unclipped })
 
         fun choose(enabled: Boolean) = owner.autoStartChanged(owner.state.activation, enabled)
 
@@ -414,23 +499,47 @@ class NativeSettingsAutoStartDraftTest {
         }
 
         override fun close() {
-            try {
-                preferences.nextSettingsCommit.getAndSet(null)?.close()
-                if (::screen.isInitialized) screen.close()
-                // Quarantine is process-wide and a queued refresh may still read this fixture.
-                withRetentionPersistenceLock {
-                    assertTrue(preferences.edit().remove(AUTO_START_KEY).commit())
-                    AutoStartAfterRestart.policy.publishCommitted(false)
-                }
-            } finally {
-                animations.cancel()
-                activity.pause().stop().destroy()
-                ShadowSettings.setCanDrawOverlays(false)
-                val failure = JournalHostIoShadow.finishFixture()
-                ServiceStateOsShadow.fixtureRoot = null
-                assertTrue(root.deleteRecursively())
-                failure?.let { throw it }
+            var failure: Throwable? = null
+            fun cleanup(action: () -> Unit) {
+                failure = closePreservingPrimaryFailure(failure, action)
             }
+            cleanup { preferences.nextSettingsCommit.getAndSet(null)?.close() }
+            cleanup { if (::screen.isInitialized) screen.close() }
+            cleanup { animations.cancel() }
+            cleanup {
+                settingsJobs.forEach { it.cancel() }
+                // A cancelled owner can still be completing a non-cancellable catalog scan.
+                // Include owners retired by open() before touching process or filesystem state.
+                runBlocking { withTimeout(10_000) { settingsJobs.joinAll() } }
+            }
+            val settingsSettled = settingsJobs.all { it.isCompleted }
+            if (settingsSettled) {
+                cleanup(::resetFixtureDatabase)
+                cleanup {
+                    // Quarantine is process-wide and a queued preference refresh may still read this fixture.
+                    withRetentionPersistenceLock {
+                        assertTrue(preferences.edit().remove(AUTO_START_KEY).commit())
+                        AutoStartAfterRestart.policy.publishCommitted(false)
+                    }
+                }
+            }
+            cleanup { activity.pause().stop().destroy() }
+            cleanup { ShadowSettings.setCanDrawOverlays(false) }
+            if (settingsSettled) {
+                cleanup { JournalHostIoShadow.finishFixture()?.let { throw it } }
+                ServiceStateOsShadow.fixtureRoot = null
+                cleanup { assertTrue(root.deleteRecursively()) }
+            }
+            failure?.let { throw it }
+        }
+
+        private fun resetFixtureDatabase() = synchronized(RecordingDatabase) {
+            val database = databaseSingleton.get(null) as RecordingDatabase? ?: return@synchronized
+            val expected = context.getDatabasePath(checkNotNull(database.databaseName)).canonicalFile
+            val actual = File(database.readableDatabase.path).canonicalFile
+            check(actual == expected) { "Settings fixture cannot reset RecordingDatabase owned by $actual" }
+            RecordingDatabase.resetAfterCorruption()
+            check(databaseSingleton.get(null) == null) { "Settings fixture database remained owned after close" }
         }
     }
 

@@ -224,7 +224,8 @@ def assets(android_only=False):
             child = ET.SubElement(group, "group", android(name="main_r" if name == "main" else name + "_echo", translateX=x))
             for path in glyph:
                 color = "#FFFFFFFF" if variant == "mono" else "@color/launcher_" + ("main" if name == "main" else "accent")
-                if variant == "compat_splash" and name == "main":
+                # Both splash paths draw directly on a day/night window instead of the brand plate.
+                if variant in ("compat_splash", "splash") and name == "main":
                     color = "@color/reverb_splash_compat_main"
                 alpha = "0" if variant == "splash" and name != "main" else layer.attrib["stroke-opacity"]
                 ET.SubElement(child, "path", android(

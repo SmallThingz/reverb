@@ -357,7 +357,7 @@ internal class NativeSettingsSections(
             else -> R.string.auto_start_summary
         }
         return ToggleState(context.getString(R.string.auto_start_title), choice.permissionPending || choice.enabled,
-            choice.loaded, context.getString(description))
+            choice.loaded && !choice.saving, context.getString(description))
     }
 
 }

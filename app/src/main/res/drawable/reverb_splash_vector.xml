@@ -11,8 +11,8 @@
             <path android:name="near_leg" android:pathData="M196.995 306 L281.686 358" android:fillColor="@android:color/transparent" android:strokeColor="@color/launcher_accent" android:strokeAlpha="0" android:strokeWidth="26" android:strokeLineCap="round" android:strokeLineJoin="round" />
         </group>
         <group android:name="main_r" android:translateX="0">
-            <path android:name="main_body" android:pathData="M127.686 358 L156.357 154 L222.357 154 C272.357 154 301.859 186 295.676 230 C289.492 274 250.995 306 200.995 306 L134.995 306" android:fillColor="@android:color/transparent" android:strokeColor="@color/launcher_main" android:strokeAlpha="1" android:strokeWidth="26" android:strokeLineCap="round" android:strokeLineJoin="round" />
-            <path android:name="main_leg" android:pathData="M196.995 306 L281.686 358" android:fillColor="@android:color/transparent" android:strokeColor="@color/launcher_main" android:strokeAlpha="1" android:strokeWidth="26" android:strokeLineCap="round" android:strokeLineJoin="round" />
+            <path android:name="main_body" android:pathData="M127.686 358 L156.357 154 L222.357 154 C272.357 154 301.859 186 295.676 230 C289.492 274 250.995 306 200.995 306 L134.995 306" android:fillColor="@android:color/transparent" android:strokeColor="@color/reverb_splash_compat_main" android:strokeAlpha="1" android:strokeWidth="26" android:strokeLineCap="round" android:strokeLineJoin="round" />
+            <path android:name="main_leg" android:pathData="M196.995 306 L281.686 358" android:fillColor="@android:color/transparent" android:strokeColor="@color/reverb_splash_compat_main" android:strokeAlpha="1" android:strokeWidth="26" android:strokeLineCap="round" android:strokeLineJoin="round" />
         </group>
     </group>
 </vector>

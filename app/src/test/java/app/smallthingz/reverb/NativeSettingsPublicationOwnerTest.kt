@@ -70,6 +70,28 @@ class NativeSettingsPublicationOwnerTest {
         assertTrue(f.setProgress(wheel, 46))
     }
 
+    @Test fun notificationWheelExposesAdjustmentWithoutADeadClick() = Fixture().use { f ->
+        val wheel = f.wheel()
+        val node = checkNotNull(wheel.createAccessibilityNodeInfo())
+        try {
+            assertEquals("android.widget.SeekBar", node.className.toString())
+            assertNotNull(node.rangeInfo)
+            assertTrue(node.isFocusable)
+            assertFalse(node.isClickable)
+            assertFalse(node.actionList.any { it.id == AccessibilityNodeInfo.ACTION_CLICK })
+            assertTrue(node.actionList.any { it.id == AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS.id })
+        } finally {
+            node.recycle()
+        }
+        assertFalse(wheel.performAccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, null))
+        assertEquals(30, f.owner.snapshot.quickSaveSeconds)
+        assertTrue(f.published.isEmpty())
+
+        assertTrue(f.setProgress(wheel, 31))
+        assertEquals(31, f.owner.snapshot.quickSaveSeconds)
+        assertEquals(listOf(31), f.published)
+    }
+
     @Test fun hideReopenRevokesHeldGestureAndRetiresServiceAndSectionOwners() = Fixture().use { f ->
         val wheel = f.wheel()
         repeat(5) {
