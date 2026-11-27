@@ -1,6 +1,8 @@
 package app.smallthingz.reverb
 
+import android.app.Activity
 import android.app.Application
+import android.content.Context
 import android.view.View
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
@@ -15,6 +17,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
@@ -34,6 +37,211 @@ import kotlin.coroutines.CoroutineContext
 class NativeLibraryPlaybackStateTest {
     private val a = recording("a")
     private val b = recording("b")
+
+    @Test fun verifiedNotificationExpandsNewRowOnceAndRejectsReusedIdentity() {
+        val activity = Robolectric.buildActivity(Activity::class.java).setup()
+        try {
+            val host = object : View(activity.get()) { override fun hasWindowFocus() = true }
+            activity.get().setContentView(host)
+            var scan = CompletableDeferred<List<RecordingEntity>>()
+            Fixture(listOf(a), host = host, refreshRecordings = { scan.await() }).use { f ->
+                f.lifecycle.currentState = Lifecycle.State.RESUMED
+                f.open()
+                assertEquals(listOf(a), f.latest.recordings)
+                assertTrue(f.controller.navigationAllowed())
+                // The fixture holds the first frame. Admit the real refresh queue without the startup delay.
+                val ready = NativeLibraryController::class.java.getDeclaredField("firstRefreshReady")
+                    .apply { isAccessible = true }.get(f.controller) as BooleanArray
+                ready[0] = true
+                val completed = mutableListOf<RecordingEntity?>()
+                var starts = 0
+                fun request(token: String, rows: List<RecordingEntity>) {
+                    scan = CompletableDeferred()
+                    f.controller.requestPlayback(RecordingPlaybackRequest(token, b.id, b.storageType, b.fileIdentity),
+                        beforePlayback = { starts++ }, finished = { completed.add(it) })
+                    f.settle()
+                    assertTrue(scan.complete(rows))
+                    f.settle()
+                }
+                fun takeStart(): RecordingPlayback.Start {
+                    val intent = checkNotNull(shadowOf(f.context).nextStartedService)
+                    assertEquals(RecordingPlaybackService::class.java.name, intent.component?.className)
+                    return checkNotNull(RecordingPlayback.takeStart(
+                        intent.getLongExtra(RecordingPlaybackService.EXTRA_REQUEST, -1)))
+                }
+                request("new", listOf(a, b))
+                assertEquals(b, takeStart().recording)
+                val expanded = checkNotNull(f.latest.list.expandedOwner)
+                assertEquals(b.id, expanded.recordingId)
+                assertNoAutoStart(expanded)
+                f.controller.dateFormattingChanged()
+                f.settle()
+                assertSame(expanded, f.latest.list.expandedOwner)
+                assertEquals(listOf(b), completed)
+                assertNull(shadowOf(f.context).nextStartedService)
+
+                request("unchanged", listOf(a, b))
+                assertEquals(b, takeStart().recording)
+                assertSame(expanded, f.latest.list.expandedOwner)
+                request("replaced", listOf(a, b.copy(fileIdentity = "replacement")))
+                assertNull(f.latest.list.expandedOwner)
+                assertEquals(listOf(b, b, null), completed)
+                assertEquals(2, starts)
+                assertNull(shadowOf(f.context).nextStartedService)
+            }
+        } finally {
+            RecordingPlayback.stop(b)
+            activity.pause().stop().destroy()
+        }
+    }
+
+    @Test fun verifiedNotificationReplacesInfoWithRequestedControlsOnFocusReturn() =
+        NotificationFixture(listOf(a, b), b).use { f ->
+            f.library.controller.info(a)
+            f.library.settle()
+            assertEquals(a, f.library.latest.infoRecording)
+            f.library.onPublish = { presentation ->
+                if (presentation.list.expandedOwner?.recordingId == b.id) {
+                    assertNull(presentation.infoRecording)
+                    assertNull(presentation.list.infoRecordingId)
+                    assertNull(presentation.list.renameRecordingId)
+                    assertTrue(presentation.list.screenActive)
+                }
+            }
+
+            f.setWindowFocus(false)
+            f.request("focus-deferred")
+            f.completeRefresh(listOf(a, b))
+            assertEquals(a, f.library.latest.infoRecording)
+            assertNull(f.library.latest.list.expandedOwner)
+            f.assertNoStart()
+            assertTrue(f.completed.isEmpty())
+
+            f.setWindowFocus(true)
+            assertEquals(b, f.takeStart().recording)
+            val expanded = checkNotNull(f.library.latest.list.expandedOwner)
+            assertEquals(b.id, expanded.recordingId)
+            assertTrue(f.library.controller.isCurrentPlaybackOwner(expanded))
+            assertNoAutoStart(expanded)
+            f.library.controller.dateFormattingChanged()
+            f.library.settle()
+            assertSame(expanded, f.library.latest.list.expandedOwner)
+            assertEquals(listOf(b), f.completed)
+            assertEquals(1, f.starts)
+            f.assertNoStart()
+
+            f.library.controller.info(a)
+            f.library.settle()
+            f.request("stale-with-info")
+            f.completeRefresh(listOf(a, b.copy(fileIdentity = "replacement")))
+            assertEquals(a, f.library.latest.infoRecording)
+            assertNull(f.library.latest.list.expandedOwner)
+            assertEquals(listOf(b, null), f.completed)
+            assertEquals(1, f.starts)
+            f.assertNoStart()
+        }
+
+    @Test fun directDeleteBlocksMatchingNotificationFromPlanningThroughUndo() {
+        val target = b.copy(id = "content://media/external/audio/media/42", storageType = RecordingStorageType.MEDIASTORE,
+            directoryId = MEDIA_STORE_DIRECTORY_ID)
+        val rows = listOf(a, target)
+        val plan = CompletableDeferred<RecordingDeletionPlan>()
+        NotificationFixture(rows, target, plan = { _, selected ->
+            assertEquals(listOf(target), selected)
+            plan.await()
+        }).use { f ->
+            f.library.controller.info(a)
+            f.library.controller.deleteRecordings(listOf(target))
+            f.request("direct", target)
+            f.completeRefresh(rows)
+            assertEquals(a, f.library.latest.infoRecording)
+            assertTrue(f.completed.isEmpty())
+            f.assertNoStart()
+
+            assertTrue(plan.complete(RecordingDeletionPlan(listOf(target), emptyList())))
+            f.library.settle()
+            assertNotNull(f.library.latest.undo)
+            assertEquals(listOf<RecordingEntity?>(null), f.completed)
+            assertEquals(a, f.library.latest.infoRecording)
+            f.assertNoStart()
+        }
+    }
+
+    @Test fun promptDeleteWaitsForSettlementAndFreshNotificationScan() {
+        val target = b.copy(id = "content://media/external/audio/media/42", storageType = RecordingStorageType.MEDIASTORE,
+            directoryId = MEDIA_STORE_DIRECTORY_ID)
+        val rows = listOf(a, target)
+        for (survives in listOf(true, false)) {
+            val plan = CompletableDeferred<RecordingDeletionPlan>()
+            val settled = CompletableDeferred<Unit>()
+            val promptTarget = RecordingDeletionConsentTarget(target,
+                PendingDeletionIntent(target.id, target.sizeBytes, "01".repeat(32), false))
+            NotificationFixture(rows, target, plan = { _, _ -> plan.await() }, prompt = {
+                assertEquals(listOf(promptTarget), it)
+                settled
+            }).use { f ->
+                f.library.controller.deleteRecordings(listOf(target))
+                f.request("unrelated", a)
+                f.completeRefresh(rows)
+                assertEquals(a, f.takeStart().recording)
+                RecordingPlayback.stop(a)
+                f.library.controller.info(a)
+                f.request("prompt", target)
+                f.completeRefresh(rows)
+                assertTrue(plan.complete(RecordingDeletionPlan(emptyList(), listOf(promptTarget))))
+                f.library.settle()
+                assertEquals(listOf(a), f.completed)
+                assertEquals(a, f.library.latest.infoRecording)
+                f.assertNoStart()
+
+                f.holdRefresh()
+                assertTrue(settled.complete(Unit))
+                f.library.settle()
+                assertEquals(listOf(a), f.completed)
+                f.assertNoStart()
+                f.completeRefresh(if (survives) rows else listOf(a))
+                if (survives) {
+                    assertEquals(target, f.takeStart().recording)
+                    assertNull(f.library.latest.infoRecording)
+                } else {
+                    assertEquals(a, f.library.latest.infoRecording)
+                }
+                assertEquals(listOf(a, target.takeIf { survives }), f.completed)
+                f.assertNoStart()
+            }
+        }
+    }
+
+    @Test fun verifiedNotificationWaitsForRenameAndRechecksAfterItsTerminal() =
+        NotificationFixture(listOf(a, b), b).use { f ->
+            f.library.controller.rename(a)
+            f.library.settle()
+            f.request("rename-deferred")
+            f.completeRefresh(listOf(a, b))
+            assertEquals(a, f.library.latest.renameRecording)
+            assertEquals(a.id, f.library.latest.list.renameRecordingId)
+            assertNull(f.library.latest.list.expandedOwner)
+            assertTrue(f.completed.isEmpty())
+            assertEquals(0, f.starts)
+            f.assertNoStart()
+
+            val renamed = a.copy(displayName = "Renamed.wav")
+            f.holdRefresh()
+            f.library.controller.renamed(a, renamed)
+            f.library.settle()
+            assertTrue(f.library.latest.recordings.contains(renamed))
+            assertNull(f.library.latest.renameRecording)
+            assertNull(f.library.latest.list.expandedOwner)
+            assertTrue(f.completed.isEmpty())
+            f.assertNoStart()
+
+            f.completeRefresh(listOf(renamed, b))
+            assertEquals(b, f.takeStart().recording)
+            assertEquals(b.id, f.library.latest.list.expandedOwner?.recordingId)
+            assertEquals(listOf(b), f.completed)
+            assertEquals(1, f.starts)
+            f.assertNoStart()
+        }
 
     @Test fun indicatorFollowsActualPlayingRatherThanPendingTransportIntent() = Fixture(listOf(a, b)).use { f ->
         f.open()
@@ -531,9 +739,90 @@ class NativeLibraryPlaybackStateTest {
             createdAtMillis = 1L, lastSeenAtMillis = 1L)
     }
 
-    private class Fixture(
+    internal class NotificationFixture(
+        rows: List<RecordingEntity>,
+        private val target: RecordingEntity,
+        plan: suspend (Context, List<RecordingEntity>) -> RecordingDeletionPlan = RecordingDeletionConsent::planDeletion,
+        prompt: (List<RecordingDeletionConsentTarget>) -> kotlinx.coroutines.Deferred<Unit> = RecordingDeletionConsent::enqueueImmediate,
+        ownsCatalog: Boolean = true,
+    ) : AutoCloseable {
+        private val activity = Robolectric.buildActivity(Activity::class.java).setup().visible()
+        private var focused = true
+        private val host = object : View(activity.get()) {
+            override fun hasWindowFocus() = focused
+        }
+        private var scan = CompletableDeferred<List<RecordingEntity>>()
+        val library: Fixture
+        val completed = mutableListOf<RecordingEntity?>()
+        var starts = 0
+            private set
+
+        init {
+            activity.get().setContentView(host)
+            library = Fixture(rows, host = host, refreshRecordings = { scan.await() }, plan = plan, prompt = prompt,
+                ownsCatalog = ownsCatalog)
+            library.lifecycle.currentState = Lifecycle.State.RESUMED
+            library.open()
+            assertTrue(library.controller.navigationAllowed())
+            // Keep the startup frame parked, as in the new-row test. Subsequent requests use the real refresh queue.
+            val ready = NativeLibraryController::class.java.getDeclaredField("firstRefreshReady")
+                .apply { isAccessible = true }.get(library.controller) as BooleanArray
+            ready[0] = true
+        }
+
+        fun setWindowFocus(value: Boolean) {
+            focused = value
+            activity.windowFocusChanged(value)
+            library.settle()
+            assertEquals(value, library.controller.navigationAllowed())
+        }
+
+        fun holdRefresh() { scan = CompletableDeferred() }
+
+        fun request(token: String, selected: RecordingEntity = target) =
+            request(RecordingPlaybackRequest(token, selected.id, selected.storageType, selected.fileIdentity))
+
+        fun request(saved: RecordingPlaybackRequest) {
+            holdRefresh()
+            library.controller.requestPlayback(saved,
+                beforePlayback = { starts++ },
+                finished = { completed.add(it) },
+            )
+            library.settle()
+        }
+
+        fun completeRefresh(rows: List<RecordingEntity>) {
+            assertTrue(scan.complete(rows))
+            library.settle()
+        }
+
+        fun takeStart(): RecordingPlayback.Start {
+            val intent = checkNotNull(shadowOf(library.context).nextStartedService)
+            assertEquals(RecordingPlaybackService::class.java.name, intent.component?.className)
+            return checkNotNull(RecordingPlayback.takeStart(
+                intent.getLongExtra(RecordingPlaybackService.EXTRA_REQUEST, -1)))
+        }
+
+        fun assertNoStart() { assertNull(shadowOf(library.context).nextStartedService) }
+
+        override fun close() {
+            try {
+                library.close()
+            } finally {
+                RecordingPlayback.stop(target)
+                activity.pause().stop().destroy()
+            }
+        }
+    }
+
+    internal class Fixture(
         rows: List<RecordingEntity>,
         initialPlayback: RecordingPlaybackState = RecordingPlaybackState(),
+        host: View? = null,
+        refreshRecordings: suspend (Context) -> List<RecordingEntity> = RecordingRepository::refresh,
+        plan: suspend (Context, List<RecordingEntity>) -> RecordingDeletionPlan = RecordingDeletionConsent::planDeletion,
+        prompt: (List<RecordingDeletionConsentTarget>) -> kotlinx.coroutines.Deferred<Unit> = RecordingDeletionConsent::enqueueImmediate,
+        private val ownsCatalog: Boolean = true,
     ) : LifecycleOwner, AutoCloseable {
         override val lifecycle = LifecycleRegistry(this).apply { currentState = Lifecycle.State.STARTED }
         val context: Application = RuntimeEnvironment.getApplication()
@@ -550,9 +839,10 @@ class NativeLibraryPlaybackStateTest {
         val controller: NativeLibraryController
 
         init {
-            replaceCatalog(rows)
-            controller = NativeLibraryController(context, View(context), this, parent, frames, null, input,
-                submitBackgroundDeletion = { _, _ -> deletionReceipt }, playbackState = playback,
+            if (ownsCatalog) replaceCatalog(rows)
+            controller = NativeLibraryController(context, host ?: View(context), this, parent, frames, null, input,
+                submitBackgroundDeletion = { _, _ -> deletionReceipt }, playbackState = playback, refreshRecordings = refreshRecordings,
+                planDeletion = plan, enqueueDeletionPrompt = prompt,
                 publish = { onPublish(it); publications.add(it) })
             settle()
         }
@@ -615,8 +905,10 @@ class NativeLibraryPlaybackStateTest {
                 parent.cancel()
                 deletionReceipt.cancel()
                 settle()
-                runBlocking { dao.applyChanges(emptyList(), dao.listAll().map { it.id }) }
-                RecordingDatabase.resetAfterCorruption()
+                if (ownsCatalog) {
+                    runBlocking { dao.applyChanges(emptyList(), dao.listAll().map { it.id }) }
+                    RecordingDatabase.resetAfterCorruption()
+                }
             }
         }
     }

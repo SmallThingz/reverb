@@ -20,6 +20,7 @@ abstract class QuickSaveTileService : TileService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var listener: Job? = null
     private var destroyed = false
+    private var actionGeneration = 0L
     private var displayed: QuickSaveTileOption? = null
     private lateinit var observationSession: QuickSaveTileObservationSession
 
@@ -34,6 +35,7 @@ abstract class QuickSaveTileService : TileService() {
     }
 
     override fun onTileRemoved() {
+        actionGeneration++
         QuickSaveTileOptions.recordObservation(applicationContext, observationSession, QuickSaveTileAddedState.NOT_ADDED)
         super.onTileRemoved()
     }
@@ -72,9 +74,11 @@ abstract class QuickSaveTileService : TileService() {
     override fun onClick() {
         super.onClick()
         val tapped = displayed ?: return
+        val generation = actionGeneration
         val save = {
             // Unlock delays cannot retarget a removed, edited or recycled option.
-            if (!destroyed && QuickSaveTileOptions.options.value?.find { it.slot == optionSlot } == tapped &&
+            if (!destroyed && generation == actionGeneration &&
+                QuickSaveTileOptions.options.value?.find { it.slot == optionSlot } == tapped &&
                 QuickSaveTileOptions.error.value == null) {
                 try {
                     requireServiceStarted {
@@ -93,6 +97,7 @@ abstract class QuickSaveTileService : TileService() {
     }
 
     override fun onDestroy() {
+        actionGeneration++
         destroyed = true
         scope.cancel()
         super.onDestroy()

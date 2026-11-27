@@ -1,12 +1,20 @@
 package app.smallthingz.reverb
 
+import android.Manifest
+import android.app.AppOpsManager
 import android.app.Application
+import android.app.PendingIntent
 import android.content.ContentProvider
 import android.content.ContentValues
+import android.content.ContextWrapper
+import android.content.Intent
+import android.content.ClipData
+import android.content.pm.PackageManager
 import android.content.pm.ProviderInfo
 import android.database.Cursor
 import android.database.MatrixCursor
 import android.net.Uri
+import android.os.Bundle
 import android.os.ParcelFileDescriptor
 import android.provider.MediaStore
 import java.io.File
@@ -16,14 +24,21 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.security.MessageDigest
 import java.util.Base64
+import java.util.concurrent.FutureTask
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.mapNotNull
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowContentResolver
+import org.robolectric.shadows.ShadowEnvironment
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], application = Application::class, shadows = [PlaybackSessionOsShadow::class])
@@ -119,6 +134,217 @@ class ProviderPublicationBoundaryTest {
             assertEquals(selected, dao.findById(selected.id))
             assertArrayEquals(bytes, checkNotNull(provider.retainedOriginal).readBytes())
             assertArrayEquals(replacement, provider.payload.readBytes())
+        }
+    }
+
+    @Test fun deniedImmediateWriteRequestPreservesPayloadCatalogAndJournalAfterGrantChanges() = runBlocking {
+        fixture { app, provider, target, fingerprint, bytes, dao ->
+            val selected = registerPublishedSelection(app, provider, target, fingerprint, bytes)
+            val siblingId = "content://media/external/audio/media/730033"
+            var writable = true
+            val context = object : ContextWrapper(app) {
+                override fun checkUriPermission(uri: Uri, pid: Int, uid: Int, modeFlags: Int) = PackageManager.PERMISSION_DENIED
+                override fun checkContentUriPermissionFull(uri: Uri, pid: Int, uid: Int, modeFlags: Int): Int {
+                    assertTrue(uri.toString() == selected.id || uri.toString() == siblingId)
+                    assertEquals(Intent.FLAG_GRANT_WRITE_URI_PERMISSION, modeFlags)
+                    return if (writable || uri.toString() == siblingId) PackageManager.PERMISSION_GRANTED else PackageManager.PERMISSION_DENIED
+                }
+            }
+            // Robolectric defaults unconfigured AppOps to allowed, which bypasses the per-row checks.
+            val appOps = shadowOf(checkNotNull(app.getSystemService(AppOpsManager::class.java)))
+            val uid = app.applicationInfo.uid
+            val storageOp = checkNotNull(AppOpsManager.permissionToOp(Manifest.permission.MANAGE_EXTERNAL_STORAGE))
+            val mediaOp = checkNotNull(AppOpsManager.permissionToOp(Manifest.permission.MANAGE_MEDIA))
+            appOps.setMode(storageOp, uid, app.packageName, AppOpsManager.MODE_IGNORED)
+            appOps.setMode(mediaOp, uid, context.opPackageName, AppOpsManager.MODE_IGNORED)
+            // SDK 35 resolves the first external directory before checking the all-files AppOp.
+            ShadowEnvironment.addExternalDir("provider-publication-boundary")
+            assertFalse(hasAllFilesAccess())
+            assertFalse(MediaStore.canManageMedia(context))
+            val batch = listOf(selected)
+            assertEquals(batch, RecordingDeletionConsent.planDeletion(context, batch).undo)
+            writable = false
+            provider.ownerPackage = app.packageName
+            assertEquals(batch, RecordingDeletionConsent.planDeletion(context, batch).undo)
+            provider.ownerPackage = "fixture.foreign"
+            // A real second row and descriptor ensure proof failure cannot masquerade as writable access.
+            assertNull(dao.findById(siblingId))
+            provider.alternateRowAvailable = true
+            val sibling = selected.copy(id = siblingId,
+                fileIdentity = providerIdentity(Uri.parse(siblingId), bytes.size.toLong(), provider.generation))
+            try {
+                dao.upsert(sibling)
+                assertEquals(sibling, RecordingRepository.snapshotDeletionConsentTarget(context, sibling)?.recording)
+                assertTrue(requiresMediaWriteConsent(context, selected))
+                assertFalse(requiresMediaWriteConsent(context, sibling))
+                val mixed = RecordingDeletionConsent.planDeletion(context, listOf(selected, sibling))
+                assertEquals(listOf(sibling), mixed.undo)
+                assertEquals(batch, mixed.prompt.map { it.recording })
+                val completion = RecordingDeletionConsent.enqueueImmediate(mixed.prompt)
+                // If preparation called the ordinary delete attempt now, this provider would remove the bytes.
+                writable = true
+                provider.removeOnDelete = true
+                val launch = withTimeout(5_000L) {
+                    RecordingDeletionConsent.changes.mapNotNull { RecordingDeletionConsent.claim(context) }.first()
+                }
+                val revision = RecordingDeletionConsent.completions.value
+                try {
+                    assertEquals(batch, launch.targets.map { it.recording })
+                    assertEquals(listOf(selected.id), provider.writeRequestUris)
+                    assertEquals(0, provider.deletes)
+                    assertEquals(selected, dao.findById(selected.id))
+                } finally {
+                    RecordingDeletionConsent.finish(context, launch.token, granted = false)
+                    withTimeout(5_000L) { RecordingDeletionConsent.completions.first { it > revision } }
+                }
+                withTimeout(5_000L) { completion.await() }
+                assertFalse(RecordingDeletionConsent.owns(launch.token))
+                assertEquals(selected, dao.findById(selected.id))
+                assertArrayEquals(bytes, provider.payload.readBytes())
+                assertTrue(getRecorderPreferences(app).getStringSet(PrefKey.PENDING_RECORDING_DELETIONS.name, emptySet())!!.isEmpty())
+                assertEquals(sibling, dao.findById(siblingId))
+            } finally {
+                dao.deleteById(siblingId)
+            }
+        }
+    }
+
+    @Test
+    @org.robolectric.annotation.LooperMode(org.robolectric.annotation.LooperMode.Mode.PAUSED)
+    fun restoredNotificationWaitsForProcessPromptAndPostSettlementCatalog() = runBlocking {
+        for (granted in listOf(false, true)) fixture(expectedDeletes = if (granted) 1 else 0) {
+                app, provider, target, fingerprint, bytes, dao ->
+            val selected = registerPublishedSelection(app, provider, target, fingerprint, bytes)
+            val proof = checkNotNull(RecordingRepository.snapshotDeletionConsentTarget(app, selected))
+            val rows = dao.listAll()
+            val other = rows.single { it.id.endsWith("/730032") }
+            val request = RecordingPlaybackRequest("saved-request", selected.id, selected.storageType, selected.fileIdentity)
+            provider.removeOnDelete = true
+            lateinit var receipt: kotlinx.coroutines.Deferred<Unit>
+            NativeLibraryPlaybackStateTest.NotificationFixture(rows, selected,
+                plan = { _, _ -> RecordingDeletionPlan(emptyList(), listOf(proof)) },
+                prompt = { RecordingDeletionConsent.enqueueImmediate(it).also { result -> receipt = result } },
+                ownsCatalog = false).use { first ->
+                first.library.controller.deleteRecordings(listOf(selected))
+                first.request(request)
+                first.completeRefresh(rows)
+                first.assertNoStart()
+            }
+            val launch = withTimeout(5_000L) {
+                RecordingDeletionConsent.changes.mapNotNull { RecordingDeletionConsent.claim(app) }.first()
+            }
+            try {
+                NativeLibraryPlaybackStateTest.NotificationFixture(rows, selected, ownsCatalog = false).use { next ->
+                    next.request("other", other)
+                    next.completeRefresh(rows)
+                    assertEquals(other, next.takeStart().recording)
+                    RecordingPlayback.stop(other)
+                    next.library.controller.info(other)
+                    next.request(checkNotNull(RecordingPlaybackRequest.fromBundle(request.toBundle())))
+                    next.completeRefresh(rows)
+                    assertEquals(listOf(other), next.completed)
+                    assertEquals(other, next.library.latest.infoRecording)
+                    next.assertNoStart()
+
+                    next.holdRefresh()
+                    RecordingDeletionConsent.finish(app, launch.token, granted)
+                    withTimeout(5_000L) { receipt.await() }
+                    next.library.controller.dateFormattingChanged()
+                    next.library.settle()
+                    assertEquals(listOf(other), next.completed)
+                    next.assertNoStart()
+                    next.completeRefresh(dao.listAll())
+                    if (!granted) assertEquals(selected, next.takeStart().recording)
+                    assertEquals(listOf(other, selected.takeUnless { granted }), next.completed)
+                    next.assertNoStart()
+                }
+            } finally {
+                RecordingDeletionConsent.finish(app, launch.token, false)
+                withTimeout(5_000L) { receipt.await() }
+            }
+        }
+    }
+
+    @Test
+    @org.robolectric.annotation.LooperMode(org.robolectric.annotation.LooperMode.Mode.PAUSED)
+    fun matchingProcessConsentQueuedDuringNotificationScanRevokesThatProof() = runBlocking {
+        fixture(expectedDeletes = 1) { app, provider, target, fingerprint, bytes, dao ->
+            val selected = registerPublishedSelection(app, provider, target, fingerprint, bytes)
+            val proof = checkNotNull(RecordingRepository.snapshotDeletionConsentTarget(app, selected))
+            val rows = dao.listAll()
+            provider.removeOnDelete = true
+            NativeLibraryPlaybackStateTest.NotificationFixture(rows, selected, ownsCatalog = false).use { next ->
+                next.request("scan-before-enqueue")
+                val receipt = RecordingDeletionConsent.enqueueImmediate(listOf(proof))
+                val launch = withTimeout(5_000L) {
+                    RecordingDeletionConsent.changes.mapNotNull { RecordingDeletionConsent.claim(app) }.first()
+                }
+                try {
+                    next.completeRefresh(rows)
+                    next.assertNoStart()
+                    next.holdRefresh()
+                    RecordingDeletionConsent.finish(app, launch.token, true)
+                    withTimeout(5_000L) { receipt.await() }
+                    assertNull(dao.findById(selected.id))
+                    next.library.controller.dateFormattingChanged()
+                    next.library.settle()
+                    assertTrue(next.completed.isEmpty())
+                    next.assertNoStart()
+                    next.completeRefresh(dao.listAll())
+                    assertEquals(listOf<RecordingEntity?>(null), next.completed)
+                    next.assertNoStart()
+                } finally {
+                    RecordingDeletionConsent.finish(app, launch.token, false)
+                    withTimeout(5_000L) { receipt.await() }
+                }
+            }
+        }
+    }
+
+    @Test fun matchingEnqueueAndVerifiedPlaybackHaveOneAdmissionOrder() = runBlocking {
+        fixture { app, provider, target, fingerprint, bytes, _ ->
+            val selected = registerPublishedSelection(app, provider, target, fingerprint, bytes)
+            val proof = checkNotNull(RecordingRepository.snapshotDeletionConsentTarget(app, selected))
+            val request = RecordingPlaybackRequest("verified-before-IO", selected.id, selected.storageType, selected.fileIdentity)
+            val earlierWatch = RecordingPlaybackRoute()
+            val delivery = RecordingPlaybackRoute()
+            delivery.submit(request)
+            delivery.verified(request.token, delivery.proofGeneration)
+            RecordingDeletionConsent.watchPlayback(earlierWatch)
+            RecordingDeletionConsent.watchPlayback(delivery)
+            val enqueue = FutureTask { RecordingDeletionConsent.enqueueImmediate(listOf(proof)) }
+            val consume = FutureTask { RecordingDeletionConsent.takePlaybackIfReady(delivery, true) }
+            val writer = Thread(enqueue, "test-consent-enqueue")
+            val reader = Thread(consume, "test-consent-delivery")
+            fun awaitMonitor(thread: Thread) {
+                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+                while (thread.isAlive && thread.state != Thread.State.BLOCKED && System.nanoTime() < deadline) {
+                    Thread.sleep(1)
+                }
+                assertEquals("Expected monitor contention from ${thread.name}", Thread.State.BLOCKED, thread.state)
+            }
+            try {
+                assertFalse(RecordingDeletionConsent.holdsPlayback(request))
+                // Stop enqueue after insertion, before it can invalidate delivery's still-ready proof.
+                synchronized(earlierWatch) {
+                    writer.start()
+                    awaitMonitor(writer)
+                    reader.start()
+                    awaitMonitor(reader)
+                }
+                assertNull(consume.get(5, TimeUnit.SECONDS))
+            } finally {
+                RecordingDeletionConsent.retirePlayback(earlierWatch)
+                RecordingDeletionConsent.retirePlayback(delivery)
+                if (writer.state != Thread.State.NEW) {
+                    val receipt = enqueue.get(5, TimeUnit.SECONDS)
+                    val launch = withTimeout(5_000L) {
+                        RecordingDeletionConsent.changes.mapNotNull { RecordingDeletionConsent.claim(app) }.first()
+                    }
+                    RecordingDeletionConsent.finish(app, launch.token, false)
+                    withTimeout(5_000L) { receipt.await() }
+                }
+            }
         }
     }
 
@@ -445,8 +671,10 @@ class ProviderPublicationBoundaryTest {
             assertNull(dao.findById(sentinelId))
             ownsRow = true
             ownsSentinel = true
-            val sentinelRow = RecordingEntity(sentinelId, "sentinel.wav", "audio/wav", 1L, 1L, 48L, "sentinel",
-                RecordingStorageType.MEDIASTORE, MEDIA_STORE_DIRECTORY_ID, "sentinel-identity")
+            val sentinelSize = 48L
+            val sentinelRow = RecordingEntity(sentinelId, "sentinel.wav", "audio/wav", 1L, 1L, sentinelSize, "sentinel",
+                RecordingStorageType.MEDIASTORE, MEDIA_STORE_DIRECTORY_ID,
+                providerIdentity(Uri.parse(sentinelId), sentinelSize, provider.generation))
             dao.upsert(sentinelRow)
             provider.attachInfo(app, ProviderInfo().apply { authority = "media" })
             ShadowContentResolver.registerProviderInternal("media", provider)
@@ -511,6 +739,7 @@ class ProviderPublicationBoundaryTest {
  * this provider before each fixture uses it. The retired provider is never accessed after cleanup.
  */
 private class PublicationMediaProvider(val payload: File) : ContentProvider() {
+    var ownerPackage: String? = null
     var name = ".reverb-export-publication.wav"
     var pending: Int? = 1
     var pendingAfterUpdate: Int? = 1
@@ -555,6 +784,7 @@ private class PublicationMediaProvider(val payload: File) : ContentProvider() {
         if (uri.lastPathSegment == "730031" || (alternateRowAvailable && uri.lastPathSegment == "730033")) {
             if (missing) { trace += "query:missing"; cursors += cursor; return cursor }
             val values: Map<String, Any?> = mapOf(
+                MediaStore.MediaColumns.OWNER_PACKAGE_NAME to ownerPackage,
                 MediaStore.MediaColumns._ID to uri.lastPathSegment!!.toLong(),
                 MediaStore.MediaColumns.DISPLAY_NAME to name,
                 MediaStore.MediaColumns.SIZE to (reportedSize ?: payload.length()),
@@ -622,6 +852,16 @@ private class PublicationMediaProvider(val payload: File) : ContentProvider() {
         if (throwAfterDelete) { didThrowDelete = true; throw IllegalStateException("deleted then transport failed") }
         return deleteResult
     }
+    var writeRequestUris = emptyList<String>()
+    override fun call(method: String, arg: String?, extras: Bundle?): Bundle? {
+        if (method != "create_write_request") return super.call(method, arg, extras)
+        val clip = checkNotNull(extras?.getParcelable("clip_data", ClipData::class.java))
+        writeRequestUris = (0 until clip.itemCount).map { clip.getItemAt(it).uri.toString() }
+        val sender = PendingIntent.getActivity(checkNotNull(context), 41, Intent("reverb.test.WRITE_REQUEST"),
+            PendingIntent.FLAG_IMMUTABLE)
+        return Bundle().apply { putParcelable("result", sender) }
+    }
+
     override fun getType(uri: Uri) = "audio/wav"
     fun assertRenameRequest() {
         assertEquals(setOf(MediaStore.MediaColumns.DISPLAY_NAME), updates.single().keySet())

@@ -1,8 +1,11 @@
 package app.smallthingz.reverb
 
 import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.IntentSender
 import android.os.Build
+import android.os.Process
 import android.provider.MediaStore
 import android.util.Log
 import androidx.core.net.toUri
@@ -11,11 +14,13 @@ import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 internal data class RecordingDeletionConsentTarget(
     val recording: RecordingEntity,
@@ -23,10 +28,16 @@ internal data class RecordingDeletionConsentTarget(
     val legacySender: IntentSender? = null,
 )
 
+internal data class RecordingDeletionPlan(
+    val undo: List<RecordingEntity>,
+    val prompt: List<RecordingDeletionConsentTarget>,
+)
+
 internal data class RecordingDeletionConsentRequest(
     val targets: List<RecordingDeletionConsentTarget>,
     val token: String = UUID.randomUUID().toString(),
     val rename: RecordingRenameConsentWork? = null,
+    val promptCompletion: CompletableDeferred<Unit>? = null,
 )
 
 internal class RecordingRenameConsentWork(
@@ -42,7 +53,14 @@ internal data class RecordingDeletionConsentLaunch(
     val token: String,
     val sender: IntentSender,
     val targets: List<RecordingDeletionConsentTarget>,
-)
+) {
+    @androidx.annotation.MainThread
+    fun launchAfterStoppingPlayback(launch: (IntentSender) -> Unit) {
+        // An admitted notification may already have queued or opened this exact recording.
+        targets.forEach { RecordingPlayback.stop(it.recording) }
+        launch(sender)
+    }
+}
 
 internal sealed interface RecordingDeletionAttempt {
     data object Deleted : RecordingDeletionAttempt
@@ -69,6 +87,24 @@ internal object RecordingDeletionConsent {
     private var active: Execution? = null
     private val renameHost = RecordingRenameConsentHost()
     private val renames = linkedMapOf<String, RecordingRenameConsentWork>()
+    private val playbackRoutes = mutableSetOf<RecordingPlaybackRoute>()
+
+    @Synchronized fun watchPlayback(route: RecordingPlaybackRoute) { playbackRoutes.add(route) }
+    @Synchronized fun retirePlayback(route: RecordingPlaybackRoute) { playbackRoutes.remove(route) }
+
+    /** Linearize final notification admission with queue insertion and proof revocation. */
+    @Synchronized fun takePlaybackIfReady(route: RecordingPlaybackRoute, foreground: Boolean): RecordingPlaybackRequest? {
+        val request = route.request ?: return null
+        if (!foreground || holdsPlayback(request)) return null
+        return route.takeIfReady(true)?.also { playbackRoutes.remove(route) }
+    }
+
+    @Synchronized private fun offerDeletion(request: RecordingDeletionConsentRequest) {
+        pending.offer(request)
+        // Revoke even an in-flight scan on another Activity. Settlement requests a new scan.
+        playbackRoutes.forEach { it.invalidateForDeletion(request.targets) }
+        signal()
+    }
 
     @Synchronized fun attachRenameHost(owner: Any) { renameHost.attach(owner) }
     @Synchronized fun renameLifetime(): Long = renameHost.generation
@@ -110,10 +146,42 @@ internal object RecordingDeletionConsent {
     @Synchronized private fun signal() { changed.value += 1 }
     @Synchronized private fun signalCompletion() { completed.value += 1 }
 
+    /** Classify each selected identity independently. This step has no journal or delete authority. */
+    suspend fun planDeletion(context: Context, recordings: List<RecordingEntity>): RecordingDeletionPlan =
+        withContext(Dispatchers.IO) {
+            val mayNeedPrompt = try {
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !hasAllFilesAccess() &&
+                    (Build.VERSION.SDK_INT < Build.VERSION_CODES.S || !MediaStore.canManageMedia(context))
+            } catch (_: RuntimeException) {
+                false
+            }
+            if (!mayNeedPrompt) return@withContext RecordingDeletionPlan(recordings, emptyList())
+            val undo = mutableListOf<RecordingEntity>()
+            val prompt = mutableListOf<RecordingDeletionConsentTarget>()
+            for (recording in recordings) {
+                val target = try {
+                    if (requiresMediaWriteConsent(context, recording))
+                        RecordingRepository.snapshotDeletionConsentTarget(context, recording) else null
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    null // Uncertain access or proof cannot skip Undo.
+                }
+                if (target == null) undo += recording else prompt += target
+            }
+            RecordingDeletionPlan(undo, prompt)
+        }
+
+    fun enqueueImmediate(targets: List<RecordingDeletionConsentTarget>): Deferred<Unit> {
+        require(targets.isNotEmpty())
+        val completion = CompletableDeferred<Unit>()
+        offerDeletion(RecordingDeletionConsentRequest(targets.toList(), promptCompletion = completion))
+        return completion
+    }
+
     fun enqueue(targets: List<RecordingDeletionConsentTarget>) {
         if (targets.isEmpty()) return
-        pending.offer(RecordingDeletionConsentRequest(targets.toList()))
-        signal()
+        offerDeletion(RecordingDeletionConsentRequest(targets.toList()))
     }
 
     /** Called by a resumed host. Preparation owns no Activity and can finish while it is detached. */
@@ -146,6 +214,11 @@ internal object RecordingDeletionConsent {
             }
         }
         return null
+    }
+
+    /** Includes queued and active groups until their terminal journal/feedback settlement. */
+    @Synchronized fun holdsPlayback(request: RecordingPlaybackRequest): Boolean = pending.anyRequest { group ->
+        group.targets.any { request.matches(it.recording) }
     }
 
     fun owns(token: String): Boolean = pending.contains(token)
@@ -244,7 +317,12 @@ internal object RecordingDeletionConsent {
         while (execution.nextIndex < request.targets.size) {
             val chunk = prepareRecordingConsentChunk(request.targets, execution.nextIndex, limit) { index, target ->
                 when (val result = attempt(context) {
-                    RecordingRepository.prepareDeletionConsent(context, target, checkNotNull(execution.journal))
+                    if (request.promptCompletion != null) {
+                        // A grant acquired while queued must never turn pre-prompt verification into a delete.
+                        val verified = RecordingRepository.snapshotDeletionConsentTarget(context, target.recording, target)
+                        if (verified != null) RecordingDeletionAttempt.NeedsConsent(verified)
+                        else RecordingDeletionAttempt.Failed(RecordingDeletionFailure(RecordingDeletionFailureReason.IDENTITY_UNVERIFIED))
+                    } else RecordingRepository.prepareDeletionConsent(context, target, checkNotNull(execution.journal))
                 }) {
                     is RecordingDeletionAttempt.NeedsConsent -> result.target
                     else -> { execution.results[index] = result; null }
@@ -340,8 +418,30 @@ internal object RecordingDeletionConsent {
                     active = null
                     signalCompletion()
                     signal()
+                    execution.request.promptCompletion?.complete(Unit)
                 }
             }
         }
     }
+}
+
+/** Called on IO. A denied explicit URI grant alone does not exclude the row owner's implicit access. */
+internal fun requiresMediaWriteConsent(context: Context, recording: RecordingEntity): Boolean {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || recording.storageType != RecordingStorageType.MEDIASTORE ||
+        !mediaStoreRecordingIdIsValid(recording.id)) return false
+    val uri = recording.id.toUri()
+    val pid = Process.myPid()
+    val uid = Process.myUid()
+    val write = Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+    if (context.checkUriPermission(uri, pid, uid, write) == PackageManager.PERMISSION_GRANTED) return false
+    if (Build.VERSION.SDK_INT >= 35 &&
+        context.checkContentUriPermissionFull(uri, pid, uid, write) != PackageManager.PERMISSION_DENIED) return false
+    val column = MediaStore.MediaColumns.OWNER_PACKAGE_NAME
+    return context.contentResolver.query(uri, arrayOf(column), null, null, null)?.use { row ->
+        if (!row.moveToFirst()) return@use false
+        val owner = row.getString(row.getColumnIndexOrThrow(column))
+        if (row.moveToNext() || owner == context.packageName) return@use false
+        // Before API 35 an explicit-grant denial alone cannot establish lack of implicit write access.
+        Build.VERSION.SDK_INT >= 35 || !owner.isNullOrBlank()
+    } == true
 }

@@ -97,7 +97,8 @@ class QuickSaveTileHandoffTest {
             })
             created = true
             controller.create()
-            Shadow.extract<ServiceCompatibleTileShadow>(tile).setLocked(false)
+            val shadow = Shadow.extract<ServiceCompatibleTileShadow>(tile)
+            shadow.setLocked(false)
             tile.onStartListening()
             listening = true
             awaitMain {
@@ -129,6 +130,33 @@ class QuickSaveTileHandoffTest {
                 }
                 assertEquals(ownedEvents, events)
             }
+
+            fun queueUnlock() {
+                shadow.setLocked(true)
+                tile.onClick()
+            }
+            queueUnlock()
+            tile.onTileRemoved()
+            shadow.deliverUnlock()
+            assertEquals(3, starts.size)
+
+            tile.onTileAdded()
+            queueUnlock()
+            tile.onTileRemoved()
+            tile.onTileAdded()
+            shadow.deliverUnlock()
+            assertEquals(3, starts.size)
+
+            queueUnlock()
+            tile.onStopListening(); listening = false
+            shadow.deliverUnlock()
+            assertEquals(4, starts.size)
+            assertEquals(7, starts.last().getIntExtra(ReverbService.EXTRA_QUICK_SAVE_SECONDS, -1))
+
+            queueUnlock()
+            controller.destroy(); destroyed = true
+            shadow.deliverUnlock()
+            assertEquals(4, starts.size)
         } catch (error: Throwable) {
             record(error)
         } finally {
@@ -155,7 +183,7 @@ class QuickSaveTileHandoffTest {
             }
             if (!unsafe && primary == null) {
                 try {
-                    assertEquals(3, starts.size)
+                    assertEquals(4, starts.size)
                     assertEquals(2, ownedEvents.size)
                     assertEquals(ownedEvents, AppFeedbackCenter.events.value)
                     ownedEvents.forEach { AppFeedbackCenter.acknowledge(it.id) }

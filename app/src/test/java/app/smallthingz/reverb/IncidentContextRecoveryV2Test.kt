@@ -6,20 +6,28 @@ import android.app.ApplicationExitInfo
 import android.content.Context
 import android.content.ContextWrapper
 import android.os.Process
+import android.os.SystemClock
 import android.provider.Settings
 import android.system.ErrnoException
 import android.system.OsConstants
 import app.smallthingz.reverb.incidentcontextisolated.IncidentContextSandboxMarker
+import java.io.DataInputStream
+import java.io.DataOutputStream
 import java.io.File
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.file.Files
+import java.time.Instant
+import java.time.ZoneId
+import java.time.ZoneOffset
+import java.util.TimeZone
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.*
 import org.junit.Before
@@ -30,6 +38,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.shadow.api.Shadow
 import org.robolectric.shadows.ShadowActivityManager
 import org.robolectric.shadows.ShadowProcess
+import org.robolectric.shadows.ShadowSystemClock
 
 /** Actual persistent recovery with Android exit evidence controlled only at ActivityManager. */
 @RunWith(org.robolectric.RobolectricTestRunner::class)
@@ -917,6 +926,141 @@ class IncidentContextRecoveryV2Test {
         val resumed = wireRows(history.readBytes()).single { wirePid(it) == 41 }
         assertEquals(admittedAt, ByteBuffer.wrap(resumed).getLong(9))
     }
+
+    @Test fun backgroundRevisionKeepsItsDisplayZoneWhenResumeZoneIsUnchanged() = fixture { context, root ->
+        val beforeMidnight = RecordingIncident(
+            Instant.parse("2026-11-22T23:59:00Z").toEpochMilli(),
+            kind = RecordingIncidentKind.UNEXPECTED_ERROR, description = "Same topic",
+        )
+        val afterMidnight = beforeMidnight.copy(
+            occurredAtMillis = Instant.parse("2026-11-23T00:01:00Z").toEpochMilli(),
+        )
+        DataOutputStream(File(root, "recording-incidents.bin").outputStream()).use {
+            RecordingIncidentStore.writeHistoryPayload(it, listOf(afterMidnight, beforeMidnight))
+        }
+        val originalZone = TimeZone.getDefault()
+        try {
+            TimeZone.setDefault(TimeZone.getTimeZone("UTC"))
+            runBlocking {
+                withTimeout(5_000L) {
+                    val controller = IncidentHistoryController(context)
+                    val states = Channel<IncidentHistoryUiState>(Channel.UNLIMITED)
+                    val observer = launch { controller.observeHistory { states.trySend(it).getOrThrow() } }
+                    suspend fun awaitReady(acknowledged: Boolean): IncidentHistoryPresentation {
+                        while (true) {
+                            val state = states.receive()
+                            if (state.status == IncidentHistoryLoadStatus.READY && state.history.rows.any {
+                                    it.incident.occurredAtMillis == afterMidnight.occurredAtMillis &&
+                                        it.acknowledged == acknowledged
+                                }
+                            ) return state.history
+                        }
+                    }
+                    try {
+                        val initial = awaitReady(acknowledged = false)
+                        assertEquals(2, initial.days.size)
+                        val revision = RecordingIncidentStore.historyRevision.value
+
+                        // The paused owner misses both zone changes but still observes store revisions.
+                        TimeZone.setDefault(TimeZone.getTimeZone("GMT+02:00"))
+                        assertEquals(ZoneOffset.ofHours(2), ZoneId.systemDefault().rules.getOffset(Instant.EPOCH))
+                        RecordingIncidentStore.toggleIncidentAcknowledged(context, afterMidnight)
+                        assertTrue(RecordingIncidentStore.historyRevision.value > revision)
+                        val background = awaitReady(acknowledged = true)
+
+                        TimeZone.setDefault(TimeZone.getTimeZone("UTC"))
+                        controller.refreshDisplayTimeZone()
+                        assertSame(background, controller.state.history)
+                        assertEquals(initial.rows.map { it.startLabel }, background.rows.map { it.startLabel })
+                        assertEquals(initial.days.map { it.epochDay }, background.days.map { it.epochDay })
+                        val dayTopicMembers = background.days.map { it.groups.single().occurrences.single().key }
+                        assertEquals(initial.rows.map { it.key }, dayTopicMembers)
+                    } finally {
+                        observer.cancelAndJoin()
+                    }
+                }
+            }
+        } finally {
+            TimeZone.setDefault(originalZone)
+        }
+    }
+
+    @Test fun backwardWallClockStillPublishesAndRetiresFatalInterruption() = fixture { context, root ->
+        val session = File(root, "recording-session.bin")
+        val marker = armBeforeWallClockRollback(context, session)
+        RecordingIncidentStore.recordCaptureInterrupted(context, "Fatal capture interruption")
+        assertEquals(marker.copy(armed = false), readSessionFixture(session))
+
+        val incident = RecordingIncidentStore.readIncidents(context).single()
+        assertEquals("Fatal capture interruption", incident.description)
+        assertEquals(marker.armedAtMillis, incident.captureArmedAtMillis)
+        assertFalse(session.exists())
+    }
+
+    @Test fun backwardWallClockAndUnreadableMarkerRetryFatalInterruption() = fixture { context, root ->
+        val session = File(root, "recording-session.bin")
+        val marker = armBeforeWallClockRollback(context, session)
+        val blocker = File(root, "recording-session.bin.new")
+        assertTrue(blocker.mkdir())
+        RecordingIncidentStore.recordCaptureInterrupted(context, "Fatal interruption after marker read failure")
+        assertFalse(File(root, "recording-incidents.bin").exists())
+        assertEquals(marker, readSessionFixture(session))
+        assertTrue(blocker.delete())
+
+        val incident = RecordingIncidentStore.readIncidents(context).single()
+        assertEquals("Fatal interruption after marker read failure", incident.description)
+        assertEquals(marker.armedAtMillis, incident.captureArmedAtMillis)
+        assertFalse(session.exists())
+        assertEquals(listOf(incident), RecordingIncidentStore.readIncidents(context))
+    }
+
+    @Test fun unreadableMarkerRetryDoesNotClaimLaterElapsedArmWithEarlierWallTime() = fixture { context, root ->
+        val session = File(root, "recording-session.bin")
+        val marker = armBeforeWallClockRollback(context, session)
+        val blocker = File(root, "recording-session.bin.new")
+        assertTrue(blocker.mkdir())
+        val wallAtStop = System.currentTimeMillis()
+        RecordingIncidentStore.recordCaptureInterrupted(context, "Interrupted earlier arm")
+        assertTrue(blocker.delete())
+        ShadowSystemClock.advanceBy(1, TimeUnit.SECONDS)
+        val later = marker.copy(
+            armedAtMillis = wallAtStop - 1L,
+            armedElapsedRealtimeMillis = SystemClock.elapsedRealtime(),
+        )
+        writeSessionFixture(session, later)
+
+        assertTrue(RecordingIncidentStore.readIncidents(context).isEmpty())
+        assertEquals(later, readSessionFixture(session))
+    }
+
+    @Test fun backwardWallClockStillPublishesServiceStopAndKeepsMarkerArmed() = fixture { context, root ->
+        val session = File(root, "recording-session.bin")
+        val marker = armBeforeWallClockRollback(context, session)
+        RecordingIncidentStore.recordCaptureServiceStopped(context, "Service teardown")
+
+        val incident = RecordingIncidentStore.readIncidents(context).single()
+        assertEquals("Service teardown", incident.description)
+        assertEquals(marker.armedAtMillis, incident.captureArmedAtMillis)
+        assertEquals(marker, readSessionFixture(session))
+    }
+
+    private fun armBeforeWallClockRollback(context: Context, session: File): ActiveRecordingSessionMarker {
+        val armed = checkNotNull(RecordingIncidentStore.recordCaptureStarted(context).marker)
+        val shifted = armed.copy(armedAtMillis = armed.armedAtMillis + 60_000L)
+        // Model a backward wall change via the encoded arm. The live elapsed clock still moves.
+        writeSessionFixture(session, shifted)
+        ShadowSystemClock.advanceBy(1, TimeUnit.SECONDS)
+        assertTrue(System.currentTimeMillis() < shifted.armedAtMillis)
+        assertTrue(SystemClock.elapsedRealtime() > shifted.armedElapsedRealtimeMillis)
+        return shifted
+    }
+
+    private fun writeSessionFixture(session: File, marker: ActiveRecordingSessionMarker) {
+        DataOutputStream(session.outputStream()).use { RecordingIncidentStore.writeSessionPayload(it, marker) }
+    }
+
+    private fun readSessionFixture(session: File): ActiveRecordingSessionMarker =
+        DataInputStream(session.inputStream()).use(RecordingIncidentStore::readSessionPayload)
 
     private fun laterCaptureTime(previous: Long): Long {
         org.robolectric.shadows.ShadowSystemClock.advanceBy(1, TimeUnit.SECONDS)

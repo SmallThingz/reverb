@@ -2,12 +2,15 @@ package app.smallthingz.reverb
 
 import android.app.Application
 import android.content.res.Configuration
+import android.os.LocaleList
 import android.os.Process
 import android.util.Log
 import kotlin.system.exitProcess
 import smallthingz.ui.graphics.NoiseUiLifecycle
 
 class ReverbApplication : Application() {
+    private var notificationChannelLocales: LocaleList? = null
+
     // One main-thread-created token for this Application/process; never an Activity owner.
     internal var displayNightObserver: smallthingz.ui.components.NativeDisplayNightObserver? = null
         private set
@@ -22,6 +25,7 @@ class ReverbApplication : Application() {
             // Reconciliation clears any old forced mirror when independence is unavailable.
             Log.w("ReverbTheme", "Independent display night observation unavailable", error)
         }
+        notificationChannelLocales = resources.configuration.locales
         ReverbNotificationChannels.refreshExisting(this)
         QuickSaveTileOptions.refresh(this)
         Thread({
@@ -63,6 +67,9 @@ class ReverbApplication : Application() {
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
+        val locales = resources.configuration.locales
+        if (locales == notificationChannelLocales) return
+        notificationChannelLocales = locales
         ReverbNotificationChannels.refreshExisting(this)
     }
 

@@ -6,6 +6,7 @@ import androidx.activity.OnBackPressedDispatcher
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
+import java.time.ZoneId
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -193,10 +194,10 @@ class NativeIncidentsScreenOwnerTest {
         var pending: CompletableDeferred<IncidentHistoryPresentation>? = null
         var reads = 0
         var activeReads = 0
-        override suspend fun readHistory(): IncidentHistoryPresentation {
+        override suspend fun readHistory(zone: ZoneId): IncidentHistoryPresentation {
             reads++
             activeReads++
-            try { return pending?.await() ?: prepareIncidentHistory(emptyList()) }
+            try { return pending?.await() ?: prepareIncidentHistory(emptyList(), zone = zone) }
             finally { activeReads-- }
         }
         override fun toggleAcknowledgedInBackground(incident: RecordingIncident) = error("Unexpected mutation")

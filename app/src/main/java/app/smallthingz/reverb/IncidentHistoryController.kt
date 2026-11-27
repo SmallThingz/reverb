@@ -3,19 +3,23 @@ package app.smallthingz.reverb
 import android.content.Context
 import android.content.res.Configuration
 import android.content.res.Resources
+import java.time.ZoneId
 import java.util.Locale
 import androidx.annotation.MainThread
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.withContext
 
 /** The store transfers accepted mutations to its process owner before these methods return. */
 internal interface IncidentHistoryAccess {
     val revisions: StateFlow<Long>
-    suspend fun readHistory(): IncidentHistoryPresentation
+    suspend fun readHistory(zone: ZoneId): IncidentHistoryPresentation
     fun toggleAcknowledgedInBackground(incident: RecordingIncident)
     fun deleteInBackground(incidents: List<RecordingIncident>)
 }
@@ -29,6 +33,7 @@ internal interface IncidentHistoryAccess {
 internal class IncidentHistoryController(
     private val access: IncidentHistoryAccess,
     private val waitBeforeRetry: suspend (Long) -> Unit = { delay(it) },
+    private val displayTimeZone: () -> ZoneId = ZoneId::systemDefault,
 ) {
     constructor(context: Context) : this(StoredIncidentHistoryAccess(context.applicationContext,
         context.applicationContext.createConfigurationContext(Configuration(context.resources.configuration)).resources))
@@ -36,6 +41,11 @@ internal class IncidentHistoryController(
     var state: IncidentHistoryUiState = IncidentHistoryUiState()
         private set
     private var observing = false
+    private val timeZone = MutableStateFlow(displayTimeZone())
+
+    fun refreshDisplayTimeZone() {
+        timeZone.value = displayTimeZone()
+    }
 
     /**
      * One observer per controller. Invoke from the existing LaunchedEffect or a native root's
@@ -45,12 +55,13 @@ internal class IncidentHistoryController(
         check(!observing) { "Incident history already has an observer" }
         observing = true
         try {
+            refreshDisplayTimeZone()
             onStateChanged(state)
-            // Same immediate StateFlow load and latest-only cancellation as released MainScreen.
-            access.revisions.collectLatest {
+            // Both inputs use the same latest-only load and retry path.
+            combine(access.revisions, timeZone, ::Pair).distinctUntilChanged().collectLatest { (_, zone) ->
                 publish(state.loadStarted(), onStateChanged)
                 var retryDelayMillis = DURABLE_UI_RETRY_INITIAL_MILLIS
-                while (!loadIncidents(onStateChanged)) {
+                while (!loadIncidents(zone, onStateChanged)) {
                     waitBeforeRetry(retryDelayMillis)
                     retryDelayMillis = nextDurableUiRetryDelayMillis(retryDelayMillis)
                 }
@@ -74,9 +85,12 @@ internal class IncidentHistoryController(
         access.deleteInBackground(incidents)
     }
 
-    private suspend fun loadIncidents(onStateChanged: (IncidentHistoryUiState) -> Unit): Boolean {
+    private suspend fun loadIncidents(
+        zone: ZoneId,
+        onStateChanged: (IncidentHistoryUiState) -> Unit,
+    ): Boolean {
         val loaded = try {
-            access.readHistory()
+            access.readHistory(zone)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
@@ -102,9 +116,10 @@ private class StoredIncidentHistoryAccess(
     override val revisions: StateFlow<Long>
         get() = RecordingIncidentStore.historyRevision
 
-    override suspend fun readHistory(): IncidentHistoryPresentation = withContext(Dispatchers.IO) {
+    override suspend fun readHistory(zone: ZoneId): IncidentHistoryPresentation = withContext(Dispatchers.IO) {
         prepareIncidentHistory(RecordingIncidentStore.readIncidents(appContext),
-            locale = displayResources.configuration.locales[0] ?: Locale.getDefault(), resources = displayResources)
+            locale = displayResources.configuration.locales[0] ?: Locale.getDefault(), zone = zone,
+            resources = displayResources)
     }
 
     override fun toggleAcknowledgedInBackground(incident: RecordingIncident) {

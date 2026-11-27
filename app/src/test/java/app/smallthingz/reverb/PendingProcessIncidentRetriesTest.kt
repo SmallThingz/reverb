@@ -10,11 +10,14 @@ import org.junit.Test
 class PendingProcessIncidentRetriesTest {
     private val userRoot = File("/owned/user/no_backup")
     private val fixtureRoot = File("/owned/user/no_backup/fixture")
+    private val publicationEpoch = Any()
 
     private fun retry(root: File, time: Long, pid: Int = 42, started: Long = 10L) =
         PendingProcessIncidentRetry(
             root, time, "outage-$time", pid, started,
-            RecordingIncident(time, pid = pid, description = "outage-$time"),
+            occurredAtElapsedRealtimeMillis = time,
+            publicationEpoch = publicationEpoch,
+            incident = RecordingIncident(time, pid = pid, description = "outage-$time"),
         )
 
     @Test
@@ -53,16 +56,17 @@ class PendingProcessIncidentRetriesTest {
     }
 
     @Test
-    fun dedupRetainsFirstOutageOnlyWithinExactRootAndProcessLifetime() {
+    fun dedupRetainsFirstOutageOnlyWithinExactRootProcessAndPublicationEpoch() {
         val queue = PendingProcessIncidentRetries()
         val first = retry(userRoot, 100L)
         val newProcess = retry(userRoot, 300L, started = 11L)
         val newPid = retry(userRoot, 400L, pid = 43)
         val fixture = retry(fixtureRoot, 500L)
-        listOf(first, retry(userRoot, 200L), newProcess, newPid, fixture).forEach(queue::enqueue)
+        val sameTickNewArm = first.copy(publicationEpoch = Any())
+        listOf(first, retry(userRoot, 200L), newProcess, newPid, fixture, sameTickNewArm).forEach(queue::enqueue)
         val applied = mutableListOf<PendingProcessIncidentRetry>()
         queue.retryOwned(userRoot, applied::add)
-        assertEquals(listOf(first, newProcess, newPid), applied)
+        assertEquals(listOf(first, newProcess, newPid, sameTickNewArm), applied)
         assertEquals(listOf(fixture.incident), queue.incidents(fixtureRoot))
     }
 

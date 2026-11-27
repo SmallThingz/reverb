@@ -1,6 +1,7 @@
 package app.smallthingz.reverb
 
 import android.content.Context
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import android.media.AudioAttributes
 import android.media.AudioFormat
@@ -1466,7 +1467,8 @@ internal class TimelineAudioPreviewController(
             if (!isShuttleCurrent(token, ordinaryAuthority)) return@enqueueLatest
             val source = try {
                 timeShuttleStage(token, { PreviewShuttleStage.SOURCE_FACTORY }) { sourceFactory() }
-            } catch (_: Exception) {
+            } catch (error: Exception) {
+                postShuttleFailureRecovery(token, ordinaryAuthority, onFailureAfterStart, error)
                 activeShuttleToken.compareAndSet(token, 0L)
                 return@enqueueLatest
             }
@@ -1580,7 +1582,7 @@ internal class TimelineAudioPreviewController(
             if (ordinaryAuthority?.active == false) throw PreviewCancelled()
         }
         var startedCallbackSent = false
-        var resumeAfterFailure = false
+        var failure: Exception? = null
         try {
             checkShuttleCurrent()
             val channelCount = source.channelCount
@@ -2042,13 +2044,8 @@ internal class TimelineAudioPreviewController(
                     finishPendingTail()
                 }
             }
-        } catch (_: PreviewCancelled) {
-            Unit
-        } catch (_: Exception) {
-            // Cancellation/newer gestures stay silent. A real failure after AudioTrack took
-            // audible ownership must hand control back to the caller so it can restore its
-            // already-open player instead of leaving the gesture silent until finger-up.
-            resumeAfterFailure = startedCallbackSent && onFailureAfterStart != null && isShuttleCurrent(token, ordinaryAuthority)
+        } catch (error: Exception) {
+            failure = error
         } finally {
             try {
                 nativeScratchRun?.close()
@@ -2058,8 +2055,8 @@ internal class TimelineAudioPreviewController(
                 track?.let { quietOwner(it).retire() }
                 authorityHandle?.let { ordinaryAuthority?.detach(it) }
                 // Register proof ownership before a fallback can request normal playback.
-                if (resumeAfterFailure && onFailureAfterStart != null) postIfCurrent(token) {
-                    if (ordinaryAuthority?.active != false) onFailureAfterStart()
+                failure?.let { error ->
+                    postShuttleFailureRecovery(token, ordinaryAuthority, onFailureAfterStart, error, startedCallbackSent)
                 }
                 // A retiring worker must not clear a newer gesture published by the UI thread.
                 activeShuttleToken.compareAndSet(token, 0L)
@@ -2074,6 +2071,22 @@ internal class TimelineAudioPreviewController(
                     onFailure = onSourceCloseFailure,
                 )
             }
+        }
+    }
+
+    private fun postShuttleFailureRecovery(
+        token: Long,
+        authority: RecordingScrubAuthority?,
+        onFailureAfterStart: (() -> Unit)?,
+        error: Exception,
+        startedCallbackSent: Boolean = false,
+    ) {
+        if (error is PreviewCancelled || error is CancellationException || error is InterruptedException ||
+            Thread.currentThread().isInterrupted || onFailureAfterStart == null ||
+            !(authority?.playbackSuspended ?: startedCallbackSent) || !isShuttleCurrent(token, authority)) return
+        // The same Library gesture can still own suspension after its AudioTrack is replaced.
+        postIfCurrent(token) {
+            if (authority?.active != false) onFailureAfterStart()
         }
     }
 

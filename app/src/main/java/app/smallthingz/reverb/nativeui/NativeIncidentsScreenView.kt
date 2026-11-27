@@ -89,7 +89,7 @@ internal class NativeIncidentsScreenView(
         backLease = owner.registerBack(dispatcher, lifecycleOwner,
             selectionActive = { content?.selectionActive == true },
             consumeSelectionBack = { content?.consumeSelectionBack() == true })
-        try { renderLease = owner.connect(this) }
+        try { renderLease = owner.connect(this, lifecycleOwner) }
         catch (failure: Throwable) {
             try { close() } catch (cleanup: Throwable) { failure.addSuppressed(cleanup) }
             throw failure

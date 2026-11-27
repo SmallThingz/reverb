@@ -124,9 +124,25 @@ internal class DurableSaveCoordinator private constructor(private val context: C
     fun materialize(
         id: String,
         onFailurePublished: (DurableSavePublicationReceipt) -> Unit = {},
+        fromRecovery: Boolean = false,
+        onReady: (RecordingEntity) -> Unit = {},
         checkActive: () -> Unit,
-    ): RecordingEntity = synchronized(materializerLock) {
-        completed[id]?.let { return@synchronized it }
+    ): RecordingEntity {
+        val recording = synchronized(materializerLock) {
+            val cached = completed[id]
+            // A recovery scan can outlive the worker that already owns terminal delivery.
+            if (fromRecovery && cached != null) return cached
+            cached ?: materializeLocked(id, onFailurePublished, checkActive)
+        }
+        onReady(recording)
+        return recording
+    }
+
+    private fun materializeLocked(
+        id: String,
+        onFailurePublished: (DurableSavePublicationReceipt) -> Unit,
+        checkActive: () -> Unit,
+    ): RecordingEntity {
         var record = synchronized(journalLock) { journal.read(id) }
         var publicationOwner: RecordingOperationToken? = null
         var retired = false
@@ -150,7 +166,7 @@ internal class DurableSaveCoordinator private constructor(private val context: C
                 DurableSaveJobs.publish(record.pending(SavePhase.SAVING, progress))
             }
         }
-        try {
+        return try {
             checkActive()
             validateDestination(record)
             DurableSaveJobs.publish(record.pending(

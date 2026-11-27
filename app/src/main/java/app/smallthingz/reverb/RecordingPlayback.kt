@@ -63,6 +63,10 @@ internal object RecordingPlayback {
 
     internal fun takeStart(token: Long): Start? = pending?.takeIf { it.token == token }?.also { pending = null }
     internal fun hasPendingStart(): Boolean = pending != null
+    internal fun cancelPendingStartFor(owner: RecordingPlaybackService) {
+        val request = pending ?: return
+        if (service === owner && owner.ownsRecording(request.recording)) pending = null
+    }
     internal fun nextGeneration(): Long = ++nextOwner
     internal fun positionObserved(): Boolean = positionObservers.observed
     fun observePosition(token: Any, visible: Boolean) {
@@ -128,8 +132,7 @@ internal object RecordingPlayback {
         )
     }
     fun suspendForGesture(recording: RecordingEntity, authority: RecordingScrubAuthority) {
-        if (scrubAuthorities.owns(authority)) service?.suspendForGestureMatching(recording,
-            authority.key.generation, authority.key.transportIntentRevision)
+        if (scrubAuthorities.owns(authority)) service?.suspendForGestureMatching(recording, authority)
     }
     fun seek(recording: RecordingEntity, positionMillis: Int, resume: Boolean) {
         if (!resume && currentScrubKey(recording)?.retainedIdle == true) {

@@ -67,7 +67,7 @@ class RecordingPlaybackService : Service() {
     }
     private var focus: AudioFocusRequest? = null
     private lateinit var audio: AudioManager
-    private lateinit var session: MediaSession
+    private var session: MediaSession? = null
     private var publishedMetadataTitle: String? = null
     private var publishedMetadataDuration = -1
     private val attributes = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA)
@@ -91,27 +91,46 @@ class RecordingPlaybackService : Service() {
     override fun onCreate() {
         super.onCreate()
         audio = getSystemService(AudioManager::class.java)
-        session = MediaSession(this, "Reverb saved recording").apply {
-            setCallback(object : MediaSession.Callback() {
-                override fun onPlay() { recording?.let { RecordingPlayback.play(this@RecordingPlaybackService, it) } }
-                override fun onPause() = pauseCurrent()
-                override fun onStop() = finishPlayback()
-                override fun onSeekTo(pos: Long) {
-                    recording?.let { selected ->
-                        val resume = ownership.wantsPlayback
-                        queueExternalTransport {
-                            seekMatching(selected, pos.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt(), resume)
-                        }
-                    }
-                }
-            }, main)
-            isActive = true
-        }
         ContextCompat.registerReceiver(this, noisy, IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY),
             ContextCompat.RECEIVER_NOT_EXPORTED)
         noisyRegistered = true
         ReverbNotificationChannels.ensure(this, ReverbNotificationChannel.PLAYBACK)
         RecordingPlayback.attach(this)
+    }
+
+    private fun openSession(generation: Long) {
+        val current = MediaSession(this, "Reverb saved recording")
+        // Register ownership before configuration so the normal failure path releases a partial session.
+        session = current
+        publishedMetadataTitle = null
+        publishedMetadataDuration = -1
+        current.setCallback(object : MediaSession.Callback() {
+            override fun onPlay() {
+                if (ownership.current(generation)) recording?.let { RecordingPlayback.play(this@RecordingPlaybackService, it) }
+            }
+            override fun onPause() {
+                if (!ownership.current(generation)) return
+                RecordingPlayback.cancelPendingStartFor(this@RecordingPlaybackService)
+                pauseCurrent()
+            }
+            override fun onStop() {
+                if (!ownership.current(generation)) return
+                RecordingPlayback.cancelPendingStartFor(this@RecordingPlaybackService)
+                finishPlayback()
+            }
+            override fun onSeekTo(pos: Long) {
+                if (ownership.current(generation)) {
+                    queueExternalSeek(pos.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt(), ownership.wantsPlayback)
+                }
+            }
+        }, main)
+        current.isActive = true
+    }
+
+    private fun closeSession() {
+        val retired = session ?: return
+        session = null
+        cleanup { retired.release() }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -148,16 +167,17 @@ class RecordingPlaybackService : Service() {
         if (recording?.let { samePlaybackRecording(it, next) } == true && ownership.active) {
             if (promote) ensureForeground()
             ownership.resume()
-            queueExternalTransport {
-                if (requestedPosition != null) seekMatching(next, requestedPosition, true) else resume()
-            }
+            if (requestedPosition != null) queueExternalSeek(requestedPosition, resume = true)
+            else queueExternalTransport(::resume)
             return
         }
         releaseTransport()
+        closeSession()
         recording = next
         position = requestedPosition?.coerceAtLeast(0) ?: 0
         duration = next.durationMillis.coerceIn(1L, Int.MAX_VALUE.toLong()).toInt()
         val token = ownership.replace()
+        openSession(token)
         clockIdentity = "$instanceToken:$token"
         clockEpoch++
         // Establish the exact token before rendering controls, still before opening any source.
@@ -264,6 +284,11 @@ class RecordingPlaybackService : Service() {
         if (playing && RecordingPlayback.positionObserved()) main.post(progress)
     }
 
+    private fun queueExternalSeek(target: Int, resume: Boolean) = queueExternalTransport {
+        // A verified rename may have rebound the pinned stream within this command's generation.
+        recording?.let { seekMatching(it, target, resume) }
+    }
+
     private fun queueExternalTransport(command: () -> Unit) = guarded {
         clockEpoch++
         quietStart?.cancel()
@@ -361,11 +386,16 @@ class RecordingPlaybackService : Service() {
         RecordingPlayback.revokeScrub(this)
         pauseTransport(releaseFocus = true)
     }
-    internal fun suspendForGestureMatching(expected: RecordingEntity, generation: Long, transportIntentRevision: Long) = guarded {
-        if (!ownsRecording(expected) || !ownership.currentGesture(generation, transportIntentRevision)) return@guarded
+    internal fun suspendForGestureMatching(expected: RecordingEntity, authority: RecordingScrubAuthority) = guarded {
+        val key = authority.key
+        if (!authority.active || !ownsRecording(expected) ||
+            !ownership.currentGesture(key.generation, key.transportIntentRevision)) return@guarded
+        val suspendsPlayback = prepared && player != null &&
+            (playing || (ownership.seeks.pending && ownership.seeks.resume && ownership.wantsPlayback))
         ownership.suspendForGesture()
         // The gesture AudioTrack owns audible playback; keep focus until it resumes or is cancelled.
         pauseTransport(releaseFocus = false)
+        if (suspendsPlayback) authority.acknowledgePlaybackSuspended()
     }
     private fun pauseTransport(releaseFocus: Boolean) {
         quietStart?.cancel()
@@ -472,8 +502,10 @@ class RecordingPlaybackService : Service() {
                 actionIntent(ACTION_STOP))
             .setDeleteIntent(actionIntent(ACTION_STOP))
         // Platform MediaStyle avoids adding a second media framework to the app.
-        return Notification.Builder.recoverBuilder(this, builder.build())
-            .setStyle(Notification.MediaStyle().setMediaSession(session.sessionToken).setShowActionsInCompactView(0, 1))
+        val notice = builder.build()
+        val token = session?.sessionToken ?: return notice
+        return Notification.Builder.recoverBuilder(this, notice)
+            .setStyle(Notification.MediaStyle().setMediaSession(token).setShowActionsInCompactView(0, 1))
             .build()
     }
 
@@ -487,6 +519,7 @@ class RecordingPlaybackService : Service() {
             position, duration, ownership.generation, wantsPlayback = ownership.wantsPlayback,
             transportIntentRevision = ownership.transportIntentRevision, playbackAnchor = anchor))
         if (!updateNotification) return
+        val session = session ?: return
         val title = recording?.displayName.orEmpty()
         // Seeks and transport changes still publish their clock/state, but not identical metadata.
         if (publishedMetadataTitle != title || publishedMetadataDuration != duration) {
@@ -538,6 +571,7 @@ class RecordingPlaybackService : Service() {
             publish()
             if (retained != null) RecordingPlayback.publish(this, retained)
         }
+        closeSession()
         cleanup { ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE) }
         foreground = false
         cleanup { getSystemService(NotificationManager::class.java).cancel(NOTIFICATION_ID) }
@@ -565,7 +599,6 @@ class RecordingPlaybackService : Service() {
         RecordingPlayback.detach(this)
         scope.cancel()
         if (noisyRegistered) { noisyRegistered = false; cleanup { unregisterReceiver(noisy) } }
-        cleanup { session.release() }
         super.onDestroy()
     }
 

@@ -90,6 +90,8 @@ class ActualServiceLifecycleTest {
         lifecycle(capture = true, stopTimeout = StopTimeout.SEAL_FAILURE)
     @Test fun dataSyncTimeoutRevokesQueuedRestartAndStillDrainsThePendingStop() =
         lifecycle(capture = true, stopTimeout = StopTimeout.QUEUED_RESTART)
+    @Test fun dataSyncTimeoutRejectsLatePlatformStartUntilExplicitEnable() =
+        lifecycle(capture = true, stopTimeout = StopTimeout.LATE_PLATFORM_START)
     @Test fun homeStopCommitsBeforeHeldReadAndSupersedesOlderParkedToggle() =
         lifecycle(capture = true, stopEntry = StopEntry.HOME)
     @Test fun quickSettingsStopCommitsBeforeHeldReadAndUnblocksOlderSnapshotFence() =
@@ -147,7 +149,7 @@ class ActualServiceLifecycleTest {
         assertEquals(listOf("start", "promote"), events)
     }
 
-    private enum class StopTimeout { DRAIN, SEAL_FAILURE, QUEUED_RESTART }
+    private enum class StopTimeout { DRAIN, SEAL_FAILURE, QUEUED_RESTART, LATE_PLATFORM_START }
     private enum class StopEntry { HOME, QUICK_SETTINGS }
 
     private fun lifecycle(capture: Boolean, rejectedStartThrows: Boolean? = null,
@@ -816,17 +818,22 @@ class ActualServiceLifecycleTest {
             assertFalse(getRecorderPreferences(actual).getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, true))
             val incidentRoot = actual.applicationContext.noBackupFilesDir
             // Keep the ordinary Stop from attempting the injected seal before the timeout.
-            val queueRestart = stopTimeout == StopTimeout.QUEUED_RESTART || stopTimeout == StopTimeout.SEAL_FAILURE
+            val latePlatformStart = stopTimeout == StopTimeout.LATE_PLATFORM_START
+            val queueRestart = latePlatformStart || stopTimeout == StopTimeout.QUEUED_RESTART || stopTimeout == StopTimeout.SEAL_FAILURE
             if (queueRestart) {
                 assertTrue(actual.enableListening(ReverbService.BufferSlot.LOOPING).accepted)
                 assertTrue(getRecorderPreferences(actual).getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false))
                 assertEquals(2, starts.size)
-                assertEquals(Service.START_STICKY, actual.onStartCommand(starts.last(), 0, 38))
+                if (!latePlatformStart) assertEquals(Service.START_STICKY, actual.onStartCommand(starts.last(), 0, 38))
             }
             if (stopTimeout != null) {
                 val generation = field(actual, "listeningCommandGeneration") as AtomicLong
                 val beforeTimeout = generation.get()
                 actual.onTimeout(37, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+                if (latePlatformStart) {
+                    assertEquals(Service.START_NOT_STICKY, actual.onStartCommand(starts.last(), 0, 38))
+                    assertEquals(0, field(actual, "foregroundServiceTypes"))
+                }
                 assertEquals(armed.marker, RecordingIncidentStore.beginKnownCaptureStop(actual).marker)
                 assertTrue(captureHistory(incidentRoot).isEmpty())
                 if (queueRestart) {
@@ -858,6 +865,13 @@ class ActualServiceLifecycleTest {
             }
             if (queueRestart) {
                 assertEquals(1, actual.inputAttempts.get())
+                if (latePlatformStart) {
+                    assertEquals(0, field(actual, "foregroundServiceTypes"))
+                    assertTrue(getRecorderPreferences(actual).getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false))
+                    // A fresh explicit Start can request foreground admission on this same instance.
+                    assertTrue(actual.enableListening(ReverbService.BufferSlot.LOOPING).accepted)
+                    assertEquals(3, starts.size)
+                }
                 assertTrue(actual.disableListening().accepted)
                 fence(handler)
             }
@@ -881,7 +895,12 @@ class ActualServiceLifecycleTest {
             }
             snapshot.close(); retained.remove(snapshot)
             assertEquals(2, packet.reads.get())
-            assertEquals(if (queueRestart || stopEntry == StopEntry.QUICK_SETTINGS) 2 else 1, starts.size)
+            val expectedStarts = when {
+                latePlatformStart -> 3
+                queueRestart || stopEntry == StopEntry.QUICK_SETTINGS -> 2
+                else -> 1
+            }
+            assertEquals(expectedStarts, starts.size)
         } catch (error: Throwable) {
             failure = error
             throw error

@@ -22,6 +22,13 @@ internal class RecordingScrubAuthority internal constructor(
     private var handle: RecordingScrubQuietHandle? = null
     @Volatile var active = true
         private set
+    @Volatile var playbackSuspended = false
+        private set
+
+    /** The matching service paused playback or suppressed an accepted seek resume for this gesture. */
+    fun acknowledgePlaybackSuspended() = synchronized(lock) {
+        if (active) playbackSuspended = true
+    }
 
     fun attach(next: RecordingScrubQuietHandle): Boolean {
         val accepted = synchronized(lock) {

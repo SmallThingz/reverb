@@ -180,7 +180,11 @@ class MainActivity : ComponentActivity() {
                         deletionConsentToken = request.token
                         try {
                             registerDeletionConsent(request.token)
-                            deletionConsentLauncher?.launch(IntentSenderRequest.Builder(request.sender).build())
+                            deletionConsentLauncher?.let { launcher ->
+                                request.launchAfterStoppingPlayback { sender ->
+                                    launcher.launch(IntentSenderRequest.Builder(sender).build())
+                                }
+                            }
                         } catch (error: android.content.IntentSender.SendIntentException) {
                             retireDeletionConsentLauncher()
                             RecordingDeletionConsent.finish(this@MainActivity, request.token, false, launchFailed = true, launchFailure = error)

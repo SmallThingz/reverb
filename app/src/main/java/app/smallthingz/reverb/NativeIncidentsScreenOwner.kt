@@ -1,18 +1,25 @@
 package app.smallthingz.reverb
 
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import androidx.activity.BackEventCompat
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.OnBackPressedDispatcher
+import androidx.core.content.ContextCompat
 import smallthingz.ui.animation.core.Animatable
 import smallthingz.ui.animation.core.FastOutSlowInEasing
 import smallthingz.ui.animation.core.tween
 import smallthingz.ui.runtime.MonotonicFrameClock
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.isActive
@@ -36,6 +43,7 @@ internal class NativeIncidentsScreenOwner(
     private var onAlertChanged: (Boolean) -> Unit,
     val history: IncidentHistoryController = IncidentHistoryController(context),
 ) : AutoCloseable {
+    private val appContext = context.applicationContext
     private val scope = CoroutineScope(parentScope.coroutineContext + Job(parentScope.coroutineContext[Job]))
     init { requireNotNull(scope.coroutineContext[MonotonicFrameClock]) { "Incidents requires its window frame clock" } }
     private var open = initiallyOpen
@@ -64,7 +72,7 @@ internal class NativeIncidentsScreenOwner(
         }
     }
 
-    fun connect(value: NativeIncidentsRenderer): AutoCloseable {
+    fun connect(value: NativeIncidentsRenderer, lifecycleOwner: LifecycleOwner? = null): AutoCloseable {
         check(!closed && renderer == null) { "Incidents already has a renderer" }
         val token = Any()
         rendererToken = token
@@ -76,7 +84,28 @@ internal class NativeIncidentsScreenOwner(
             if (rendererToken === token) { renderer = null; rendererToken = null }
             throw failure
         }
+        val timeZoneObservation = lifecycleOwner?.let { owner ->
+            scope.launch {
+                owner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                    val receiver = object : BroadcastReceiver() {
+                        override fun onReceive(context: Context, intent: Intent) {
+                            history.refreshDisplayTimeZone()
+                        }
+                    }
+                    ContextCompat.registerReceiver(appContext, receiver,
+                        IntentFilter(Intent.ACTION_TIMEZONE_CHANGED), ContextCompat.RECEIVER_NOT_EXPORTED)
+                    try {
+                        // Also catch changes while the receiver was off.
+                        history.refreshDisplayTimeZone()
+                        awaitCancellation()
+                    } finally {
+                        appContext.unregisterReceiver(receiver)
+                    }
+                }
+            }
+        }
         return AutoCloseable {
+            timeZoneObservation?.cancel()
             if (rendererToken === token) { renderer = null; rendererToken = null }
         }
     }

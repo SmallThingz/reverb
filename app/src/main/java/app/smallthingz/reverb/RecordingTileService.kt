@@ -418,6 +418,8 @@ internal object RecordingQuickTileStateCache {
         }
     }
 
+    fun publicationGeneration(): Long = synchronized(stateLock) { stateGeneration }
+
     fun observationGeneration(): Long = synchronized(stateLock) { completedClearGeneration }
 
     fun oneShotFullObservationGeneration(): Long = synchronized(stateLock) { oneShotClearGeneration }
@@ -513,22 +515,28 @@ internal object RecordingQuickTileStateCache {
     }
 
     fun markServiceStopped(context: Context, owner: Any): RecordingTileSnapshot =
-        markRuntimeUnavailable(context, persistLatestDurations = true, stoppedOwner = owner)
+        checkNotNull(markRuntimeUnavailable(context, persistLatestDurations = true, stoppedOwner = owner))
 
     fun markRuntimeUnavailable(context: Context): RecordingTileSnapshot =
-        markRuntimeUnavailable(context, persistLatestDurations = false)
+        checkNotNull(markRuntimeUnavailable(context, persistLatestDurations = false))
+
+    fun markTileStartFailed(context: Context, publicationAtStart: Long): Boolean =
+        markRuntimeUnavailable(context, persistLatestDurations = false, publicationAtStart = publicationAtStart) != null
 
     private fun markRuntimeUnavailable(
         context: Context,
         persistLatestDurations: Boolean,
         stoppedOwner: Any? = null,
-    ): RecordingTileSnapshot {
+        publicationAtStart: Long? = null,
+    ): RecordingTileSnapshot? {
         val appContext = context.applicationContext
         val stopped: RecordingTileSnapshot
         val expectedGeneration: Long
         val expectedOwner: Any?
         synchronized(stateLock) {
             if (stoppedOwner != null && runtimeOwner !== stoppedOwner) return readNonBlocking()
+            // A rejected platform handoff cannot revoke a runtime publication that arrived during it.
+            if (publicationAtStart != null && runtimeAuthoritative && stateGeneration != publicationAtStart) return null
             if (stoppedOwner != null) runtimeOwnerStopped = true
             expectedOwner = runtimeOwner
             stopped = failClosedRecordingTileSnapshot(cachedSnapshot)
@@ -927,6 +935,7 @@ abstract class RecordingTileService : TileService() {
 
     private var tileListening = false
     private var tileDestroyed = false
+    private var actionGeneration = 0L
     private var tileIcon: Icon? = null
     private lateinit var tileObservation: RecordingTileObservation
 
@@ -947,6 +956,7 @@ abstract class RecordingTileService : TileService() {
     }
 
     override fun onTileRemoved() {
+        actionGeneration++
         tileListening = false
         RecordingQuickTiles.observeRemoved(this, tileObservation)
         super.onTileRemoved()
@@ -972,30 +982,33 @@ abstract class RecordingTileService : TileService() {
             refreshFromCacheAndHydrate()
             return
         }
-        val action = { dispatchTileAction() }
+        val generation = actionGeneration
+        val action = { dispatchTileAction(generation) }
         if (isLocked) unlockAndRun(action) else action()
     }
 
     override fun onDestroy() {
+        actionGeneration++
         tileDestroyed = true
         tileListening = false
         RecordingQuickTiles.endObservation(this, tileObservation)
         super.onDestroy()
     }
 
-    private fun dispatchTileAction() {
+    private fun dispatchTileAction(generation: Long) {
         // SystemUI is free to destroy this TileService as soon as the click collapses the shade.
         // Transfer ownership synchronously to ReverbService's started lifetime instead of binding
         // from this short-lived component and losing the action during normal TileService teardown.
-        if (tileDestroyed) return
+        if (tileDestroyed || generation != actionGeneration ||
+            !RecordingQuickTiles.observationIsCurrent(tileObservation)) return
         val intent = Intent(this, ReverbService::class.java)
             .setAction(ReverbService.ACTION_QUICK_TILE_COMMAND)
             .putExtra(ReverbService.EXTRA_QUICK_TILE_BUFFER_SLOT, bufferSlot.storageCode.toInt())
+        val publicationAtStart = RecordingQuickTileStateCache.publicationGeneration()
         val started = runCatching {
             requireServiceStarted { startForegroundService(intent) }
         }.isSuccess
-        if (!started) {
-            RecordingQuickTileStateCache.markRuntimeUnavailable(this)
+        if (!started && RecordingQuickTileStateCache.markTileStartFailed(this, publicationAtStart)) {
             RecordingQuickTiles.refreshCachedSnapshot(this, requestSystemRefresh = true)
         }
     }

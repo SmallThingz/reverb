@@ -409,6 +409,70 @@ class MediaStoreCatalogObservationTest {
         }
     }
 
+    @Test fun deleteRejectsRevisionChangedDuringFinalPresenceQuery() = runBlocking {
+        CatalogRowProvider.values = row()
+        val selected = selection().copy(createdAtMillis = 1L, lastSeenAtMillis = 1L)
+        val db = RecordingDatabase.getInstance(app)
+        assertOwnedDatabase(db)
+        val dao = db.recordingDao()
+        val preferences = getRecorderPreferences(app)
+        val journalKey = PrefKey.PENDING_RECORDING_DELETIONS.name
+        val payload = Files.createTempFile(app.cacheDir.toPath(), "mediastore-delete-", ".wav").toFile()
+        val replacementBytes = ByteArray(120) { 22 }
+        var ownsRow = false
+        var ownsJournal = false
+        var bodyFailure: Throwable? = null
+        try {
+            assertNull("test owns a fresh catalog ID", dao.findById(selected.id))
+            assertFalse("test owns the deletion journal", preferences.contains(journalKey))
+            ownsRow = true
+            ownsJournal = true
+            dao.upsert(selected)
+            payload.writeBytes(ByteArray(120) { 11 })
+            CatalogRowProvider.descriptorSource = payload
+            CatalogRowProvider.deleteRow = {
+                check(payload.delete())
+                CatalogRowProvider.empty = true
+                1
+            }
+            var changedDuringPresence = false
+            CatalogRowProvider.onPresenceQuery = {
+                changedDuringPresence = true
+                payload.writeBytes(replacementBytes)
+                CatalogRowProvider.values = row(generation = 10L)
+            }
+
+            assertFalse(RecordingRepository.deleteExactWithoutPendingReplay(app, selected))
+            assertTrue("fixture reached the last presence query", changedDuringPresence)
+            assertEquals(0, CatalogRowProvider.mutationCalls)
+            assertArrayEquals(replacementBytes, payload.readBytes())
+            assertEquals(selected, dao.findById(selected.id))
+            val pending = checkNotNull(decodePendingDeletionIntent(
+                preferences.getStringSet(journalKey, emptySet()).orEmpty().single(),
+            ))
+            assertEquals(selected.id, pending.id)
+            assertFalse(pending.assetDeleted)
+
+            val revised = RecordingRepository.register(app, selected.copy(fileIdentity = checkNotNull(observed()).identity))
+            assertNotEquals(selected.fileIdentity, revised.fileIdentity)
+            assertTrue(RecordingRepository.delete(app, revised))
+            assertEquals(1, CatalogRowProvider.mutationCalls)
+            assertFalse(payload.exists())
+            assertNull(dao.findById(selected.id))
+            assertTrue(preferences.getStringSet(journalKey, emptySet()).orEmpty().isEmpty())
+        } catch (error: Throwable) {
+            bodyFailure = error
+            throw error
+        } finally {
+            cleanupRegistration(bodyFailure, listOf(
+                { if (ownsJournal) check(preferences.edit().remove(journalKey).commit()) },
+                { if (ownsRow) dao.deleteById(selected.id) },
+                { RecordingDatabase.resetAfterCorruption() },
+                { Files.deleteIfExists(payload.toPath()) },
+            ))
+        }
+    }
+
     @Test fun registerRechecksProviderAfterActualCatalogWriteFailure() = runBlocking {
         CatalogRowProvider.values = row()
         val selected = selection().copy(createdAtMillis = 1L, lastSeenAtMillis = 1L)
@@ -496,6 +560,8 @@ private class CatalogRowProvider : ContentProvider() {
         var calls = 0
         var openCalls = 0
         var mutationCalls = 0
+        var onPresenceQuery: (() -> Unit)? = null
+        var deleteRow: (() -> Int)? = null
         var lastOpenUri: Uri? = null
         var lastOpenMode: String? = null
         var descriptorSource: File? = null
@@ -508,6 +574,7 @@ private class CatalogRowProvider : ContentProvider() {
             empty = false; returnNull = false; queryFailure = false; closeFailure = false
             calls = 0; lastProjection = null; lastUri = null; lastCursor = null
             openCalls = 0; mutationCalls = 0; lastOpenUri = null; lastOpenMode = null
+            onPresenceQuery = null; deleteRow = null
             descriptorSource = null; openedDescriptor = null
         }
     }
@@ -520,6 +587,11 @@ private class CatalogRowProvider : ContentProvider() {
         lastUri = uri
         if (queryFailure || (denySecond && calls == 2)) throw SecurityException("provider access denied")
         if (returnNull) return null
+        if (projection?.size == 1 && projection[0] == MediaStore.MediaColumns._ID) {
+            val onPresence = onPresenceQuery
+            onPresenceQuery = null
+            onPresence?.invoke()
+        }
         val cursor = object : MatrixCursor(requireNotNull(projection)) {
             override fun close() {
                 super.close()
@@ -557,7 +629,8 @@ private class CatalogRowProvider : ContentProvider() {
     override fun getType(uri: Uri): String? = null
     override fun insert(uri: Uri, values: ContentValues?): Uri? { mutationCalls++; return null }
     override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?): Int {
-        mutationCalls++; return 0
+        mutationCalls++
+        return deleteRow?.invoke() ?: 0
     }
     override fun update(uri: Uri, values: ContentValues?, selection: String?, selectionArgs: Array<out String>?): Int {
         mutationCalls++; return 0

@@ -2,6 +2,9 @@ package app.smallthingz.reverb
 
 import android.Manifest
 import android.app.Application
+import android.app.Notification
+import android.app.NotificationManager
+import android.content.Intent
 import android.content.pm.ProviderInfo
 import android.database.Cursor
 import android.database.MatrixCursor
@@ -38,6 +41,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -99,6 +103,203 @@ class RecordingPlaybackServiceCallbackBoundaryTest {
         assertFalse(finalState.playing)
         assertFalse(finalState.wantsPlayback)
         assertFalse("Delayed preparation must not resurrect a paused owner", media.isReallyPlaying)
+    }
+
+    @Test fun consentLaunchStopsMatchingPendingStartAndPinnedTransportOnly() = withPlaybackService { media, _, _, _ ->
+        val app = RuntimeEnvironment.getApplication()
+        val audio = checkNotNull(app.getSystemService(AudioManager::class.java))
+        Shadows.shadowOf(audio).setNextFocusRequestResponse(AudioManager.AUDIOFOCUS_REQUEST_GRANTED)
+        media.invokePreparedListener()
+        val service = readField(RecordingPlayback, "service") as RecordingPlaybackService
+        val selected = checkNotNull(RecordingPlayback.state.value.recording)
+        assertTrue(RecordingPlayback.state.value.playing)
+        assertTrue(media.isReallyPlaying)
+        assertTrue(RecordingPlayback.play(app, selected))
+        val heldStart = checkNotNull(Shadows.shadowOf(app).nextStartedService)
+        val sender = android.app.PendingIntent.getActivity(app, 0, Intent(app, MainActivity::class.java),
+            android.app.PendingIntent.FLAG_IMMUTABLE).intentSender
+        val launched = mutableListOf<RecordingEntity>()
+        fun prompt(target: RecordingEntity, onLaunch: () -> Unit) {
+            val proof = PendingDeletionIntent(target.id, target.sizeBytes, "01".repeat(32), false)
+            RecordingDeletionConsentLaunch("prompt", sender, listOf(RecordingDeletionConsentTarget(target, proof)))
+                .launchAfterStoppingPlayback {
+                    assertSame(sender, it)
+                    launched += target
+                    onLaunch()
+                }
+        }
+        val replacement = selected.copy(fileIdentity = selected.fileIdentity + "-replacement")
+        prompt(replacement) {
+            assertTrue(RecordingPlayback.hasPendingStart())
+            assertTrue(service.ownsRecording(selected))
+            assertTrue(media.isReallyPlaying)
+        }
+        prompt(selected) {
+            assertFalse(RecordingPlayback.hasPendingStart())
+            assertFalse(service.ownsRecording(selected))
+            assertNull(readField(service, "player"))
+            assertNull(RecordingPlayback.state.value.recording)
+        }
+        service.onStartCommand(heldStart, 0, 2)
+        ShadowLooper.idleMainLooper()
+        assertFalse(service.ownsRecording(selected))
+        assertNull(RecordingPlayback.state.value.recording)
+        assertEquals(listOf(replacement, selected), launched)
+    }
+
+    @Test fun currentSessionPauseCancelsHeldPlay() = heldPlayCancelledBySession(stop = false)
+
+    @Test fun currentSessionStopCancelsHeldPlay() = heldPlayCancelledBySession(stop = true)
+
+    @Test fun currentSessionPauseCancelsHeldPlayAcrossVerifiedRename() =
+        heldPlayCancelledBySession(stop = false, rename = true)
+
+    private fun heldPlayCancelledBySession(stop: Boolean, rename: Boolean = false) =
+        withPlaybackService { media, handler, callback, _ ->
+            val service = readField(RecordingPlayback, "service") as RecordingPlaybackService
+            callback.onPause()
+            media.invokePreparedListener()
+            val prepared = RecordingPlayback.state.value
+            val original = checkNotNull(prepared.recording)
+            val session = readField(service, "session") as MediaSession
+            val player = readField(service, "player") as MediaPlayer
+            assertTrue(prepared.prepared)
+            assertFalse(prepared.wantsPlayback)
+
+            val heldStart = holdSessionPlay(handler, callback)
+            val expected = if (rename) original.copy(id = original.id + ".renamed", displayName = "renamed.wav")
+                else original
+            try {
+                if (rename) {
+                    // Exercise the verified rename rebind while the prepared stream and session are pinned.
+                    RecordingPlayback.renamed(original, expected)
+                    assertSame(session, readField(service, "session"))
+                    assertEquals(expected, RecordingPlayback.state.value.recording)
+                    assertEquals(prepared.generation, RecordingPlayback.state.value.generation)
+                    val request = readField(RecordingPlayback, "pending") as RecordingPlayback.Start
+                    assertEquals(expected, request.recording)
+                }
+                assertTrue(handler.post { if (stop) callback.onStop() else callback.onPause() })
+                ShadowLooper.idleMainLooper()
+                val pendingAtDelivery = RecordingPlayback.hasPendingStart()
+
+                service.onStartCommand(heldStart, 0, 2)
+                ShadowLooper.idleMainLooper()
+
+                val settled = RecordingPlayback.state.value
+                assertFalse(settled.playing)
+                assertFalse(settled.wantsPlayback)
+                assertFalse(media.isReallyPlaying)
+                assertFalse("The terminal command must retire its held start before delivery", pendingAtDelivery)
+                assertFalse(RecordingPlayback.hasPendingStart())
+                if (stop) {
+                    assertNull(settled.recording)
+                    assertNull(readField(service, "session"))
+                    assertNull(readField(service, "player"))
+                    assertNull(readField(service, "opening"))
+                } else {
+                    assertTrue(settled.prepared)
+                    assertEquals(expected, settled.recording)
+                    assertEquals(prepared.generation, settled.generation)
+                    assertSame(session, readField(service, "session"))
+                    assertSame(player, readField(service, "player"))
+                }
+            } finally {
+                if (rename) RecordingPlayback.stop(expected)
+            }
+        }
+
+    @Test fun currentSessionStopPreservesHeldPlayForAnotherRecording() {
+        val app = RuntimeEnvironment.getApplication()
+        val secondFile = File.createTempFile("session-pending-replacement-", ".wav", app.cacheDir)
+        withPlaybackService(additionalSource = secondFile) { media, handler, callback, _ ->
+            val service = readField(RecordingPlayback, "service") as RecordingPlaybackService
+            callback.onPause()
+            media.invokePreparedListener()
+            val prepared = RecordingPlayback.state.value
+            val first = checkNotNull(prepared.recording)
+            assertTrue(prepared.prepared)
+            val firstSession = readField(service, "session") as MediaSession
+            holdSessionPlay(handler, callback)
+            File(first.id).copyTo(secondFile, overwrite = true)
+            PlaybackSessionOsShadow.targetPath = secondFile.absolutePath
+            val second = fileRecording(secondFile)
+            assertTrue(second.fileIdentity.isNotBlank())
+            try {
+                assertTrue(RecordingPlayback.play(app, second))
+                val heldReplacement = checkNotNull(Shadows.shadowOf(app).nextStartedService)
+                assertTrue(handler.post { callback.onStop() })
+                ShadowLooper.idleMainLooper()
+                assertNull(readField(service, "session"))
+                assertTrue("Stopping A must leave B's accepted start armed", RecordingPlayback.hasPendingStart())
+
+                service.onStartCommand(heldReplacement, 0, 2)
+                val adopted = RecordingPlayback.state.value
+                assertEquals(second, adopted.recording)
+                assertTrue(adopted.generation != prepared.generation)
+                assertTrue(adopted.wantsPlayback)
+                val secondSession = readField(service, "session")
+                assertNotNull(secondSession)
+                assertTrue(firstSession !== secondSession)
+                assertFalse(RecordingPlayback.hasPendingStart())
+                awaitPlayer(service)
+            } finally {
+                RecordingPlayback.stop(second)
+            }
+        }
+    }
+
+    private fun holdSessionPlay(handler: Handler, callback: MediaSession.Callback): Intent {
+        assertTrue(handler.post { callback.onPlay() })
+        ShadowLooper.idleMainLooper()
+        assertTrue(RecordingPlayback.hasPendingStart())
+        return checkNotNull(Shadows.shadowOf(RuntimeEnvironment.getApplication()).nextStartedService)
+            .also { assertTrue(it.hasExtra(RecordingPlaybackService.EXTRA_REQUEST)) }
+    }
+
+    @Test fun queuedPausedSessionSeekSurvivesVerifiedRename() = queuedSeekAcrossRename(positionedStart = false)
+
+    @Test fun queuedPositionedStartSurvivesVerifiedRename() = queuedSeekAcrossRename(positionedStart = true)
+
+    private fun queuedSeekAcrossRename(positionedStart: Boolean) = withPlaybackService(prepareDelay = 120_000) { media, _, callback, main ->
+        val service = readField(RecordingPlayback, "service") as RecordingPlaybackService
+        val idle = readField(service, "idleRelease") as Runnable
+        val original = checkNotNull(RecordingPlayback.state.value.recording)
+        val renamed = original.copy(id = original.id + ".renamed", displayName = "renamed.wav")
+        val generation = RecordingPlayback.state.value.generation
+        callback.onPause()
+        media.setSeekDelay(-1)
+        media.invokePreparedListener()
+        assertTrue(main.hasCallbacks(idle))
+        if (positionedStart) {
+            val app = RuntimeEnvironment.getApplication()
+            assertTrue(RecordingPlayback.play(app, original, 900))
+            service.onStartCommand(checkNotNull(Shadows.shadowOf(app).nextStartedService), 0, 2)
+        } else callback.onSeekTo(900)
+        assertFalse(main.hasCallbacks(idle))
+        assertFalse(RecordingPlayback.state.value.prepared)
+        RecordingPlayback.renamed(original, renamed)
+        assertEquals(generation, RecordingPlayback.state.value.generation)
+        ShadowLooper.idleMainLooper()
+        assertEquals(900, media.pendingSeek)
+        val state = RecordingPlayback.state.value
+        assertEquals(renamed, state.recording)
+        assertTrue(state.prepared)
+        assertFalse(state.playing)
+        assertEquals(positionedStart, state.wantsPlayback)
+        assertEquals(!positionedStart, main.hasCallbacks(idle))
+        // The old FILE path is still inadmissible for an externally supplied seek.
+        RecordingPlayback.seek(original, 100, resume = false)
+        assertEquals(state, RecordingPlayback.state.value)
+        if (!positionedStart) {
+            media.invokeSeekCompleteListener()
+            assertEquals(900, RecordingPlayback.state.value.positionMillis)
+            ShadowLooper.idleMainLooper(60_000L, TimeUnit.MILLISECONDS)
+            assertFalse(service.ownsRecording(renamed))
+            assertEquals(renamed, RecordingPlayback.state.value.recording)
+            assertEquals(900, RecordingPlayback.state.value.positionMillis)
+            assertFalse(main.hasCallbacks(idle))
+        }
     }
 
     @Test
@@ -182,6 +383,46 @@ class RecordingPlaybackServiceCallbackBoundaryTest {
         }
 
     @Test
+    fun matchingScrubAcknowledgesSuppressedPendingSeekResume() =
+        withPlaybackService(startPosition = 300) { media, _, _, _ ->
+            val audio = checkNotNull(RuntimeEnvironment.getApplication().getSystemService(AudioManager::class.java))
+            Shadows.shadowOf(audio).setNextFocusRequestResponse(AudioManager.AUDIOFOCUS_REQUEST_GRANTED)
+            media.setSeekDelay(-1)
+            media.invokePreparedListener()
+
+            val beforeHandoff = RecordingPlayback.state.value
+            val recording = checkNotNull(beforeHandoff.recording)
+            assertTrue(beforeHandoff.prepared)
+            assertTrue(beforeHandoff.wantsPlayback)
+            assertFalse(beforeHandoff.playing)
+            assertFalse(media.isReallyPlaying)
+            assertEquals(300, media.pendingSeek)
+
+            val revoked = checkNotNull(RecordingPlayback.acquireScrub(recording))
+            val authority = checkNotNull(RecordingPlayback.acquireScrub(recording))
+            assertFalse(revoked.active)
+            RecordingPlayback.suspendForGesture(recording, revoked)
+            assertFalse(revoked.playbackSuspended)
+            assertEquals(beforeHandoff, RecordingPlayback.state.value)
+
+            assertTrue(authority.resumePlayback)
+            assertFalse(authority.playbackSuspended)
+            RecordingPlayback.suspendForGesture(recording, authority)
+            assertTrue(authority.playbackSuspended)
+            assertTrue(RecordingPlayback.isScrubCurrent(recording, authority))
+            assertFalse(RecordingPlayback.state.value.wantsPlayback)
+            assertEquals(300, media.pendingSeek)
+
+            media.invokeSeekCompleteListener()
+            ShadowLooper.idleMainLooper()
+            assertEquals(-1, media.pendingSeek)
+            assertEquals(300, media.currentPositionRaw)
+            assertFalse("The accepted seek must finish without restarting playback during the scrub", media.isReallyPlaying)
+            assertFalse(RecordingPlayback.state.value.playing)
+            assertTrue(RecordingPlayback.isScrubCurrent(recording, authority))
+        }
+
+    @Test
     @Config(shadows = [PlaybackMetadataShadow::class])
     fun pausedSeeksReuseMetadataButPreparationRenameAndStopPublishChanges() =
         withPlaybackService(declaredDuration = 1_000) { media, _, callback, _ ->
@@ -217,6 +458,73 @@ class RecordingPlaybackServiceCallbackBoundaryTest {
             assertMetadata(4, "", 0)
             assertFalse(RecordingPlayback.state.value.playing)
         }
+
+    @Test
+    @Config(shadows = [PlaybackMetadataShadow::class])
+    fun replacingRecordingRetiresSessionTokenAndQueuedTransport() {
+        val app = RuntimeEnvironment.getApplication()
+        val secondFile = File.createTempFile("session-replacement-", ".wav", app.cacheDir)
+        withPlaybackService(additionalSource = secondFile) { firstPlayer, firstHandler, firstCallback, _ ->
+            val service = readField(RecordingPlayback, "service") as RecordingPlaybackService
+            val notices = checkNotNull(service.getSystemService(NotificationManager::class.java))
+            fun publishedToken(): MediaSession.Token = checkNotNull(notices.activeNotifications
+                .single { it.id == 7391 }.notification.extras
+                .getParcelable(Notification.EXTRA_MEDIA_SESSION, MediaSession.Token::class.java))
+
+            val first = checkNotNull(RecordingPlayback.state.value.recording)
+            val firstGeneration = RecordingPlayback.state.value.generation
+            val firstToken = publishedToken()
+            firstCallback.onPause()
+            firstPlayer.invokePreparedListener()
+            assertEquals(firstToken, publishedToken())
+            // A's accepted seek has already posted its service command when B is adopted.
+            firstCallback.onSeekTo(1_300)
+            File(first.id).copyTo(secondFile, overwrite = true)
+            PlaybackSessionOsShadow.targetPath = secondFile.absolutePath
+            val second = fileRecording(secondFile).copy(displayName = first.displayName)
+            assertTrue(RecordingPlayback.play(app, second, 0))
+            service.onStartCommand(checkNotNull(Shadows.shadowOf(app).nextStartedService), 0, 2)
+            val adopted = RecordingPlayback.state.value
+            assertTrue(adopted.generation != firstGeneration)
+            assertEquals(second, adopted.recording)
+            val secondSession = readField(service, "session") as MediaSession
+            val secondToken = publishedToken()
+            assertTrue("A retained notification must address a distinct session", firstToken != secondToken)
+            assertEquals(secondSession.sessionToken, secondToken)
+            val metadata = Shadow.extract<PlaybackMetadataShadow>(secondSession).updates.single()
+            assertEquals(second.displayName, metadata.getString(MediaMetadata.METADATA_KEY_TITLE))
+            assertEquals(second.durationMillis, metadata.getLong(MediaMetadata.METADATA_KEY_DURATION))
+
+            // Deliver a retained callback on its actual handler even if release removed older messages.
+            var dispatched = false
+            assertTrue(firstHandler.post {
+                firstCallback.onPause()
+                firstCallback.onPlay()
+                firstCallback.onSeekTo(700)
+                firstCallback.onStop()
+                dispatched = true
+            })
+            ShadowLooper.idleMainLooper()
+            assertTrue(dispatched)
+            assertEquals(adopted, RecordingPlayback.state.value)
+            assertFalse(RecordingPlayback.hasPendingStart())
+            assertNull(Shadows.shadowOf(app).nextStartedService)
+
+            val currentHandler = readField(secondSession, "mCallback") as Handler
+            val current = readField(currentHandler, "mCallback") as MediaSession.Callback
+            val player = Shadow.extract<ShadowMediaPlayer>(awaitPlayer(service))
+            current.onPause()
+            player.setSeekDelay(-1)
+            player.invokePreparedListener()
+            assertTrue(currentHandler.post { current.onSeekTo(450) })
+            ShadowLooper.idleMainLooper()
+            assertEquals(450, player.pendingSeek)
+            assertEquals(second, RecordingPlayback.state.value.recording)
+            assertEquals(secondToken, publishedToken())
+            current.onStop()
+            assertNull(RecordingPlayback.state.value.recording)
+        }
+    }
 
     @Test fun blockedDocumentOpenAdmitsOnlyTheLatestReplacement() =
         exerciseBlockedProvider(blockInVerification = false)
@@ -336,6 +644,8 @@ class RecordingPlaybackServiceCallbackBoundaryTest {
     private fun withPlaybackService(
         startPosition: Int? = null,
         declaredDuration: Long = 2_000,
+        prepareDelay: Int = 60_000,
+        additionalSource: File? = null,
         exercise: (ShadowMediaPlayer, Handler, MediaSession.Callback, Handler) -> Unit,
     ) {
         val app = RuntimeEnvironment.getApplication()
@@ -347,7 +657,7 @@ class RecordingPlaybackServiceCallbackBoundaryTest {
         try {
             writePcm16Wav(source, sampleRate = 48_000, durationMillis = 2_000)
             PlaybackSessionOsShadow.targetPath = source.absolutePath
-            ShadowMediaPlayer.setMediaInfoProvider { ShadowMediaPlayer.MediaInfo(2_000, 60_000) }
+            ShadowMediaPlayer.setMediaInfoProvider { ShadowMediaPlayer.MediaInfo(2_000, prepareDelay) }
             val selectedRecording = fileRecording(source).copy(durationMillis = declaredDuration)
             recording = selectedRecording
             val createdController = Robolectric.buildService(RecordingPlaybackService::class.java)
@@ -392,6 +702,7 @@ class RecordingPlaybackServiceCallbackBoundaryTest {
                 cleanup { ShadowLooper.idleMainLooper() }
                 cleanup { ShadowMediaPlayer.resetStaticState() }
                 cleanup { PlaybackSessionOsShadow.targetPath = "" }
+                cleanup { additionalSource?.let { check(!it.exists() || it.delete()) } }
                 cleanup { check(!source.exists() || source.delete()) { "Cannot delete owned playback fixture" } }
             }
             failure?.let { throw it }

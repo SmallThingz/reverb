@@ -13,15 +13,21 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
+import java.io.DataInputStream
 import java.io.File
 import java.io.FileDescriptor
+import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.file.Files
 import java.security.MessageDigest
 import java.util.Base64
 import java.util.UUID
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -128,6 +134,51 @@ class SafRepositoryReconciliationTest {
         }
     }
 
+    @Test fun renamePreservesAnExternalNameChangedAfterPostRenameObservation() = runBlocking {
+        fixture(expectedRenames = 1) { f ->
+            f.provider.renameSupported = true
+            f.provider.onPostRenameOpen = {
+                assertEquals("renamed.wav", f.provider.selectedName)
+                f.provider.selectedName = "external.wav"
+            }
+
+            val failure = try {
+                RecordingRepository.rename(f.context, f.selected, "renamed")
+                fail("rename returned success with a stale name")
+                null
+            } catch (error: IOException) { error }
+            assertEquals("Recording changed before rename catalog commit", failure?.message)
+            assertEquals(listOf(Uri.parse(SAF_SELECTED) to "renamed.wav"), f.provider.renameRequests)
+            assertEquals("external.wav", f.provider.selectedName)
+            assertNull(f.dao.findById(SAF_SELECTED))
+            val refreshed = RecordingRepository.refresh(f.context).single { it.id == SAF_SELECTED }
+            assertEquals("external.wav", refreshed.displayName)
+            assertEquals(refreshed, f.dao.findById(SAF_SELECTED))
+            f.assertOwnedBytes()
+        }
+    }
+
+    @Test fun renameDoesNotReturnStaleCatalogWhenProviderAlreadyHasRequestedName() = runBlocking {
+        fixture(expectRenameIncident = true) { f ->
+            f.provider.renameSupported = true
+            val opensBefore = f.provider.selectedOpens
+            assertEquals(f.selected, RecordingRepository.rename(f.context, f.selected, "clip"))
+            assertEquals("An exact no-op needs no payload descriptor", opensBefore, f.provider.selectedOpens)
+            f.provider.selectedName = "renamed.wav"
+            val failure = try {
+                RecordingRepository.rename(f.context, f.selected, "renamed")
+                fail("rename reported success with the old catalog row")
+                null
+            } catch (error: RecordingRenameStateUncertainException) { error }
+            assertNotNull(failure)
+            assertEquals("The rejected rename verified the selected bytes", opensBefore + 1, f.provider.selectedOpens)
+            f.provider.assertClosed()
+            assertEquals(f.selected, f.dao.findById(SAF_SELECTED))
+            assertEquals("renamed.wav", f.provider.selectedName)
+            f.assertOwnedBytes()
+        }
+    }
+
     @Test fun incompleteConfiguredListingPreservesKnownCatalogAndStableRetryRecovers() = runBlocking {
         for (fault in listOf("null", "denied", "loading", "error", "duplicate")) fixture { f ->
             f.provider.listing = fault
@@ -212,6 +263,41 @@ class SafRepositoryReconciliationTest {
         }
     }
 
+    @Test fun acceptedSaveRejectsNameChangedWhileOpeningCatalog() = runBlocking {
+        fixture { f ->
+            val incoming = f.selected.copy(codecSummary = "new save metadata")
+            RecordingDatabase.getInstance(f.context).close()
+            val traceStart = f.provider.trace.size
+            f.context.beforeCatalogOpen = {
+                f.provider.trace += "catalog:open"
+                f.provider.selectedName = "external.wav"
+            }
+            val failure = try {
+                RecordingRepository.registerFromAcceptedOperation(f.context, incoming)
+                fail("registration accepted a stale provider name")
+                null
+            } catch (error: RecordingCatalogIdentityChangedException) {
+                error
+            } finally {
+                f.context.beforeCatalogOpen = null
+            }
+            assertEquals("Recording changed before catalog registration", failure?.message)
+            assertEquals(listOf("catalog:open", "query:selected:100000"), f.provider.trace.drop(traceStart))
+            assertEquals(f.selected, f.dao.findById(SAF_SELECTED))
+            f.assertOwnedBytes()
+
+            val retryTraceStart = f.provider.trace.size
+            val registered = RecordingRepository.registerFromAcceptedOperation(f.context,
+                incoming.copy(displayName = "external.wav"))
+            assertEquals(listOf("query:selected:100000"), f.provider.trace.drop(retryTraceStart))
+            assertEquals("external.wav", registered.displayName)
+            assertEquals(incoming.fileIdentity, registered.fileIdentity)
+            assertEquals(incoming.codecSummary, registered.codecSummary)
+            assertEquals(registered, f.dao.findById(SAF_SELECTED))
+            f.assertOwnedBytes()
+        }
+    }
+
     private suspend fun unavailableRefresh(context: Context) {
         val error = try {
             RecordingRepository.refresh(context)
@@ -221,7 +307,7 @@ class SafRepositoryReconciliationTest {
         assertNotNull(error)
     }
 
-    private class Fixture(val context: Context, val provider: SafRefreshProvider, val dao: RecordingDao,
+    private class Fixture(val context: FixtureContext, val provider: SafRefreshProvider, val dao: RecordingDao,
         val selected: RecordingEntity, val sentinel: RecordingEntity, val original: ByteArray, val sentinelBytes: ByteArray) {
         fun assertOwnedBytes() {
             assertArrayEquals(original, provider.payload.readBytes())
@@ -231,6 +317,17 @@ class SafRepositoryReconciliationTest {
 
     /** Remap only the app-owned environment; all catalog and scanner work stays production code. */
     private class FixtureContext(base: Context, private val root: File, private val preferences: SharedPreferences) : ContextWrapper(base) {
+        var beforeCatalogOpen: (() -> Unit)? = null
+
+        override fun getDatabasePath(name: String): File {
+            if (name == DATABASE_FILE_NAME) {
+                val onOpen = beforeCatalogOpen
+                beforeCatalogOpen = null
+                onOpen?.invoke()
+            }
+            return super.getDatabasePath(name)
+        }
+
         override fun getApplicationContext(): Context = this
         override fun getFilesDir(): File = File(root, "files").apply { check(isDirectory || mkdirs()) }
         override fun getCacheDir(): File = File(root, "cache").apply { check(isDirectory || mkdirs()) }
@@ -239,7 +336,11 @@ class SafRepositoryReconciliationTest {
         override fun getSharedPreferences(name: String, mode: Int): SharedPreferences = preferences
     }
 
-    private suspend fun fixture(expectedRenames: Int = 0, body: suspend (Fixture) -> Unit) {
+    private suspend fun fixture(
+        expectedRenames: Int = 0,
+        expectRenameIncident: Boolean = false,
+        body: suspend (Fixture) -> Unit,
+    ) {
         val app = RuntimeEnvironment.getApplication()
         val root = File(app.filesDir, "saf-refresh-${UUID.randomUUID()}").apply { check(mkdir()) }
         val preferenceName = "saf-refresh-${root.name}"
@@ -252,7 +353,11 @@ class SafRepositoryReconciliationTest {
         val provider = SafRefreshProvider(payload, sentinelFile)
         val media = EmptyRefreshMediaProvider()
         val previousRoot = ServiceStateOsShadow.fixtureRoot
+        val incidentScope = RecordingIncidentStore::class.java.getDeclaredField("historyMutationScope")
+            .apply { isAccessible = true }.get(RecordingIncidentStore) as CoroutineScope
+        val incidentOwner = checkNotNull(incidentScope.coroutineContext[Job])
         var ownsShadow = false
+        var incidentWritersDrained = false
         var ownsSelected = false
         var ownsSentinel = false
         var db: RecordingDatabase? = null
@@ -264,6 +369,7 @@ class SafRepositoryReconciliationTest {
         fun cleanup(action: () -> Unit) { try { action() } catch (error: Throwable) { record(error) } }
         try {
             check(previousRoot == null)
+            check(incidentOwner.children.none()) { "Incident writers already owned before SAF fixture" }
             JournalHostIoShadow.reset()
             ownsShadow = true
             // SQLite remains at its real Robolectric app path; no host metadata outside this app is admitted.
@@ -311,8 +417,32 @@ class SafRepositoryReconciliationTest {
             cleanup { runBlocking { if (ownsSelected) checkNotNull(db).recordingDao().deleteById(SAF_SELECTED) } }
             cleanup { runBlocking { if (ownsSentinel) checkNotNull(db).recordingDao().deleteById(SAF_SENTINEL) } }
             cleanup { if (db != null) RecordingDatabase.resetAfterCorruption() }
-            if (ownsShadow) cleanup { JournalHostIoShadow.finishFixture()?.let(::record) }
-            cleanup { ServiceStateOsShadow.fixtureRoot = previousRoot }
+            if (ownsShadow) {
+                cleanup {
+                    // Rename failures can queue an incident write before returning. That writer
+                    // owns the directory descriptor until its publication barrier completes.
+                    runBlocking { withTimeout(8_000) { incidentOwner.children.toList().joinAll() } }
+                    incidentWritersDrained = true
+                    if (expectRenameIncident) {
+                        val history = File(context.noBackupFilesDir, "recording-incidents.bin")
+                        val incident = DataInputStream(history.inputStream().buffered()).use { input ->
+                            readIncidentPayloadExact(input, "SAF rename incident",
+                                RecordingIncidentStore::readHistoryPayload)
+                        }.single()
+                        assertEquals(RecordingIncidentKind.UNEXPECTED_ERROR, incident.kind)
+                        val description = incident.description.orEmpty()
+                        assertTrue(description.contains("Rename recording"))
+                        assertTrue(description.contains("Document recording changed before rename"))
+                        assertTrue("Incident history crossed the directory barrier",
+                            JournalHostIoShadow.directorySyncAttempts > 0)
+                    }
+                }
+                // A timed-out owner may still be using the fixture. Leave its evidence intact.
+                if (incidentWritersDrained) {
+                    cleanup { JournalHostIoShadow.finishFixture()?.let(::record) }
+                    cleanup { ServiceStateOsShadow.fixtureRoot = previousRoot }
+                }
+            }
             if (failure == null) cleanup { check(app.deleteSharedPreferences(preferenceName)) }
             if (failure == null) cleanup { check(root.deleteRecursively()) }
         }
@@ -347,6 +477,7 @@ private class SafRefreshProvider(val payload: File, val sentinel: File) : Conten
     var selectedName = "clip.wav"
     var renameSupported = false
     var nameAfterRename: String? = null
+    var onPostRenameOpen: (() -> Unit)? = null
     var itemAfterRename = "present"
     val postRenameProjections = mutableListOf<List<String>>()
     val capabilityObservations = mutableListOf<Boolean>()
@@ -404,6 +535,11 @@ private class SafRefreshProvider(val payload: File, val sentinel: File) : Conten
         trace += if (selected) "open:selected" else "open:sentinel"
         if (selected) {
             selectedOpens++
+            if (renameRequests.isNotEmpty()) {
+                val onOpen = onPostRenameOpen
+                onPostRenameOpen = null
+                onOpen?.invoke()
+            }
             replaceOnOpen?.let { replacement ->
                 val retained = File(payload.parentFile, "original-retained.wav")
                 check(payload.renameTo(retained))

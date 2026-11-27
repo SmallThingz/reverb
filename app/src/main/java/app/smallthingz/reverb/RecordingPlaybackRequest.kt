@@ -57,28 +57,33 @@ internal class RecordingPlaybackRoute {
     var request: RecordingPlaybackRequest? = null
         private set
     private var verifiedToken: String? = null
-    var proofGeneration: Long = 0
+    @Volatile var proofGeneration: Long = 0
         private set
 
-    fun submit(value: RecordingPlaybackRequest): Boolean {
+    @Synchronized fun submit(value: RecordingPlaybackRequest): Boolean {
         if (request?.token == value.token) return false
         request = value
         invalidateProof()
         return true
     }
 
-    fun verified(token: String?, generation: Long) {
+    @Synchronized fun invalidateForDeletion(targets: List<RecordingDeletionConsentTarget>) {
+        val current = request ?: return
+        if (targets.any { current.matches(it.recording) }) invalidateProof()
+    }
+
+    @Synchronized fun verified(token: String?, generation: Long) {
         if (generation == proofGeneration && token != null && request?.token == token) verifiedToken = token
     }
 
-    fun invalidateProof() { verifiedToken = null; proofGeneration++ }
+    @Synchronized fun invalidateProof() { verifiedToken = null; proofGeneration++ }
 
-    fun takeIfReady(foreground: Boolean): RecordingPlaybackRequest? {
+    @Synchronized fun takeIfReady(foreground: Boolean): RecordingPlaybackRequest? {
         val current = request ?: return null
         if (!foreground || verifiedToken != current.token) return null
         clear()
         return current
     }
 
-    fun clear() { request = null; invalidateProof() }
+    @Synchronized fun clear() { request = null; invalidateProof() }
 }

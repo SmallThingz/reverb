@@ -51,6 +51,7 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import app.smallthingz.reverb.nativeui.*
 import java.io.File
+import java.time.ZoneId
 import java.time.ZoneOffset
 import java.util.Locale
 import kotlinx.coroutines.CoroutineExceptionHandler
@@ -233,7 +234,7 @@ private class IncidentsFixtureAccess(private val scene: IncidentParityScene,
     override val revisions = MutableStateFlow(0L)
     var mutations = 0
         private set
-    override suspend fun readHistory(): IncidentHistoryPresentation {
+    override suspend fun readHistory(zone: ZoneId): IncidentHistoryPresentation {
         val snapshot = when (scene) {
             IncidentParityScene.LOADING -> awaitCancellation()
             IncidentParityScene.ERROR -> error("QA synthetic unavailable history")
@@ -243,7 +244,7 @@ private class IncidentsFixtureAccess(private val scene: IncidentParityScene,
         }
         val resources = displayResources ?: return snapshot
         return withContext(Dispatchers.IO) {
-            prepareIncidentHistory(snapshot.rows.map { it.incident }, Locale.US, ZoneOffset.UTC, resources)
+            prepareIncidentHistory(snapshot.rows.map { it.incident }, Locale.US, zone, resources)
         }
     }
     fun replaceNativeRows(incidents: List<RecordingIncident>) {
@@ -439,11 +440,13 @@ internal class IncidentsParityBoard(
                     if (click) 48f * density.density else 0f
                 })
             sourceAccess?.let { memory ->
-                val controller = IncidentHistoryController(memory, waitBeforeRetry = { awaitCancellation() })
+                val controller = IncidentHistoryController(memory, waitBeforeRetry = { awaitCancellation() },
+                    displayTimeZone = { ZoneOffset.UTC })
                 sourceHistory = controller
                 scope.launch { controller.observeHistory { sourceState = it } }
             }
-            val historyOwner = IncidentHistoryController(access, waitBeforeRetry = { awaitCancellation() })
+            val historyOwner = IncidentHistoryController(access, waitBeforeRetry = { awaitCancellation() },
+                displayTimeZone = { ZoneOffset.UTC })
             val panelOwner = NativeIncidentsScreenOwner(context, nativeScope, initiallyOpen = true,
                 onBackRequested = {
                     if (interactive) { nativeBackCount++; checkNotNull(owner).bindNavigation(false, false) }

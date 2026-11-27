@@ -31,6 +31,7 @@ import app.smallthingz.reverb.RecordingStorageType
 import app.smallthingz.reverb.prepareIncidentHistory
 import app.smallthingz.reverb.recordingIncidentPresentationKey
 import app.smallthingz.reverb.toggleRecordingIncidentAcknowledgement
+import java.time.ZoneId
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
@@ -330,7 +331,8 @@ class NativeMainLibraryScrollbarGestureTest {
             RecordingIncident(occurredAtMillis = 1_700_000_000_000L + index * 1_000L, pid = index + 1)
         }
 
-        override suspend fun readHistory() = prepareIncidentHistory(incidents, resources = context.resources)
+        override suspend fun readHistory(zone: ZoneId) =
+            prepareIncidentHistory(incidents, zone = zone, resources = context.resources)
 
         override fun toggleAcknowledgedInBackground(incident: RecordingIncident) {
             val key = recordingIncidentPresentationKey(incident)

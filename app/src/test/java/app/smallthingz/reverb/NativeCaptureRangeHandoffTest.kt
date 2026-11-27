@@ -2,6 +2,9 @@ package app.smallthingz.reverb
 
 import android.app.Activity
 import android.app.Application
+import android.os.Handler
+import android.os.Looper
+import android.os.Message
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
@@ -50,6 +53,18 @@ import smallthingz.ui.text.view.NativeTextSemanticsClipPolicy
 @LooperMode(LooperMode.Mode.PAUSED)
 class NativeCaptureRangeHandoffTest {
     @get:Rule val temporary = TemporaryFolder()
+
+    @Test fun rangeHandoffReleasesOnlyTheVisualizationLeaseAndHomeReacquiresItOnce() {
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().visible()
+        try {
+            Fixture(activity.get()).use { fixture ->
+                activity.windowFocusChanged(true)
+                fixture.verifyVisualizationLease()
+            }
+        } finally {
+            activity.pause().stop().destroy()
+        }
+    }
 
     @Test fun snapshotArrivalAndPredictiveCloseKeepThePreDetachSource() {
         val directory = temporary.newFolder()
@@ -125,6 +140,74 @@ class NativeCaptureRangeHandoffTest {
                 try { close() } catch (cleanup: Throwable) { failure.addSuppressed(cleanup) }
                 throw failure
             }
+        }
+
+        fun verifyVisualizationLease() {
+            // Use the real Service registries, with no service startup, recorder, or audio work.
+            val recorder = Robolectric.buildService(ReverbService::class.java).get()
+            var audioPosts = 0
+            write(recorder, "audioHandler", object : Handler(Looper.getMainLooper()) {
+                override fun sendMessageAtTime(msg: Message, uptimeMillis: Long): Boolean {
+                    audioPosts++
+                    return true
+                }
+            })
+            write(recorder, "state", ReverbService.STATE_LISTENING)
+            write(recorder, "durableListeningIntentEnabled", true)
+            assertTrue(root.hasWindowFocus())
+            write(owner, "attached", true)
+            NativeCaptureUiOwner::class.java.getDeclaredMethod("replaceService", ReverbService::class.java)
+                .apply { isAccessible = true }.invoke(owner, recorder)
+
+            val mailbox = read<IdentityFrameMailbox<ReverbService.VisualizationCallback,
+                ReverbService.VisualizationFrame>>(recorder, "visualizationCallbacks")
+            val foreground = read<UiForegroundOwnerTracker>(recorder, "appUiForegroundOwners")
+            val homeRegistration = checkNotNull(mailbox.currentRegistration())
+            val initialPosts = audioPosts
+            val normal = read<ReverbHomeBodyOwner>(content, "normal")
+            val blob = normal.view.blobInputView
+            val renderer = (blob as ViewGroup).getChildAt(0) as AudioReactiveBlobView
+            write(renderer, "currentLife", .62f)
+            write(renderer, "currentActivity", .75f)
+            val bounds = checkNotNull(geometry.capture(blob, Offset.Zero,
+                Rect(0f, 0f, blob.width.toFloat(), blob.height.toFloat()))).visibleBoundsInRoot
+            val diameter = minOf(bounds.width, bounds.height) * 2f * renderer.currentBaseRadiusFraction()
+            val pending = ReverbService.VisualizationFrame(.9f, ReverbService.VisualizationFrame.EMPTY.bins,
+                bufferSlot = BufferSlot.ONE_SHOT)
+            assertTrue(mailbox.publish(homeRegistration, pending))
+            assertEquals(1, mailbox.size())
+            assertEquals(1, foreground.size())
+
+            val preparing = home.copy(rangeSnapshotBuffer = BufferSlot.ONE_SHOT,
+                body = home.body.copy(preparingRange = true))
+            content.bind(preparing, environment)
+            val source = read<RangeMorphSourceGeometry>(content, "sourceGeometry")
+            assertEquals("Sample the renderer before lease retirement clears its live frame", diameter,
+                source.bodyDiameterPx, .001f)
+            assertNull(home.body.oneShotController.currentBaseRadiusFraction())
+            assertNull(mailbox.currentRegistration())
+            assertEquals(0, mailbox.size())
+            assertEquals(initialPosts + 1, audioPosts)
+            mailbox.dispatchPending { _, _ -> fail("A frame queued for the retired Home was delivered") }
+            assertFalse(mailbox.publish(homeRegistration, pending))
+            assertTrue("Range Back remains enabled", back.hasEnabledCallbacks())
+            assertTrue(read<Boolean>(read<NativeRangeExportOwner>(content, "rangeOwner"), "visualizerVisible"))
+            repeat(3) { content.bind(preparing, environment) }
+            assertNull(mailbox.currentRegistration())
+            assertEquals(initialPosts + 1, audioPosts)
+            assertEquals(1, foreground.size())
+
+            content.bind(home, environment)
+            val returnedRegistration = checkNotNull(mailbox.currentRegistration())
+            assertNotSame(homeRegistration, returnedRegistration)
+            assertEquals(1, mailbox.size())
+            assertEquals(initialPosts + 2, audioPosts)
+            repeat(3) { content.bind(home, environment) }
+            assertSame(returnedRegistration, mailbox.currentRegistration())
+            assertEquals(initialPosts + 2, audioPosts)
+            assertEquals(1, foreground.size())
+            assertEquals(ReverbService.STATE_LISTENING, read<Int>(recorder, "state"))
+            assertTrue(read<Boolean>(recorder, "durableListeningIntentEnabled"))
         }
 
         fun verify(snapshot: ReverbService.TimelineSnapshot) {
@@ -295,6 +378,8 @@ class NativeCaptureRangeHandoffTest {
 
     companion object {
         private fun event(progress: Float) = BackEventCompat(0f, 0f, progress, BackEventCompat.EDGE_LEFT)
+        private fun write(owner: Any, name: String, value: Any) =
+            owner.javaClass.getDeclaredField(name).run { isAccessible = true; set(owner, value) }
         @Suppress("UNCHECKED_CAST")
         private fun <T> read(owner: Any, name: String): T = owner.javaClass.getDeclaredField(name).run {
             isAccessible = true

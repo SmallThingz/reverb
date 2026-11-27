@@ -2265,7 +2265,9 @@ internal fun deleteVerifiedRecordingAsset(
 ): Boolean {
     // Callers must have content-fingerprinted this exact provider asset immediately before
     // reaching this function. A concrete provider identity, when available, must still match.
-    if (!recordingDeletionIdentityMatches(context, recording)) return false
+    if (recording.storageType != RecordingStorageType.MEDIASTORE &&
+        !recordingDeletionIdentityMatches(context, recording)
+    ) return false
     when (recordingAssetState(context, recording)) {
         RecordingAssetState.MISSING,
         RecordingAssetState.UNAVAILABLE,
@@ -2285,7 +2287,9 @@ internal fun deleteVerifiedRecordingAsset(
             }
         }
         RecordingStorageType.MEDIASTORE -> {
-            if (!sourceRetirementStillAllowed()) return false
+            // Presence only proves that the URI exists. Recheck the selected revision after
+            // that query and any move-target verification, immediately before requesting delete.
+            if (!sourceRetirementStillAllowed() || !recordingDeletionIdentityMatches(context, recording)) return false
             val deleteFailure = runCatching {
                 context.contentResolver.delete(recording.id.toUri(), null, null)
             }.exceptionOrNull()
@@ -2385,10 +2389,13 @@ fun renameRecordingAsset(
     requestedBaseName: String,
     allowWriteConsent: Boolean = false,
 ): RecordingEntity? {
-    if (!recordingDestructiveIdentityMatches(context, recording)) return null
+    if (recording.fileIdentity.isBlank() ||
+        (recording.storageType != RecordingStorageType.DOCUMENT &&
+            !recordingDestructiveIdentityMatches(context, recording))
+    ) return null
     val sanitized = recordingRenameDisplayName(recording.displayName, requestedBaseName, recording.storageType)
         ?: return null
-    if (sanitized == recording.displayName) return recording
+    if (sanitized == recording.displayName && recording.storageType != RecordingStorageType.DOCUMENT) return recording
     return when (recording.storageType) {
         RecordingStorageType.FILE -> renameFileRecording(context, recording, sanitized)
         RecordingStorageType.DOCUMENT -> renameDocumentRecording(context, recording, sanitized)
@@ -4567,20 +4574,28 @@ private fun renameDocumentRecording(
 ): RecordingEntity? {
     return runCatching {
         val sourceUri = recording.id.toUri()
-        val document = DocumentFile.fromSingleUri(context, sourceUri) ?: return@runCatching null
-        val uniqueName = findAvailableDocumentDisplayName(
+        val uniqueName = if (displayName == recording.displayName) displayName else findAvailableDocumentDisplayName(
             context = context,
             treeUri = recording.directoryId.toUri(),
             requestedDisplayName = displayName,
             excludedUri = sourceUri,
         )
-        if (uniqueName == recording.displayName || uniqueName == document.name) {
-            return@runCatching recording
-        }
         // A provider is allowed to return a new URI when rename changes its document ID.
         // Pin the selected bytes before mutation so a URI-changing result can be proven to
         // represent the same recording rather than an unrelated equal-looking document.
-        val beforeDigest = sha256StableRecording(context, recording) ?: return@runCatching null
+        val beforeDigest = if (uniqueName == recording.displayName) null else {
+            sha256StableRecording(context, recording) ?: return@runCatching null
+        }
+        // The provider can change the name without changing the content revision. Check the
+        // expected source name and identity together after the read, including during rollback.
+        val before = resolveProviderCatalogObservation(context, RecordingStorageType.DOCUMENT, sourceUri,
+            recording.fileIdentity)
+        if (before == null || before.displayName != recording.displayName ||
+            !providerRecordingIdentityMatches(recording.fileIdentity, before.identity)
+        ) {
+            throw RecordingRenameStateUncertainException("Document recording changed before rename: ${recording.id}")
+        }
+        if (beforeDigest == null) return@runCatching recording
         var renameFailure: Throwable? = null
         val returnedRenamedUri = try {
             DocumentsContract.renameDocument(context.contentResolver, sourceUri, uniqueName)

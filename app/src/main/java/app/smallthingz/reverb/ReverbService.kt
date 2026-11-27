@@ -1663,6 +1663,7 @@ open class ReverbService : Service() {
             serviceDestroying ||
             generation != listeningCommandGeneration.get() ||
             !isListeningEnabled() ||
+            foregroundServiceTimedOut ||
             foregroundStartBlocked ||
             persistenceFailureBlocked
         ) return
@@ -1735,7 +1736,8 @@ open class ReverbService : Service() {
             if (serviceDestroying || !attempt.isCurrent(
                     listeningCommandGeneration.get(), foregroundAdmissionGeneration.get(),
                 ) ||
-                !durableListeningIntentEnabled || foregroundStartBlocked || persistenceFailureBlocked
+                !durableListeningIntentEnabled || foregroundServiceTimedOut ||
+                foregroundStartBlocked || persistenceFailureBlocked
             ) return
             // A delayed platform start observes intent on main, but cannot overtake a durable
             // Stop or publish LISTENING from the intent value observed before that Stop.
@@ -2571,10 +2573,10 @@ open class ReverbService : Service() {
         closeLeaseOnce()
         // Main observes the new generation before queued delivery, so older busy snapshots resample.
         mainHandler.post { owner.receiver.saveQueued(handle.id) }
-        queueDurableMaterialization(owner)
+        queueDurableMaterialization(owner, fromRecovery = false)
     }
 
-    private fun queueDurableMaterialization(owner: DurableSaveOwner) {
+    private fun queueDurableMaterialization(owner: DurableSaveOwner, fromRecovery: Boolean) {
         val jobId = owner.jobId ?: throw IllegalStateException("Save job was not durably admitted")
         try {
             synchronized(exportStateLock) {
@@ -2584,12 +2586,15 @@ open class ReverbService : Service() {
                 }
                 exportWorkExecutor.execute {
                     try {
-                        val recording = durableSaveCoordinator.materialize(jobId,
+                        durableSaveCoordinator.materialize(jobId,
                             onFailurePublished = { owner.failurePublication = it },
+                            fromRecovery = fromRecovery,
+                            onReady = { recording ->
+                                if (owner.terminalDelivered.compareAndSet(false, true)) {
+                                    mainHandler.post { owner.receiver.fileReady(recording) }
+                                }
+                            },
                         ) { ensureDurableSaveActive(owner) }
-                        if (owner.terminalDelivered.compareAndSet(false, true)) {
-                            mainHandler.post { owner.receiver.fileReady(recording) }
-                        }
                     } catch (error: Exception) {
                         failDurableSaveOwner(owner, error)
                     } finally {
@@ -2632,7 +2637,7 @@ open class ReverbService : Service() {
                             val lifetimeFailure = protectDurableSaveLifetime(generation).failure
                             if (lifetimeFailure != null) {
                                 owners.forEach { failDurableSaveOwner(it, lifetimeFailure) }
-                            } else owners.forEach(::queueDurableMaterialization)
+                            } else owners.forEach { queueDurableMaterialization(it, fromRecovery = true) }
                         } finally {
                             finishRecovery()
                         }
@@ -5634,7 +5639,7 @@ open class ReverbService : Service() {
         captureCommandStartId = startId
         val listeningEnabled = durableListeningIntentEnabled
         val generation = listeningCommandGeneration.get()
-        if (listeningEnabled && (foregroundStartBlocked || persistenceFailureBlocked)) {
+        if (listeningEnabled && (foregroundServiceTimedOut || foregroundStartBlocked || persistenceFailureBlocked)) {
             requestServiceStopWhenExportIdle()
             return START_NOT_STICKY
         }

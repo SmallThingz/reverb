@@ -97,6 +97,7 @@ internal class NativeCaptureContentView(
             }
             if (changedEnvironment) body.setEnvironment(environment)
             body.bind(state.body, state.selectedBuffer, owner.actions)
+            owner.setHomeBlobMounted(body.view.isAttachedToWindow)
         } else {
             val enteringRange = rangeOwner?.selectedBuffer != slot
             if (enteringRange && !state.rangeSavePending) {
@@ -107,6 +108,8 @@ internal class NativeCaptureContentView(
                     if (slot == BufferSlot.ONE_SHOT) state.body.oneShotEnabled else state.body.loopingEnabled,
                     owner.sampledBlobActivity(slot), controller.currentBaseRadiusFraction())
             }
+            // Lease retirement clears the live frame, so the morph origin must already be frozen.
+            owner.setHomeBlobMounted(false)
             normal?.let { bodyText?.close(); bodyText = null; removeView(it.view); it.close(); normal = null }
             if (enteringRange) {
                 disposeRange()
@@ -208,6 +211,16 @@ internal class NativeCaptureContentView(
             normal?.view, rangeView, transient.statusCard)
     }
 
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        owner.setHomeBlobMounted(!closed && normal != null)
+    }
+
+    override fun onDetachedFromWindow() {
+        owner.setHomeBlobMounted(false)
+        super.onDetachedFromWindow()
+    }
+
     override fun close() {
         if (closed) return
         closed = true
@@ -215,6 +228,7 @@ internal class NativeCaptureContentView(
         fun release(block: () -> Unit) { try { block() } catch (error: Throwable) {
             if (failure == null) failure = error else if (failure !== error) failure!!.addSuppressed(error)
         } }
+        release { owner.setHomeBlobMounted(false) }
         release(rangeBack::close)
         release(::disposeRange)
         release { normal?.let { removeView(it.view); it.close() }; normal = null }

@@ -704,6 +704,8 @@ internal data class PendingProcessIncidentRetry(
     val description: String,
     val expectedPid: Int,
     val expectedProcessStartElapsedRealtimeMillis: Long,
+    val occurredAtElapsedRealtimeMillis: Long,
+    val publicationEpoch: Any,
     var incident: RecordingIncident? = null,
     val stopToken: KnownCaptureStopToken? = null,
 )
@@ -717,7 +719,7 @@ internal class PendingProcessIncidentRetries {
                 it.root == retry.root && it.expectedPid == retry.expectedPid &&
                     it.expectedProcessStartElapsedRealtimeMillis == retry.expectedProcessStartElapsedRealtimeMillis &&
                     it.stopToken?.marker == retry.stopToken?.marker &&
-                    it.stopToken?.publicationEpoch === retry.stopToken?.publicationEpoch
+                    it.publicationEpoch === retry.publicationEpoch
             }
         ) pending += retry
     }
@@ -870,30 +872,20 @@ internal fun captureSessionStartDisposition(
     else -> CaptureSessionStartDisposition.RESOLVE_INTERRUPTED_SESSION
 }
 
+/** Elapsed time orders an arm and outage within the same process lifetime. */
 internal fun processLocalIncidentMarkerMatches(
     armed: Boolean,
     markerPid: Int,
     markerProcessStartElapsedRealtimeMillis: Long,
-    markerArmedAtMillis: Long,
+    markerArmedElapsedRealtimeMillis: Long,
     expectedPid: Int,
     expectedProcessStartElapsedRealtimeMillis: Long,
-    stopOccurredAtMillis: Long,
+    stopOccurredAtElapsedRealtimeMillis: Long,
 ): Boolean = armed &&
     markerPid == expectedPid &&
     markerProcessStartElapsedRealtimeMillis == expectedProcessStartElapsedRealtimeMillis &&
-    markerArmedAtMillis > 0L &&
-    markerArmedAtMillis <= stopOccurredAtMillis
-
-private fun ActiveRecordingSessionMarker.matches(retry: PendingProcessIncidentRetry): Boolean =
-    processLocalIncidentMarkerMatches(
-        armed = armed,
-        markerPid = pid,
-        markerProcessStartElapsedRealtimeMillis = processStartElapsedRealtimeMillis,
-        markerArmedAtMillis = armedAtMillis,
-        expectedPid = retry.expectedPid,
-        expectedProcessStartElapsedRealtimeMillis = retry.expectedProcessStartElapsedRealtimeMillis,
-        stopOccurredAtMillis = retry.occurredAtMillis,
-    )
+    markerArmedElapsedRealtimeMillis >= markerProcessStartElapsedRealtimeMillis &&
+    markerArmedElapsedRealtimeMillis <= stopOccurredAtElapsedRealtimeMillis
 
 
 internal fun unexpectedErrorIncidentDescription(
@@ -1384,12 +1376,15 @@ internal object RecordingIncidentStore {
         // Earlier terminal evidence owns this arm until its publication and retirement settle.
         if (runCatching { retryPendingCaptureInterruptions(appContext) }.isFailure) return
         val stoppedAtMillis = System.currentTimeMillis()
+        val stoppedAtElapsedRealtimeMillis = SystemClock.elapsedRealtime()
         val retry = PendingProcessIncidentRetry(
             root = incidentRoot(appContext),
             occurredAtMillis = stoppedAtMillis,
             description = description,
             expectedPid = Process.myPid(),
             expectedProcessStartElapsedRealtimeMillis = Process.getStartElapsedRealtime(),
+            occurredAtElapsedRealtimeMillis = stoppedAtElapsedRealtimeMillis,
+            publicationEpoch = captureSessionPublicationEpoch,
         )
         val markerFile = sessionFile(appContext)
         val marker = try {
@@ -1400,8 +1395,7 @@ internal object RecordingIncidentStore {
             enqueueServiceStopIncidentRetry(retry)
             return
         } ?: return
-        if (!marker.matches(retry)
-        ) {
+        if (!marker.matches(retry)) {
             // A prior-process armed marker belongs to startup recovery, not this Service lifetime.
             return
         }
@@ -1424,12 +1418,15 @@ internal object RecordingIncidentStore {
         // Earlier terminal evidence owns this arm until its publication and retirement settle.
         if (runCatching { retryPendingCaptureInterruptions(appContext) }.isFailure) return
         val interruptedAtMillis = System.currentTimeMillis()
+        val interruptedAtElapsedRealtimeMillis = SystemClock.elapsedRealtime()
         val retry = PendingProcessIncidentRetry(
             root = incidentRoot(appContext),
             occurredAtMillis = interruptedAtMillis,
             description = description,
             expectedPid = Process.myPid(),
             expectedProcessStartElapsedRealtimeMillis = Process.getStartElapsedRealtime(),
+            occurredAtElapsedRealtimeMillis = interruptedAtElapsedRealtimeMillis,
+            publicationEpoch = captureSessionPublicationEpoch,
         )
         val file = sessionFile(appContext)
         val marker = try {
@@ -1442,8 +1439,7 @@ internal object RecordingIncidentStore {
             enqueueCaptureInterruptionRetry(retry)
             return
         } ?: return
-        if (!marker.matches(retry)
-        ) return
+        if (!marker.matches(retry)) return
 
         val incident = incidentWithoutExitEvidence(
             marker = marker,
@@ -1500,12 +1496,15 @@ internal object RecordingIncidentStore {
         val marker = token.marker ?: return
         if (!marker.armed || !token.owns(root, captureSessionPublicationEpoch, marker)) return
         val interruptedAtMillis = System.currentTimeMillis()
+        val interruptedAtElapsedRealtimeMillis = SystemClock.elapsedRealtime()
         val retry = PendingProcessIncidentRetry(
             root = root,
             occurredAtMillis = interruptedAtMillis,
             description = description,
             expectedPid = marker.pid,
             expectedProcessStartElapsedRealtimeMillis = marker.processStartElapsedRealtimeMillis,
+            occurredAtElapsedRealtimeMillis = interruptedAtElapsedRealtimeMillis,
+            publicationEpoch = token.publicationEpoch,
             incident = if (requireLiveMarker) null else incidentWithoutExitEvidence(marker, interruptedAtMillis, description),
             stopToken = token,
         )
@@ -1564,6 +1563,7 @@ internal object RecordingIncidentStore {
             },
             retainUncertainEvidence = { marker ->
                 val interruptedAtMillis = System.currentTimeMillis()
+                val interruptedAtElapsedRealtimeMillis = SystemClock.elapsedRealtime()
                 val description = "Capture stopped because known-Stop incident state could not be persisted"
                 enqueueCaptureInterruptionRetry(
                     PendingProcessIncidentRetry(
@@ -1572,6 +1572,8 @@ internal object RecordingIncidentStore {
                         description = description,
                         expectedPid = marker.pid,
                         expectedProcessStartElapsedRealtimeMillis = marker.processStartElapsedRealtimeMillis,
+                        occurredAtElapsedRealtimeMillis = interruptedAtElapsedRealtimeMillis,
+                        publicationEpoch = captureSessionPublicationEpoch,
                         incident = incidentWithoutExitEvidence(marker, interruptedAtMillis, description),
                     ),
                 )
@@ -1679,6 +1681,17 @@ internal object RecordingIncidentStore {
     private fun markerBelongsToCurrentProcess(marker: ActiveRecordingSessionMarker): Boolean =
         marker.pid == Process.myPid() &&
             marker.processStartElapsedRealtimeMillis == Process.getStartElapsedRealtime()
+
+    private fun ActiveRecordingSessionMarker.matches(retry: PendingProcessIncidentRetry): Boolean =
+        retry.publicationEpoch === captureSessionPublicationEpoch && processLocalIncidentMarkerMatches(
+            armed = armed,
+            markerPid = pid,
+            markerProcessStartElapsedRealtimeMillis = processStartElapsedRealtimeMillis,
+            markerArmedElapsedRealtimeMillis = armedElapsedRealtimeMillis,
+            expectedPid = retry.expectedPid,
+            expectedProcessStartElapsedRealtimeMillis = retry.expectedProcessStartElapsedRealtimeMillis,
+            stopOccurredAtElapsedRealtimeMillis = retry.occurredAtElapsedRealtimeMillis,
+        )
 
     private fun enqueueServiceStopIncidentRetry(retry: PendingProcessIncidentRetry) {
         pendingServiceStopIncidentRetries.enqueue(retry)
@@ -1798,8 +1811,7 @@ internal object RecordingIncidentStore {
                     }
                 }
                 val resolvedMarker = requireNotNull(marker)
-                if (!resolvedMarker.matches(retry)
-                ) {
+                if (!resolvedMarker.matches(retry)) {
                     // The only matching durable marker is gone or no longer armed. Never retarget
                     // this old stop at a newer/prior capture session.
                     return@retryOwned

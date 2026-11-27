@@ -2,6 +2,7 @@ package app.smallthingz.reverb
 
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.View
@@ -26,6 +27,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 
 internal data class NativeLibraryCallbacks(
@@ -72,6 +74,11 @@ internal class NativeLibraryController(
     private val submitBackgroundDeletion: (Context, List<RecordingEntity>) -> Deferred<RecordingDeletionBatchResult> =
         RecordingRepository::deleteInBackground,
     private val playbackState: StateFlow<RecordingPlaybackState> = RecordingPlayback.state,
+    private val refreshRecordings: suspend (Context) -> List<RecordingEntity> = RecordingRepository::refresh,
+    private val planDeletion: suspend (Context, List<RecordingEntity>) -> RecordingDeletionPlan =
+        RecordingDeletionConsent::planDeletion,
+    private val enqueueDeletionPrompt: (List<RecordingDeletionConsentTarget>) -> Deferred<Unit> =
+        RecordingDeletionConsent::enqueueImmediate,
     private val publish: (NativeLibraryPresentation) -> Unit,
 ) : AutoCloseable {
     private val scope = CoroutineScope(parentScope.coroutineContext + Job(parentScope.coroutineContext[Job]))
@@ -91,6 +98,10 @@ internal class NativeLibraryController(
     private val pendingDeletions = ObservedRecordingMap(::visibleChanged)
     private val localTrimBusyOwners = mutableMapOf<Any, String>()
     private val deletionState = LibraryDeletionState()
+    private var checkingDeletionConsent by observed(false)
+    private var leftDuringDeletionCheck = false
+    private var awaitingDeletionPrompt by observed(false)
+    private var deletionPlaybackTargets = emptyList<RecordingEntity>()
     private var renameRecording by observed<RecordingEntity?>(null)
     private var infoRecording by observed<RecordingEntity?>(null)
     private var expandedRecordingOwner by observed<InlinePlaybackRowOwner?>(null)
@@ -124,7 +135,7 @@ internal class NativeLibraryController(
     private val focusListener = android.view.ViewTreeObserver.OnWindowFocusChangeListener { focused ->
         if (focused) {
             shareDelivery[0]?.foregroundChanged()
-            deliverPlaybackRequest()
+            if (playbackRoute.request != null) invalidate()
         }
     }
     private var lastVisible: List<RecordingEntity>? = null
@@ -349,7 +360,7 @@ internal class NativeLibraryController(
             }
             if (event == Lifecycle.Event.ON_RESUME) shareDelivery[0]?.foregroundChanged()
             if (active && observerInstalled && event == Lifecycle.Event.ON_RESUME) refresh(showSpinner = false)
-            if (event == Lifecycle.Event.ON_STOP && pendingDeletions.isNotEmpty()) {
+            if (event == Lifecycle.Event.ON_STOP && !awaitingDeletionPrompt && (checkingDeletionConsent || pendingDeletions.isNotEmpty())) {
                 val failure = closePreservingPrimaryFailure(null) { clearUndoNotice() }
                 closePreservingPrimaryFailure(failure, ::commitPendingDeletionsInBackground)?.let { throw it }
             }
@@ -373,7 +384,6 @@ internal class NativeLibraryController(
     }
 
     private fun deliver() {
-        deliverPlaybackRequest()
         val visible = if (visibleDirty || lastVisible == null) {
             visibleDirty = false
             val catalogRows = recordings.filterNot { it.id in pendingDeletions }
@@ -393,6 +403,9 @@ internal class NativeLibraryController(
             val callback = input.callbacks.onVisibleRecordingsChanged
             visibleEffect = scope.launch { callback(visible) }
         }
+        // Reconcile the previous visible owners before installing a newly discovered requested row.
+        deliverPlaybackRequest()
+        if (closed) return
         if (playbackRestoreReady) restorePlayingRecordingOnOpen(visible)
         if (dateHeadersDirty) {
             dateHeadersDirty = false
@@ -439,7 +452,7 @@ internal class NativeLibraryController(
             isRefreshing = isRefreshing,
             selectedCount = selectedIds.size,
             selectionHasBusyMutation = selectedIds.keys.any { it in activeMutationRecordingIds },
-            acceptsDeletions = deletionState.acceptsDeletions,
+            acceptsDeletions = deletionState.acceptsDeletions && !checkingDeletionConsent && !awaitingDeletionPrompt,
             undo = undoNotice,
             menuRecording = contextMenuRecordingId?.let { id -> visible.firstOrNull { it.id == id } },
             renameRecording = renameRecording,
@@ -553,6 +566,7 @@ internal class NativeLibraryController(
     fun dismissRename() { renameRecording = null }
     fun renamed(original: RecordingEntity, renamed: RecordingEntity) {
         // Completion belongs to the accepted target, never whichever editor is currently open.
+        playbackRoute.invalidateProof()
         val updated = libraryRecordingsAfterRename(recordings, original, renamed)
         recordings = updated
         input.callbacks.onVisibleRecordingsChanged(actionableCatalogRows(updated))
@@ -560,6 +574,7 @@ internal class NativeLibraryController(
         clearSelection(); refresh(showSpinner = false)
     }
     fun renameUncertain(error: Throwable) {
+        playbackRoute.invalidateProof()
         dismissRename(); clearSelection()
         showPassiveNotice(actionableErrorMessage(context, resources.getString(R.string.rename_recording_uncertain), error), FeedbackTone.ERROR)
         refresh(showSpinner = false)
@@ -713,6 +728,7 @@ internal class NativeLibraryController(
     fun requestPlayback(request: RecordingPlaybackRequest, beforePlayback: () -> Unit,
                         finished: (RecordingEntity?) -> Unit) {
         if (closed || !playbackRoute.submit(request)) return
+        RecordingDeletionConsent.watchPlayback(playbackRoute)
         cancelPlaybackRestore()
         beforeRequestedPlayback = beforePlayback
         playbackRequestFinished = finished
@@ -720,7 +736,12 @@ internal class NativeLibraryController(
     }
 
     private fun deliverPlaybackRequest() {
-        val request = playbackRoute.takeIfReady(!expandedTrimSaveInFlight() && navigationAllowed()) ?: return
+        val pendingRequest = playbackRoute.request ?: return
+        if (deletionPlaybackTargets.any(pendingRequest::matches)) return
+        // Rename owns its draft and terminal presentation until its own dismissal.
+        val request = RecordingDeletionConsent.takePlaybackIfReady(playbackRoute,
+            renameRecording == null && !expandedTrimSaveInFlight() && navigationAllowed(),
+        ) ?: return
         val recording = recordings.firstOrNull(request::matches)?.takeUnless {
             it.id in pendingDeletions || pendingSaveOwns(it) || recordingMutations.isActive(it.id)
         }
@@ -732,6 +753,7 @@ internal class NativeLibraryController(
         // Consume row auto-start before installing it: this explicit request owns the only start.
         clearSelection()
         contextMenuRecordingId = null
+        dismissInfo()
         trimRequestRecordingId = null
         setExpandedRecording(recording.id)
         expandedRecordingOwner?.consumeInitialAutoStart()
@@ -741,6 +763,7 @@ internal class NativeLibraryController(
     }
 
     private fun finishPlaybackRequest(recording: RecordingEntity?) {
+        RecordingDeletionConsent.retirePlayback(playbackRoute)
         playbackRoute.clear()
         beforeRequestedPlayback = null
         val finished = playbackRequestFinished
@@ -759,8 +782,10 @@ internal class NativeLibraryController(
             return
         }
         val generation = refreshGeneration.request(showSpinner)
-        val playbackRequestToken = playbackRoute.request?.token
+        // A recreated host may scan during a process-owned prompt. Only a scan admitted
+        // after settlement can verify that notification. The completion collector requests it.
         val playbackProofGeneration = playbackRoute.proofGeneration
+        val playbackRequestToken = playbackRoute.request?.takeUnless(RecordingDeletionConsent::holdsPlayback)?.token
         loadFailed = false
         refreshQueue.request {
             if (!refreshGeneration.isCurrent(generation)) return@request
@@ -770,7 +795,7 @@ internal class NativeLibraryController(
                 val backgroundRevision = deletionState.backgroundCommitRevision
                 val backgroundReceipt = backgroundDeletionReceipt[0]
                 backgroundReceipt?.join()
-                val stored = RecordingRepository.refresh(context)
+                val stored = refreshRecordings(context)
                 if (!refreshGeneration.isCurrent(generation)) return@request
                 val previousById = recordings.associateBy { it.id }
                 recordings = stored
@@ -793,7 +818,8 @@ internal class NativeLibraryController(
                             backgroundDeletionReceipt[0] = null
                         }
                     }
-                } else {
+                } else if (!(checkingDeletionConsent && leftDuringDeletionCheck)) {
+                    // The accepted stop handoff is waiting for its direct subset. Preserve its exact snapshot.
                     var pendingTargetInvalidated = false
                     pendingDeletions.keys.toList().forEach { id ->
                         val requested = pendingDeletions[id]
@@ -820,7 +846,7 @@ internal class NativeLibraryController(
                     }
                 }
                 playbackRoute.verified(playbackRequestToken, playbackProofGeneration)
-                deliverPlaybackRequest()
+                if (playbackRequestToken != null) invalidate()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
@@ -935,6 +961,14 @@ internal class NativeLibraryController(
     }
 
     fun commitPendingDeletionsInBackground() {
+        if (checkingDeletionConsent) {
+            leftDuringDeletionCheck = true
+            return
+        }
+        handOffPendingDeletions()
+    }
+
+    private fun handOffPendingDeletions() {
         val revision = deletionState.handoffToBackground(pendingDeletions.isNotEmpty()) ?: return
         // A scan admitted before handoff cannot restore pre-delete rows after receipt settlement.
         refreshGeneration.invalidate()
@@ -979,23 +1013,112 @@ internal class NativeLibraryController(
     }
 
     fun deleteRecordings(targets: Collection<RecordingEntity>) {
+        if (closed || checkingDeletionConsent || awaitingDeletionPrompt || !deletionState.acceptsDeletions) return
         if (targets.any { isLocallyBusy(it.id) || recordingMutations.isActive(it.id) || pendingSaveOwns(it) }) return
-        if (targets.isEmpty()) return
-        val undoWindow = deletionState.extendUndoWindow() ?: return
+        val batch = targets.filterNot { it.id in pendingDeletions }
+        if (batch.isEmpty()) return
+        val checkConsent = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && batch.any { it.storageType == RecordingStorageType.MEDIASTORE }
         cancelPlaybackRestore()
-        targets.forEach(RecordingPlayback::stop)
-        if (targets.any { it.id == expandedRecordingOwner?.recordingId }) {
-            setExpandedRecording(null)
+        batch.forEach(RecordingPlayback::stop)
+        if (!checkConsent) {
+            offerDeletionUndo(batch)
+        } else {
+            checkDeletionConsent(batch)
         }
-        targets.forEach { pendingDeletions[it.id] = it }
-        input.callbacks.onVisibleRecordingsChanged(actionableCatalogRows(recordings))
+        if (closed) return
+        if (batch.any { it.id == expandedRecordingOwner?.recordingId }) setExpandedRecording(null)
         clearSelection()
         contextMenuRecordingId = null
+    }
+
+    private fun checkDeletionConsent(batch: List<RecordingEntity>) {
+        deletionPlaybackTargets = batch
+        checkingDeletionConsent = true
+        leftDuringDeletionCheck = false
+        // Keep the prior Undo token usable while permission checks run. Its deadline must not race
+        // an arriving direct subset or expire behind the platform dialog.
+        deletionJob[0]?.cancel()
+        deletionJob[0] = null
+        val app = context.applicationContext
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            try {
+                withContext(NonCancellable) {
+                    val plan = try {
+                        planDeletion(app, batch)
+                    } catch (error: Exception) {
+                        // A failed advisory check has no authority over the new targets. Settle the
+                        // earlier accepted Undo according to its own lifetime, even on cancellation.
+                        if (closed || leftDuringDeletionCheck) handOffPendingDeletions()
+                        else undoNotice?.let { startUndoDeadline(it.window) }
+                        if (error is CancellationException) throw error
+                        showPassiveNotice(actionableErrorMessage(app, app.getString(R.string.delete_error_catalog), error),
+                            FeedbackTone.ERROR)
+                        return@withContext
+                    }
+                    val completion = if (plan.prompt.isEmpty()) null else {
+                        if (!closed) awaitingDeletionPrompt = true
+                        enqueueDeletionPrompt(plan.prompt)
+                    }
+                    try {
+                        if (closed || leftDuringDeletionCheck) {
+                            plan.undo.forEach { pendingDeletions[it.id] = it }
+                        } else if (plan.undo.isNotEmpty()) {
+                            offerDeletionUndo(plan.undo)
+                        } else if (completion == null) {
+                            undoNotice?.let { startUndoDeadline(it.window) }
+                        }
+                    } finally {
+                        // Publishing Undo can synchronously retire this owner after the check above.
+                        if (closed || leftDuringDeletionCheck) handOffPendingDeletions()
+                        deletionPlaybackTargets = plan.prompt.map { it.recording }
+                        if (!closed && completion != null) resumeUndoAfterPrompt(completion)
+                    }
+                }
+            } finally {
+                if (!awaitingDeletionPrompt) deletionPlaybackTargets = emptyList()
+                checkingDeletionConsent = false
+            }
+        }
+    }
+
+    private fun resumeUndoAfterPrompt(completion: Deferred<Unit>) {
+        // Only the UI waiter is cancelled on disposal. The process queue still owns the exact consent batch.
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            completion.await()
+            lifecycleOwner.lifecycle.currentStateFlow.first { it.isAtLeast(Lifecycle.State.RESUMED) }
+            val request = playbackRoute.request
+            val needsFreshScan = request != null && deletionPlaybackTargets.any(request::matches)
+            deletionPlaybackTargets = emptyList()
+            if (needsFreshScan) playbackRoute.invalidateProof()
+            awaitingDeletionPrompt = false
+            if (needsFreshScan) refresh(showSpinner = false)
+            undoNotice?.let { startUndoDeadline(it.window) }
+        }
+    }
+
+    private fun offerDeletionUndo(batch: List<RecordingEntity>) {
+        val undoWindow = deletionState.extendUndoWindow() ?: return
+        batch.forEach { pendingDeletions[it.id] = it }
         val count = pendingDeletions.size
         val message = if (count == 1) resources.getString(R.string.recording_deleted)
         else resources.getQuantityString(R.plurals.recordings_deleted, count, count)
-        input.callbacks.onUndoVisibleChange(input.active)
         undoNotice = NativeLibraryUndoNotice(message, undoWindow)
+        if (!awaitingDeletionPrompt) startUndoDeadline(undoWindow)
+        try {
+            input.callbacks.onVisibleRecordingsChanged(actionableCatalogRows(recordings))
+            if (!closed && undoNotice?.window == undoWindow) input.callbacks.onUndoVisibleChange(input.active)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            // Keep the accepted transaction and its receipt waiter alive if the renderer fails.
+            if (!checkingDeletionConsent) throw error
+            RecordingIncidentStore.recordUnexpectedErrorInBackground(context, "Library Undo publication", error)
+            showPassiveNotice(actionableErrorMessage(context, resources.getString(R.string.delete_error_catalog), error),
+                FeedbackTone.ERROR)
+        }
+    }
+
+    private fun startUndoDeadline(undoWindow: Long) {
         deletionJob[0]?.cancel()
         deletionJob[0] = scope.launch {
             try {
@@ -1020,9 +1143,9 @@ internal class NativeLibraryController(
     }
 
     fun undoDelete(undoWindow: Long) {
-        val undoJob = deletionJob[0] ?: return
+        if (checkingDeletionConsent && leftDuringDeletionCheck) return
         if (!deletionState.undo(undoWindow)) return
-        undoJob.cancel()
+        deletionJob[0]?.cancel()
         deletionJob[0] = null
         pendingDeletions.clear()
         input.callbacks.onVisibleRecordingsChanged(actionableCatalogRows(recordings))
@@ -1089,6 +1212,7 @@ internal class NativeLibraryController(
     override fun close() {
         if (closed) return
         closed = true
+        RecordingDeletionConsent.retirePlayback(playbackRoute)
         playbackRoute.clear()
         beforeRequestedPlayback = null
         playbackRequestFinished = null

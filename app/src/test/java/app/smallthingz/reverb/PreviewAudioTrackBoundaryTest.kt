@@ -226,9 +226,110 @@ class PreviewAudioTrackBoundaryTest {
         }
     }
 
+    @Test fun replacementFirstWriteFailureRequestsRecoveryAfterAcknowledgedSuspension() =
+        checkReplacementFirstWriteFailure(acknowledged = true, revokeBeforeDelivery = false)
+
+    @Test fun replacementFirstWriteFailureWithoutSuspensionDoesNotRequestRecovery() =
+        checkReplacementFirstWriteFailure(acknowledged = false, revokeBeforeDelivery = false)
+
+    @Test fun revokedAuthoritySuppressesQueuedReplacementRecovery() =
+        checkReplacementFirstWriteFailure(acknowledged = true, revokeBeforeDelivery = true)
+
+    private fun checkReplacementFirstWriteFailure(acknowledged: Boolean, revokeBeforeDelivery: Boolean) =
+        fixture(false, shuttleSource = true) { controller, recording ->
+            val authority = RecordingScrubAuthority(RecordingScrubKey(7L, 3L), resumePlayback = true)
+            val handoff = CountDownLatch(1)
+            var recoveries = 0
+            PreviewBoundaryTrackShadow.maximumWrite = 3072
+            PreviewBoundaryTrackShadow.failWriteAt = 1
+            PreviewBoundaryTrackShadow.failTrackNumber = 2
+            val bothReleased = CountDownLatch(2)
+            PreviewBoundaryTrackShadow.released = bothReleased
+
+            controller.startRecordingShuttle(RuntimeEnvironment.getApplication(), recording, .010, 1f,
+                onStarted = {
+                    if (acknowledged) authority.acknowledgePlaybackSuspended()
+                    handoff.countDown()
+                },
+                onFailureAfterStart = { recoveries++ },
+                fromSeconds = .010, untilSeconds = .070, ordinaryAuthority = authority)
+            awaitMain(handoff)
+            await(PreviewBoundaryTrackShadow.played, "first track played after handoff")
+            assertEquals(acknowledged, authority.playbackSuspended)
+            controller.updateShuttle(.040, 0f, .010, .070)
+            controller.updateShuttle(.040, -1f, .010, .070)
+            await(bothReleased, "original and rejected replacement retired")
+            assertEquals("main delivery is still pending", 0, recoveries)
+            if (revokeBeforeDelivery) authority.revoke()
+            drainMain()
+
+            assertEquals(if (acknowledged && !revokeBeforeDelivery) 1 else 0, recoveries)
+            val tracks = PreviewBoundaryTrackShadow.instances()
+            assertEquals(2, tracks.size)
+            assertEquals(1, tracks[0].events.count { it.first == "play" })
+            assertEquals(listOf("write", "pause", "flush", "release"), tracks[1].events.map { it.first })
+            assertTrue(tracks[1].acceptedBytes().isEmpty())
+        }
+
+    @Test fun initialFirstWriteFailureBeforeSuspensionDoesNotRequestRecovery() = fixture(false, shuttleSource = true) { controller, recording ->
+        val authority = RecordingScrubAuthority(RecordingScrubKey(7L, 3L), resumePlayback = true)
+        var handoffs = 0
+        var recoveries = 0
+        PreviewBoundaryTrackShadow.failWriteAt = 1
+
+        controller.startRecordingShuttle(RuntimeEnvironment.getApplication(), recording, .010, 1f,
+            onStarted = { handoffs++ }, onFailureAfterStart = { recoveries++ },
+            fromSeconds = .010, untilSeconds = .070, ordinaryAuthority = authority)
+        await(PreviewBoundaryTrackShadow.released, "unprimed initial track retired")
+        drainMain()
+
+        assertEquals(0, handoffs)
+        assertEquals(0, recoveries)
+        assertFalse(authority.playbackSuspended)
+        assertEquals(listOf("write", "pause", "flush", "release"), PreviewBoundaryTrackShadow.single().events.map { it.first })
+    }
+
+    @Test fun replacementSourceOpenFailureRequestsRecoveryAfterAcknowledgedSuspension() {
+        val originalWaiting = CountDownLatch(1)
+        val originalCanExit = CountDownLatch(1)
+        fixture(false, shuttleSource = true, prepareSource = false, onShuttleTargetWait = {
+            originalWaiting.countDown()
+            check(originalCanExit.await(10, TimeUnit.SECONDS))
+        }) { controller, recording ->
+            val authority = RecordingScrubAuthority(RecordingScrubKey(7L, 3L), resumePlayback = true)
+            val handoff = CountDownLatch(1)
+            val recovery = CountDownLatch(1)
+            var recoveries = 0
+            PreviewBoundaryTrackShadow.maximumWrite = 3072
+
+            try {
+                controller.startRecordingShuttle(RuntimeEnvironment.getApplication(), recording, .010, .91f,
+                    onStarted = { authority.acknowledgePlaybackSuspended(); handoff.countDown() },
+                    onFailureAfterStart = { recoveries++; recovery.countDown() },
+                    fromSeconds = .010, untilSeconds = .070, ordinaryAuthority = authority)
+                awaitMain(handoff)
+                await(PreviewBoundaryTrackShadow.played, "original source opened and played")
+                await(originalWaiting, "old worker parked away from source reads")
+                // Remove only this fixture while its original worker is parked. The replacement must open it again.
+                assertTrue(File(recording.id).delete())
+                controller.updateShuttle(.040, -1f, .010, .070)
+            } finally {
+                originalCanExit.countDown()
+            }
+            awaitMain(recovery)
+            await(PreviewBoundaryTrackShadow.released, "original track retired")
+            drainMain()
+
+            assertEquals(1, recoveries)
+            assertEquals(1, PreviewBoundaryTrackShadow.single().events.count { it.first == "play" })
+        }
+    }
+
     private fun fixture(
         blockFirstWrite: Boolean, acquiredOnlyCleanup: Boolean = false, shuttleSource: Boolean = false,
-        shuttleClock: () -> Long = { 0L }, test: (TimelineAudioPreviewController, RecordingEntity) -> Unit,
+        shuttleClock: () -> Long = { 0L }, prepareSource: Boolean = true,
+        onShuttleTargetWait: ((Float) -> Unit)? = null,
+        test: (TimelineAudioPreviewController, RecordingEntity) -> Unit,
     ) {
         check(ServiceStateOsShadow.fixtureRoot == null)
         JournalHostIoShadow.reset()
@@ -251,14 +352,16 @@ class PreviewAudioTrackBoundaryTest {
                 createdAtMillis = 1L, lastSeenAtMillis = 1L)
             val owner = TimelineAudioPreviewController(onTrackReleaseFailure = {
                 synchronized(cleanupFailures) { cleanupFailures += it }
-            }, shuttleNowNanos = shuttleClock).also { controller = it }
-            val prepared = CountDownLatch(1)
-            val errors = mutableListOf<Throwable>()
-            owner.prepareRecording(RuntimeEnvironment.getApplication(), recording,
-                { assertEquals(sourceDurationMillis, it); prepared.countDown() }, { errors += it; prepared.countDown() },
-                { synchronized(cleanupFailures) { cleanupFailures += it } })
-            awaitMain(prepared)
-            assertTrue(errors.toString(), errors.isEmpty())
+            }, shuttleNowNanos = shuttleClock, onShuttleTargetWait = onShuttleTargetWait).also { controller = it }
+            if (prepareSource) {
+                val prepared = CountDownLatch(1)
+                val errors = mutableListOf<Throwable>()
+                owner.prepareRecording(RuntimeEnvironment.getApplication(), recording,
+                    { assertEquals(sourceDurationMillis, it); prepared.countDown() }, { errors += it; prepared.countDown() },
+                    { synchronized(cleanupFailures) { cleanupFailures += it } })
+                awaitMain(prepared)
+                assertTrue(errors.toString(), errors.isEmpty())
+            }
             test(owner, recording)
         } catch (error: Throwable) {
             primary = error
@@ -277,9 +380,11 @@ class PreviewAudioTrackBoundaryTest {
             clean { drainMain() }
             clean { synchronized(cleanupFailures) { assertTrue(cleanupFailures.toString(), cleanupFailures.isEmpty()) } }
             if (workersStopped) {
-                clean { PreviewBoundaryTrackShadow.acquired()?.let { track ->
-                    if (acquiredOnlyCleanup) assertAcquiredReleaseOnce(track) else assertTerminalOnce(track)
-                } }
+                clean {
+                    for (track in PreviewBoundaryTrackShadow.instances()) {
+                        if (acquiredOnlyCleanup) assertAcquiredReleaseOnce(track) else assertTerminalOnce(track)
+                    }
+                }
                 clean { JournalHostIoShadow.finishFixture()?.let { throw it } }
                 ServiceStateOsShadow.fixtureRoot = null
             }
@@ -374,7 +479,9 @@ class PreviewBoundaryTrackShadow : ShadowAudioTrack() {
         check(size > 0 && offset >= 0 && offset + size <= bytes.size && size % 2 == 0)
         check(mode == AudioTrack.WRITE_BLOCKING || mode == AudioTrack.WRITE_NON_BLOCKING)
         event("write")
-        if (failWriteAt > 0 && events.count { it.first == "write" } == failWriteAt) return AudioTrack.ERROR_BAD_VALUE
+        if (failWriteAt > 0 && events.count { it.first == "write" } == failWriteAt &&
+            (failTrackNumber == 0 || synchronized(tracks) { tracks.indexOf(this) + 1 == failTrackNumber })
+        ) return AudioTrack.ERROR_BAD_VALUE
         writeEntered.countDown()
         if (blockFirst && events.count { it.first == "write" } == 1) check(allowWriteReturn.await(10, TimeUnit.SECONDS))
         val accepted = minOf(size, maximumWrite)
@@ -400,13 +507,14 @@ class PreviewBoundaryTrackShadow : ShadowAudioTrack() {
         lateinit var secondBodyAccepted: CountDownLatch
         lateinit var played: CountDownLatch
         @Volatile var failWriteAt = 0
+        @Volatile var failTrackNumber = 0
         @Volatile var thresholdResult = 1
         lateinit var writeEntered: CountDownLatch
         lateinit var allowWriteReturn: CountDownLatch
         lateinit var quiet: CountDownLatch
         lateinit var released: CountDownLatch
         fun single(): PreviewBoundaryTrackShadow = synchronized(tracks) { tracks.single() }
-        fun acquired(): PreviewBoundaryTrackShadow? = synchronized(tracks) { tracks.singleOrNull() }
+        fun instances(): List<PreviewBoundaryTrackShadow> = synchronized(tracks) { tracks.toList() }
         fun reset(block: Boolean) {
             synchronized(tracks) { tracks.clear() }
             blockFirst = block
@@ -415,6 +523,7 @@ class PreviewBoundaryTrackShadow : ShadowAudioTrack() {
             firstBodyAccepted = CountDownLatch(1); secondBodyAccepted = CountDownLatch(1)
             played = CountDownLatch(1)
             failWriteAt = 0
+            failTrackNumber = 0
             thresholdResult = 1
             writeEntered = CountDownLatch(1); allowWriteReturn = CountDownLatch(1)
             quiet = CountDownLatch(1); released = CountDownLatch(1)

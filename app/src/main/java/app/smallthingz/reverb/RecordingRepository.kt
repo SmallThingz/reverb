@@ -235,18 +235,7 @@ object RecordingRepository {
     ): RecordingEntity {
         return withContext(Dispatchers.IO) {
             mutex.withLock {
-                val stableIdentityAvailable = recording.fileIdentity.isNotBlank()
-                val currentPostcondition = if (stableIdentityAvailable) {
-                    runCatching { recordingCatalogPostconditionObservation(context, recording) }.getOrNull()
-                } else {
-                    null
-                }
-                if (!recordingCatalogPostconditionIsCurrent(
-                        stableIdentityAvailable = stableIdentityAvailable,
-                        currentIdentityMatches = currentPostcondition?.identityMatches == true,
-                        currentDisplayNameMatches = currentPostcondition?.displayNameMatches == true,
-                    )
-                ) {
+                if (recording.fileIdentity.isBlank()) {
                     throw RecordingCatalogIdentityChangedException("Recording changed before catalog registration")
                 }
                 val dao = dao(context)
@@ -262,6 +251,12 @@ object RecordingRepository {
                     val copied = publication?.let { fileCopyPublicationForTarget(it, presentRecording) }
                     copyOwnershipUnresolved = copied != null
                     FileCopyPublications.catalogCommit(context, publication, listOfNotNull(copied)) {
+                        val currentPostcondition = runCatching {
+                            recordingCatalogPostconditionObservation(context, presentRecording)
+                        }.getOrNull()
+                        if (currentPostcondition?.identityMatches != true || !currentPostcondition.displayNameMatches) {
+                            throw RecordingCatalogIdentityChangedException("Recording changed before catalog registration")
+                        }
                         dao.upsert(presentRecording)
                     }
                     if (copied != null && !finishCopiedFileSourceLocked(context, copied, presentRecording, owner) &&
@@ -272,15 +267,13 @@ object RecordingRepository {
                     }
                     presentRecording
                 } catch (error: Exception) {
-                    if (error is CancellationException) throw error
-                    val retryPostcondition = if (stableIdentityAvailable) {
-                        runCatching { recordingCatalogPostconditionObservation(context, recording) }.getOrNull()
-                    } else {
-                        null
-                    }
+                    if (error is CancellationException || error is RecordingCatalogIdentityChangedException) throw error
+                    val retryPostcondition = runCatching {
+                        recordingCatalogPostconditionObservation(context, recording)
+                    }.getOrNull()
                     throw catalogRegistrationFailureAfterIdentityRecheck(
                         error = error,
-                        stableIdentityAvailable = stableIdentityAvailable,
+                        stableIdentityAvailable = true,
                         currentDisplayNameMatches = retryPostcondition?.displayNameMatches == true,
                         currentIdentityMatches = retryPostcondition?.identityMatches == true,
                         copyCleanupPending = copyOwnershipUnresolved && owner == FileCopyCleanupOwner.LIVE_ACCEPTED_OPERATION,
@@ -389,6 +382,33 @@ object RecordingRepository {
 
     internal suspend fun flushConsentDeletionJournal(batch: RecordingDeletionJournalBatch) {
         mutex.withLock { batch.flush() }
+    }
+
+    /** Keep prompt preparation read-only. A retry must retain the original selection and proof. */
+    internal suspend fun snapshotDeletionConsentTarget(
+        context: Context,
+        recording: RecordingEntity,
+        original: RecordingDeletionConsentTarget? = null,
+    ): RecordingDeletionConsentTarget? = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            if (recording.storageType != RecordingStorageType.MEDIASTORE ||
+                recordingMutations.isActive(recording.id)
+            ) return@withLock null
+            val tracked = dao(context).findById(recording.id) ?: return@withLock null
+            if (!sameRecordingActionTarget(recording, tracked)) return@withLock null
+            if (original == null) {
+                val fingerprint = createPendingDeletionIntent(context, tracked) ?: return@withLock null
+                RecordingDeletionConsentTarget(tracked, fingerprint)
+            } else {
+                if (!sameRecordingActionTarget(original.recording, tracked) ||
+                    !recordingDeletionIdentityMatches(context, tracked)) return@withLock null
+                original.takeIf {
+                    revalidateConsentedDeletionIntent(tracked.id, it.fingerprint) {
+                        pendingDeletionMatchesCurrentAsset(context, tracked, it.fingerprint)
+                    } != null
+                }
+            }
+        }
     }
 
     internal suspend fun prepareDeletionConsent(context: Context, target: RecordingDeletionConsentTarget,
@@ -812,6 +832,7 @@ object RecordingRepository {
                     val copiedPhysicalResult = renamed.storageType == RecordingStorageType.FILE &&
                         !sameFileObjectAcrossRename(tracked.fileIdentity, renamed.fileIdentity)
                     var copied: FileCopyPublication? = null
+                    var renamedPostconditionVerified = false
                     try {
                         val publication = if (renamed.storageType == RecordingStorageType.FILE)
                             FileCopyPublications.snapshot(context) else null
@@ -833,6 +854,7 @@ object RecordingRepository {
                         ) {
                             throw IOException("Recording changed before rename catalog commit")
                         }
+                        renamedPostconditionVerified = true
                         FileCopyPublications.catalogCommit(context, publication, listOfNotNull(copied)) {
                             dao.applyChanges(
                                 upserts = listOf(renamed),
@@ -847,7 +869,10 @@ object RecordingRepository {
                         // possible (for example the old path was reused concurrently), never keep
                         // a stale catalog row that could now address unrelated bytes. A refresh can
                         // rediscover both the renamed recording and any replacement independently.
-                        val rolledBack = attemptRenameRecoveryPreservingPrimaryFailure(
+                        // A lost SAF postcondition gives no authority to overwrite a newer name.
+                        val rolledBack = if (renamed.storageType == RecordingStorageType.DOCUMENT &&
+                            !renamedPostconditionVerified
+                        ) null else attemptRenameRecoveryPreservingPrimaryFailure(
                             primaryFailure = error,
                             fallback = null,
                         ) {

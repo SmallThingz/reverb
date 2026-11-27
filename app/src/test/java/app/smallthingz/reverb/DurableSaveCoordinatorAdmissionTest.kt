@@ -210,6 +210,54 @@ class DurableSaveCoordinatorAdmissionTest {
         }
     }
 
+    @Test fun delayedRecoverySkipsDeliveredSaveAndDeliversFirstPublishedRecovery() = withFixture { context, root, store, _ ->
+        withOwnedMedia(context, root) { provider ->
+            provider.allowRetry = true
+            val coordinator = coordinator(context)
+            fun admit(name: String): String = requireNotNull(store.acquireRange(0.0, store.durationSeconds())).use {
+                val handle = coordinator.admit(it, managedWavRequest().copy(name = name))
+                provider.ownedJobIds += handle.id
+                handle.id
+            }
+
+            val retryId = admit("retry")
+            val interruption = java.io.IOException("interrupted after publication")
+            DurableSaveFaultHooks.onBoundary = { id, stage ->
+                if (id == retryId && stage == "PUBLISHED_DURABLE") throw interruption
+            }
+            try {
+                coordinator.materialize(retryId) {}
+                fail("expected interruption after publication")
+            } catch (error: java.io.IOException) {
+                assertSame(interruption, error)
+            } finally {
+                DurableSaveFaultHooks.onBoundary = null
+            }
+            val journal = DurableSaveJournal(File(root, "durable-saves"))
+            assertEquals(DurableSaveStage.PUBLISHED, journal.read(retryId).stage)
+
+            val activeId = admit("active")
+            val scanned = coordinator.recover()
+            assertEquals(setOf(retryId, activeId), scanned.map { it.id }.toSet())
+            // Main has not consumed the scan. The original worker finishes and posts success first.
+            val originalPosts = mutableListOf<String>()
+            coordinator.materialize(activeId, onReady = { originalPosts += it.id }) {}
+            assertFalse(journal.directory(activeId).exists())
+            val writesBeforeRecovery = provider.updates
+            val recoveryPosts = mutableListOf<String>()
+            for (handle in scanned) {
+                coordinator.materialize(handle.id, fromRecovery = true, onReady = { recoveryPosts += it.id }) {}
+            }
+
+            assertEquals(listOf(provider.retryUri.toString()), originalPosts)
+            assertEquals(listOf(provider.uri.toString()), recoveryPosts)
+            assertEquals(2, provider.inserts)
+            assertEquals(writesBeforeRecovery, provider.updates)
+            assertFalse(journal.directory(retryId).exists())
+            assertEquals(0, coordinator.pendingCount())
+        }
+    }
+
     @Test fun publishedBoundaryInterruptionRecoversWithoutSecondProviderUpdate() = withFixture { context, root, store, pcm ->
         withOwnedMedia(context, root) { provider ->
             val first = coordinator(context)

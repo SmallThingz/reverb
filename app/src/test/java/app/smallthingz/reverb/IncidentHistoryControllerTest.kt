@@ -1,6 +1,10 @@
 package app.smallthingz.reverb
 
 import java.io.IOException
+import java.time.Instant
+import java.time.ZoneId
+import java.time.ZoneOffset
+import java.util.Locale
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -12,6 +16,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -31,7 +36,7 @@ class IncidentHistoryControllerTest {
                 var mutations = 0
                 val access = object : IncidentHistoryAccess {
                     override val revisions = MutableStateFlow(0L)
-                    override suspend fun readHistory() = prepareIncidentHistory(stored)
+                    override suspend fun readHistory(zone: ZoneId) = prepareIncidentHistory(stored, zone = zone)
                     override fun toggleAcknowledgedInBackground(incident: RecordingIncident) { mutations++ }
                     override fun deleteInBackground(incidents: List<RecordingIncident>) { mutations++ }
                 }
@@ -74,6 +79,88 @@ class IncidentHistoryControllerTest {
                 } finally {
                     observer.cancelAndJoin()
                 }
+            }
+        }
+    }
+
+    @Test fun changedTimeZoneRegroupsRetainedHistoryAtSameRevisionAndSkipsDuplicates() = runBlocking {
+        withTimeout(2_000L) {
+            val beforeMidnight = RecordingIncident(
+                Instant.parse("2026-11-22T23:59:00Z").toEpochMilli(), pid = 10, description = "Same topic",
+            )
+            val afterMidnight = beforeMidnight.copy(
+                occurredAtMillis = Instant.parse("2026-11-23T00:01:00Z").toEpochMilli(), pid = 11,
+            )
+            var zone = ZoneOffset.UTC
+            val reads = Channel<ZoneId>(Channel.UNLIMITED)
+            val access = object : IncidentHistoryAccess {
+                override val revisions = MutableStateFlow(0L)
+                override suspend fun readHistory(zone: ZoneId): IncidentHistoryPresentation {
+                    reads.send(zone)
+                    return prepareIncidentHistory(listOf(beforeMidnight, afterMidnight), Locale.US, zone)
+                }
+                override fun toggleAcknowledgedInBackground(incident: RecordingIncident) = error("Unexpected mutation")
+                override fun deleteInBackground(incidents: List<RecordingIncident>) = error("Unexpected mutation")
+            }
+            val controller = IncidentHistoryController(access, displayTimeZone = { zone })
+            val states = Channel<IncidentHistoryUiState>(Channel.UNLIMITED)
+            val observer = launch { controller.observeHistory { states.trySend(it).getOrThrow() } }
+            try {
+                assertEquals(ZoneOffset.UTC, reads.receive())
+                val initial = states.awaitStatus(IncidentHistoryLoadStatus.READY).history
+                assertEquals(2, initial.days.size)
+                assertEquals(listOf("12:01:00 AM", "11:59:00 PM"), initial.rows.map { it.startLabel })
+
+                zone = ZoneOffset.ofHours(2)
+                controller.refreshDisplayTimeZone()
+                assertEquals(zone, reads.receive())
+                val refreshed = states.awaitStatus(IncidentHistoryLoadStatus.READY).history
+                val group = refreshed.days.single().groups.single()
+                assertEquals("Same topic", group.message)
+                assertEquals(initial.rows.map { it.key }, group.occurrences.map { it.key })
+                assertEquals(listOf("2:01:00 AM", "1:59:00 AM"), refreshed.rows.map { it.startLabel })
+                assertEquals(0L, access.revisions.value)
+
+                controller.refreshDisplayTimeZone()
+                assertEquals(null, withTimeoutOrNull(100L) { reads.receive() })
+                assertSame(refreshed, controller.state.history)
+            } finally {
+                observer.cancelAndJoin()
+            }
+        }
+    }
+
+    @Test fun unobservedTimeZoneChangeKeepsRetryZoneUntilRefreshCancelsRead() = runBlocking {
+        withTimeout(2_000L) {
+            var zone = ZoneOffset.UTC
+            val access = ControlledAccess()
+            val retry = ControlledRetry()
+            val controller = IncidentHistoryController(access, retry::wait, displayTimeZone = { zone })
+            val states = Channel<IncidentHistoryUiState>(Channel.UNLIMITED)
+            val observer = launch { controller.observeHistory { states.trySend(it).getOrThrow() } }
+            try {
+                val initial = access.reads.receive()
+                assertEquals(ZoneOffset.UTC, access.lastReadZone)
+                initial.completeExceptionally(IOException("History temporarily unavailable"))
+                val backoff = retry.waits.receive()
+
+                zone = ZoneOffset.ofHours(2)
+                backoff.release.complete(Unit)
+                val obsolete = access.reads.receive()
+                assertEquals(ZoneOffset.UTC, access.lastReadZone)
+
+                controller.refreshDisplayTimeZone()
+                val latest = access.reads.receive()
+                assertEquals(zone, access.lastReadZone)
+                assertEquals(1, access.cancelledReads)
+                val refreshed = history(2L)
+                latest.complete(refreshed)
+                assertSame(refreshed, states.awaitStatus(IncidentHistoryLoadStatus.READY).history)
+                obsolete.complete(history(1L))
+                assertSame(refreshed, controller.state.history)
+                assertEquals(0L, access.revisions.value)
+            } finally {
+                observer.cancelAndJoin()
             }
         }
     }
@@ -231,7 +318,11 @@ class IncidentHistoryControllerTest {
         var onToggle: (RecordingIncident) -> Unit = {}
         var onDelete: (RecordingIncident) -> Unit = {}
 
-        override suspend fun readHistory(): IncidentHistoryPresentation {
+        var lastReadZone: ZoneId? = null
+            private set
+
+        override suspend fun readHistory(zone: ZoneId): IncidentHistoryPresentation {
+            lastReadZone = zone
             val response = CompletableDeferred<IncidentHistoryPresentation>()
             reads.send(response)
             return try {

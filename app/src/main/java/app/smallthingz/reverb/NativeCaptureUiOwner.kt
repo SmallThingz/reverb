@@ -106,6 +106,7 @@ internal class NativeCaptureUiOwner(
     private var bufferSelection = restoredSelection
     private val selectedBuffer get() = bufferSelection ?: BufferSlot.ONE_SHOT
     private var visualizerVisible = visualizerVisible
+    private var homeBlobMounted = false
     private var skipSilenceEnabled = false
     private val oneShotBlobController = NativeAudioBlobController()
     private val loopingBlobController = NativeAudioBlobController()
@@ -230,10 +231,18 @@ internal class NativeCaptureUiOwner(
     fun setVisualizerVisible(value: Boolean) {
         if (visualizerVisible == value) return
         visualizerVisible = value
-        if (attached) replaceVisualizationLease()
+        reconcileVisualizationLease()
         refreshPresentationVisibility()
         publish()
     }
+
+    /** Only the mounted Home blob consumes live frames. Range retains its route visibility. */
+    fun setHomeBlobMounted(mounted: Boolean) {
+        if (!screenAlive.get() || homeBlobMounted == mounted) return
+        homeBlobMounted = mounted
+        reconcileVisualizationLease()
+    }
+
     fun refreshPresentationVisibility() {
         feedbackVisible.value = callbacks.isSaveFeedbackVisible() && view.hasWindowFocus()
     }
@@ -273,7 +282,7 @@ internal class NativeCaptureUiOwner(
     private fun replaceService(next: ReverbService?) {
         if (service === next) return
         foreground?.close(); foreground = null
-        visualization?.close(); visualization = null
+        closeVisualizationLease()
         captureCommandOwner.retire()
         captureCommandOwner = CaptureCommandUiOwner()
         pendingStatePoll = null
@@ -283,14 +292,23 @@ internal class NativeCaptureUiOwner(
     private fun replaceLeases() {
         foreground?.close()
         foreground = serviceUiOwner.foregroundLease(service, lifecycleOwner, view, uiForegroundOwner)
-        replaceVisualizationLease()
+        reconcileVisualizationLease()
     }
-    private fun replaceVisualizationLease() {
-        visualization?.close()
-        visualization = serviceUiOwner.visualizationLease(service, lifecycleOwner, view,
-            visualizationCallback, visualizerVisible) {
-            oneShotBlobController.clear(); loopingBlobController.clear()
+    private fun reconcileVisualizationLease() {
+        val recorder = service
+        if (!screenAlive.get() || !attached || !visualizerVisible || !homeBlobMounted || recorder == null) {
+            closeVisualizationLease()
+        } else if (visualization == null) {
+            visualization = serviceUiOwner.visualizationLease(recorder, lifecycleOwner, view,
+                visualizationCallback, visualizerVisible = true) {
+                oneShotBlobController.clear(); loopingBlobController.clear()
+            }
         }
+    }
+    private fun closeVisualizationLease() {
+        val lease = visualization
+        visualization = null
+        lease?.close()
     }
     private val visualizationCallback = ReverbService.VisualizationCallback { frame ->
         when (frame.bufferSlot) {
@@ -643,7 +661,7 @@ internal class NativeCaptureUiOwner(
         try { binding?.close() } finally {
             binding = null
             foreground?.close(); foreground = null
-            visualization?.close(); visualization = null
+            closeVisualizationLease()
             if (!attached) {
                 detachActiveSaveUi()
                 closeCaptureSnapshotsBestEffort(rangeSnapshot, pendingExportSnapshot)

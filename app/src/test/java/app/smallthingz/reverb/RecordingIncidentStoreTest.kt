@@ -177,36 +177,36 @@ class RecordingIncidentStoreTest {
         assertTrue(
             processLocalIncidentMarkerMatches(
                 armed = true, markerPid = 41, markerProcessStartElapsedRealtimeMillis = 100L,
-                markerArmedAtMillis = 1_000L, expectedPid = 41,
-                expectedProcessStartElapsedRealtimeMillis = 100L, stopOccurredAtMillis = 2_000L,
+                markerArmedElapsedRealtimeMillis = 1_000L, expectedPid = 41,
+                expectedProcessStartElapsedRealtimeMillis = 100L, stopOccurredAtElapsedRealtimeMillis = 2_000L,
             ),
         )
         assertFalse(
             processLocalIncidentMarkerMatches(
                 armed = false, markerPid = 41, markerProcessStartElapsedRealtimeMillis = 100L,
-                markerArmedAtMillis = 1_000L, expectedPid = 41,
-                expectedProcessStartElapsedRealtimeMillis = 100L, stopOccurredAtMillis = 2_000L,
+                markerArmedElapsedRealtimeMillis = 1_000L, expectedPid = 41,
+                expectedProcessStartElapsedRealtimeMillis = 100L, stopOccurredAtElapsedRealtimeMillis = 2_000L,
             ),
         )
         assertFalse(
             processLocalIncidentMarkerMatches(
                 armed = true, markerPid = 40, markerProcessStartElapsedRealtimeMillis = 100L,
-                markerArmedAtMillis = 1_000L, expectedPid = 41,
-                expectedProcessStartElapsedRealtimeMillis = 100L, stopOccurredAtMillis = 2_000L,
+                markerArmedElapsedRealtimeMillis = 1_000L, expectedPid = 41,
+                expectedProcessStartElapsedRealtimeMillis = 100L, stopOccurredAtElapsedRealtimeMillis = 2_000L,
             ),
         )
         assertFalse(
             processLocalIncidentMarkerMatches(
                 armed = true, markerPid = 41, markerProcessStartElapsedRealtimeMillis = 99L,
-                markerArmedAtMillis = 1_000L, expectedPid = 41,
-                expectedProcessStartElapsedRealtimeMillis = 100L, stopOccurredAtMillis = 2_000L,
+                markerArmedElapsedRealtimeMillis = 1_000L, expectedPid = 41,
+                expectedProcessStartElapsedRealtimeMillis = 100L, stopOccurredAtElapsedRealtimeMillis = 2_000L,
             ),
         )
         assertFalse(
             processLocalIncidentMarkerMatches(
                 armed = true, markerPid = 41, markerProcessStartElapsedRealtimeMillis = 100L,
-                markerArmedAtMillis = 2_001L, expectedPid = 41,
-                expectedProcessStartElapsedRealtimeMillis = 100L, stopOccurredAtMillis = 2_000L,
+                markerArmedElapsedRealtimeMillis = 2_001L, expectedPid = 41,
+                expectedProcessStartElapsedRealtimeMillis = 100L, stopOccurredAtElapsedRealtimeMillis = 2_000L,
             ),
         )
     }
@@ -431,11 +431,12 @@ class RecordingIncidentStoreTest {
             try {
                 queue.clear()
                 val root = File("build/tmp/service-stop-retry-test/owner")
-                val first = PendingProcessIncidentRetry(root, 10_000L, "first boundary", 42, 9_000L)
-                val duplicate = PendingProcessIncidentRetry(root, 20_000L, "later boundary", 42, 9_000L,
-                    RecordingIncident(occurredAtMillis = 20_000L))
-                val otherPid = PendingProcessIncidentRetry(root, 10_000L, "other pid", 43, 9_000L)
-                val otherStart = PendingProcessIncidentRetry(root, 10_000L, "other start", 42, 9_001L)
+                val first = PendingProcessIncidentRetry(root, 10_000L, "first boundary", 42, 9_000L,
+                    occurredAtElapsedRealtimeMillis = 9_500L, publicationEpoch = Any())
+                val duplicate = first.copy(occurredAtMillis = 20_000L, description = "later boundary",
+                    occurredAtElapsedRealtimeMillis = 19_500L, incident = RecordingIncident(occurredAtMillis = 20_000L))
+                val otherPid = first.copy(description = "other pid", expectedPid = 43)
+                val otherStart = first.copy(description = "other start", expectedProcessStartElapsedRealtimeMillis = 9_001L)
                 val otherRoot = first.copy(root = File("build/tmp/service-stop-retry-test/other-owner"))
                 for (retry in listOf(first, duplicate, otherPid, otherStart, otherRoot, first)) {
                     val before = revision.value

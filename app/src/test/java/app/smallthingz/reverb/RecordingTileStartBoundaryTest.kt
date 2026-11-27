@@ -33,10 +33,18 @@ class RecordingTileStartBoundaryTest {
     @Test fun nullStartFailsClosed() = fixture(Outcome.NULL)
     @Test fun thrownStartFailsClosed() = fixture(Outcome.THROWN)
     @Test fun acceptedStartPreservesLiveCache() = fixture(Outcome.ACCEPTED)
+    @Test fun newerLivePublicationSurvivesNullAndThrownStarts() {
+        fixture(Outcome.NULL, cacheChange = CacheChange.LIVE)
+        fixture(Outcome.THROWN, cacheChange = CacheChange.LIVE)
+    }
+    @Test fun coldNullStartInvalidatesEvenAfterNewerHydration() =
+        fixture(Outcome.NULL, cacheChange = CacheChange.COLD_HYDRATION)
+    @Test fun deferredUnlockBelongsToTheTileAddition() = fixture(Outcome.ACCEPTED, deferUnlock = true)
 
     private enum class Outcome { NULL, THROWN, ACCEPTED }
+    private enum class CacheChange { NONE, LIVE, COLD_HYDRATION }
 
-    private fun fixture(outcome: Outcome) {
+    private fun fixture(outcome: Outcome, cacheChange: CacheChange = CacheChange.NONE, deferUnlock: Boolean = false) {
         val app = RuntimeEnvironment.getApplication()
         val prefs = getRecorderPreferences(app)
         check(prefs.all.isEmpty()) { "Recorder preferences already owned" }
@@ -48,6 +56,12 @@ class RecordingTileStartBoundaryTest {
         check(savedCache.getValue("runtimeOwner") == null) { "Recorder runtime already owned" }
         val priorObservation = snapshotObservation()
         val token = Any()
+        val live = RecordingTileSnapshot(listening = true, activeBuffer = ReverbService.BufferSlot.LOOPING,
+            oneShotEnabled = true, oneShotFull = false, loopingEnabled = true,
+            oneShotSeconds = 1f, loopingSeconds = 2f, commandGeneration = 41L, durationCountersKnown = true)
+        val newerLive = live.copy(oneShotSeconds = 9f, commandGeneration = 42L)
+        val durationKey = PrefKey.QUICK_TILE_LOOPING_DURATION_MILLIS.name
+        var hydratedGeneration: Long? = null
         val starts = mutableListOf<Intent>()
         val controller = Robolectric.buildService(LoopingRecordingTileService::class.java)
         val tile = controller.get()
@@ -72,6 +86,23 @@ class RecordingTileStartBoundaryTest {
                     else super.checkSelfPermission(permission)
                 override fun startForegroundService(intent: Intent): ComponentName? {
                     starts += Intent(intent)
+                    when (cacheChange) {
+                        CacheChange.NONE -> Unit
+                        CacheChange.LIVE -> {
+                            check(RecordingQuickTileStateCache.publish(token, newerLive))
+                            RecordingQuickTiles.refreshCachedSnapshot(tile, requestSystemRefresh = false)
+                        }
+                        CacheChange.COLD_HYDRATION -> {
+                            val generation = RecordingQuickTileStateCache.publicationGeneration()
+                            check(prefs.edit().putLong(durationKey, 6000L).commit())
+                            RecordingQuickTileStateCache.hydratePersistedAsync(tile)
+                            drainTileRoundTrip()
+                            assertEquals(6f, RecordingQuickTileStateCache.readNonBlocking().loopingSeconds, 0f)
+                            hydratedGeneration = RecordingQuickTileStateCache.publicationGeneration().also {
+                                assertTrue(it > generation)
+                            }
+                        }
+                    }
                     return when (outcome) {
                         Outcome.NULL -> null
                         Outcome.THROWN -> throw SecurityException("fixture tile start denied")
@@ -82,37 +113,72 @@ class RecordingTileStartBoundaryTest {
             baseInstalled = true
             createCalled = true
             controller.create()
-            Shadow.extract<ServiceCompatibleTileShadow>(tile).setLocked(false)
+            val shadow = Shadow.extract<ServiceCompatibleTileShadow>(tile)
             tile.onStartListening()
             listening = true
             drainTileRoundTrip()
-            runtimeClaimed = true
-            RecordingQuickTileStateCache.beginRuntime(token)
-            val live = RecordingTileSnapshot(listening = true, activeBuffer = ReverbService.BufferSlot.LOOPING,
-                oneShotEnabled = true, oneShotFull = false, loopingEnabled = true,
-                oneShotSeconds = 1f, loopingSeconds = 2f, commandGeneration = 41L, durationCountersKnown = true)
-            check(RecordingQuickTileStateCache.publish(token, live))
-            assertEquals(live, RecordingQuickTileStateCache.readNonBlocking())
-            tile.onClick()
+            if (cacheChange != CacheChange.COLD_HYDRATION) {
+                RecordingQuickTileStateCache.beginRuntime(token)
+                runtimeClaimed = true
+                check(RecordingQuickTileStateCache.publish(token, live))
+                assertEquals(live, RecordingQuickTileStateCache.readNonBlocking())
+            }
+            val expectedLive = when {
+                cacheChange == CacheChange.LIVE -> newerLive
+                outcome == Outcome.ACCEPTED -> live
+                else -> null
+            }
+            fun queueUnlock() {
+                shadow.setLocked(true)
+                tile.onClick()
+            }
+            if (deferUnlock) {
+                queueUnlock()
+                tile.onTileRemoved(); listening = false
+                shadow.deliverUnlock()
+                assertTrue(starts.isEmpty())
+
+                tile.onTileAdded()
+                tile.onStartListening(); listening = true
+                queueUnlock()
+                tile.onTileRemoved(); listening = false
+                tile.onTileAdded()
+                tile.onStartListening(); listening = true
+                shadow.deliverUnlock()
+                assertTrue(starts.isEmpty())
+
+                queueUnlock()
+                tile.onStopListening(); listening = false
+                shadow.deliverUnlock()
+            } else tile.onClick()
             assertEquals(1, starts.size)
             val intent = starts.single()
             assertEquals(ComponentName(tile, ReverbService::class.java), intent.component)
             assertEquals(ReverbService.ACTION_QUICK_TILE_COMMAND, intent.action)
             assertEquals(ReverbService.BufferSlot.LOOPING.storageCode.toInt(),
                 intent.getIntExtra(ReverbService.EXTRA_QUICK_TILE_BUFFER_SLOT, -1))
-            assertEquals(outcome == Outcome.ACCEPTED, RecordingQuickTileStateCache.readNonBlocking().listening)
+            assertEquals(expectedLive != null, RecordingQuickTileStateCache.readNonBlocking().listening)
+            if (expectedLive != null) assertEquals(expectedLive, RecordingQuickTileStateCache.readNonBlocking())
+            if (cacheChange == CacheChange.LIVE) {
+                assertEquals(android.service.quicksettings.Tile.STATE_ACTIVE, checkNotNull(tile.qsTile).state)
+            }
+            if (cacheChange == CacheChange.COLD_HYDRATION) {
+                assertTrue(RecordingQuickTileStateCache.publicationGeneration() > checkNotNull(hydratedGeneration))
+            }
             assertNull(appShadow.peekNextStartedActivity())
             assertTrue(appShadow.boundServiceConnections.isEmpty())
-            tile.onStopListening(); listening = false
+            if (listening) { tile.onStopListening(); listening = false }
+            if (deferUnlock) queueUnlock()
             destroyAttempted = true; controller.destroy(); destroyCompleted = true
+            if (deferUnlock) shadow.deliverUnlock()
             drainTileRoundTrip()
             assertFalse(RecordingQuickTiles.hasListeningServices())
             assertEquals(1, starts.size)
-            assertEquals(outcome == Outcome.ACCEPTED, RecordingQuickTileStateCache.readNonBlocking().listening)
-            if (outcome == Outcome.ACCEPTED) assertEquals(live, RecordingQuickTileStateCache.readNonBlocking())
+            assertEquals(expectedLive != null, RecordingQuickTileStateCache.readNonBlocking().listening)
+            if (expectedLive != null) assertEquals(expectedLive, RecordingQuickTileStateCache.readNonBlocking())
             assertNull(appShadow.peekNextStartedActivity())
             assertTrue(appShadow.boundServiceConnections.isEmpty())
-            assertTrue(prefs.all.isEmpty())
+            assertEquals(if (cacheChange == CacheChange.COLD_HYDRATION) setOf(durationKey) else emptySet(), prefs.all.keys)
         } catch (error: Throwable) {
             if (destroyAttempted && !destroyCompleted) failDrain(error) else primary = error
         }
@@ -130,6 +196,9 @@ class RecordingTileStartBoundaryTest {
                 catch (error: Throwable) { failDrain(error) }
                 if (observationFailed) drainFailed = true
             }
+            if (cacheChange == CacheChange.COLD_HYDRATION) try {
+                check(prefs.edit().remove(durationKey).commit())
+            } catch (error: Throwable) { failDrain(error) }
             if (!drainFailed && baseInstalled) try { baseField.set(tile, previousBase) } catch (error: Throwable) { failDrain(error) }
         }
         primary?.let { throw it }
@@ -209,13 +278,20 @@ class RecordingTileStartBoundaryTest {
 class ServiceCompatibleTileShadow : ShadowService() {
     private var tile: android.service.quicksettings.Tile? = null
     private var locked = false
+    private var pendingUnlock: Runnable? = null
 
     @Implementation fun getQsTile(): android.service.quicksettings.Tile =
         tile ?: Shadow.newInstanceOf(android.service.quicksettings.Tile::class.java).also { tile = it }
     @Implementation fun isLocked(): Boolean = locked
     @Implementation fun unlockAndRun(action: Runnable?) {
-        locked = false
-        action?.run()
+        check(pendingUnlock == null)
+        pendingUnlock = checkNotNull(action)
     }
     fun setLocked(value: Boolean) { locked = value }
+    fun deliverUnlock() {
+        locked = false
+        val action = checkNotNull(pendingUnlock)
+        pendingUnlock = null
+        action.run()
+    }
 }
