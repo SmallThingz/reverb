@@ -70,3 +70,38 @@ leave GitHub's latest stable release intact.
 Changes to this repository's `.fdroid.yml` alone do not update central fdroiddata.
 Local checker and independent rebuild success are preflight evidence, not proof
 that the F-Droid server has completed its later build and publication cycle.
+
+## Optional private APK size experiment
+
+For a private candidate, run the pinned SDK `zipalign -z -P 16 4` after assembling
+an **unsigned** APK and before invoking the existing private signer. The pre-sign
+helper verifies the source revision embedded by AGP, input APK digest, and tool
+digest. It compares every decoded ZIP payload and the entry metadata, allowing
+DEFLATE compression hints and layout to change. Stored resources and native
+libraries remain stored, and the same tool checks 16 KiB native alignment and
+4-byte stored-entry alignment before the helper publishes a new file. The
+assembled input is preserved. The native tool may recompress every DEFLATE
+entry. There is no additional Python encoder dependency.
+
+```sh
+python3 scripts/test_prepare_release_apk.py
+python3 scripts/prepare_release_apk.py ASSEMBLED_UNSIGNED.apk NEW_PRIVATE_UNSIGNED.apk \
+  --zipalign /path/to/pinned/build-tools/37.0.0/zipalign \
+  --source-revision FULL_BUILD_COMMIT \
+  --input-sha256 ASSEMBLED_APK_SHA256 \
+  --zipalign-sha256 ZIPALIGN_BINARY_SHA256 \
+  --expected-output-sha256 REVIEWED_PRIVATE_UNSIGNED_SHA256
+```
+
+The expected-output argument is optional for the first measurement. Record the
+first candidate digest and require it on an independent replay with the same
+assembled input, tool binary and options. After preparation, retain the existing
+private signing and artifact checks. Compare final signed size and performance
+separately.
+
+This step is opt-in and sits outside Gradle assemble. Keep the default release
+and F-Droid paths as documented above. Public adoption requires a reviewed,
+source-controlled recipe that independently applies the identical transformation
+with the pinned tool before signature copying, and reproduces the final signed
+APK byte for byte. The existing version/tag, clean-source and signer checks
+still apply. Published signatures and APKs are outside this experiment.
