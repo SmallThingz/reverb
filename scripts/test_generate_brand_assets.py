@@ -71,7 +71,7 @@ class BrandGenerationTest(unittest.TestCase):
         self.assertFalse(cache.exists())
 
     def test_old_in_app_anchor_is_rejected(self):
-        self.replace("native-ui/src/main/kotlin/smallthingz/ui/reverb/ReverbBrandMarkView.kt",
+        self.replace(brand.NATIVE_MARK,
                      "originX = 28.5f", "originX = 44.5f")
         result = self.run_generator()
         self.assertNotEqual(0, result.returncode)
@@ -204,7 +204,7 @@ class BrandGenerationTest(unittest.TestCase):
         result = self.run_generator(check=False)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertEqual(0, self.run_generator().returncode)
-        renderer = self.root / "native-ui/src/main/kotlin/smallthingz/ui/reverb/ReverbBrandMarkView.kt"
+        renderer = self.root / brand.NATIVE_MARK
         self.assertIn("originX = 29.5f", renderer.read_text())
         vector = ET.parse(self.root / "app/src/main/res/drawable/ic_launcher_foreground.xml").getroot()
         self.assertEqual("29.5", vector.find("group").get("{" + brand.ANDROID + "}translateX"))

@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class AppIconOwnershipTest(unittest.TestCase):
     def test_platform_aliases_resolve_to_library_artwork_without_local_overrides(self):
-        manifest = json.loads((ROOT / 'native-ui/src/main/resource-provenance/reverb-icons/OWNERSHIP.json').read_text())
+        manifest = json.loads((ROOT / 'native-ui/docs/resource-provenance/reverb-icons/OWNERSHIP.json').read_text())
         aliases = ET.parse(ROOT / 'app/src/main/res/values/native_icon_aliases.xml').getroot()
         actual = {item.attrib['name']: item.text for item in aliases.findall('item')}
         expected = {name: '@drawable/' + item['resource'] for name, item in manifest['platformResources'].items()}

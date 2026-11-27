@@ -98,7 +98,7 @@ class BrandAssetsTest {
             assertEquals("@drawable/ic_launcher_$name", inset.a("drawable"))
             for (edge in listOf("Left", "Top", "Right", "Bottom")) assertEquals("0dp", inset.a("inset$edge"))
         }
-        val inApp = file("native-ui/src/main/kotlin/smallthingz/ui/reverb/ReverbBrandMarkView.kt").readText()
+        val inApp = file("native-ui/src/main/adapters/kotlin/smallthingz/ui/reverb/ReverbBrandMarkView.kt").readText()
         assertTrue(inApp.contains("Generated from native-ui/src/main/brand/reverb.svg"))
         assertTrue(inApp.contains("NativeLayeredMarkView(context, description, reverbBrandArt, ::readReverbBrandPalette)"))
         assertTrue(inApp.contains("init { bindDefaultReverbBrandSurface() }"))

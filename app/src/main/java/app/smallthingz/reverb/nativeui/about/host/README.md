@@ -5,7 +5,7 @@ This is a historical integration record. Window/motion/runtime now live in
 `NativeModalWindowRuntime`; `ReverbAboutDialog` only binds the app content and
 scroll restoration. The 14 motion tests moved to `NativeFloatingDialogMotionTest`.
 Earlier window provenance is retained in the library's
-`src/main/resource-provenance/dialog-window/`; current extraction provenance is
+`docs/resource-provenance/dialog-window/`; current extraction provenance is
 `native-ui/SOURCE-dialogs.json`. Historical qualification statements below do not
 qualify the extracted implementation.
 

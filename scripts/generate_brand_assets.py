@@ -11,6 +11,7 @@ import xml.etree.ElementTree as ET
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = "native-ui/src/main/brand/reverb.svg"
 PLATE_CHECKER = "native-ui/scripts/generate_reverb_brand_plate.py"
+NATIVE_MARK = "native-ui/src/main/adapters/kotlin/smallthingz/ui/reverb/ReverbBrandMarkView.kt"
 MARK_SIZE_DP = 108
 # Library-owned exports of the fixed-dark foreground and deterministic icon grain.
 BRAND_SURFACE_FILES = {
@@ -177,7 +178,7 @@ def assets(android_only=False):
     output = {
         "app/src/main/icon.svg": (f"<!-- Generated from {SOURCE}; run scripts/generate_brand_assets.py. -->\n".encode()
                                   + source.read_bytes()),
-        "native-ui/src/main/kotlin/smallthingz/ui/reverb/ReverbBrandMarkView.kt": native_mark(glyph, mark, translation[1]),
+        NATIVE_MARK: native_mark(glyph, mark, translation[1]),
     }
     # The launcher cannot instantiate an app View: consume the library's resource plate directly.
     background = ET.Element("layer-list")
