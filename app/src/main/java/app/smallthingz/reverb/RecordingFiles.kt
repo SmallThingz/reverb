@@ -4653,10 +4653,11 @@ private fun renameDocumentRecording(
                 )
             },
         ) {
-            val renamedIdentity = resolveProviderRecordingIdentity(
+            val renamedObservation = resolveProviderCatalogObservation(
                 context, RecordingStorageType.DOCUMENT, renamedUri, recording.fileIdentity,
             )
-            val renamedDisplayName = DocumentFile.fromSingleUri(context, renamedUri)?.name?.takeIf { it.isNotBlank() }
+            val renamedIdentity = renamedObservation?.identity.orEmpty()
+            val renamedDisplayName = renamedObservation?.displayName?.takeIf { it.isNotBlank() }
             val renamed = recording.copy(
                 id = renamedUri.toString(),
                 displayName = renamedDisplayName ?: uniqueName,

@@ -88,6 +88,46 @@ class SafRepositoryReconciliationTest {
         }
     }
 
+    @Test fun renameUsesOneStrictNameIdentityObservationAndKeepsContentAndCatalogBookends() = runBlocking {
+        fixture(expectedRenames = 1) { f ->
+            f.provider.renameSupported = true
+            val renamed = checkNotNull(RecordingRepository.rename(f.context, f.selected, "renamed"))
+            assertEquals(listOf(Uri.parse(SAF_SELECTED) to "renamed.wav"), f.provider.renameRequests)
+            assertEquals(SAF_SELECTED, renamed.id)
+            assertEquals("renamed.wav", renamed.displayName)
+            val encodedId = Base64.getUrlEncoder().withoutPadding().encodeToString(SAF_SELECTED.toByteArray(Charsets.UTF_8))
+            assertEquals("provider:2:$encodedId:1644:100001", renamed.fileIdentity)
+            assertEquals(renamed, f.dao.findById(SAF_SELECTED))
+            val strictColumns = listOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME, DocumentsContract.Document.COLUMN_MIME_TYPE,
+                DocumentsContract.Document.COLUMN_SIZE, DocumentsContract.Document.COLUMN_LAST_MODIFIED)
+            assertEquals(strictColumns, f.provider.postRenameProjections.first())
+            assertFalse("post-rename name must come from the identity observation, not a second IPC",
+                f.provider.postRenameProjections.contains(listOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME)))
+            val renameIndex = f.provider.trace.indexOf("rename:selected")
+            assertTrue(renameIndex >= 0)
+            assertTrue("post-rename payload verification remains", f.provider.trace.drop(renameIndex + 1).contains("open:selected"))
+            f.assertOwnedBytes()
+        }
+    }
+
+    @Test fun renameWithWrongBlankOrUnavailableObservedNameStaysUncertainAndPreservesCatalog() = runBlocking {
+        for (name in listOf("other.wav", "", null)) fixture(expectedRenames = 1) { f ->
+            f.provider.renameSupported = true
+            f.provider.nameAfterRename = name
+            f.provider.itemAfterRename = if (name == null) "missing" else "present"
+            val failure = try {
+                RecordingRepository.rename(f.context, f.selected, "renamed")
+                fail("unproven requested name was accepted")
+                null
+            } catch (error: RecordingRenameStateUncertainException) { error }
+            assertNotNull(failure)
+            assertEquals(f.selected, f.dao.findById(SAF_SELECTED))
+            assertFalse(f.provider.postRenameProjections.contains(listOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME)))
+            f.assertOwnedBytes()
+        }
+    }
+
     @Test fun incompleteConfiguredListingPreservesKnownCatalogAndStableRetryRecovers() = runBlocking {
         for (fault in listOf("null", "denied", "loading", "error", "duplicate")) fixture { f ->
             f.provider.listing = fault
@@ -306,6 +346,9 @@ private class SafRefreshProvider(val payload: File, val sentinel: File) : Conten
     var revision = 100_000L
     var selectedName = "clip.wav"
     var renameSupported = false
+    var nameAfterRename: String? = null
+    var itemAfterRename = "present"
+    val postRenameProjections = mutableListOf<List<String>>()
     val capabilityObservations = mutableListOf<Boolean>()
     val callMethods = mutableListOf<String>()
     val renameRequests = mutableListOf<Pair<Uri, String>>()
@@ -331,6 +374,7 @@ private class SafRefreshProvider(val payload: File, val sentinel: File) : Conten
             if (children && listing == "error") putString(DocumentsContract.EXTRA_ERROR, "injected listing error")
         }
         val columns = checkNotNull(projection)
+        if (selected && renameRequests.isNotEmpty()) postRenameProjections += columns.toList()
         if (selected && columns.contentEquals(arrayOf(DocumentsContract.Document.COLUMN_FLAGS))) {
             capabilityObservations += renameSupported
         }
@@ -382,7 +426,8 @@ private class SafRefreshProvider(val payload: File, val sentinel: File) : Conten
         check(source.toString() == SAF_SELECTED)
         val requestedName = checkNotNull(request.getString(DocumentsContract.Document.COLUMN_DISPLAY_NAME))
         renameRequests += source to requestedName
-        selectedName = requestedName
+        selectedName = nameAfterRename ?: requestedName
+        item = itemAfterRename
         revision = 100_001L
         trace += "rename:selected"
         return Bundle().apply { putParcelable("uri", source) }
