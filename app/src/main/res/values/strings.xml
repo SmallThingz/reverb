@@ -188,8 +188,8 @@
     <string name="open_settings">Open settings</string>
     <string name="incidents_title">Incidents</string>
     <string name="open_incidents">Open incidents</string>
-    <string name="incidents_empty">No recording incidents</string>
-    <string name="incidents_empty_detail">Unexpected shutdowns while recording will appear here.</string>
+    <string name="incidents_empty">No incidents</string>
+    <string name="incidents_empty_detail">Recording incidents and unexpected app errors will appear here.</string>
     <string name="incidents_loading">Loading incidents…</string>
     <string name="incidents_unavailable">Couldn\'t load incidents. Retrying…</string>
     <string name="incident_input_heading">Microphone input issue</string>
