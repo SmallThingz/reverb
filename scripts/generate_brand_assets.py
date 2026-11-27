@@ -39,6 +39,33 @@ def encode(element):
             + ET.tostring(element, encoding="unicode") + "\n").encode()
 
 
+def brand_wrapper_specs():
+    res = "app/src/main/res"
+    wrappers = {}
+    for version in (26, 33):
+        adaptive = ET.Element("adaptive-icon")
+        ET.SubElement(adaptive, "background", android(drawable="@drawable/ic_launcher_background"))
+        ET.SubElement(adaptive, "foreground", android(drawable="@drawable/ic_launcher_foreground_inset"))
+        if version == 33:
+            ET.SubElement(adaptive, "monochrome", android(drawable="@drawable/ic_launcher_monochrome_inset"))
+        for name in ("ic_launcher", "ic_launcher_round"):
+            wrappers[f"{res}/mipmap-anydpi-v{version}/{name}.xml"] = adaptive
+    for variant in ("foreground", "monochrome"):
+        name = f"ic_launcher_{variant}"
+        wrappers[f"{res}/drawable/{name}_inset.xml"] = ET.Element("inset", android(
+            insetLeft="0dp", insetTop="0dp", insetRight="0dp", insetBottom="0dp", drawable=f"@drawable/{name}"))
+    splash = ET.Element("animated-vector", android(drawable="@drawable/reverb_splash_vector"))
+    for target, animation in (("far_echo", "far_translate"), ("near_body", "near_alpha"),
+                              ("near_leg", "near_alpha"), ("far_body", "far_alpha"), ("far_leg", "far_alpha")):
+        ET.SubElement(splash, "target", android(name=target, animation=f"@animator/reverb_splash_{animation}"))
+    wrappers[f"{res}/drawable/reverb_splash_animated_icon.xml"] = splash
+    return wrappers
+
+
+def resource_key(path):
+    return path.parent.name.split("-", 1)[0], path.name.split(".", 1)[0]
+
+
 def kotlin_float(value):
     if not math.isfinite(float(value)):
         raise ValueError("Brand coordinates must be finite")
@@ -256,22 +283,31 @@ def assets(android_only=False):
                 if is_color and (name == "native_amoled_foreground_fill"
                                  or (name.startswith(prefix) and path.relative_to(ROOT).as_posix() not in managed)):
                     raise ValueError(f"Brand color override outside canonical/generated palette: {path.relative_to(ROOT)}")
+    wrappers = brand_wrapper_specs()
+    for name, expected in wrappers.items():
+        try:
+            actual = ET.parse(ROOT / name).getroot()
+        except (OSError, ET.ParseError) as error:
+            raise ValueError(f"Cannot read canonical brand wrapper: {name}") from error
+        if ET.canonicalize(ET.tostring(actual), strip_text=True) != ET.canonicalize(
+                ET.tostring(expected), strip_text=True):
+            raise ValueError(f"Brand wrapper does not match the canonical recipe: {name}")
+
     # Android merges resources by type/name, regardless of source set, qualifier or extension.
-    # Only the generated main files may define these drawable/animator names.
-    geometry = {(Path(name).parent.name, Path(name).stem) for name in output
-                if name.startswith("app/src/main/res/") and Path(name).parent.name in ("drawable", "animator")}
-    geometry |= {("drawable", Path(name).stem) for name in BRAND_PLATE_FILES}
-    managed_geometry = set(output) | BRAND_PLATE_FILES
+    # The exact v26/v33 adaptive pairs are both managed, including each round alias.
+    managed_geometry = {name for name in output
+                        if name.startswith("app/src/main/res/") and Path(name).parent.name in ("drawable", "animator")}
+    managed_geometry |= BRAND_PLATE_FILES | set(wrappers)
+    geometry = {resource_key(Path(name)) for name in managed_geometry}
     for path in (path for owner in ("app", "native-ui")
                  for path in (ROOT / owner).glob("src/*/res/*/*")):
         if not path.is_file():
             continue
-        resource_type = path.parent.name.split("-", 1)[0]
-        key = (resource_type, path.name.split(".", 1)[0])
+        key = resource_key(path)
         relative = path.relative_to(ROOT).as_posix()
         if key in geometry and relative not in managed_geometry:
             raise ValueError(f"Brand geometry override outside generated resources: {relative}")
-        if resource_type == "values" and path.suffix == ".xml":
+        if key[0] == "values" and path.suffix == ".xml":
             for entry in ET.parse(path).getroot():
                 key = (entry.get("type") if entry.tag == "item" else entry.tag, entry.get("name"))
                 if key in geometry:

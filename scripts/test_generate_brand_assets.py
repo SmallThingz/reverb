@@ -30,7 +30,7 @@ class BrandGenerationTest(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(prefix="reverb-brand-test-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
-        sources = ["scripts/generate_brand_assets.py", brand.SOURCE]
+        sources = ["scripts/generate_brand_assets.py", brand.SOURCE, *brand.brand_wrapper_specs()]
         plate = load_plate_exporter(brand.ROOT)
         sources += [brand.PLATE_CHECKER]
         sources += ["native-ui/" + path for path in plate.SOURCE_FILES]
@@ -140,6 +140,34 @@ class BrandGenerationTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("ic_launcher_background.xml", result.stderr)
 
+    def test_adaptive_icon_background_drift_is_rejected_in_both_framework_versions(self):
+        for version in (26, 33):
+            for alias in ("ic_launcher", "ic_launcher_round"):
+                name = f"app/src/main/res/mipmap-anydpi-v{version}/{alias}.xml"
+                with self.subTest(name=name):
+                    self.assert_wrapper_drift_rejected(name, "@drawable/ic_launcher_background", "@android:color/black")
+
+    def test_launcher_inset_and_splash_wiring_drift_are_rejected(self):
+        for variant in ("foreground", "monochrome"):
+            name = f"app/src/main/res/drawable/ic_launcher_{variant}_inset.xml"
+            with self.subTest(name=name):
+                self.assert_wrapper_drift_rejected(name, 'android:insetLeft="0dp"', 'android:insetLeft="12dp"')
+        name = "app/src/main/res/drawable/reverb_splash_animated_icon.xml"
+        self.assert_wrapper_drift_rejected(name, "@drawable/reverb_splash_vector", "@drawable/reverb_splash_foreground")
+        self.assert_wrapper_drift_rejected(name, 'android:name="far_echo"', 'android:name="near_echo"')
+
+    def assert_wrapper_drift_rejected(self, name, before, after):
+        path = self.root / name
+        original = path.read_bytes()
+        try:
+            self.replace(name, before, after)
+            result = self.run_generator()
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("Brand wrapper does not match the canonical recipe", result.stderr)
+            self.assertIn(name, result.stderr)
+        finally:
+            path.write_bytes(original)
+
     def test_app_cannot_shadow_library_surface_role(self):
         override = self.root / "app/src/main/res/values/brand_override.xml"
         override.write_text('<resources><item type="color" name="reverb_brand_surface">#123456</item></resources>')
@@ -181,6 +209,18 @@ class BrandGenerationTest(unittest.TestCase):
             with self.subTest(kind=kind):
                 content = f'<resources><item type="{kind}" name="{name}">@{kind}/other</item></resources>'
                 self.assert_geometry_override_rejected("app/src/debug/res/values-night/brand.xml", content.encode())
+
+    def test_brand_wrappers_cannot_be_shadowed_by_variants_or_qualifiers(self):
+        round_icon = (self.root / "app/src/main/res/mipmap-anydpi-v33/ic_launcher_round.xml").read_bytes()
+        release_icon = round_icon.replace(b"@drawable/ic_launcher_background", b"@android:color/black")
+        self.assert_geometry_override_rejected(
+            "app/src/release/res/mipmap-anydpi-v33/ic_launcher_round.xml", release_icon)
+        self.assert_geometry_override_rejected(
+            "native-ui/src/main/res/mipmap-night-anydpi-v33/ic_launcher_round.xml", round_icon)
+        splash = (self.root / "app/src/main/res/drawable/reverb_splash_animated_icon.xml").read_bytes()
+        self.assert_geometry_override_rejected("app/src/main/res/drawable-night/reverb_splash_animated_icon.xml", splash)
+        alias = '<resources><item type="mipmap" name="ic_launcher">@mipmap/ic_launcher_round</item></resources>'
+        self.assert_geometry_override_rejected("app/src/main/res/values/launcher_alias.xml", alias.encode())
 
     def test_plate_and_grain_cannot_be_replaced_by_app_or_qualified_resources(self):
         for path in ("app/src/debug/res/drawable/reverb_brand_plate.xml",
