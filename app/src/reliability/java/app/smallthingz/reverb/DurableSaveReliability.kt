@@ -656,6 +656,106 @@ internal fun verifyDurableSaveOverlap(
     }
 }
 
+internal fun verifyDurableFlacAbortOverlap(context: Context, tree: Uri, report: StringBuilder) {
+    durableQaGuard(context)
+    durableQaRequireNoPendingJobs(context)
+    check(DurableSaveFaultHooks.onBoundary == null)
+    val run = UUID.randomUUID().toString()
+    val source = DurableQaSource(context, run)
+    val coordinator = DurableSaveCoordinator.get(context)
+    val journal = DurableSaveJournal(durableSaveJournalRoot(context))
+    var primary: Throwable? = null
+    try {
+        source.append()
+        fun admit(name: String, start: Double, end: Double): String =
+            checkNotNull(source.store.acquireRange(start, end)).use { lease ->
+                coordinator.admit(lease, DurableSaveRequest(
+                    "durable-flac-abort-$run-$name", tree.toString(), ExportFormat.FLAC,
+                    ExportCodec.PCM_16, DURABLE_QA_RATE, 1, PcmSampleFormat.PCM_16, DEFAULT_FLAC_COMPRESSION,
+                )).id
+            }
+        val first = admit("first", 0.25, 1.5)
+        val next = admit("next", 0.5, 1.75)
+        check(first != next)
+        val firstProofs = verifyDurableQaPins(context, first, 12_000, 60_000)
+        val nextProofs = verifyDurableQaPins(context, next, 24_000, 60_000)
+        check(firstProofs.map { it.sourcePath }.intersect(nextProofs.map { it.sourcePath }.toSet()).isNotEmpty())
+        source.store.clear()
+
+        val rejection = DurableSaveLifetimeRejectedException(DurableSaveLifetimeRejection.SERVICE_STOPPING)
+        var pcmSubmitted = false
+        DurableSaveFaultHooks.onBoundary = { id, boundary ->
+            if (id == first && boundary == "PCM_BATCH") pcmSubmitted = true
+        }
+        val failure = try {
+            runCatching {
+                coordinator.materialize(first) {
+                    if (pcmSubmitted) throw rejection
+                }
+            }.exceptionOrNull()
+        } finally {
+            DurableSaveFaultHooks.onBoundary = null
+        }
+        check(pcmSubmitted && failure === rejection) { "Expected the injected post-PCM rejection, got $failure" }
+        check(rejection.suppressed.isEmpty()) { "Clean FLAC abort acquired an unexpected cleanup failure" }
+        val interrupted = journal.read(first)
+        check(interrupted.stage == DurableSaveStage.WRITING && interrupted.output != null)
+        check(DurableSaveJobs.state.value.single { it.id == first }.phase == SavePhase.FAILED)
+        check(catalog(context).none { it.displayName == interrupted.request.name })
+        val staging = checkNotNull(interrupted.output)
+        check(staging.staging && staging.storageType == RecordingStorageType.DOCUMENT)
+        check(staging.directoryId == tree.toString())
+        val stagingUri = checkNotNull(staging.uri)
+        check(stagingUri.authority == tree.authority)
+        // Empty staging is valid if the encoder had not emitted STREAMINFO.
+        // Once the header exists, a normal writer close would replace the unknown frame count.
+        val header = ByteArray(26)
+        java.io.DataInputStream(checkNotNull(context.contentResolver.openInputStream(stagingUri))).use { input ->
+            val firstByte = input.read()
+            if (firstByte >= 0) {
+                header[0] = firstByte.toByte()
+                input.readFully(header, 1, header.size - 1)
+                check(header.copyOfRange(0, 8).contentEquals(byteArrayOf(102, 76, 97, 67, 0, 0, 0, 34)))
+                val frames = ByteBuffer.wrap(header, 18, 8).long and 0xF_FFFF_FFFFL
+                check(frames == 0L) { "Aborted FLAC staging was finalized with $frames frames" }
+            }
+        }
+
+        val nextRecording = coordinator.materialize(next) { }
+        verifyDurableQaOutput(context, nextRecording, ExportFormat.FLAC, 24_000, 60_000, report)
+        verifyDurableQaReferencesReleased(context, next, nextProofs)
+        check(verifyDurableQaPins(context, first, 12_000, 60_000) == firstProofs)
+
+        val firstRecording = coordinator.materialize(first) { }
+        check(firstRecording.id != nextRecording.id)
+        verifyDurableQaOutput(context, firstRecording, ExportFormat.FLAC, 12_000, 60_000, report)
+        verifyDurableQaReferencesReleased(context, first, firstProofs)
+        // Successful jobs retain a terminal handoff until their exact output revisions are observed.
+        val terminalRows = DurableSaveJobs.state.value
+        check(terminalRows.single { it.id == first }
+            .matchesPublishedRecording(mapOf(firstRecording.id to firstRecording.fileIdentity)))
+        check(terminalRows.single { it.id == next }
+            .matchesPublishedRecording(mapOf(nextRecording.id to nextRecording.fileIdentity)))
+        DurableSaveJobs.acknowledgePublished(mapOf(
+            firstRecording.id to firstRecording.fileIdentity,
+            nextRecording.id to nextRecording.fileIdentity,
+        ))
+        check(DurableSaveJobs.state.value.none { it.id == first || it.id == next })
+        source.deleteAfterSuccess()
+        report.appendLine("DURABLE_FLAC_ABORT_OVERLAP run=$run first=$first next=$next")
+    } catch (error: Throwable) {
+        primary = error
+        throw error
+    } finally {
+        try {
+            source.close()
+        } catch (cleanup: Throwable) {
+            if (primary == null) throw cleanup
+            if (cleanup !== primary) primary.addSuppressed(cleanup)
+        }
+    }
+}
+
 /** Bounded metadata fan-out probe; concurrent append must finish while admission is deliberately held. */
 internal fun verifyDurableSaveAdmissionContinuation(
     context: Context,

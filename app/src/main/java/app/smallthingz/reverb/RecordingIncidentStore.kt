@@ -915,6 +915,15 @@ internal fun unexpectedErrorIncidentDescription(
     val message = error.message?.let(::trimmedPrefix).orEmpty()
     if (message.isNotEmpty()) { append(": "); append(message) }
     if (result.length == maxChars) return result.toString()
+    if (error is DurableSaveLifetimeRejectedException) {
+        error.suppressed.firstOrNull()?.let { failure ->
+            append("; suppressed ")
+            append(failure::class.java.name)
+            val failureMessage = failure.message?.let(::trimmedPrefix).orEmpty()
+            if (failureMessage.isNotEmpty()) { append(": "); append(failureMessage) }
+        }
+    }
+    if (result.length == maxChars) return result.toString()
     val stackTrace = error.stackTrace
     val frame = stackTrace.firstOrNull { it.className.startsWith("app.smallthingz.reverb") }
         ?: stackTrace.firstOrNull()

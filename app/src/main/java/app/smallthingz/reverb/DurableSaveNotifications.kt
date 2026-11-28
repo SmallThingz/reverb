@@ -31,7 +31,7 @@ internal object DurableSaveNotifications {
     private var started = false
 
     @Synchronized
-    fun start(context: Context) {
+    fun start(context: Context, canRetireUnpresented: (String) -> Boolean) {
         if (started) return
         started = true
         val app = context.applicationContext
@@ -54,8 +54,10 @@ internal object DurableSaveNotifications {
                             // Also retire notifications left by a prior process, only after authoritative hydration.
                             manager.activeNotifications.forEach { active ->
                                 val tag = active.tag ?: return@forEach
-                                if (active.id == DURABLE_SAVE_NOTIFICATION_ID && tag.startsWith(DURABLE_SAVE_TAG_PREFIX) &&
-                                    tag.removePrefix(DURABLE_SAVE_TAG_PREFIX) !in desired) {
+                                if (active.id != DURABLE_SAVE_NOTIFICATION_ID || !tag.startsWith(DURABLE_SAVE_TAG_PREFIX)) return@forEach
+                                val id = tag.removePrefix(DURABLE_SAVE_TAG_PREFIX)
+                                // A successful Service scan can precede its main-thread row adoption.
+                                if (id !in desired && canRetireUnpresented(id)) {
                                     manager.cancel(tag, DURABLE_SAVE_NOTIFICATION_ID)
                                 }
                             }

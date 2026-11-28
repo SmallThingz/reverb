@@ -274,6 +274,13 @@ internal class FlacAudioFileWriter(
         } catch (error: Throwable) { failure = error; throw error }
     }
 
+    override fun abort(primaryFailure: Throwable) {
+        if (closed) return
+        closed = true
+        failure = primaryFailure
+        finalizer.abort(primaryFailure, { codec.release() }, { output.close() })
+    }
+
     override fun close() {
         if (closed) return
         closed = true

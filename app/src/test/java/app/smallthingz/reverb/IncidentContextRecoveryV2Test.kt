@@ -15,13 +15,18 @@ import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.File
 import java.io.IOException
+import java.lang.reflect.InvocationTargetException
 import java.nio.ByteBuffer
 import java.nio.file.Files
 import java.time.Instant
 import java.time.ZoneId
 import java.time.ZoneOffset
 import java.util.TimeZone
+import java.util.concurrent.Executors
+import java.util.concurrent.FutureTask
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.runBlocking
@@ -35,8 +40,10 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.LooperMode
 import org.robolectric.shadow.api.Shadow
 import org.robolectric.shadows.ShadowActivityManager
+import org.robolectric.shadows.ShadowLooper
 import org.robolectric.shadows.ShadowProcess
 import org.robolectric.shadows.ShadowSystemClock
 
@@ -103,6 +110,168 @@ class IncidentContextRecoveryV2Test {
                 assertTrue(incident.description.orEmpty().contains(failure.message!!))
                 assertFalse(File(root, "recording-session.bin").exists())
             } finally { owners.clear() }
+        }
+    }
+
+    @Test @LooperMode(LooperMode.Mode.PAUSED)
+    fun durableSaveGuardAndQueuesClassifyRetiredOwnersAndRealExecutorRejection() {
+        for (materialization in listOf(false, true)) {
+            for (state in SaveOwnerState.entries) fixture { context, root ->
+                withReportingService(context) { service ->
+                    exerciseDurableSaveQueue(service, context, state, materialization)
+                    assertFalse(File(root, "recording-session.bin").exists())
+                }
+            }
+        }
+    }
+
+    private enum class SaveOwnerState(val rejection: DurableSaveLifetimeRejection?) {
+        CURRENT(null),
+        CLOSED(DurableSaveLifetimeRejection.SERVICE_STOPPING),
+        DESTROYING(DurableSaveLifetimeRejection.SERVICE_STOPPING),
+        TIMED_OUT(DurableSaveLifetimeRejection.FOREGROUND_TIMED_OUT),
+        SUPERSEDED(DurableSaveLifetimeRejection.SUPERSEDED_GENERATION),
+        MISSING(DurableSaveLifetimeRejection.SUPERSEDED_GENERATION),
+        REPLACED(DurableSaveLifetimeRejection.SUPERSEDED_GENERATION),
+    }
+
+    private fun exerciseDurableSaveQueue(
+        service: ReverbService,
+        context: Context,
+        state: SaveOwnerState,
+        materialization: Boolean,
+    ) {
+        val terminals = mutableListOf<Throwable?>()
+        val queued = mutableListOf<String>()
+        val receiver = object : ReverbService.AudioFileReceiver {
+            override fun fileReady(recording: RecordingEntity) { fail("rejected save succeeded") }
+            override fun fileFailed(message: String, error: Throwable?) { terminals += error }
+            override fun saveQueued(jobId: String) { queued += jobId }
+        }
+        val ownerType = ReverbService::class.java.declaredClasses.single { it.simpleName == "DurableSaveOwner" }
+        val constructor = ownerType.declaredConstructors.single { it.parameterCount == 5 }.apply { isAccessible = true }
+        val jobId = "queue-rejection-fixture"
+        val receipt = if (materialization) {
+            checkNotNull(DurableSaveJobs.publish(PendingSave(jobId, "test.wav", 1L, 1L, SavePhase.QUEUED)))
+        } else null
+        val owner = constructor.newInstance(1L, receiver, 0L, if (materialization) jobId else null, receipt)
+        val replacement = constructor.newInstance(1L, receiver, 0L, null, null)
+        fun field(name: String) = ReverbService::class.java.getDeclaredField(name).apply { isAccessible = true }
+        @Suppress("UNCHECKED_CAST")
+        val owners = field("durableSaveOwners").get(service) as MutableMap<Long, Any>
+        // Keep another save active so terminal cleanup avoids unrelated foreground transitions.
+        owners[2L] = constructor.newInstance(2L, receiver, 0L, null, null)
+        owners[1L] = owner
+        when (state) {
+            SaveOwnerState.CURRENT -> Unit
+            SaveOwnerState.CLOSED -> field("exportAdmissionClosed").setBoolean(service, true)
+            SaveOwnerState.DESTROYING -> field("serviceDestroying").setBoolean(service, true)
+            SaveOwnerState.TIMED_OUT -> field("foregroundServiceTimedOut").setBoolean(service, true)
+            SaveOwnerState.SUPERSEDED -> (field("durableWorkGeneration").get(service) as AtomicLong).incrementAndGet()
+            SaveOwnerState.MISSING -> owners.remove(1L)
+            SaveOwnerState.REPLACED -> owners[1L] = replacement
+        }
+
+        val executor = Executors.newSingleThreadExecutor()
+        val executorField = if (materialization) "exportWorkExecutor" else "durableSaveAdmissionExecutor"
+        field(executorField).set(service, executor)
+        try {
+            val guard = ReverbService::class.java.getDeclaredMethod("ensureDurableSaveActive", ownerType)
+                .apply { isAccessible = true }
+            val guardFailure = try {
+                guard.invoke(service, owner)
+                null
+            } catch (wrapped: InvocationTargetException) {
+                wrapped.targetException
+            }
+            val rejection = state.rejection
+            if (rejection == null) assertNull(guardFailure)
+            else assertEquals(rejection, (guardFailure as DurableSaveLifetimeRejectedException).rejection)
+
+            if (materialization) {
+                val queue = ReverbService::class.java.getDeclaredMethod("queueDurableMaterialization", ownerType)
+                    .apply { isAccessible = true }
+                executor.shutdown()
+                queue.invoke(service, owner)
+            } else {
+                val queue = ReverbService::class.java.getDeclaredMethod("queueDurableSaveAdmission", ownerType,
+                    FutureTask::class.java, kotlin.jvm.functions.Function0::class.java).apply { isAccessible = true }
+                var submissions = 0
+                val afterSubmission: () -> Unit = { submissions++ }
+                if (rejection == null) {
+                    val accepted = FutureTask<Unit> { Unit }
+                    queue.invoke(service, owner, accepted, afterSubmission)
+                    accepted.get(5, TimeUnit.SECONDS)
+                }
+                executor.shutdown()
+                val rejected = FutureTask<Unit> { fail("rejected admission ran") }
+                queue.invoke(service, owner, rejected, afterSubmission)
+                assertTrue(rejected.isCancelled)
+                assertEquals(if (rejection == null) 1 else 0, submissions)
+            }
+
+            assertTrue(terminals.isEmpty())
+            assertTrue(queued.isEmpty())
+            ShadowLooper.idleMainLooper()
+            awaitHistoryWriters()
+            if (materialization) {
+                val pending = DurableSaveJobs.state.value.single { it.id == jobId }
+                assertEquals(SavePhase.FAILED, pending.phase)
+                if (rejection != null) assertTrue(pending.error.orEmpty().contains(rejection.explanation))
+            }
+            if (materialization && state in listOf(
+                    SaveOwnerState.DESTROYING, SaveOwnerState.TIMED_OUT, SaveOwnerState.SUPERSEDED)) {
+                assertEquals(listOf(jobId), queued)
+                assertTrue(terminals.isEmpty())
+            } else {
+                assertTrue(queued.isEmpty())
+                val terminal = terminals.single()
+                if (rejection == null) assertTrue(terminal is RejectedExecutionException)
+                else assertEquals(rejection, (terminal as DurableSaveLifetimeRejectedException).rejection)
+            }
+            if (state == SaveOwnerState.REPLACED) assertSame(replacement, owners[1L])
+            else assertNull(owners[1L])
+            assertNotNull(owners[2L])
+            val incidents = RecordingIncidentStore.readIncidents(context)
+            if (rejection == null) assertEquals(RecordingIncidentKind.UNEXPECTED_ERROR, incidents.single().kind)
+            else assertTrue(incidents.isEmpty())
+        } finally {
+            executor.shutdownNow()
+            if (materialization) DurableSaveJobs.remove(jobId)
+        }
+    }
+
+    @Test @LooperMode(LooperMode.Mode.PAUSED)
+    fun durableSaveLifetimeRejectionWithSuppressedFailurePersistsOneIncident() = fixture { context, root ->
+        withReportingService(context) { service ->
+            val ownerType = ReverbService::class.java.declaredClasses.single { it.simpleName == "DurableSaveOwner" }
+            val failures = mutableListOf<Throwable?>()
+            val receiver = object : ReverbService.AudioFileReceiver {
+                override fun fileReady(recording: RecordingEntity) { fail("rejected save succeeded") }
+                override fun fileFailed(message: String, error: Throwable?) { failures += error }
+            }
+            val owner = ownerType.declaredConstructors.single { it.parameterCount == 5 }.apply { isAccessible = true }
+                .newInstance(1L, receiver, 0L, null, null)
+            val error = DurableSaveLifetimeRejectedException(DurableSaveLifetimeRejection.SERVICE_STOPPING)
+            val cleanup = IOException("Save writer close failed " + "x".repeat(512))
+            val journalFailure = IOException("Save failure journal write failed")
+            error.addSuppressed(cleanup)
+            error.addSuppressed(journalFailure)
+            val finish = ReverbService::class.java.getDeclaredMethod("finishDurableSaveFailure", ownerType,
+                String::class.java, Exception::class.java).apply { isAccessible = true }
+            repeat(2) { finish.invoke(service, owner, "Save paused", error) }
+            ShadowLooper.idleMainLooper()
+            awaitHistoryWriters()
+            assertSame(error, failures.single())
+            val incident = RecordingIncidentStore.readIncidents(context).single()
+            assertEquals(RecordingIncidentKind.UNEXPECTED_ERROR, incident.kind)
+            assertEquals(listOf(cleanup, journalFailure), error.suppressed.toList())
+            val description = incident.description.orEmpty()
+            assertTrue(description.contains(error.javaClass.simpleName))
+            assertTrue(description.contains("suppressed java.io.IOException: Save writer close failed"))
+            assertFalse(description.contains("Save failure journal write failed"))
+            assertEquals(384, description.length)
+            assertFalse(File(root, "recording-session.bin").exists())
         }
     }
 

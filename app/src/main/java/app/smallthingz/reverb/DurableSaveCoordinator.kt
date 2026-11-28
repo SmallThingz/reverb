@@ -23,7 +23,11 @@ internal class DurableSaveCoordinator private constructor(private val context: C
     private val completed = LinkedHashMap<String, RecordingEntity>()
     private val pendingIds = linkedSetOf<String>()
 
-    init { DurableSaveNotifications.start(context) }
+    init {
+        DurableSaveNotifications.start(context) { id ->
+            synchronized(journalLock) { DurableSaveJobs.readiness.value.loaded && id !in pendingIds }
+        }
+    }
 
     fun setRecoveryRequest(owner: Any, callback: () -> Unit) = DurableSaveJobs.setRecoveryRequest(owner, callback)
     fun clearRecoveryRequest(owner: Any) = DurableSaveJobs.clearRecoveryRequest(owner)
@@ -77,26 +81,47 @@ internal class DurableSaveCoordinator private constructor(private val context: C
         }
     }
 
-    /** Reads one source graph at a time; other jobs still recover when one record is unavailable. */
-    fun recover(): List<DurableSaveHandle> = synchronized(admissionRecoveryLock) { recoverLocked() }
+    /** Synchronous recovery callers consume the scan immediately. */
+    fun recover(ownedJobIds: Set<String> = emptySet()): List<DurableSaveHandle> =
+        DurableSaveJobs.adoptRecovery(scanForRecovery(ownedJobIds), ownedJobIds)
 
-    private fun recoverLocked(): List<DurableSaveHandle> = synchronized(journalLock) {
-        val eligible = ArrayList<DurableSaveHandle>()
+    fun scanForRecovery(ownedJobIds: Set<String>): DurableSaveRecoveryScan =
+        synchronized(admissionRecoveryLock) {
+            synchronized(journalLock) {
+                DurableSaveJobs.beginRecoveryScan().also { recoverLocked(ownedJobIds, it) }
+            }
+        }
+
+    fun hydrateStartup() {
+        synchronized(admissionRecoveryLock) {
+            synchronized(journalLock) { recoverLocked(emptySet(), null) }
+        }
+    }
+
+    /** Called with both coordinator locks held. Only lightweight summaries escape the scan. */
+    private fun recoverLocked(ownedJobIds: Set<String>, scan: DurableSaveRecoveryScan?) {
         try {
             val presentedFailures = LinkedHashMap<String, String>()
             val result = journal.recoverEach(onRecord = { record ->
+                if (record.id in ownedJobIds) return@recoverEach
                 when (record.stage) {
                     DurableSaveStage.PINNING, DurableSaveStage.CANCELLED -> {
                         val cancelled = record.copy(stage = DurableSaveStage.CANCELLED)
                         journal.write(cancelled)
                         journal.retire(cancelled)
                         pendingIds -= record.id
-                        DurableSaveJobs.remove(record.id)
+                        if (scan == null) DurableSaveJobs.remove(record.id) else scan.retiredIds.add(record.id)
                     }
                     else -> {
                         pendingIds += record.id
-                        val publication = DurableSaveJobs.publish(record.pending(SavePhase.RECOVERING))
-                        eligible += DurableSaveHandle(record.id, publication)
+                        if (scan != null) {
+                            scan.rows.add(record.pending(SavePhase.RECOVERING))
+                        } else {
+                            val phase = if (record.error.isEmpty()) SavePhase.QUEUED else SavePhase.FAILED
+                            DurableSaveJobs.hydrateIfAbsent(
+                                record.pending(phase).copy(startupDiscovered = phase == SavePhase.QUEUED),
+                            )
+                        }
                     }
                 }
             }, onFailure = { id, failure ->
@@ -105,11 +130,19 @@ internal class DurableSaveCoordinator private constructor(private val context: C
                     context.getString(R.string.save_jobs_recovery_failed), failure)
             })
             result.failures.forEach { (id, error) ->
-                DurableSaveJobs.publish(PendingSave(id, "Save recovery", 0, 0, SavePhase.FAILED, error = presentedFailures[id] ?: safeReportedErrorDetail(error, 512) ?: context.getString(R.string.failure_reason_unknown)))
+                if (id in ownedJobIds) return@forEach
+                val message = presentedFailures[id] ?: safeReportedErrorDetail(error, 512)
+                    ?: context.getString(R.string.failure_reason_unknown)
+                val job = PendingSave(id, "Save recovery", 0, 0, SavePhase.FAILED, error = message)
+                if (scan == null) DurableSaveJobs.hydrateIfAbsent(job) else scan.rows.add(job)
             }
             pendingIds.retainAll(result.presentIds)
-            eligible.removeAll { it.id !in result.presentIds }
-            DurableSaveJobs.reconcileAuthoritativeJobs(result.presentIds)
+            if (scan == null) {
+                DurableSaveJobs.reconcileAuthoritativeJobs(result.presentIds)
+            } else {
+                scan.rows.removeAll { it.id !in result.presentIds }
+                scan.presentOrOwnedIds = result.presentIds + ownedJobIds
+            }
             DurableSaveJobs.recovered(result.failures.entries.firstOrNull()?.let { (id, error) ->
                 presentedFailures[id] ?: safeReportedErrorDetail(error, 512) ?: context.getString(R.string.failure_reason_unknown) })
         } catch (failure: Exception) {
@@ -117,7 +150,6 @@ internal class DurableSaveCoordinator private constructor(private val context: C
             DurableSaveJobs.recovered(actionableErrorMessage(context, context.getString(R.string.save_jobs_recovery_failed), failure))
             throw failure
         }
-        eligible
     }
 
     /** Serial across Service instances as an old worker may still be unwinding during rebind. */
@@ -231,7 +263,7 @@ internal class DurableSaveCoordinator private constructor(private val context: C
                 DurableSaveFaultHooks.reached(id, "BEFORE_WRITER")
                 val writer = createRecordingAudioWriter(context, target, request.format, request.sampleRate,
                     request.channelCount, request.sampleFormat, request.flacCompression)
-                writer.use {
+                writer.useForDurableSave {
                     record.source.range.readNormalized(request.sampleRate, request.channelCount, request.sampleFormat,
                         exportFrameLimit(request.format, request.codec, request.sampleRate, request.channelCount, request.sampleFormat)) {
                             bytes, offset, count ->

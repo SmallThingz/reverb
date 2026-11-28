@@ -2,12 +2,24 @@ package app.smallthingz.reverb
 
 import android.content.Context
 import java.io.Closeable
+import smallthingz.ui.util.closePreservingPrimaryFailure
 
 internal interface RecordingAudioWriter : Closeable {
     val totalSampleBytesWritten: Long
     val totalFileBytesWritten: Long
     fun write(bytes: ByteArray, offset: Int, count: Int)
     fun verify(context: Context, checkCancelled: () -> Unit = {}): StableOutputFingerprint
+    fun abort(primaryFailure: Throwable) = close()
+}
+
+internal inline fun RecordingAudioWriter.useForDurableSave(crossinline writePcm: () -> Unit) {
+    try {
+        writePcm()
+    } catch (failure: Throwable) {
+        closePreservingPrimaryFailure(failure) { abort(failure) }
+        throw failure
+    }
+    close()
 }
 
 internal fun createRecordingAudioWriter(

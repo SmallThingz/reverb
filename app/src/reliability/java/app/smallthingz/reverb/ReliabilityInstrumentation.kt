@@ -208,6 +208,22 @@ class ReliabilityInstrumentation : Instrumentation() {
                     verifyDurableSaveCleanupFailure(targetContext, tree, provider, report)
                 }
                 report.appendLine("PASS durable_save_cleanup_failure")
+            } else if (requestedTest == "durable_flac_abort_overlap") {
+                executed++
+                val tree = DocumentsContract.buildTreeDocumentUri(
+                    "${targetContext.packageName}.reliability.documents", ReliabilityDocumentsProvider.ROOT_ID,
+                )
+                targetContext.contentResolver.acquireContentProviderClient(tree).use { client ->
+                    val provider = requireNotNull(client?.localContentProvider as? ReliabilityDocumentsProvider)
+                    val previousMode = provider.mode
+                    try {
+                        provider.mode = ReliabilityDocumentsProvider.Mode.RENAME_NEW_ID
+                        verifyDurableFlacAbortOverlap(targetContext, tree, report)
+                    } finally {
+                        provider.mode = previousMode
+                    }
+                }
+                report.appendLine("PASS durable_flac_abort_overlap")
             } else if (requestedTest == "durable_save_reference_retirement") {
                 executed++
                 verifyDurableSaveReferenceRetirement(targetContext, report)

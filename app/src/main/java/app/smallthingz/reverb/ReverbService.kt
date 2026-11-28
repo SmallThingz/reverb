@@ -516,7 +516,6 @@ open class ReverbService : Service() {
             mainHandler.post { scheduleDurableSaveRecovery(allowForegroundRetry = true) }
         }
         scheduleDurableSaveRecovery()
-        DurableSaveNotifications.start(applicationContext)
         durabilitySyncExecutor = Executors.newSingleThreadExecutor { runnable ->
             Thread({
                 Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
@@ -2468,12 +2467,15 @@ open class ReverbService : Service() {
     }
 
     private fun ensureDurableSaveActive(owner: DurableSaveOwner) {
-        val current = synchronized(exportStateLock) {
-            !exportAdmissionClosed && !serviceDestroying && !foregroundServiceTimedOut &&
-                owner.generation == durableWorkGeneration.get() && durableSaveOwners[owner.id] === owner
-        }
-        if (!current) {
-            throw IOException("Saving paused until Reverb can resume")
+        synchronized(exportStateLock) {
+            val rejection = when {
+                exportAdmissionClosed || serviceDestroying -> DurableSaveLifetimeRejection.SERVICE_STOPPING
+                foregroundServiceTimedOut -> DurableSaveLifetimeRejection.FOREGROUND_TIMED_OUT
+                owner.generation != durableWorkGeneration.get() || durableSaveOwners[owner.id] !== owner ->
+                    DurableSaveLifetimeRejection.SUPERSEDED_GENERATION
+                else -> null
+            }
+            if (rejection != null) throw DurableSaveLifetimeRejectedException(rejection)
         }
     }
 
@@ -2524,17 +2526,14 @@ open class ReverbService : Service() {
     ) {
         var failure: Exception? = null
         synchronized(exportStateLock) {
-            if (exportAdmissionClosed || serviceDestroying || foregroundServiceTimedOut ||
-                owner.generation != durableWorkGeneration.get() ||
-                durableSaveOwners[owner.id] !== owner) {
-                failure = RejectedExecutionException("Save admission is closed")
-            } else {
-                try {
-                    durableSaveAdmissionExecutor.execute(task)
-                    afterSubmission()
-                } catch (error: RejectedExecutionException) {
-                    failure = error
-                }
+            try {
+                ensureDurableSaveActive(owner)
+                durableSaveAdmissionExecutor.execute(task)
+                afterSubmission()
+            } catch (error: DurableSaveLifetimeRejectedException) {
+                failure = error
+            } catch (error: RejectedExecutionException) {
+                failure = error
             }
         }
         failure?.let { error ->
@@ -2580,10 +2579,7 @@ open class ReverbService : Service() {
         val jobId = owner.jobId ?: throw IllegalStateException("Save job was not durably admitted")
         try {
             synchronized(exportStateLock) {
-                if (exportAdmissionClosed || serviceDestroying || foregroundServiceTimedOut ||
-                    owner.generation != durableWorkGeneration.get()) {
-                    throw RejectedExecutionException("Saving paused until Reverb can resume")
-                }
+                ensureDurableSaveActive(owner)
                 exportWorkExecutor.execute {
                     try {
                         durableSaveCoordinator.materialize(jobId,
@@ -2602,6 +2598,8 @@ open class ReverbService : Service() {
                     }
                 }
             }
+        } catch (error: DurableSaveLifetimeRejectedException) {
+            failDurableSaveOwner(owner, error)
         } catch (error: RejectedExecutionException) {
             failDurableSaveOwner(owner, error)
         }
@@ -2622,12 +2620,21 @@ open class ReverbService : Service() {
         try {
             durableSaveAdmissionExecutor.execute {
                 try {
-                    val handles = durableSaveCoordinator.recover()
+                    // Admission and recovery share this executor, so no new job ID from
+                    // this Service can appear between the snapshot and the journal scan.
+                    val ownedJobIds = synchronized(exportStateLock) {
+                        durableSaveOwners.values.mapNotNull { it.jobId }.toSet()
+                    }
+                    val scan = durableSaveCoordinator.scanForRecovery(ownedJobIds)
                     mainHandler.post {
                         try {
-                            if (serviceDestroying || foregroundServiceTimedOut || generation != durableWorkGeneration.get()) return@post
+                            if (serviceDestroying || foregroundServiceTimedOut || generation != durableWorkGeneration.get()) {
+                                DurableSaveJobs.recoveryHandoffDropped(scan)
+                                return@post
+                            }
                             val owners = synchronized(exportStateLock) {
-                                handles.filter { handle -> durableSaveOwners.values.none { it.jobId == handle.id } }.map { handle ->
+                                val currentIds = durableSaveOwners.values.mapNotNull { it.jobId }.toSet()
+                                DurableSaveJobs.adoptRecovery(scan, currentIds).map { handle ->
                                     DurableSaveOwner(nextExportTokenId.getAndIncrement(), NotifyFileReceiver(applicationContext), generation, handle.id, handle.publication)
                                         .also { durableSaveOwners[it.id] = it }
                                 }
@@ -4052,13 +4059,14 @@ open class ReverbService : Service() {
                     ring.stop(preserveInFlight = accepted?.mayCommit == true)
                     null
                 } else {
+                    val visualizationEpoch = visualizationCallbacks.currentEpoch()
                     val requested = captureReadByteCount(accepted.sampleRate, storage.budget.frameBytes,
-                        storage.budget.maxReadBytes, visualizationCallbacks.current() != null,
+                        storage.budget.maxReadBytes, visualizationEpoch != null,
                         appUiForeground || silenceSampleRequest?.running() == true)
                     ring.reserve(CaptureReadIdentity(accepted.release, accepted.continuity, accepted.command,
                         accepted.destination.storageCode, accepted.sampleRate, accepted.channels,
                         accepted.sampleFormat.bytesPerSample, accepted.sampleFormat.storageCode.toInt(),
-                        System.nanoTime()), requested)
+                        System.nanoTime(), visualizationEpoch), requested)
                 }
             } },
             mayComplete = { lease -> synchronized(captureIngressLock) {
@@ -4103,8 +4111,7 @@ open class ReverbService : Service() {
         if (bootCaptureConfirmation != null || BootResumeNotification.needsCaptureProof) confirmBootCaptureFromPacket(input, packet)
         if (!serviceDestroying && state == STATE_LISTENING &&
             id.continuityGeneration == captureContinuityGeneration.get()) {
-            publishVisualization(bytes, 0, packet.byteCount, slot,
-                id.commandGeneration, id.continuityGeneration)
+            publishVisualization(bytes, 0, packet.byteCount, slot, id)
         }
         requestDurabilitySyncIfDue()
     }
@@ -4831,9 +4838,9 @@ open class ReverbService : Service() {
         visualizationAnalyzer ?: AudioVisualizationAnalyzer().also { visualizationAnalyzer = it }
 
     private fun publishVisualization(array: ByteArray, offset: Int, count: Int,
-        slot: BufferSlot, commandGeneration: Long, continuityGeneration: Long) {
+        slot: BufferSlot, read: CaptureReadIdentity) {
         val registration = visualizationCallbacks.currentRegistration() ?: return
-        if (visualizationFaulted) return
+        if (visualizationFaulted || !read.belongsToVisualizationEpoch(registration.epoch)) return
         // The capture read itself is display-rate while the visualizer is attached. Analyze every
         // completed read: a second coarse throttle only adds input-to-pixel latency and can skip
         // short transients entirely.
@@ -4846,10 +4853,10 @@ open class ReverbService : Service() {
                 channelCount = channelMode.channelCount,
                 sampleRate = sampleRate,
                 silenceSuppressed = silenceGateConfig.enabled && silenceGateSlot == slot &&
-                    silenceGateEpoch == continuityGeneration && silenceGateStream?.suppressingSilence == true,
+                    silenceGateEpoch == read.continuityGeneration && silenceGateStream?.suppressingSilence == true,
                 bufferSlot = slot,
-                captureCommandGeneration = commandGeneration,
-                captureContinuityGeneration = continuityGeneration,
+                captureCommandGeneration = read.commandGeneration,
+                captureContinuityGeneration = read.continuityGeneration,
             )
         } catch (error: Exception) {
             visualizationFaulted = true

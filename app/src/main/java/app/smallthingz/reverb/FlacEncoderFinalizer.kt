@@ -13,6 +13,13 @@ internal fun checkFlacExportNotInterrupted() {
 internal class FlacEncoderFinalizer {
     private var closed = false
 
+    fun abort(primaryFailure: Throwable, releaseCodec: () -> Unit, closeOutput: () -> Unit) {
+        if (closed) return
+        closed = true
+        closePreservingPrimaryFailure(primaryFailure, releaseCodec)
+        closePreservingPrimaryFailure(primaryFailure, closeOutput)
+    }
+
     fun close(
         previousFailure: Throwable?,
         queueEnd: () -> Unit,

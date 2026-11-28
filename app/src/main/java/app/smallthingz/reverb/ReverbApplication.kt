@@ -36,7 +36,7 @@ class ReverbApplication : Application() {
                     withRetentionPersistenceLock { applyLaunchThemeMode(this, getConfiguredThemeMode(this)) }
                 }.onFailure { Log.w("ReverbTheme", "Unable to reconcile starting-window theme", it) }
             }
-            runCatching { DurableSaveCoordinator.get(this).recover() }
+            runCatching { DurableSaveCoordinator.get(this).hydrateStartup() }
                 .onFailure { Log.e("ReverbApplication", "Unable to recover pending saves", it) }
         }, "reverb-save-recovery").apply { isDaemon = true }.start()
         Thread(

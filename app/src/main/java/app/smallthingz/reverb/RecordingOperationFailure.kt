@@ -11,7 +11,8 @@ internal fun unexpectedRecordingOperationFailure(error: Throwable): Boolean {
     repeat(32) {
         val failure = current ?: return true
         if (visited.put(failure, true) != null) return true
-        if (failure is CancellationException || failure is DurableSaveLifetimeRejectedException ||
+        if (failure is DurableSaveLifetimeRejectedException) return failure.suppressed.isNotEmpty()
+        if (failure is CancellationException ||
             (failure is RecordingRenameDefiniteFailure && failure.expectedConsentRejection != null) ||
             (failure is FileCopyIncidentException && failure.incidentOwnedByRecovery)) return false
         current = failure.cause

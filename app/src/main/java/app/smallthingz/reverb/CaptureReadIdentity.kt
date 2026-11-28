@@ -11,7 +11,10 @@ internal data class CaptureReadIdentity(
     val bytesPerSample: Int,
     val encodingCode: Int,
     val startedAtNanos: Long,
+    val visualizationEpoch: Long? = null,
 ) {
     val frameBytes: Int = Math.multiplyExact(channels, bytesPerSample)
     init { require(sampleRate > 0 && channels > 0 && bytesPerSample > 0) }
+
+    fun belongsToVisualizationEpoch(epoch: Long): Boolean = visualizationEpoch == epoch
 }

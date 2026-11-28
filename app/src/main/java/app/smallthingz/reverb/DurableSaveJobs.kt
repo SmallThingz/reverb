@@ -19,6 +19,7 @@ internal data class PendingSave(
     val codecSummary: String = "",
     val publishedRecordingIdentity: String? = null,
     val terminallyRetired: Boolean = false,
+    val startupDiscovered: Boolean = false,
 )
 
 internal fun PendingSave.matchesPublishedRecording(recordings: Map<String, String>): Boolean {
@@ -38,7 +39,9 @@ internal fun retryDurableSavesForLibraryRefresh(
     pending: List<PendingSave>,
     userInitiated: Boolean,
 ): Boolean = !readiness.loaded || readiness.recoveryFailure != null ||
-    (userInitiated && pending.any { it.phase == SavePhase.FAILED })
+    (userInitiated && pending.any {
+        it.phase == SavePhase.FAILED || (it.phase == SavePhase.QUEUED && it.startupDiscovered)
+    })
 
 internal fun durableSaveCompletionNeedsCatalogRefresh(
     previous: List<PendingSave>,
@@ -58,7 +61,16 @@ internal fun durableSaveCompletionNeedsCatalogRefresh(
 }
 
 /** Process-local publication ownership; never grants disk or recording authority. */
-internal class DurableSavePublicationReceipt internal constructor(internal val id: String)
+internal class DurableSavePublicationReceipt internal constructor(
+    internal val id: String,
+    internal val fromHydration: Boolean = false,
+)
+
+internal class DurableSaveRecoveryScan(val observed: Map<String, DurableSavePublicationReceipt>) {
+    val rows = ArrayList<PendingSave>()
+    val retiredIds = ArrayList<String>()
+    var presentOrOwnedIds: Set<String> = emptySet()
+}
 
 internal object DurableSaveJobs {
     data class Readiness(val loaded: Boolean = false, val recoveryFailure: String? = null)
@@ -74,6 +86,19 @@ internal object DurableSaveJobs {
     }
 
     internal fun publish(job: PendingSave) = presentation.publish(job)
+    internal fun recoveryHandoffDropped(scan: DurableSaveRecoveryScan) {
+        // Scanning may have cleared an earlier read error before a previously invisible
+        // job could be adopted. Keep Library refresh eligible without creating a receipt.
+        val visible = state.value
+        if (scan.rows.any { row -> row.id !in scan.observed && visible.none { it.id == row.id } }) {
+            mutableReadiness.compareAndSet(Readiness(loaded = true), Readiness())
+        }
+    }
+
+    internal fun beginRecoveryScan() = presentation.beginRecoveryScan()
+    internal fun adoptRecovery(scan: DurableSaveRecoveryScan, ownedIds: Set<String>) =
+        presentation.adoptRecovery(scan, ownedIds)
+    internal fun hydrateIfAbsent(job: PendingSave) = presentation.hydrateIfAbsent(job)
     internal fun failIfCurrent(receipt: DurableSavePublicationReceipt, error: String) = presentation.failIfCurrent(receipt, error)
     internal fun claimFailureDelivery(receipt: DurableSavePublicationReceipt) = presentation.claimFailureDelivery(receipt)
     internal fun remove(id: String) = presentation.remove(id)
@@ -108,16 +133,49 @@ internal class DurableSavePresentationState {
     private val retiredPublishedIds = LinkedHashSet<String>()
 
     @Synchronized
-    fun publish(job: PendingSave): DurableSavePublicationReceipt? {
-        // A fresh recovery/failure publication owns work again and cannot remain in the terminal cache.
-        retiredPublishedIds.remove(job.id)
-        invalidatePublication(job.id)
-        val receipt = DurableSavePublicationReceipt(job.id)
-        currentPublications[job.id] = receipt
+    fun publish(job: PendingSave, fromHydration: Boolean = false): DurableSavePublicationReceipt? {
+        val receipt = replacePublication(job.id, fromHydration)
         // Only remove(), called after durable source/journal retirement, may grant terminal status.
         mutableState.value = (mutableState.value.filterNot { it.id == job.id } + job.copy(terminallyRetired = false))
             .sortedByDescending { it.startedAtMillis }
         return receipt
+    }
+
+    @Synchronized
+    fun hydrateIfAbsent(job: PendingSave) {
+        if (mutableState.value.none { it.id == job.id }) publish(job, fromHydration = true)
+    }
+
+    @Synchronized
+    fun beginRecoveryScan() = DurableSaveRecoveryScan(currentPublications.toMap())
+
+    /** Apply observations only after the Service accepts the generation on main. */
+    @Synchronized
+    fun adoptRecovery(scan: DurableSaveRecoveryScan, ownedIds: Set<String>): List<DurableSaveHandle> {
+        fun unchanged(id: String): Boolean = id !in ownedIds &&
+            currentPublications[id] === scan.observed[id]
+
+        for (id in scan.retiredIds) {
+            if (unchanged(id)) remove(id)
+        }
+        reconcileAuthoritativeJobs(scan.presentOrOwnedIds, ::unchanged)
+        val handles = ArrayList<DurableSaveHandle>()
+        val updates = LinkedHashMap<String, PendingSave>()
+        for (job in scan.rows) {
+            if (job.id in ownedIds || job.id in retiredPublishedIds) continue
+            val current = currentPublications[job.id]
+            val observed = scan.observed[job.id]
+            // Application may have hydrated an initially absent row while main was queued.
+            if (current !== observed && !(observed == null && current?.fromHydration == true)) continue
+            val receipt = replacePublication(job.id, fromHydration = false)
+            updates[job.id] = job
+            if (job.phase == SavePhase.RECOVERING) handles.add(DurableSaveHandle(job.id, receipt))
+        }
+        if (updates.isNotEmpty()) {
+            mutableState.value = (mutableState.value.filterNot { it.id in updates } + updates.values)
+                .sortedByDescending { it.startedAtMillis }
+        }
+        return handles
     }
 
     @Synchronized
@@ -133,6 +191,12 @@ internal class DurableSavePresentationState {
         currentPublications[receipt.id] === receipt &&
             mutableState.value.any { it.id == receipt.id && it.phase == SavePhase.FAILED } &&
             claimedFailureDeliveries.add(receipt)
+
+    private fun replacePublication(id: String, fromHydration: Boolean): DurableSavePublicationReceipt {
+        retiredPublishedIds.remove(id)
+        invalidatePublication(id)
+        return DurableSavePublicationReceipt(id, fromHydration).also { currentPublications[id] = it }
+    }
 
     private fun invalidatePublication(id: String) {
         currentPublications.remove(id)?.let(claimedFailureDeliveries::remove)
@@ -172,9 +236,9 @@ internal class DurableSavePresentationState {
 
     /** Call only after a complete journal membership observation crosses its durability barrier. */
     @Synchronized
-    fun reconcileAuthoritativeJobs(presentIds: Set<String>) {
+    fun reconcileAuthoritativeJobs(presentIds: Set<String>, canRemove: (String) -> Boolean = { true }) {
         val absentFailures = mutableState.value.filter {
-            it.phase == SavePhase.FAILED && it.id !in presentIds
+            it.phase == SavePhase.FAILED && it.id !in presentIds && canRemove(it.id)
         }.mapTo(HashSet()) { it.id }
         if (absentFailures.isEmpty()) return
         absentFailures.forEach(::invalidatePublication)
