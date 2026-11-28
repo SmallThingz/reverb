@@ -24,6 +24,7 @@ import app.smallthingz.reverb.LibraryListItem
 import app.smallthingz.reverb.LibraryListSnapshot
 import app.smallthingz.reverb.RecordingEntity
 import app.smallthingz.reverb.samePlaybackRecording
+import app.smallthingz.reverb.sameRecordingActionTarget
 import app.smallthingz.reverb.PendingSave
 import app.smallthingz.reverb.R
 import app.smallthingz.reverb.formatRecordingStartTimestamp
@@ -744,7 +745,14 @@ internal class ReverbLibraryListView(
 
         fun bind(entry: Entry) {
             workObserver?.rowBound(entry.key)
-            if (binding?.key != entry.key) retire()
+            val previousRecording = binding?.recording
+            val recording = checkNotNull(entry.recording)
+            if (binding?.key != entry.key ||
+                (previousRecording != null && previousRecording !== recording &&
+                    !sameRecordingActionTarget(previousRecording, recording))) {
+                // A reused catalog ID must not carry a held gesture into a different asset.
+                retire()
+            }
             if (expansion != null && entry.row?.expanded == true && binding?.info != entry.info) releaseExpansion()
             binding = entry
             boundRevision = rowUpdates.bindingRevision
