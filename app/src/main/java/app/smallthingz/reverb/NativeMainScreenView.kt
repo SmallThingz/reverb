@@ -752,7 +752,9 @@ internal class NativeMainScreenView private constructor(
         else -> library?.inlineInputExcluded(view) == true
     }
 
-    override fun admitsSurfaceInput(descendant: View): Boolean = !source.inInactiveLayer(descendant)
+    override fun admitsSurfaceInput(descendant: View): Boolean =
+        !source.inInactiveLayer(descendant) &&
+            (!belongsTo(descendant, incidents) || incidentsOwner.nonBackInputAllowed)
 
     private fun updateSurfaceAdmission() {
         val state = library?.currentState()

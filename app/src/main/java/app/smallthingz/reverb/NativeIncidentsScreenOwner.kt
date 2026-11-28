@@ -58,6 +58,9 @@ internal class NativeIncidentsScreenOwner(
     private val panel = NativeIncidentPanelMotion(initiallyOpen, scope, ::publishMotion)
     private var lastAlert: Boolean? = null
     val state get() = history.state
+    /** Header effects resume at the fully open pose after predictive cancellation settles. */
+    val nonBackInputAllowed get() = !closed && open && allowBack &&
+        !back.gestureActive && !back.commitCompleted && panel.progress == 1f
     val overlayVisible get() = open || panel.progress > 0f
     val openProgress get() = incidentsPanelOpenProgress(panel.progress, back.gestureActive,
         back.progress.value, back.commitCompleted, open, back.startOpenProgress)
