@@ -39,8 +39,11 @@ import smallthingz.ui.components.NativePairedFieldLayout
 import smallthingz.ui.components.NativeToggleRow
 import smallthingz.ui.common.DropdownContent
 import smallthingz.ui.controls.textSurfaceRange
+import smallthingz.ui.graphics.Color as SurfaceColor
 import smallthingz.ui.graphics.NoiseDrawable
 import smallthingz.ui.graphics.NoiseTexture
+import smallthingz.ui.graphics.compositeOver
+import smallthingz.ui.graphics.toArgb
 import smallthingz.ui.platform.AndroidUiFrameClock
 import smallthingz.ui.reverb.ReverbEnvironment
 import smallthingz.ui.reverb.ReverbTextSurfaceScope
@@ -322,14 +325,17 @@ class NativeSettingsForegroundCoverageTest {
             }
         } else {
             val colors = f.environment.palette
-            val alpha = (f.environment.appearance.calibration.actionOpacity * 255f).roundToInt()
-            val expectedContainer = ColorUtils.setAlphaComponent(colors.primary, alpha)
+            val expectedOpaqueFill = SurfaceColor(colors.primary)
+                .copy(alpha = f.environment.appearance.calibration.actionOpacity)
+                .compositeOver(SurfaceColor(colors.field)).toArgb()
             val actualPaint = NativeMaterialButtonView::class.java.getDeclaredField("paint").let {
                 it.isAccessible = true; it.get(target) as Paint
             }
-            assertEquals("Calibration binds the exact light-theme container", expectedContainer, actualPaint.color)
+            assertEquals("Calibration binds the exact precomposed light-theme container", expectedOpaqueFill, actualPaint.color)
+            assertEquals(255, Color.alpha(actualPaint.color))
             val renderedFill = lightFlatPixels.first()
-            assertTrue("Calibration paints its translucent fill over the light underlay", renderedFill != colors.field)
+            assertEquals("Flat calibration pixels match the opaque tinted fill", expectedOpaqueFill, renderedFill)
+            assertTrue("Calibration paints a tinted fill distinct from the light group", renderedFill != colors.field)
             val ink = NativeMaterialButtonView::class.java.getDeclaredField("displayedInk").let {
                 it.isAccessible = true; it.getInt(target)
             }

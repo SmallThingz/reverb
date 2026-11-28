@@ -13,6 +13,8 @@ import androidx.lifecycle.LifecycleRegistry
 import androidx.lifecycle.setViewTreeLifecycleOwner
 import app.smallthingz.reverb.R
 import java.time.Duration
+import org.junit.After
+import org.junit.Before
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -24,6 +26,7 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.annotation.LooperMode
+import org.robolectric.shadows.ShadowChoreographer
 import org.robolectric.util.ReflectionHelpers
 import smallthingz.ui.components.NativeActionSheet
 import smallthingz.ui.components.NativeColorScheme
@@ -37,6 +40,21 @@ import smallthingz.ui.unit.Density
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @LooperMode(LooperMode.Mode.PAUSED)
 class NativeCaptureDiscardSheetTest {
+    private lateinit var previousFrameDelay: Duration
+    private var previousVsyncPaused = false
+
+    @Before fun finiteFrameClock() {
+        previousFrameDelay = ShadowChoreographer.getFrameDelay()
+        previousVsyncPaused = ShadowChoreographer.isPaused()
+        ShadowChoreographer.setFrameDelay(Duration.ofMillis(16))
+        ShadowChoreographer.setPaused(true)
+    }
+
+    @After fun restoreFrameClock() {
+        ShadowChoreographer.setFrameDelay(previousFrameDelay)
+        ShadowChoreographer.setPaused(previousVsyncPaused)
+    }
+
     @Test fun committedBackRetiresDiscardFooterBeforeExitCompletes() {
         val controller = Robolectric.buildActivity(Activity::class.java).setup().visible()
         val activity = controller.get()
@@ -54,6 +72,18 @@ class NativeCaptureDiscardSheetTest {
         var cancellations = 0
         var confirmations = 0
 
+        fun advanceFrames(millis: Long) {
+            // Native vsync is clock-driven: one large paused-clock jump can coalesce frames.
+            // Keep the original time budget while delivering the actual animation frames.
+            main.idle()
+            var remaining = millis
+            while (remaining > 0) {
+                val step = minOf(16L, remaining)
+                main.idleFor(Duration.ofMillis(step))
+                remaining -= step
+            }
+        }
+
         fun show(title: Int): NativeActionSheet {
             val current = createDiscardBufferSheet(
                 anchor, environment, activity.getString(title), activity.getString(R.string.clear_buffer_confirmation),
@@ -62,7 +92,7 @@ class NativeCaptureDiscardSheetTest {
             )
             sheet = current
             current.show()
-            main.idleFor(Duration.ofMillis(500))
+            advanceFrames(500)
             return ReflectionHelpers.getField(current, "dialog")
         }
 
@@ -77,12 +107,14 @@ class NativeCaptureDiscardSheetTest {
                 // No animation frame runs between committed Back and these retained footer actions.
                 dialog.onBackPressedDispatcher.onBackPressed()
                 assertTrue(dialog.isShowing)
+                assertFalse(dialog.acceptsContentActions)
                 assertFalse(confirm.performClick())
                 confirm.performAccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, null)
                 assertEquals(index, confirmations)
                 assertEquals(index, cancellations)
 
-                main.idleFor(Duration.ofMillis(500))
+                advanceFrames(500)
+                assertEquals(index, confirmations)
                 assertEquals(index + 1, cancellations)
                 assertFalse(dialog.isShowing)
 

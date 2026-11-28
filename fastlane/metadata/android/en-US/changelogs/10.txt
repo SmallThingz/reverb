@@ -1,8 +1,9 @@
 Improve playback and fine scrubbing near normal speed.
 Fix Home/End keys scrolling the Library while renaming.
 Improve save recovery and avoid duplicate completion results.
-Keep Quick Save responsive during buffer clearing and preserve capture when a save cannot be queued.
+Keep Quick Save responsive while clearing; preserve capture if queuing fails.
 Keep canceled Library edge gestures from closing the panel.
 Group save notifications under Save results.
-Reduce repeated work in Library, previews, and animations.
+Reduce Library, preview and animation work.
 Remove the CPU-awake setting.
+Fix light-theme calibration texture.

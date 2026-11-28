@@ -38,9 +38,12 @@ class NativeCaptureControlSurfaceLayoutTest {
         surface.place(200, 150)
 
         assertEquals(200, surface.width)
-        assertEquals(listOf(Rect(70, 15, 193, 44), Rect(7, 15, 63, 44)), surface.segments.map(View::bounds))
-        assertEquals(listOf(Rect(132, 55, 191, 114), Rect(64, 55, 123, 114),
-            Rect(9, 55, 55, 114), Rect(0, 55, 0, 114)), surface.actions.map(View::bounds))
+        assertEquals(View.LAYOUT_DIRECTION_RTL, surface.layoutDirection)
+        // Narrow rows share the available width instead of starving later controls.
+        // Selector gaps leave 179px (90/89); action gaps yield so all four retain 50px.
+        assertEquals(listOf(Rect(103, 15, 193, 44), Rect(7, 15, 96, 44)), surface.segments.map(View::bounds))
+        assertEquals(listOf(Rect(150, 55, 200, 114), Rect(100, 55, 150, 114),
+            Rect(50, 55, 100, 114), Rect(0, 55, 50, 114)), surface.actions.map(View::bounds))
     }
 
     @Test fun appearanceRebindRelayoutsTheSameChildrenAndPreservesTheirAction() {

@@ -11,6 +11,7 @@
 - Reduce repeated work in Library, previews, and animations.
 - Group save notifications under Save results.
 - Remove the CPU-awake setting.
+- Restore visible grain on the light-theme calibration button.
 
 ## 0.1.3-rc4 — 2026-11-18 (prerelease)
 

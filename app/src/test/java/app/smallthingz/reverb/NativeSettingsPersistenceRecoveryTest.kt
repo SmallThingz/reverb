@@ -16,7 +16,9 @@ import java.io.IOException
 import java.nio.file.Files
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
@@ -139,6 +141,12 @@ class NativeSettingsPersistenceRecoveryTest {
     }
 
     private class Fixture(private val scope: CoroutineScope) : LifecycleOwner, AutoCloseable {
+        private val databaseSingleton = RecordingDatabase::class.java.getDeclaredField("instance").apply {
+            isAccessible = true
+        }
+        private val previousDatabase = databaseSingleton.get(null)
+        private val previousFeedback = AppFeedbackCenter.events.value.toList()
+        private val previousShadowRoot = ServiceStateOsShadow.fixtureRoot
         private val activity = Robolectric.buildActivity(Activity::class.java).setup().visible()
         override val lifecycle = LifecycleRegistry(this).apply { currentState = Lifecycle.State.RESUMED }
         val root = Files.createTempDirectory("settings-persistence-recovery-").toFile()
@@ -148,16 +156,26 @@ class NativeSettingsPersistenceRecoveryTest {
             override fun hasWindowFocus(): Boolean = true
         }.also { activity.get().setContentView(it) }
         private var activeOwner: NativeSettingsOwner? = null
+        private val settingsJobs = mutableListOf<Job>()
+        private var ownsShadowRoot = false
         private var observedPersistence = false
         val owner get() = checkNotNull(activeOwner)
         var navigations = 0
             private set
 
         init {
-            JournalHostIoShadow.reset()
-            ServiceStateOsShadow.fixtureRoot = root.toPath()
-            assertTrue(preferences.edit().clear().commit())
-            assertTrue(window.isAttachedToWindow)
+            try {
+                JournalHostIoShadow.reset()
+                ServiceStateOsShadow.fixtureRoot = root.toPath()
+                ownsShadowRoot = true
+                assertTrue(preferences.edit().clear().commit())
+                assertTrue(window.isAttachedToWindow)
+            } catch (failure: Throwable) {
+                try { close() } catch (cleanup: Throwable) {
+                    if (cleanup !== failure) failure.addSuppressed(cleanup)
+                }
+                throw failure
+            }
         }
 
         suspend fun open() {
@@ -165,6 +183,7 @@ class NativeSettingsPersistenceRecoveryTest {
             activeOwner = NativeSettingsOwner(context, window, lifecycle, scope, true,
                 isPanelActive = { true }, onThemePreview = {}, releaseInputFocus = {},
                 launchDirectory = { error("Unexpected directory launch") }, onBack = { navigations++ })
+            settingsJobs += checkNotNull(owner.scope.coroutineContext[Job])
             owner.start { if (owner.state.persisting) observedPersistence = true }
             await { owner.state.interactionReady }
         }
@@ -189,12 +208,68 @@ class NativeSettingsPersistenceRecoveryTest {
         }
 
         override fun close() {
-            activeOwner?.close()
-            activity.pause().stop().destroy()
-            val failure = JournalHostIoShadow.finishFixture()
-            ServiceStateOsShadow.fixtureRoot = null
-            assertTrue(root.deleteRecursively())
+            var failure: Throwable? = null
+            fun cleanup(action: () -> Unit) {
+                try { action() } catch (error: Throwable) {
+                    val first = failure
+                    if (first == null) failure = error else if (first !== error) first.addSuppressed(error)
+                }
+            }
+            // AutoCloseable.use preserves a failed body assertion and suppresses this teardown's failures.
+            cleanup { activeOwner?.close() }
+            cleanup {
+                settingsJobs.forEach { it.cancel() }
+                // Include owners retired by open(): cancellation cannot interrupt an admitted catalog scan.
+                runBlocking { withTimeout(10_000) { settingsJobs.joinAll() } }
+            }
+            cleanup { activity.pause() }
+            cleanup { activity.stop() }
+            cleanup { activity.destroy() }
+            if (settingsJobs.all { it.isCompleted }) {
+                cleanup(::resetOwnedDatabase)
+                cleanup(::acknowledgeOwnedFeedback)
+                if (ownsShadowRoot) {
+                    cleanup { JournalHostIoShadow.finishFixture()?.let { throw it } }
+                    cleanup {
+                        check(ServiceStateOsShadow.fixtureRoot == root.toPath()) {
+                            "Another fixture replaced the Settings shadow root"
+                        }
+                        ServiceStateOsShadow.fixtureRoot = previousShadowRoot
+                        ownsShadowRoot = false
+                    }
+                }
+                cleanup { assertTrue(root.deleteRecursively()) }
+            }
             failure?.let { throw it }
+        }
+
+        private fun resetOwnedDatabase() = synchronized(RecordingDatabase) {
+            val database = databaseSingleton.get(null) as RecordingDatabase?
+            if (previousDatabase != null) {
+                check(database === previousDatabase) { "Settings fixture changed a foreign database singleton" }
+                return@synchronized
+            }
+            if (database == null) return@synchronized
+            val expected = context.getDatabasePath(checkNotNull(database.databaseName)).canonicalFile
+            val actual = File(database.readableDatabase.path).canonicalFile
+            check(actual == expected) { "Settings fixture cannot reset RecordingDatabase owned by $actual" }
+            RecordingDatabase.resetAfterCorruption()
+            check(databaseSingleton.get(null) == null) { "Settings fixture database remained owned after close" }
+        }
+
+        private fun acknowledgeOwnedFeedback() {
+            val previousIds = previousFeedback.map { it.id }.toSet()
+            val ownedIds = AppFeedbackCenter.events.value.map { it.id }.filterNot { it in previousIds }.toSet()
+            // Bound retirement to this settled fixture's new events; never acknowledge a foreign queue head.
+            for (ignored in ownedIds) {
+                val head = AppFeedbackCenter.events.value.firstOrNull() ?: break
+                if (head.id !in ownedIds) break
+                AppFeedbackCenter.acknowledge(head.id)
+            }
+            check(AppFeedbackCenter.events.value.none { it.id in ownedIds }) {
+                "Settings feedback remains behind a foreign queue head; unrelated feedback was preserved"
+            }
+            assertEquals(previousFeedback, AppFeedbackCenter.events.value)
         }
     }
 }

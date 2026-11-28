@@ -13,9 +13,11 @@ import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Rect
+import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
+import android.view.Choreographer
 import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
@@ -36,6 +38,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.coroutines.ContinuationInterceptor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -63,6 +66,7 @@ import org.robolectric.shadows.ShadowSystemClock
 import smallthingz.ui.components.NativeCircularProgress
 import smallthingz.ui.components.NativeMaterialButtonView
 import smallthingz.ui.components.NativeModalWindowRuntime
+import smallthingz.ui.platform.AndroidUiDispatcher
 import smallthingz.ui.text.view.ParagraphView
 
 /** Real app owner/content/pager/footer/feedback. Only platform/storage boundaries are supplied.
@@ -281,6 +285,7 @@ class NativeOnboardingRenderedRecoveryTest {
         lateinit var owner: NativeOnboardingScreenOwner
         lateinit var content: NativeActivityContentView
         private lateinit var runtime: NativeModalWindowRuntime
+        private var dispatcherAtSetup = "uninitialized"
         private lateinit var lifecycleJob: Job
         private var ownsRoot = false
         private var oldOverlay: Boolean? = null
@@ -323,6 +328,9 @@ class NativeOnboardingRenderedRecoveryTest {
             controller.setup().visible()
             activity.storage = storage
             lifecycleJob = checkNotNull(activity.lifecycleScope.coroutineContext[Job])
+            // Observe cached scheduling state before this fixture submits any runtime work.
+            // Do not reset/re-arm it: the rendered test must exercise the production runtime.
+            dispatcherAtSetup = dispatcherDiagnostic()
             runtime = NativeModalWindowRuntime(activity)
             runtime.setStarted(true)
             val environment = ReverbViewEnvironment(activity, false)
@@ -384,7 +392,8 @@ class NativeOnboardingRenderedRecoveryTest {
             } catch (timeout: TimeoutCancellationException) {
                 throw AssertionError("$message; attached=${content.isAttachedToWindow}, " +
                     "focused=${content.hasWindowFocus()}, owner=${owner.snapshot}, " +
-                    "feedback=${AppFeedbackCenter.events.value.map { it.message }}", timeout)
+                    "feedback=${AppFeedbackCenter.events.value.map { it.message }}; " +
+                    "${renderDiagnostic()}; ${ownershipDiagnostic()}", timeout)
             }
             assertTrue(message, ready())
             if (softwareDraw) draw()
@@ -476,6 +485,56 @@ class NativeOnboardingRenderedRecoveryTest {
                 "events=${AppFeedbackCenter.events.value.map { it.message }}"
         }
 
+        private fun renderDiagnostic(): String {
+            val host = descendants(content).filterIsInstance<NativeAppFeedbackHostView>().singleOrNull()
+            val paragraphs = host?.let { descendants(it).filterIsInstance<ParagraphView>().map { text ->
+                "${text.getText()}{size=${text.width}x${text.height}, shown=${text.isShown}, " +
+                    "painted=${painted(text)}, nodeVisible=${text.createAccessibilityNodeInfo()?.isVisibleToUser}}"
+            }.toList() }
+            return "feedbackHost=" +
+                "${host?.let { "${it.width}x${it.height}, attached=${it.isAttachedToWindow}" }}, paragraphs=$paragraphs"
+        }
+
+        /** Observe registrations as well as flags; a queue/flag alone does not prove a reset. */
+        private fun dispatcherDiagnostic(): String = try {
+            fun read(target: Any, name: String): Any? = target.javaClass.getDeclaredField(name)
+                .apply { isAccessible = true }.get(target)
+            val dispatcher = AndroidUiDispatcher.Main[ContinuationInterceptor] as AndroidUiDispatcher
+            synchronized(checkNotNull(read(dispatcher, "lock"))) {
+                val handler = read(dispatcher, "handler") as Handler
+                val callback = checkNotNull(read(dispatcher, "dispatchCallback"))
+                val queues = read(dispatcher.choreographer, "mCallbackQueues") as Array<*>
+                var frameRegistered = false
+                for (queue in queues) {
+                    var record = read(checkNotNull(queue), "mHead")
+                    while (record != null) {
+                        if (read(record, "action") === callback) frameRegistered = true
+                        record = read(record, "next")
+                    }
+                }
+                "sameChoreographer=${dispatcher.choreographer === Choreographer.getInstance()}, " +
+                    "sameLooper=${handler.looper === Looper.getMainLooper()}, " +
+                    "trampolineScheduled=${read(dispatcher, "scheduledTrampolineDispatch")}, " +
+                    "frameScheduled=${read(dispatcher, "scheduledFrameDispatch")}, " +
+                    "trampolined=${(read(dispatcher, "toRunTrampolined") as Collection<*>).size}, " +
+                    "frameWaiters=${(read(dispatcher, "toRunOnFrame") as Collection<*>).size}, " +
+                    "spareFrames=${(read(dispatcher, "spareToRunOnFrame") as Collection<*>).size}, " +
+                    "handlerRegistered=${handler.hasCallbacks(callback as Runnable)}, frameRegistered=$frameRegistered"
+            }
+        } catch (error: Exception) {
+            "dispatcher diagnostic unavailable: $error"
+        }
+
+        private fun ownershipDiagnostic(): String {
+            fun describe(job: Job) = "$job children=${job.children.toList()}"
+            return "lifecycle=${if (::lifecycleJob.isInitialized) describe(lifecycleJob) else "uninitialized"}, " +
+                "window=${if (::runtime.isInitialized) runtime.scope.coroutineContext[Job]?.let(::describe) else "uninitialized"}, " +
+                "finish=${processOnboardingFinish.state.value}, " +
+                "storageCalls=${if (::storage.isInitialized) storage.activeCalls.get() else 0}, " +
+                "ownsRoot=$ownsRoot, fixtureRoot=${ServiceStateOsShadow.fixtureRoot}, " +
+                "dispatcherAtSetup=[$dispatcherAtSetup], dispatcherNow=[${dispatcherDiagnostic()}]"
+        }
+
         suspend fun close() {
             val errors = mutableListOf<Throwable>()
             fun release(action: () -> Unit) { try { action() } catch (t: Throwable) { errors += t } }
@@ -493,10 +552,12 @@ class NativeOnboardingRenderedRecoveryTest {
                         platformFrame(); delay(1)
                     }
                 }
+            } catch (timeout: TimeoutCancellationException) {
+                errors += AssertionError("Fixture owners did not retire; ${ownershipDiagnostic()}", timeout)
             } catch (t: Throwable) { errors += t }
             release {
-                check(!::lifecycleJob.isInitialized || lifecycleJob.isCompleted)
-                check(!::runtime.isInitialized || runtime.scope.coroutineContext[Job]?.isCompleted == true)
+                check(!::lifecycleJob.isInitialized || lifecycleJob.isCompleted) { ownershipDiagnostic() }
+                check(!::runtime.isInitialized || runtime.scope.coroutineContext[Job]?.isCompleted == true) { ownershipDiagnostic() }
                 check(processOnboardingFinish.state.value != OnboardingFinishState.RUNNING)
                 check(!::storage.isInitialized || storage.activeCalls.get() == 0)
                 check(!ownsRoot || ServiceStateOsShadow.fixtureRoot == storage.root.toPath())

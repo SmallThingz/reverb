@@ -128,7 +128,8 @@ class LegacyReverbSavedStateTest {
     }
 
     @Test fun releasedVersionOneDraftStillUsesItsExistingSaver() {
-        val values = SettingsUiDraft.normalized(SettingsSnapshot()).save().dropLast(1).toMutableList()
+        // Version one has 24 fields, before the v2 histogram and v3 auto-start additions.
+        val values = SettingsUiDraft.normalized(SettingsSnapshot()).save().take(24).toMutableList()
         values[0] = 1
         val result = decode(Released012SavedUiKeys.SETTINGS to
             listOf(listOf(0, 0), directoryValues, null, values, directoryKey))

@@ -115,7 +115,7 @@ class SettingsSelectorAppearanceTest {
         val alternateField = 0xffd4e2ef.toInt()
         val alternate = default.copy(
             colorScheme = NativeColorSchemeResolver { dark, _, _ ->
-                ReverbPalette.fallback(dark).copy(surfaceContainerLow = alternateField)
+                ReverbPalette.fallback(dark).copy(surfaceContainerHigh = alternateField)
             },
             settingsSelectors = selectors.copy(
                 segmented = selectors.segmented.copy(surfaceRadiusDp = 0f, insetDp = 8f,

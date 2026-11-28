@@ -189,6 +189,9 @@ class SettingsControlConfigurationTest {
         try {
             drawn()
             assertTrue(anchor.isAttachedToWindow && anchor.isLaidOut)
+            // visible() attaches the Robolectric window but does not grant input focus.
+            activityOwner.windowFocusChanged(true)
+            assertTrue(anchor.hasWindowFocus())
             assertTrue(anchor.performClick())
             drawn()
             val original = overlay()
