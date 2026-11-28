@@ -23,6 +23,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicIntegerArray
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
@@ -98,6 +99,12 @@ class ActualServiceLifecycleTest {
         lifecycle(capture = true, stopEntry = StopEntry.QUICK_SETTINGS)
     @Test fun notificationQuickSaveKeepsMainResponsiveDuringNonRecordingBufferClear() =
         lifecycle(capture = true, quickSaveAcrossClear = true)
+    // This case records a real Save rejection incident and initializes the process marker.
+    // Give that process singleton its own sandbox; sibling lifecycle cases retain their checks.
+    @Config(instrumentedPackages = ["app.smallthingz.reverb.actualserviceisolated",
+        "app.smallthingz.reverb.quicksaveisolated"])
+    @Test fun fullCaptureMailboxRejectsQuickSaveWithoutPausingCaptureOrBlockingMain() =
+        lifecycle(capture = true, quickSaveFullMailbox = true)
     @Test fun startUsesRolledBackRecorderSettingsWhenAFailedCommitOverlapsIt() =
         lifecycle(capture = true, settingsRollbackDuringStart = true)
     @Test fun retiredFalseWakePreferenceDoesNotCreateCaptureLock() = lifecycle(true, legacyWake = false)
@@ -154,7 +161,8 @@ class ActualServiceLifecycleTest {
 
     private fun lifecycle(capture: Boolean, rejectedStartThrows: Boolean? = null,
         rejectNotificationQuickSave: Boolean = false, legacyWake: Any? = null, stopTimeout: StopTimeout? = null,
-        stopEntry: StopEntry? = null, quickSaveAcrossClear: Boolean = false, settingsRollbackDuringStart: Boolean = false) {
+        stopEntry: StopEntry? = null, quickSaveAcrossClear: Boolean = false, settingsRollbackDuringStart: Boolean = false,
+        quickSaveFullMailbox: Boolean = false) {
         val app = RuntimeEnvironment.getApplication()
         val noBackup = app.noBackupFilesDir
         val appRoot = requireNotNull(app.filesDir.parentFile).canonicalFile
@@ -169,7 +177,7 @@ class ActualServiceLifecycleTest {
         assertSame(observedLock, ShadowPowerManager.getLatestWakeLock())
         assertFalse(observedLock.isHeld)
         ShadowPowerManager.clearWakeLocks()
-        if (rejectedStartThrows != null || rejectNotificationQuickSave || quickSaveAcrossClear)
+        if (rejectedStartThrows != null || rejectNotificationQuickSave || quickSaveAcrossClear || quickSaveFullMailbox)
             check(AppFeedbackCenter.events.value.isEmpty()) { "Feedback already owned" }
         check(ServiceStateOsShadow.fixtureRoot == null)
         JournalHostIoShadow.reset()
@@ -182,7 +190,7 @@ class ActualServiceLifecycleTest {
         val incidentChildrenBefore = children(incidentScope)
         check(incidentChildrenBefore.isEmpty()) { "Incident work already owned" }
         val incidentRevision = RecordingIncidentStore.historyRevision.value
-        val expectedIncidentRevision = incidentRevision + if (stopTimeout == StopTimeout.SEAL_FAILURE) 1 else 0
+        val expectedIncidentRevision = incidentRevision + if (stopTimeout == StopTimeout.SEAL_FAILURE || quickSaveFullMailbox) 1 else 0
         check(incidentRetriesEmpty()) { "Incident retry already owned" }
         val incidentEpochField = RecordingIncidentStore::class.java.getDeclaredField("captureSessionPublicationEpoch")
             .apply { isAccessible = true }
@@ -394,11 +402,11 @@ class ActualServiceLifecycleTest {
                 val first = if (quickSaveAcrossClear) ByteArray(0) else ByteArray(512) { (it * 31 + 9).toByte() }
                 val rejected = ByteArray(512) { (it * 7 + 71).toByte() }
                 val packet = PacketInput(first, rejected, holdFirst = quickSaveAcrossClear,
-                    holdStopCleanup = stopEntry == StopEntry.QUICK_SETTINGS)
+                    holdStopCleanup = stopEntry == StopEntry.QUICK_SETTINGS, holdThird = quickSaveFullMailbox)
                 packetInput = packet
                 actual.syntheticInput = packet
                 exercisePublicCapture(actual, handler, retained, packet, first, stopTimeout,
-                    stopEntry, quickSaveAcrossClear, settingsRollbackDuringStart) { ownedFeedback = it }
+                    stopEntry, quickSaveAcrossClear, settingsRollbackDuringStart, quickSaveFullMailbox) { ownedFeedback = it }
                 captureEpoch = incidentEpochField.get(RecordingIncidentStore)
                 check(captureEpoch !== priorIncidentEpoch) { "Capture session was never armed" }
                 assertEquals(1, actual.inputAttempts.get())
@@ -411,7 +419,7 @@ class ActualServiceLifecycleTest {
                 ShadowLooper.idleMainLooper()
                 joinNewChildren(snapshotCleanupScope, snapshotChildrenBefore)
                 assertEquals(0, leaseCount(actual))
-                assertEquals(2, packet.reads.get())
+                assertEquals(if (quickSaveFullMailbox) 3 else 2, packet.reads.get())
                 assertEquals(1, packet.releases.get())
                 assertFalse(RecordingIncidentStore.beginKnownCaptureStop(actual).armed)
                 PersistentAudioChunkStore(loopRoot).use { reopened ->
@@ -497,7 +505,7 @@ class ActualServiceLifecycleTest {
             if (destructionCalled && !destructionCompleted) failDrain(error) else primary = error
         }
         finally {
-            packetInput?.let { it.allowFirst.countDown(); it.allowSecond.countDown(); it.allowStopCleanup.countDown() }
+            packetInput?.let { it.allowFirst.countDown(); it.allowSecond.countDown(); it.allowThird.countDown(); it.allowStopCleanup.countDown() }
             if ((capture || rejectedStartThrows != null) && service != null) try {
                 if (getRecorderPreferences(service!!).getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false)) {
                     check(service!!.disableListening().accepted)
@@ -566,13 +574,13 @@ class ActualServiceLifecycleTest {
             } catch (error: Throwable) { failCleanup(error) }
             if (!ownerDrainFailed && collectorJoined && capture && packetInput != null) try {
                 ShadowLooper.idleMainLooper()
-                assertEquals(2, packetInput!!.reads.get())
+                assertEquals(if (quickSaveFullMailbox) 3 else 2, packetInput!!.reads.get())
                 assertEquals(1, packetInput!!.stops.get())
                 assertEquals(1, packetInput!!.releases.get())
                 assertFalse(getRecorderPreferences(service!!).getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, true))
                 check(captureEpoch != null && incidentEpochField.get(RecordingIncidentStore) === captureEpoch)
                 assertFalse(RecordingIncidentStore.beginKnownCaptureStop(service!!).armed)
-                assertEquals(if (stopTimeout == StopTimeout.SEAL_FAILURE) 1 else 0, captureHistory(noBackup).size)
+                assertEquals(if (stopTimeout == StopTimeout.SEAL_FAILURE || quickSaveFullMailbox) 1 else 0, captureHistory(noBackup).size)
                 assertTrue(ProbeAudioRecordShadow.created.get() > 0)
                 assertEquals(ProbeAudioRecordShadow.created.get(), ProbeAudioRecordShadow.released.get())
                 assertEquals(0, ProbeAudioRecordShadow.liveCount())
@@ -591,7 +599,7 @@ class ActualServiceLifecycleTest {
                 AppFeedbackCenter.acknowledge(requireNotNull(ownedFeedback).id)
                 assertTrue(AppFeedbackCenter.events.value.isEmpty())
             } catch (error: Throwable) { failCleanup(error) }
-            if (rejectNotificationQuickSave || stopTimeout == StopTimeout.SEAL_FAILURE || quickSaveAcrossClear) {
+            if (rejectNotificationQuickSave || stopTimeout == StopTimeout.SEAL_FAILURE || quickSaveAcrossClear || quickSaveFullMailbox) {
                 ownedFeedback?.let { AppFeedbackCenter.acknowledge(it.id) }
             }
             if (!ownerDrainFailed) try {
@@ -624,7 +632,12 @@ class ActualServiceLifecycleTest {
             catch (error: Throwable) { failCleanup(error) }
             if (!ownerDrainFailed) try { JournalHostIoShadow.finishFixture()?.let(::failDrain) } catch (error: Throwable) { failDrain(error) }
             if (!ownerDrainFailed && ownsPid) try {
-                check(!processIdentity.isInitialized()) { "Fixture initialized process identity; retaining PID owner" }
+                if (quickSaveFullMailbox) {
+                    // The real rejected Save owns exactly this marker in this selector's sandbox.
+                    check(processIdentity.isInitialized())
+                    val marker = processIdentity.value as AppProcessMarker
+                    check(marker.pid == 47_191 && marker.processStartedAtMillis > 0L)
+                } else check(!processIdentity.isInitialized()) { "Fixture initialized process identity; retaining PID owner" }
                 check(android.os.Process.myPid() == 47_191) { "Process shadow PID owner changed" }
                 org.robolectric.shadows.ShadowProcess.setPid(priorPid)
                 check(android.os.Process.myPid() == priorPid)
@@ -718,11 +731,13 @@ class ActualServiceLifecycleTest {
     }
 
     private class PacketInput(private val first: ByteArray, private val rejected: ByteArray,
-        holdFirst: Boolean = false, holdStopCleanup: Boolean = false) : CaptureAudioInput {
+        holdFirst: Boolean = false, holdStopCleanup: Boolean = false, private val holdThird: Boolean = false) : CaptureAudioInput {
         val firstEntered = CountDownLatch(1)
         val allowFirst = CountDownLatch(if (holdFirst) 1 else 0)
         val secondEntered = CountDownLatch(1)
         val allowSecond = CountDownLatch(1)
+        val thirdEntered = CountDownLatch(1)
+        val allowThird = CountDownLatch(1)
         val stopEntered = CountDownLatch(1)
         val allowStopCleanup = CountDownLatch(if (holdStopCleanup) 1 else 0)
         val released = CountDownLatch(1)
@@ -738,7 +753,9 @@ class ActualServiceLifecycleTest {
             val number = reads.incrementAndGet()
             val bytes = when (number) {
                 1 -> { firstEntered.countDown(); check(allowFirst.await(8, TimeUnit.SECONDS)); first }
-                2 -> { secondEntered.countDown(); check(allowSecond.await(8, TimeUnit.SECONDS)); rejected }
+                2 -> { secondEntered.countDown(); check(allowSecond.await(8, TimeUnit.SECONDS))
+                    if (holdThird) ByteArray(0) else rejected }
+                3 -> { check(holdThird); thirdEntered.countDown(); check(allowThird.await(8, TimeUnit.SECONDS)); rejected }
                 else -> throw AssertionError("Input read after Stop")
             }
             check(bytes.size <= sizeInBytes)
@@ -749,6 +766,7 @@ class ActualServiceLifecycleTest {
             check(stops.incrementAndGet() == 1)
             recording = false
             allowSecond.countDown()
+            allowThird.countDown()
             stopEntered.countDown()
             check(allowStopCleanup.await(8, TimeUnit.SECONDS))
         }
@@ -758,7 +776,8 @@ class ActualServiceLifecycleTest {
     private fun exercisePublicCapture(actual: NoMicService, handler: Handler,
         retained: MutableList<ReverbService.TimelineSnapshot>,
         packet: PacketInput, first: ByteArray, stopTimeout: StopTimeout?, stopEntry: StopEntry?,
-        quickSaveAcrossClear: Boolean, settingsRollbackDuringStart: Boolean, ownFeedback: (FeedbackEvent) -> Unit) {
+        quickSaveAcrossClear: Boolean, settingsRollbackDuringStart: Boolean, quickSaveFullMailbox: Boolean,
+        ownFeedback: (FeedbackEvent) -> Unit) {
         val wrapperField = android.content.ContextWrapper::class.java.getDeclaredField("mBase").apply { isAccessible = true }
         val oldBase = wrapperField.get(actual) as android.content.Context
         val starts = mutableListOf<Intent>()
@@ -791,6 +810,7 @@ class ActualServiceLifecycleTest {
             settingsRace?.failAndRollBackSettings(actual)
             if (quickSaveAcrossClear) exerciseQuickSaveWhileClear(actual, packet)
             assertTrue(packet.secondEntered.await(8, TimeUnit.SECONDS))
+            if (quickSaveFullMailbox) exerciseQuickSaveWithFullMailbox(actual, handler, packet, ownFeedback)
             if (settingsRace != null) {
                 val published = actual.getConfigurationSnapshot()
                 assertEquals(8_000, published.sampleRate)
@@ -802,7 +822,7 @@ class ActualServiceLifecycleTest {
             }
             assertNull(ShadowPowerManager.getLatestWakeLock())
             assertEquals(8_000, field(actual, "sampleRate"))
-            assertEquals(2, packet.reads.get())
+            assertEquals(if (quickSaveFullMailbox) 3 else 2, packet.reads.get())
             val armed = RecordingIncidentStore.beginKnownCaptureStop(actual)
             assertTrue(armed.armed)
             assertEquals(47_191, requireNotNull(armed.marker).pid)
@@ -845,7 +865,7 @@ class ActualServiceLifecycleTest {
             // acknowledges it explicitly after proving that listening=false is durable.
             if (stopEntry == StopEntry.QUICK_SETTINGS) {
                 exerciseRestartWhileWatchdogReleases(actual, handler, packet)
-            } else packet.allowSecond.countDown()
+            } else { packet.allowSecond.countDown(); if (quickSaveFullMailbox) packet.allowThird.countDown() }
             assertTrue(packet.released.await(8, TimeUnit.SECONDS))
             assertEquals(1, packet.stops.get())
             assertEquals(1, packet.releases.get())
@@ -860,6 +880,8 @@ class ActualServiceLifecycleTest {
                 assertEquals("Capture stopped before buffered audio could be durably sealed", incident.description)
                 val feedback = AppFeedbackCenter.events.value.single().also(ownFeedback)
                 assertTrue(feedback.message.contains("fixture Stop seal failure"))
+            } else if (quickSaveFullMailbox) {
+                assertQuickSaveMailboxIncident(incidentRoot)
             } else {
                 assertTrue(captureHistory(incidentRoot).isEmpty())
             }
@@ -894,19 +916,21 @@ class ActualServiceLifecycleTest {
                 assertArrayEquals(first, readStoreTestPcm16Mono8Khz(it))
             }
             snapshot.close(); retained.remove(snapshot)
-            assertEquals(2, packet.reads.get())
+            assertEquals(if (quickSaveFullMailbox) 3 else 2, packet.reads.get())
             val expectedStarts = when {
                 latePlatformStart -> 3
-                queueRestart || stopEntry == StopEntry.QUICK_SETTINGS -> 2
+                queueRestart || stopEntry == StopEntry.QUICK_SETTINGS || quickSaveFullMailbox -> 2
                 else -> 1
             }
             assertEquals(expectedStarts, starts.size)
+            if (quickSaveFullMailbox) assertEquals(ReverbService.ACTION_EXPORT_KEEPALIVE, starts.last().action)
         } catch (error: Throwable) {
             failure = error
             throw error
         } finally {
             packet.allowFirst.countDown()
             packet.allowSecond.countDown()
+            packet.allowThird.countDown()
             packet.allowStopCleanup.countDown()
             try { wrapperField.set(actual, oldBase) } catch (error: Throwable) {
                 val firstFailure = failure
@@ -1088,6 +1112,173 @@ class ActualServiceLifecycleTest {
         packet.allowStopCleanup.countDown()
     }
 
+    private fun exerciseQuickSaveWithFullMailbox(service: NoMicService, handler: Handler,
+        packet: PacketInput, ownFeedback: (FeedbackEvent) -> Unit) {
+        fence(handler) // Drain initialization before holding this actual Service writer.
+        val io = field(service, "captureIo") as CaptureIoCoordinator
+        val input = requireNotNull(io.currentInput())
+        val continuity = field(service, "captureContinuityGeneration") as AtomicLong
+        val generation = continuity.get()
+        val completed = AtomicIntegerArray(64)
+        val rejected = AtomicInteger()
+        val allCompleted = CountDownLatch(64)
+        val writerEntered = CountDownLatch(1)
+        val releaseWriter = CountDownLatch(1)
+        val sentinel = CountDownLatch(1)
+        val sentinelWhileHeld = AtomicBoolean()
+        val writerGate = FutureTask {
+            writerEntered.countDown()
+            check(releaseWriter.await(8, TimeUnit.SECONDS))
+        }
+        val watchdog = Thread {
+            if (!sentinel.await(3, TimeUnit.SECONDS)) releaseWriter.countDown()
+        }
+        val worker = field(service, "durableSaveAdmissionExecutor") as ExecutorService
+        val resultScope = Class.forName("app.smallthingz.reverb.CaptureScreenKt")
+            .getDeclaredField("backgroundRecordingResultScope").apply { isAccessible = true }.get(null) as CoroutineScope
+        val priorResultJobs = children(resultScope)
+        check(priorResultJobs.isEmpty()) { "Background result delivery already owned" }
+        val incidentScope = RecordingIncidentStore::class.java.getDeclaredField("historyMutationScope")
+            .apply { isAccessible = true }.get(RecordingIncidentStore) as CoroutineScope
+        val shadow = Shadow.extract<ShadowService>(service)
+        val baselineText = requireNotNull(shadow.lastForegroundNotification)
+            .extras.getCharSequence(android.app.Notification.EXTRA_TEXT)?.toString()
+        val journal = durableSaveJournalRoot(service)
+        fun assertNoAdmission() {
+            assertTrue(DurableSaveJobs.state.value.isEmpty())
+            assertEquals(0, DurableSaveCoordinator.get(service).pendingCount())
+            assertTrue(journal.listFiles().orEmpty().isEmpty())
+            for (root in listOf(BUFFER_CACHE_FOLDER_NAME, ONE_SHOT_BUFFER_CACHE_FOLDER_NAME)) {
+                assertTrue(File(service.noBackupFilesDir, "$root/durable-pcm-refs").listFiles().orEmpty().isEmpty())
+            }
+        }
+        fun assertCaptureIntact() {
+            assertSame(io, field(service, "captureIo"))
+            assertSame(input, io.currentInput())
+            assertSame(packet, field(service, "audioRecord"))
+            assertEquals(generation, continuity.get())
+            assertEquals(ReverbService.STATE_LISTENING, field(service, "state"))
+            assertTrue(getRecorderPreferences(service).getBoolean(PrefKey.AUDIO_MEMORY_ENABLED, false))
+            assertEquals(true, field(service, "durableListeningIntentEnabled"))
+            assertEquals(false, field(service, "persistenceFailureBlocked"))
+            assertFalse((field(service, "captureCommandAdmissionFailed") as AtomicBoolean).get())
+            assertEquals(0, packet.stops.get())
+            assertEquals(0, packet.releases.get())
+        }
+        var failure: Throwable? = null
+        var watchdogStarted = false
+        var gatePosted = false
+        var accepted = 0
+        try {
+            assertCaptureIntact()
+            assertNoAdmission()
+            assertTrue((field(service, "loopingAudioChunkStore") as PersistentAudioChunkStore).countFilledBytes() > 0L)
+            check(handler.post(writerGate))
+            gatePosted = true
+            assertTrue(writerEntered.await(8, TimeUnit.SECONDS))
+            repeat(64) { index ->
+                assertEquals(CaptureControlMailbox.Admission.ACCEPTED,
+                    io.post(pauseInput = false, rejected = { rejected.incrementAndGet(); allCompleted.countDown() }, work = {
+                        completed.incrementAndGet(index); allCompleted.countDown()
+                    }))
+                accepted++
+            }
+            fun assertFull() = assertEquals(CaptureControlMailbox.Admission.FULL,
+                io.post(pauseInput = false, rejected = { rejected.incrementAndGet() },
+                    work = { rejected.incrementAndGet() }))
+            assertFull() // Probe coordinator admission only; never invoke Service emergency handling.
+            val action = FutureTask {
+                val intent = Intent(service, NoMicService::class.java).setAction(ReverbService.ACTION_QUICK_SAVE)
+                assertEquals(Service.START_STICKY, service.onStartCommand(intent, 0, 39))
+            }
+            val main = Handler(Looper.getMainLooper())
+            check(main.post(action))
+            check(main.post { sentinelWhileHeld.set(releaseWriter.count == 1L); sentinel.countDown() })
+            watchdog.start(); watchdogStarted = true
+            ShadowLooper.idleMainLooper()
+            action.get(8, TimeUnit.SECONDS)
+            assertTrue("Quick Save stalled main behind the full writer queue", sentinelWhileHeld.get())
+            // The rejected preparation settles on the admission worker, not on the gated audio owner.
+            worker.submit {}.get(8, TimeUnit.SECONDS)
+            ShadowLooper.idleMainLooper()
+            val feedback = AppFeedbackCenter.events.value.single().also(ownFeedback)
+            assertEquals(FeedbackTone.ERROR, feedback.tone)
+            assertTrue(feedback.message.contains("Audio preparation was rejected"))
+            assertEquals(64L, allCompleted.count)
+            assertEquals(0, rejected.get())
+            assertFull()
+            assertCaptureIntact()
+            assertNoAdmission()
+            assertTrue((field(service, "durableSaveOwners") as Map<*, *>).isEmpty())
+            assertEquals(ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE, field(service, "foregroundServiceTypes"))
+            assertEquals(baselineText, shadow.lastForegroundNotification.extras
+                .getCharSequence(android.app.Notification.EXTRA_TEXT)?.toString())
+
+            releaseWriter.countDown()
+            writerGate.get(8, TimeUnit.SECONDS)
+            // A zero-byte second read releases the reserved prefixes; the third stays live until Stop.
+            packet.allowSecond.countDown()
+            assertTrue(allCompleted.await(8, TimeUnit.SECONDS))
+            awaitZeroReadContinuation(input, packet.thirdEntered)
+            fence(handler)
+            repeat(64) { assertEquals(1, completed.get(it)) }
+            assertEquals(0, rejected.get())
+            assertCaptureIntact()
+            assertNoAdmission()
+            worker.submit {}.get(8, TimeUnit.SECONDS)
+            ShadowLooper.idleMainLooper()
+            joinNewChildren(resultScope, priorResultJobs)
+            joinNewChildren(incidentScope, emptySet())
+            assertEquals(listOf(feedback), AppFeedbackCenter.events.value)
+            assertQuickSaveMailboxIncident(service.noBackupFilesDir)
+            assertTrue((field(service, "durableSaveOwners") as Map<*, *>).isEmpty())
+            assertEquals(ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE, field(service, "foregroundServiceTypes"))
+        } catch (error: Throwable) {
+            failure = error
+            throw error
+        } finally {
+            releaseWriter.countDown()
+            packet.allowSecond.countDown()
+            sentinel.countDown()
+            try {
+                if (gatePosted) writerGate.get(8, TimeUnit.SECONDS)
+                repeat(64 - accepted) { allCompleted.countDown() }
+                check(allCompleted.await(8, TimeUnit.SECONDS)) { "Accepted mailbox controls did not settle" }
+                fence(handler)
+                if (watchdogStarted) { watchdog.join(8_000); check(!watchdog.isAlive) }
+                joinNewChildren(resultScope, priorResultJobs)
+            } catch (cleanup: Throwable) {
+                val primary = failure
+                if (primary == null) throw cleanup
+                if (primary !== cleanup) primary.addSuppressed(cleanup)
+            }
+        }
+    }
+
+    private fun assertQuickSaveMailboxIncident(root: File) {
+        val incident = captureHistory(root).single()
+        assertEquals(RecordingIncidentKind.UNEXPECTED_ERROR, incident.kind)
+        assertTrue(incident.description.orEmpty().startsWith("Save recording: java.util.concurrent.RejectedExecutionException"))
+        assertTrue(incident.description.orEmpty().contains("Audio preparation was rejected"))
+    }
+
+    private fun awaitZeroReadContinuation(input: CaptureIoCoordinator.Input, entered: CountDownLatch) {
+        // FIFO marker runs after readOnce has posted its zero-read retry. A competing
+        // immediate kick may already enter the held read; then no clock step is needed.
+        // Advance host time only: never synchronously idle the looper into a blocked read.
+        val advanceRetry = Runnable {
+            if (entered.count != 0L) org.robolectric.shadows.ShadowSystemClock.advanceBy(20L, TimeUnit.MILLISECONDS)
+        }
+        check(input.handler.post(advanceRetry))
+        try {
+            val started = entered.await(8, TimeUnit.SECONDS)
+            assertTrue("Native zero-read continuation did not enter: thread=${input.thread.state}, " +
+                "posted=${input.readPosted.get()}, ring=${input.storage.ring.status()}", started)
+        } finally {
+            input.handler.removeCallbacks(advanceRetry)
+        }
+    }
+
     private fun exerciseQuickSaveWhileClear(service: NoMicService, packet: PacketInput) {
         assertTrue(packet.firstEntered.await(8, TimeUnit.SECONDS))
         val oneShot = field(service, "oneShotAudioChunkStore") as PersistentAudioChunkStore
@@ -1123,7 +1314,8 @@ class ActualServiceLifecycleTest {
             val id = requireNotNull(service.startClearBuffer(ReverbService.BufferSlot.ONE_SHOT))
             packet.allowFirst.countDown()
             assertTrue(clearEntered.await(8, TimeUnit.SECONDS))
-            assertTrue(packet.secondEntered.await(8, TimeUnit.SECONDS))
+            awaitZeroReadContinuation(requireNotNull((field(service, "captureIo") as CaptureIoCoordinator).currentInput()),
+                packet.secondEntered)
             val main = Handler(Looper.getMainLooper())
             check(main.post(saveStart))
             check(main.post {
