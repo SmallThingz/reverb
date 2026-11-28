@@ -40,7 +40,7 @@
     </application>
 
     <instrumentation
-        android:name=".DebugUiInstrumentation"
+        android:name="app.smallthingz.reverb.DebugUiInstrumentation"
         android:targetPackage="${applicationId}"
         android:label="Reverb debug UI controls" />
 
