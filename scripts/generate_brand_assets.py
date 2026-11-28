@@ -23,6 +23,14 @@ BRAND_PLATE_FILES = {
     "native-ui/src/main/res/drawable/reverb_brand_grain.xml",
     "native-ui/src/main/res/drawable-nodpi/reverb_brand_grain_tile.png",
 }
+SPLASH_PALETTES = {
+    "app/src/main/res/values/reverb_splash_colors.xml": (
+        "@color/native_default_light_background", "true", "@color/reverb_brand_background",
+    ),
+    "app/src/main/res/values-night/reverb_splash_colors.xml": (
+        "@color/native_default_amoled_background", "false", "@color/reverb_brand_main",
+    ),
+}
 SVG = "{http://www.w3.org/2000/svg}"
 ANDROID = "http://schemas.android.com/apk/res/android"
 ET.register_namespace("android", ANDROID)
@@ -32,11 +40,12 @@ def android(**values):
     return {f"{{{ANDROID}}}{key}": value for key, value in values.items()}
 
 
-def encode(element):
+def encode(element, *, generated_comment=True):
     ET.indent(element, space="    ")
-    return ('<?xml version="1.0" encoding="utf-8"?>\n'
-            f'<!-- Generated from {SOURCE}; run scripts/generate_brand_assets.py. -->\n'
-            + ET.tostring(element, encoding="unicode") + "\n").encode()
+    header = '<?xml version="1.0" encoding="utf-8"?>\n'
+    if generated_comment:
+        header += f'<!-- Generated from {SOURCE}; run scripts/generate_brand_assets.py. -->\n'
+    return (header + ET.tostring(element, encoding="unicode") + "\n").encode()
 
 
 def brand_wrapper_specs():
@@ -284,6 +293,12 @@ def assets(android_only=False):
                 if is_color and (name == "native_amoled_foreground_fill"
                                  or (name.startswith(prefix) and path.relative_to(ROOT).as_posix() not in managed)):
                     raise ValueError(f"Brand color override outside canonical/generated palette: {path.relative_to(ROOT)}")
+    for name, (background, dark_navigation_icons, main_ink) in SPLASH_PALETTES.items():
+        palette = ET.Element("resources")
+        ET.SubElement(palette, "color", name="reverb_splash_background").text = background
+        ET.SubElement(palette, "bool", name="reverb_splash_dark_navigation_icons").text = dark_navigation_icons
+        ET.SubElement(palette, "color", name="reverb_splash_compat_main").text = main_ink
+        output[name] = encode(palette, generated_comment=False)
     wrappers = brand_wrapper_specs()
     for name, expected in wrappers.items():
         try:
@@ -311,6 +326,9 @@ def assets(android_only=False):
         if key[0] == "values" and path.suffix == ".xml":
             for entry in ET.parse(path).getroot():
                 key = (entry.get("type") if entry.tag == "item" else entry.tag, entry.get("name"))
+                if key in {("color", "reverb_splash_background"), ("color", "reverb_splash_compat_main"),
+                           ("bool", "reverb_splash_dark_navigation_icons")} and relative not in SPLASH_PALETTES:
+                    raise ValueError(f"Splash color override outside canonical palette: {relative}")
                 if key in geometry:
                     raise ValueError(f"Brand geometry override outside generated resources: {relative}")
     if not android_only:

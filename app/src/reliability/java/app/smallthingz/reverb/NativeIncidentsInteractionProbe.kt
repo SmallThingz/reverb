@@ -665,7 +665,13 @@ private fun verifyIncidentRowFirstPaint(
         check(labelColor.getLong(labels.first()) == smallthingz.ui.graphics.Color(palette.ink).value.toLong())
         check(labelColor.getLong(labels[1]) == smallthingz.ui.graphics.Color(palette.muted).value.toLong())
         check(glyphIcon.get(glyph) == app.smallthingz.reverb.nativeui.ReverbIcon.Unchecked)
-        check(glyphColor.getInt(glyph) == palette.primary)
+        check(glyphColor.getInt(glyph) == palette.error)
+
+        val acknowledged = next.copy(incident = next.incident.copy(acknowledgedAtMillis = next.incident.occurredAtMillis))
+        card.unbind()
+        card.bind(acknowledged, canMutate = true, selected = null, actions = actions)
+        check(glyphIcon.get(glyph) == app.smallthingz.reverb.nativeui.ReverbIcon.Checked)
+        check(glyphColor.getInt(glyph) == palette.acknowledgedStatusTint)
     } finally {
         checkNotNull(list.adapter).notifyItemChanged(2)
     }

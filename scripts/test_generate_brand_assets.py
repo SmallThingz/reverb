@@ -91,6 +91,27 @@ class BrandGenerationTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("Brand color override outside canonical/generated palette", result.stderr)
 
+    def test_canonical_night_splash_ink_cannot_match_backdrop(self):
+        relative = "app/src/main/res/values-night/reverb_splash_colors.xml"
+        self.replace(relative, "@color/reverb_brand_main", "@color/reverb_splash_background")
+        result = self.run_generator()
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("Regenerate brand assets", result.stderr)
+        self.assertIn(relative, result.stderr)
+
+    def test_api35_night_splash_ink_cannot_match_backdrop(self):
+        relative = "app/src/main/res/values-night-v35/splash_override.xml"
+        override = self.root / relative
+        override.parent.mkdir(parents=True)
+        override.write_text(
+            '<resources><color name="reverb_splash_compat_main">'
+            '@color/reverb_splash_background</color></resources>'
+        )
+        result = self.run_generator()
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("Splash color override outside canonical palette", result.stderr)
+        self.assertIn(relative, result.stderr)
+
     def test_app_cannot_shadow_library_brand_plate_color(self):
         override = self.root / "app/src/main/res/values/brand_override.xml"
         override.write_text('<resources><color name="reverb_brand_background">#123456</color></resources>')
