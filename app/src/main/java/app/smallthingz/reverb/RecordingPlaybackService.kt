@@ -85,7 +85,7 @@ class RecordingPlaybackService : Service() {
         .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build()
     private val noisy = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY) pauseCurrent()
+            if (intent?.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY) pauseFromControls()
         }
     }
     private var noisyRegistered = false
@@ -385,7 +385,7 @@ class RecordingPlaybackService : Service() {
             .setWillPauseWhenDucked(true)
             .setOnAudioFocusChangeListener({ change ->
                 if (ownership.current(token) && focus === request && change != AudioManager.AUDIOFOCUS_GAIN) {
-                    pauseCurrent()
+                    pauseFromControls()
                 }
             }, main).build()
         focus = request

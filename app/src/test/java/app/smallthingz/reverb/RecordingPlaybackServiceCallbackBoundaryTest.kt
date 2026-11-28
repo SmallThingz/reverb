@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.pm.ProviderInfo
 import android.database.Cursor
 import android.database.MatrixCursor
+import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.media.AudioTrack
 import android.media.MediaPlayer
@@ -152,6 +153,132 @@ class RecordingPlaybackServiceCallbackBoundaryTest {
         assertFalse(service.ownsRecording(selected))
         assertNull(RecordingPlayback.state.value.recording)
         assertEquals(listOf(replacement, selected), launched)
+    }
+
+    @Test fun noisyOutputCancelsHeldPlay() =
+        environmentalPauseCancelsHeldPlay(PlaybackPauseSignal.NOISY)
+
+    @Test fun focusLossCancelsHeldPlay() =
+        environmentalPauseCancelsHeldPlay(PlaybackPauseSignal.FOCUS_LOSS)
+
+    @Test fun noisyOutputPreservesHeldPlayForAnotherRecording() =
+        environmentalPausePreservesHeldReplacement(PlaybackPauseSignal.NOISY)
+
+    @Test fun focusLossPreservesHeldPlayForAnotherRecording() =
+        environmentalPausePreservesHeldReplacement(PlaybackPauseSignal.FOCUS_LOSS)
+
+    @Test fun retiredFocusCallbackCannotCancelReplacementHeldPlay() =
+        environmentalPausePreservesHeldReplacement(PlaybackPauseSignal.FOCUS_LOSS, deliverRetiredFocus = true)
+
+    private enum class PlaybackPauseSignal { NOISY, FOCUS_LOSS }
+
+    private fun deliverEnvironmentalPause(
+        signal: PlaybackPauseSignal,
+        request: AudioFocusRequest,
+        handler: Handler,
+    ) {
+        when (signal) {
+            PlaybackPauseSignal.NOISY -> RuntimeEnvironment.getApplication()
+                .sendBroadcast(Intent(AudioManager.ACTION_AUDIO_BECOMING_NOISY))
+            PlaybackPauseSignal.FOCUS_LOSS -> assertTrue(handler.post {
+                val listener = readField(request, "mFocusListener") as AudioManager.OnAudioFocusChangeListener
+                listener.onAudioFocusChange(AudioManager.AUDIOFOCUS_LOSS)
+            })
+        }
+        ShadowLooper.idleMainLooper()
+    }
+
+    private fun environmentalPauseCancelsHeldPlay(signal: PlaybackPauseSignal) =
+        withPlaybackService { media, handler, callback, main ->
+            val service = readField(RecordingPlayback, "service") as RecordingPlaybackService
+            val audio = RuntimeEnvironment.getApplication().getSystemService(AudioManager::class.java)
+            Shadows.shadowOf(audio).setNextFocusRequestResponse(AudioManager.AUDIOFOCUS_REQUEST_GRANTED)
+            media.invokePreparedListener()
+            ShadowLooper.idleMainLooper()
+            assertTrue(media.isReallyPlaying)
+            val before = RecordingPlayback.state.value
+            val player = readField(service, "player")
+            val focus = readField(service, "focus") as AudioFocusRequest
+            val heldStart = holdSessionPlay(handler, callback)
+
+            deliverEnvironmentalPause(signal, focus, main)
+            assertFalse(media.isReallyPlaying)
+            assertFalse(RecordingPlayback.state.value.wantsPlayback)
+            assertNull(readField(service, "focus"))
+            assertEquals(before.generation, RecordingPlayback.state.value.generation)
+            assertSame(player, readField(service, "player"))
+            val pendingAfterPause = RecordingPlayback.hasPendingStart()
+
+            service.onStartCommand(heldStart, 0, 2)
+            ShadowLooper.idleMainLooper()
+            assertFalse("Environmental pause must defeat the previously accepted Play delivery",
+                media.isReallyPlaying)
+            assertFalse(RecordingPlayback.state.value.playing)
+            assertFalse(RecordingPlayback.state.value.wantsPlayback)
+            assertFalse("Environmental pause must retire the matching pending Play", pendingAfterPause)
+            assertFalse(RecordingPlayback.hasPendingStart())
+            assertEquals(before.generation, RecordingPlayback.state.value.generation)
+            assertSame(player, readField(service, "player"))
+        }
+
+    private fun environmentalPausePreservesHeldReplacement(
+        signal: PlaybackPauseSignal,
+        deliverRetiredFocus: Boolean = false,
+    ) {
+        val app = RuntimeEnvironment.getApplication()
+        val secondFile = File.createTempFile("environmental-pause-replacement-", ".wav", app.cacheDir)
+        withPlaybackService(additionalSource = secondFile) { firstMedia, _, _, main ->
+            val service = readField(RecordingPlayback, "service") as RecordingPlaybackService
+            val audio = app.getSystemService(AudioManager::class.java)
+            Shadows.shadowOf(audio).setNextFocusRequestResponse(AudioManager.AUDIOFOCUS_REQUEST_GRANTED)
+            firstMedia.invokePreparedListener()
+            ShadowLooper.idleMainLooper()
+            assertTrue(firstMedia.isReallyPlaying)
+            val before = RecordingPlayback.state.value
+            val first = checkNotNull(before.recording)
+            val oldFocus = readField(service, "focus") as AudioFocusRequest
+            File(first.id).copyTo(secondFile, overwrite = true)
+            PlaybackSessionOsShadow.targetPath = secondFile.absolutePath
+            val second = fileRecording(secondFile)
+            assertTrue(second.fileIdentity.isNotBlank())
+            try {
+                assertTrue(RecordingPlayback.play(app, second))
+                val heldReplacement = checkNotNull(Shadows.shadowOf(app).nextStartedService)
+                val pendingReplacement = readField(RecordingPlayback, "pending")
+
+                deliverEnvironmentalPause(signal, oldFocus, main)
+                assertFalse(firstMedia.isReallyPlaying)
+                assertFalse(RecordingPlayback.state.value.wantsPlayback)
+                assertSame(pendingReplacement, readField(RecordingPlayback, "pending"))
+                assertEquals(before.generation, RecordingPlayback.state.value.generation)
+
+                service.onStartCommand(heldReplacement, 0, 2)
+                val replacement = Shadow.extract<ShadowMediaPlayer>(awaitPlayer(service))
+                replacement.invokePreparedListener()
+                ShadowLooper.idleMainLooper()
+                assertEquals(second, RecordingPlayback.state.value.recording)
+                assertTrue(RecordingPlayback.state.value.generation != before.generation)
+                assertTrue(replacement.isReallyPlaying)
+                assertFalse(RecordingPlayback.hasPendingStart())
+
+                if (deliverRetiredFocus) {
+                    assertTrue(RecordingPlayback.play(app, second))
+                    val heldPlay = checkNotNull(Shadows.shadowOf(app).nextStartedService)
+                    val accepted = readField(RecordingPlayback, "pending")
+                    val stateBeforeStaleFocus = RecordingPlayback.state.value
+                    deliverEnvironmentalPause(PlaybackPauseSignal.FOCUS_LOSS, oldFocus, main)
+                    assertSame(accepted, readField(RecordingPlayback, "pending"))
+                    assertEquals(stateBeforeStaleFocus, RecordingPlayback.state.value)
+                    assertTrue(replacement.isReallyPlaying)
+                    service.onStartCommand(heldPlay, 0, 3)
+                    ShadowLooper.idleMainLooper()
+                    assertTrue(replacement.isReallyPlaying)
+                    assertEquals(stateBeforeStaleFocus.generation, RecordingPlayback.state.value.generation)
+                }
+            } finally {
+                RecordingPlayback.stop(second)
+            }
+        }
     }
 
     @Test fun currentSessionPauseCancelsHeldPlay() = heldPlayCancelledByControl(stop = false)
