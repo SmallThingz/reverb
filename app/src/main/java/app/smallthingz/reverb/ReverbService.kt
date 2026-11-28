@@ -417,6 +417,7 @@ open class ReverbService : Service() {
 
     // Audio-owner-only; lifetimes without a visualizer never allocate FFT scratch.
     private var visualizationAnalyzer: AudioVisualizationAnalyzer? = null
+    private var visualizationAnalyzerEpoch: Long? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     private val capturePolicyNotificationRefreshQueued = AtomicBoolean(false)
     private val capturePolicyNotificationRefresh = Runnable {
@@ -4828,11 +4829,18 @@ open class ReverbService : Service() {
     private fun postVisualizationReset(epoch: Long?, createAnalyzer: Boolean = false): Boolean =
         audioHandler.post {
             if (!serviceDestroying && visualizationCallbacks.currentEpoch() == epoch) {
-                val analyzer = if (createAnalyzer) visualizationAnalyzerForAudioOwner() else visualizationAnalyzer
-                analyzer?.reset()
-                visualizationFaulted = false
+                resetVisualizationForEpoch(epoch, createAnalyzer)
             }
         }
+
+    private fun resetVisualizationForEpoch(epoch: Long?, createAnalyzer: Boolean = false) {
+        // A packet for this registration may have reached the audio owner before this reset was posted.
+        if (epoch != null && visualizationAnalyzerEpoch == epoch) return
+        val analyzer = if (createAnalyzer) visualizationAnalyzerForAudioOwner() else visualizationAnalyzer
+        analyzer?.reset()
+        visualizationFaulted = false
+        visualizationAnalyzerEpoch = epoch
+    }
 
     private fun visualizationAnalyzerForAudioOwner(): AudioVisualizationAnalyzer =
         visualizationAnalyzer ?: AudioVisualizationAnalyzer().also { visualizationAnalyzer = it }
@@ -4840,7 +4848,9 @@ open class ReverbService : Service() {
     private fun publishVisualization(array: ByteArray, offset: Int, count: Int,
         slot: BufferSlot, read: CaptureReadIdentity) {
         val registration = visualizationCallbacks.currentRegistration() ?: return
-        if (visualizationFaulted || !read.belongsToVisualizationEpoch(registration.epoch)) return
+        if (!read.belongsToVisualizationEpoch(registration.epoch)) return
+        resetVisualizationForEpoch(read.visualizationEpoch)
+        if (visualizationFaulted) return
         // The capture read itself is display-rate while the visualizer is attached. Analyze every
         // completed read: a second coarse throttle only adds input-to-pixel latency and can skip
         // short transients entirely.
