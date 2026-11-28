@@ -258,6 +258,114 @@ class DurableSaveCoordinatorAdmissionTest {
         }
     }
 
+    @Test fun sameNameJobsKeepDistinctOutputsAcrossPublishedRecovery() = withFixture { context, root, store, pcm ->
+        withOwnedMedia(context, root) { provider ->
+            provider.allowRetry = true
+            val coordinator = coordinator(context)
+            fun admit(startFrame: Int, endFrame: Int): DurableSaveHandle =
+                requireNotNull(store.acquireRange(startFrame / 8_000.0, endFrame / 8_000.0)).use { lease ->
+                    coordinator.admit(lease, managedWavRequest()).also { provider.ownedJobIds += it.id }
+                }
+            // Both accepted jobs request test.wav, but their overlapping ranges contain different PCM.
+            val first = admit(0, 192)
+            val second = admit(64, 256)
+            val firstPcm = pcm.copyOfRange(0, 384)
+            val secondPcm = pcm.copyOfRange(128, 512)
+            assertFalse(firstPcm.contentEquals(secondPcm))
+            assertNotEquals(first.id, second.id)
+            assertEquals(2, coordinator.pendingCount())
+            val journal = DurableSaveJournal(File(root, "durable-saves"))
+            val firstPins = journal.read(first.id).source.objects
+            val secondPins = journal.read(second.id).source.objects
+            val sharedSources = firstPins.map { it.sourcePath }.toSet()
+                .intersect(secondPins.map { it.sourcePath }.toSet())
+            assertTrue("The jobs must exercise shared source ownership", sharedSources.isNotEmpty())
+            store.clear()
+            store.close()
+            assertTrue((firstPins + secondPins).all { DurablePcmPins.isProtected(File(it.sourcePath)) })
+
+            val firstSuccesses = mutableListOf<RecordingEntity>()
+            val secondSuccesses = mutableListOf<RecordingEntity>()
+            val interruption = java.io.IOException("interrupted after first same-name publication")
+            DurableSaveFaultHooks.onBoundary = { id, stage ->
+                if (id == first.id && stage == "PUBLISHED_DURABLE") throw interruption
+            }
+            try {
+                coordinator.materialize(first.id, onReady = { firstSuccesses += it }) {}
+                fail("expected interruption after first publication")
+            } catch (error: java.io.IOException) {
+                assertSame(interruption, error)
+            } finally {
+                DurableSaveFaultHooks.onBoundary = null
+            }
+            assertEquals(DurableSaveStage.PUBLISHED, journal.read(first.id).stage)
+            assertTrue(firstSuccesses.isEmpty())
+            assertEquals(1, provider.inserts)
+            assertEquals(1, provider.updates)
+            assertEquals("test.wav", provider.nameOf(provider.uri))
+            assertEquals(0, provider.pendingOf(provider.uri))
+            val firstOutput = provider.output(provider.uri)
+            val firstInode = Files.getAttribute(firstOutput.toPath(), "unix:ino")
+            assertArrayEquals(expectedWav(firstPcm), firstOutput.readBytes())
+
+            // The second job publishes while the first still owns its journal and source pins.
+            val secondRecording = coordinator.materialize(second.id, onReady = { secondSuccesses += it }) {}
+            assertEquals(provider.retryUri.toString(), secondRecording.id)
+            assertEquals("test (2).wav", secondRecording.displayName)
+            assertEquals(listOf(secondRecording), secondSuccesses)
+            assertTrue(firstSuccesses.isEmpty())
+            assertFalse(journal.directory(second.id).exists())
+            assertTrue(journal.directory(first.id).exists())
+            assertEquals(1, coordinator.pendingCount())
+            assertTrue(sharedSources.all { DurablePcmPins.isProtected(File(it)) })
+            assertArrayEquals(expectedWav(secondPcm), provider.output(provider.retryUri).readBytes())
+            assertArrayEquals(expectedWav(firstPcm), firstOutput.readBytes())
+            assertEquals(firstInode, Files.getAttribute(firstOutput.toPath(), "unix:ino"))
+            assertEquals(2, provider.inserts)
+            assertEquals(2, provider.updates)
+
+            assertEquals(listOf(first.id), coordinator.recover().map { it.id })
+            val firstRecording = coordinator.materialize(first.id, onReady = { firstSuccesses += it }) {}
+            assertEquals(provider.uri.toString(), firstRecording.id)
+            assertEquals("test.wav", firstRecording.displayName)
+            assertEquals(listOf(firstRecording), firstSuccesses)
+            assertNotEquals(firstRecording.id, secondRecording.id)
+            assertEquals(setOf(provider.uri, provider.retryUri), provider.ownedOutputUris.toSet())
+            assertEquals(2, provider.ownedOutputUris.size)
+            val expectedRows = mapOf(firstRecording.id to firstRecording, secondRecording.id to secondRecording)
+            val catalogRows = runBlocking {
+                RecordingDatabase.getInstance(context).recordingDao().listAll()
+            }.filter { it.id in expectedRows }
+            assertEquals(2, catalogRows.size)
+            assertEquals(expectedRows, catalogRows.associateBy { it.id })
+
+            // Retired attempts return their result without another success, insert or publish update.
+            assertSame(firstRecording, coordinator.materialize(first.id, onReady = { firstSuccesses += it }) {
+                error("A completed first job must not restart materialization")
+            })
+            assertSame(secondRecording, coordinator.materialize(second.id, onReady = { secondSuccesses += it }) {
+                error("A completed second job must not restart materialization")
+            })
+            assertEquals(listOf(firstRecording), firstSuccesses)
+            assertEquals(listOf(secondRecording), secondSuccesses)
+            assertEquals(2, provider.inserts)
+            assertEquals(2, provider.updates)
+            assertTrue(provider.attemptedDeleteUris.isEmpty())
+            assertEquals(0, provider.pendingOf(provider.uri))
+            assertEquals(0, provider.pendingOf(provider.retryUri))
+            assertEquals("test.wav", provider.nameOf(provider.uri))
+            assertEquals("test (2).wav", provider.nameOf(provider.retryUri))
+            assertArrayEquals(expectedWav(firstPcm), firstOutput.readBytes())
+            assertArrayEquals(expectedWav(secondPcm), provider.output(provider.retryUri).readBytes())
+            assertEquals(firstInode, Files.getAttribute(firstOutput.toPath(), "unix:ino"))
+            assertFalse(journal.directory(first.id).exists())
+            assertFalse(journal.directory(second.id).exists())
+            assertEquals(0, coordinator.pendingCount())
+            assertTrue((firstPins + secondPins).none { DurablePcmPins.isProtected(File(it.sourcePath)) })
+            provider.assertClosed()
+        }
+    }
+
     @Test fun recoveryFinishesFirstAndRetiredSaveGetsCachedResultWithoutReplayingSuccess() =
         withFixture { context, root, store, pcm ->
             withOwnedMedia(context, root) { provider ->
