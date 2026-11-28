@@ -62,6 +62,121 @@ class ShuttleNearUnityWorkerTest {
     @Test fun retainedPhaseAt48000() = checkRateTransition(48_000)
     @Test fun retainedPhaseAt96000() = checkRateTransition(96_000)
 
+    @Test fun settledUnityResumesAtTheSubmittedSourceEdge() = checkSettledUnitySourceEdge(48_000)
+
+    @Test fun settledUnityResumesAtTheSubmittedSourceEdgeAt44100() = checkSettledUnitySourceEdge(44_100)
+
+    private fun checkSettledUnitySourceEdge(hz: Int) {
+        val originFrame = hz / 2
+        val referenceLevel = 16_000
+        val pcm = ByteBuffer.allocate(hz * 4).order(ByteOrder.LITTLE_ENDIAN).apply {
+            repeat(hz) { frame ->
+                putShort(((frame % 2_048 - 1_024) * 12).toShort())
+                putShort(referenceLevel.toShort())
+            }
+        }.array()
+        val source = samples(pcm)
+        val root = Files.createTempDirectory("shuttle-settled-unity-")
+        val previousRoot = ServiceStateOsShadow.fixtureRoot
+        ServiceStateOsShadow.fixtureRoot = root
+        ShadowAudioTrack.setMinBufferSize(256)
+        val mismatches = mutableListOf<String>()
+        try {
+            val wav = File(root.toFile(), "frame-index.wav").apply {
+                writeBytes(buildWavHeaderBytes(hz, 2, PcmSampleFormat.PCM_16, pcm.size.toLong()) + pcm)
+            }
+            val recording = RecordingEntity(wav.absolutePath, wav.name, "audio/wav", 1L, 1_000L,
+                wav.length(), "PCM", RecordingStorageType.FILE, root.toString(), resolveFileIdentity(wav))
+            for (direction in listOf(1, -1)) {
+                val clock = AtomicLong(1_000_000_000L)
+                val waits = TargetWaitGate()
+                val errors = ConcurrentLinkedQueue<Throwable>()
+                val authority = RecordingScrubAuthority(RecordingScrubKey(1L, 1L))
+                val worker = TimelineAudioPreviewController(onTrackReleaseFailure = { errors += it },
+                    shuttleNowNanos = clock::get, onShuttleTargetWait = waits::reached)
+                val lower = .25
+                val upper = .75
+                var unityFrames = 0
+                ShuttleEndpointAudioTrackShadow.reset()
+                ShuttleEndpointAudioTrackShadow.allowFirstWrite.countDown()
+                try {
+                    worker.startRecordingShuttle(RuntimeEnvironment.getApplication(), recording,
+                        atSeconds = originFrame.toDouble() / hz, rate = direction.toFloat(), onStarted = {},
+                        onFailureAfterStart = { errors += AssertionError("Shuttle lost playback") },
+                        onSourceCloseFailure = { errors += it }, fromSeconds = lower, untilSeconds = upper,
+                        ordinaryAuthority = authority)
+                    await("first unity write in direction $direction") {
+                        ShuttleEndpointAudioTrackShadow.acquiredTracks().singleOrNull()?.playing == true
+                    }
+                    val track = ShuttleEndpointAudioTrackShadow.single()
+                    assertEquals(hz, track.formatRate())
+                    assertEquals(2, track.formatChannels())
+                    clock.addAndGet(64_000_000L)
+                    await("settled unity tail in direction $direction") {
+                        val written = samples(track.bytes())
+                        if (written.limit() == 0 || written.get(written.limit() - 1).toInt() != 0) {
+                            false
+                        } else {
+                            unityFrames = written.limit() / 2
+                            true
+                        }
+                    }
+
+                    // At the same clock instant the fresh command starts at the submitted
+                    // edge. Rate advance belongs to later commands; there is no held overlap.
+                    val edge = originFrame + direction * unityFrames
+                    val writesBeforeResume = track.acceptedWrites
+                    val resumedRate = direction * .99f
+                    worker.updateShuttle(edge.toDouble() / hz, resumedRate, lower, upper)
+                    waits.observe(resumedRate, "first grain and fresh wait in direction $direction")
+                    assertSame(track, ShuttleEndpointAudioTrackShadow.single())
+                    assertEquals(writesBeforeResume + 1, track.acceptedWrites)
+
+                    val written = samples(track.bytes())
+                    assertTrue(written.limit() / 2 > unityFrames)
+                    assertEquals("Resumed grain must reach its untapered level",
+                        referenceLevel, written.get(written.limit() - 1).toInt())
+                    var mismatchCount = 0
+                    var firstMismatch = ""
+                    for (frame in 0 until written.limit() / 2) {
+                        val sourceFrame = if (direction > 0) originFrame + frame else originFrame - 1 - frame
+                        val observedIndex = written.get(frame * 2).toInt()
+                        val observedLevel = written.get(frame * 2 + 1).toInt()
+                        assertTrue("Invalid reference channel at output frame $frame", observedLevel in 0..referenceLevel)
+                        // Both channels receive the same taper. The constant channel measures
+                        // its gain so the source comparison does not repeat the ramp formula.
+                        val expectedIndex = source.get(sourceFrame * 2).toInt() * observedLevel.toDouble() / referenceLevel
+                        if (abs(observedIndex - expectedIndex) > 2.0) {
+                            if (mismatchCount == 0) {
+                                firstMismatch = "output $frame, source $sourceFrame, expected $expectedIndex, got $observedIndex"
+                            }
+                            mismatchCount++
+                        }
+                    }
+                    if (mismatchCount > 0) {
+                        mismatches += "direction $direction, settled at output $unityFrames, " +
+                            "$mismatchCount mismatched PCM frames, first at $firstMismatch"
+                    }
+                } finally {
+                    worker.close()
+                    waits.resume()
+                    authority.revoke()
+                    for (name in listOf("executor", "controlExecutor", "releaseExecutor")) {
+                        val executor = TimelineAudioPreviewController::class.java.getDeclaredField(name)
+                            .apply { isAccessible = true }.get(worker) as ExecutorService
+                        assertTrue("$name did not terminate", executor.awaitTermination(5, TimeUnit.SECONDS))
+                    }
+                    ShadowLooper.idleMainLooper()
+                    assertTrue(errors.toString(), errors.isEmpty())
+                }
+            }
+            assertTrue(mismatches.joinToString("\n"), mismatches.isEmpty())
+        } finally {
+            ServiceStateOsShadow.fixtureRoot = previousRoot
+            root.toFile().deleteRecursively()
+        }
+    }
+
     private fun checkRateTransition(hz: Int) {
         val root = Files.createTempDirectory("shuttle-retained-phase-")
         val previousRoot = ServiceStateOsShadow.fixtureRoot

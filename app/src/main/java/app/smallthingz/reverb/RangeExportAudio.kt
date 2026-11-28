@@ -1739,8 +1739,15 @@ internal class TimelineAudioPreviewController(
                     startSeconds < window.startSeconds - toleranceSeconds ||
                     endSeconds > window.endSeconds + toleranceSeconds
                 ) {
-                    val cacheStart = (anchorSeconds - SHUTTLE_CACHE_HALF_SPAN_SECONDS)
+                    val requestedCacheStart = (anchorSeconds - SHUTTLE_CACHE_HALF_SPAN_SECONDS)
                         .coerceAtLeast(lower)
+                    // Align the native-rate cache without losing support for this grain.
+                    val cacheStart = if (source.nativeSampleRate == shuttleSampleRate) {
+                        val firstFrame = maxOf(floor(requestedCacheStart * shuttleSampleRate),
+                            ceil(lower * shuttleSampleRate))
+                        val alignedStart = firstFrame / shuttleSampleRate
+                        if (alignedStart in lower..startSeconds) alignedStart else requestedCacheStart
+                    } else requestedCacheStart
                     val cacheEnd = (anchorSeconds + SHUTTLE_CACHE_HALF_SPAN_SECONDS)
                         .coerceAtMost(upper)
                     checkShuttleCurrent()
@@ -1931,7 +1938,10 @@ internal class TimelineAudioPreviewController(
                         handoffAnchor = if (overlapsNext) cursor.nextSeconds else
                             cursor.heldTailStartSeconds(pending.size / frameBytes)
                     } else {
-                        previousAnchorSeconds = cursor.nextSeconds?.minus(direction * SHUTTLE_SOURCE_HOP_SECONDS)
+                        // The unity tail was already submitted. Resume from that edge and
+                        // use it as the reference if the gesture jumps to a distant target.
+                        settledGrainEdge = cursor.nextSeconds
+                        previousAnchorSeconds = settledGrainEdge
                     }
                     unityCursor = null
                     unityPcm = null
