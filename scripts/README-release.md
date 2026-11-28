@@ -25,8 +25,8 @@ that the asset exists.
 
    ```sh
    python3 scripts/test_verify_release.py
-   python3 scripts/verify_release.py v0.1.3-rc5 \
-     /path/to/reverb-0.1.3-rc5.apk \
+   python3 scripts/verify_release.py v0.1.3 \
+     /path/to/reverb-0.1.3.apk \
      --build-tools ../../.android/sdk/build-tools/37.0.0
    ```
 
@@ -55,10 +55,12 @@ Stable releases and release candidates are intended for F-Droid pickup as well a
 F-Droid Gradle parser cannot resolve arbitrary variables. The signing guard reads
 that same Android configuration instead of maintaining a second version constant.
 
-Reverb `0.1.3-rc5` uses code 9. The repository's `.fdroid.yml` records the
-offline bootstrap prebuild, `v0.1.3-rc5` tag and expected `reverb-0.1.3-rc5.apk`
-release asset. Publish the tag and asset only after the release gates above pass,
+Stable Reverb `0.1.3` uses code 10. Version `0.1.3-rc5` (code 9) was an
+unpublished development version. The repository's `.fdroid.yml` records the
+offline bootstrap prebuild, `v0.1.3` tag and expected `reverb-0.1.3.apk` release
+asset. Publish the tag and asset only after the release gates above pass,
 including verification of the actual APK's existing developer signing certificate.
+Publish `0.1.3` as a stable release, without the prerelease flag.
 Published `0.1.3-rc4` continues to use code 8.
 
 After publication is separately authorized, verify the current upstream

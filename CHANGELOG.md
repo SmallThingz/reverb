@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.3-rc5 — 2026-11-29 (prerelease)
+## 0.1.3 — 2026-11-29
 
 - Preserve PCM16 samples in previews and exports; improve trim playback and fine scrubbing near normal speed.
 - Improve capture handling during slow writes and report stalled audio input.
