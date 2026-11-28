@@ -1,12 +1,16 @@
 # Changelog
 
-## 0.1.3-rc5 (unreleased)
+## 0.1.3-rc5 — 2026-11-29 (prerelease)
 
-- Preserve PCM16 samples in previews and normalized exports, and match float WAV trim playback to export.
+- Preserve PCM16 samples in previews and exports; improve trim playback and fine scrubbing near normal speed.
 - Improve capture handling during slow writes and report stalled audio input.
-- Reduce repeated work in the recording catalog, previews, and UI animations.
-- Combine save progress and outcomes under the Save results notification category.
-- Retire the CPU-awake setting.
+- Improve save recovery and avoid duplicate completion results.
+- Keep Quick Save responsive during buffer clearing and preserve capture when a save cannot be queued.
+- Fix Home/End keys scrolling the Library while renaming.
+- Keep canceled Library edge gestures from closing the panel.
+- Reduce repeated work in Library, previews, and animations.
+- Group save notifications under Save results.
+- Remove the CPU-awake setting.
 
 ## 0.1.3-rc4 — 2026-11-18 (prerelease)
 
