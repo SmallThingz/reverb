@@ -10,7 +10,7 @@ Reverb lets you capture audio, keep a rolling history and save the parts you nee
 
 <b>Save and listen</b>
 <ul>
-<li>Select a range on the waveform and export it as WAV</li>
+<li>Select a range on the waveform and export it as WAV, with optional FLAC compression for 16-bit PCM</li>
 <li>Listen while fine-tuning your selection</li>
 <li>Play saved recordings directly in the Library</li>
 <li>Trim into a new recording while preserving the original</li>
