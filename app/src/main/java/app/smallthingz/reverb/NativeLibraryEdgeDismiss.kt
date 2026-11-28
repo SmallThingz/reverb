@@ -107,6 +107,13 @@ internal class NativeLibraryEdgeDismiss(
             State.DOWN, State.WAIT_UP -> Unit
         }
     }
+    /** A canceled owner cannot transfer its drag or commit; reserve it until all body contacts lift. */
+    fun cancelPointer(id: Long) {
+        if (pointer != id) return
+        state = State.WAIT_UP
+        verifyFinal = null
+    }
+
     /** Source pointer-key replacement and stream cancellation never commit dismissal. */
     fun restart() {
         reservesScroll = false

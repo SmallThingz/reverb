@@ -11,6 +11,7 @@ import smallthingz.ui.components.NativeGroupLayout
 import smallthingz.ui.scroll.NativeVerticalViewport
 import android.os.Build
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewGroup
@@ -23,6 +24,7 @@ import smallthingz.ui.input.phase.NativeDragPointerChange
 import smallthingz.ui.input.phase.NativeDragPointerEvent
 import app.smallthingz.reverb.NativeLibraryEdgeDismiss
 import smallthingz.ui.input.phase.NativePointerPass
+import smallthingz.ui.input.phase.NativePointerCoordinates
 import smallthingz.ui.scroll.NativeVerticalPhaseBinding
 import smallthingz.ui.input.phase.NativeViewPhasePointerNode
 import smallthingz.ui.input.phase.NativeViewPointerHitLayout
@@ -67,9 +69,20 @@ internal class NativeLibraryPointerBinding(
     )
     private val edgeNode = object : NativeViewPhasePointerNode {
         override val view get() = content.bodyPointerView
+        private var canceledPointerUp = false
+        override fun bindMotion(event: MotionEvent?, coordinates: NativePointerCoordinates?, androidPointerMask: Int) {
+            // The raw event also contains contacts routed outside Body. Only its lifted contact
+            // can cancel this recognizer, and only when that contact belongs to this node's path.
+            canceledPointerUp = event != null && event.flags and MotionEvent.FLAG_CANCELED != 0 &&
+                (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_POINTER_UP) &&
+                androidPointerMask and (1 shl event.getPointerId(event.actionIndex)) != 0
+        }
         override fun dispatch(event: NativeDragPointerEvent, pass: NativePointerPass) {
             // This ancestor sees every ordinary body pointer, including drags waiting for slop.
-            if (pass == NativePointerPass.INITIAL) bodyHasPointer = event.changes.any { it.pressed }
+            if (pass == NativePointerPass.INITIAL) {
+                bodyHasPointer = event.changes.any { it.pressed }
+                if (canceledPointerUp) event.changes.firstOrNull { it.changedToUp }?.let { edge.cancelPointer(it.id) }
+            }
             edge.dispatch(event, pass)
         }
         override fun cancel() {
