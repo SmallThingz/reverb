@@ -12,17 +12,16 @@ Implementation and manifest entry live only in `src/debug`; tests live only in
 No BuildConfig-only exclusion, main-source hook, extra dependency, server, or UI
 library demo application is added.
 
-## Root-owned validation and installation
+## Installation and usage
 
-Do not install ordinary `assembleDebug` over the installed normal candidate: the
-normal debug variant currently shares its application ID. Root assigns the single
-Gradle runner and, if physical validation is needed, an isolated suffixed package
-using existing variant machinery. The opt-in reliability runner remains restricted
-to its existing suffixed packages. No package/runner guard is relaxed here. This
-patch itself does **not** configure or install a suffixed debug artifact.
+Use an isolated debug installation with a distinct application ID. Do not install
+ordinary `assembleDebug` over an installation containing recordings you want to
+preserve: the standard debug variant shares the normal application's ID. These
+controls do **not** configure or install a suffixed debug artifact. The separate
+opt-in reliability runner retains its existing suffixed-package restriction.
 
-After root has provisioned an appropriate isolated debug installation, take a
-snapshot using an explicit ordered shell broadcast (the sender needs `DUMP`):
+After provisioning the isolated debug installation, take a snapshot using an
+explicit ordered shell broadcast (the sender needs `DUMP`):
 
 ```sh
 adb shell am broadcast --receiver-foreground \
@@ -69,7 +68,7 @@ own focus, lifecycle pause and ordinary permission gates stay in place.
 IDs map to an explicit allowlist of resource-backed semantic labels on real merged
 accessibility action leaves. They do not accept arbitrary labels, view paths,
 methods or code. Hidden duplicates are excluded; multiple eligible leaves return
-`AMBIGUOUS` rather than guessing. This first version does not edit text, invoke
+`AMBIGUOUS` rather than guessing. These controls do not edit text, invoke
 recording/delete actions, or control separate dialogs. Such actions require their
 own explicit supported UI binding and tests; setting internal values is not an
 extension mechanism.
@@ -102,8 +101,8 @@ commands with physical gestures. No private owner state is read or overridden.
 `DebugUiInstrumentation` is a separate scripted driver. Unlike the primary receiver,
 it starts an instrumented process, launches MainActivity and finishes at plan end.
 Use it for a new instrumented session. The separate `ReliabilityInstrumentation`
-retains its own suffixed-package check. This batch driver relies on root provisioning
-the isolated debug target described above and is declared only in the debug manifest.
+retains its own suffixed-package check. Configure the isolated debug target described
+above before using this batch driver; it is declared only in the debug manifest.
 It accepts up to 16 comma-separated `snapshot`, `activate:<id>`, `await:<id>` commands
 (1024 characters). Await polls on the instrumentation worker with a 3-second polling
 budget, capped by a 30-second plan budget that begins after startup. Deadlines are
@@ -111,19 +110,32 @@ checked between synchronous UI observations. Startup and waiting for main-thread
 execution can extend elapsed time beyond those budgets. Results are JSON in
 `ui_result` and final `ui_results`.
 
+Complete native onboarding and respond to any platform permission prompts through
+normal UI before running an unattended activation plan. The commands neither answer
+nor bypass those prompts. MainActivity must be resumed and focused, its layout
+settled, and the requested control `READY`. Startup alone does not establish these
+conditions. If a prompt or lifecycle transition interrupts the plan, restore the
+normal UI prerequisites and rerun it. An incomplete plan or `NOT_RESUMED` result is
+not a successful activation. Inspect each command's JSON: a snapshot-only plan can
+finish successfully while reporting an unavailable UI, and `DISPATCHED` only means
+the activation handler accepted the action.
+
 ```sh
 adb shell am instrument -w \
   -e plan 'snapshot,await:navigation.settings,activate:navigation.settings,snapshot' \
   '<installed-debug-package>/app.smallthingz.reverb.DebugUiInstrumentation'
 ```
 
-## Tests (root runner only)
+## Tests
 
-Host selector: `app.smallthingz.reverb.DebugUiControlsTest` on `testDebugUnitTest`.
-Tests attach actual Main UI and invoke the real accessibility handlers. They cover
-navigation dispatch, retained hidden Home exclusion, lifecycle/focus rejection,
-old observation rejection, opening motion, explicit exposure policy and protocol
-bounds. They are staged but have not been compiled or executed by this worker.
-Release source exclusion is structural here; root's artifact check should confirm
-no `DebugUi*` classes/instrumentation entry in the release APK before claiming a
-measured zero-byte delta.
+Run the host suites on `testDebugUnitTest` (package `app.smallthingz.reverb`):
+`DebugUiControlsTest`, `DebugUiCommandReceiverTransportTest`, `DebugUiBoundsTest`
+and `DebugUiInstrumentationArgumentsTest`. They cover real Main UI accessibility
+handlers, navigation and selection, scrolling, lifecycle/focus and stale-observation
+rejection, pending-layout readiness, receiver results, fixture cleanup and protocol
+bounds. Pending-layout and settled-state checks do not establish interior-animation
+coverage.
+
+Release source exclusion is structural. Verify that the built release APK contains
+no `DebugUi*` classes or their manifest declarations before making artifact-content or
+size claims.
