@@ -32,8 +32,10 @@ import java.util.Base64
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
@@ -426,6 +428,144 @@ class ProviderPublicationBoundaryTest {
                 dao.deleteById(siblingId)
             }
         }
+    }
+
+    @Test
+    fun duplicateImmediateDeleteWithUpdatedWaveformSettlesOnOneDenial() = runBlocking {
+        fixture { app, provider, target, fingerprint, bytes, dao ->
+            val selected = registerPublishedSelection(app, provider, target, fingerprint, bytes)
+            val proof = checkNotNull(RecordingRepository.snapshotDeletionConsentTarget(app, selected))
+            provider.removeOnDelete = true
+            val journalKey = PrefKey.PENDING_RECORDING_DELETIONS.name
+            val preferences = getRecorderPreferences(app)
+            val journalBefore = preferences.getStringSet(journalKey, emptySet())!!.toSet()
+            val first = RecordingDeletionConsent.enqueueImmediate(listOf(proof))
+            val launch = claimDeletionPrompt(app)
+            val updated = selected.copy(waveformData = "updated-waveform", waveformRevision = "updated-revision")
+            val second = try {
+                dao.upsert(updated)
+                val refreshed = checkNotNull(RecordingRepository.snapshotDeletionConsentTarget(app, updated))
+                assertEquals(proof.fingerprint, refreshed.fingerprint)
+                assertNotEquals(proof.recording, refreshed.recording)
+                RecordingDeletionConsent.enqueueImmediate(listOf(refreshed)).also {
+                    assertNotSame(first, it)
+                    assertFalse(first.isCompleted)
+                    assertFalse(it.isCompleted)
+                    assertEquals(listOf(selected.id), provider.writeRequestUris)
+                }
+            } finally {
+                RecordingDeletionConsent.finish(app, launch.token, granted = false)
+                withTimeout(5_000L) { first.await() }
+            }
+            assertFalse(RecordingDeletionConsent.holdsPlayback(updated))
+            assertNull(RecordingDeletionConsent.claim(app))
+            withTimeout(5_000L) { second.await() }
+            assertFalse(RecordingDeletionConsent.owns(launch.token))
+            assertEquals(0, provider.deletes)
+            assertEquals(updated, dao.findById(updated.id))
+            assertArrayEquals(bytes, provider.payload.readBytes())
+            assertEquals(journalBefore, preferences.getStringSet(journalKey, emptySet()))
+        }
+    }
+
+    @Test
+    fun duplicateImmediateDeleteSettlesDespiteThrowingReentrantHandlerAndCancelledReceipt() = runBlocking {
+        fixture { app, provider, target, fingerprint, bytes, dao ->
+            val selected = registerPublishedSelection(app, provider, target, fingerprint, bytes)
+            val proof = checkNotNull(RecordingRepository.snapshotDeletionConsentTarget(app, selected))
+            val batch = listOf(proof)
+            val first = RecordingDeletionConsent.enqueueImmediate(batch)
+            val launch = claimDeletionPrompt(app)
+            val cancelled = RecordingDeletionConsent.enqueueImmediate(batch)
+            val surviving = RecordingDeletionConsent.enqueueImmediate(batch)
+            cancelled.cancel()
+            val reentrant = CompletableDeferred<Deferred<Unit>>()
+            first.invokeOnCompletion {
+                assertFalse(Thread.holdsLock(RecordingDeletionConsent))
+                reentrant.complete(RecordingDeletionConsent.enqueueImmediate(batch))
+                throw IllegalStateException("Test deletion receipt handler failed")
+            }
+
+            RecordingDeletionConsent.finish(app, launch.token, granted = false)
+            val fresh = withTimeout(5_000L) {
+                surviving.await()
+                reentrant.await()
+            }
+            assertTrue(first.isCompleted)
+            assertTrue(cancelled.isCancelled)
+            val freshLaunch = claimDeletionPrompt(app)
+            try {
+                assertNotEquals(launch.token, freshLaunch.token)
+                assertFalse(fresh.isCompleted)
+            } finally {
+                RecordingDeletionConsent.finish(app, freshLaunch.token, granted = false)
+                withTimeout(5_000L) { fresh.await() }
+            }
+            assertNull(RecordingDeletionConsent.claim(app))
+            assertEquals(0, provider.deletes)
+        }
+    }
+
+    @Test
+    fun immediateDeleteWithChangedProofOrPartialOverlapPromptsSeparately() = runBlocking {
+        fixture { app, provider, target, fingerprint, bytes, dao ->
+            val selected = registerPublishedSelection(app, provider, target, fingerprint, bytes)
+            val siblingUri = Uri.parse("content://media/external/audio/media/730033")
+            val sibling = selected.copy(id = siblingUri.toString(),
+                fileIdentity = providerIdentity(siblingUri, selected.sizeBytes, provider.generation))
+            provider.alternateRowAvailable = true
+            provider.removeOnDelete = true
+            val changedBytes = bytes.copyOf().apply { this[lastIndex] = (this[lastIndex].toInt() xor 1).toByte() }
+            try {
+                dao.upsert(sibling)
+                val originalProof = checkNotNull(RecordingRepository.snapshotDeletionConsentTarget(app, selected))
+                val original = RecordingDeletionConsent.enqueueImmediate(listOf(originalProof))
+                val originalLaunch = claimDeletionPrompt(app)
+                val (changed, overlapping) = try {
+                    assertEquals(listOf(originalProof), originalLaunch.targets)
+                    provider.payload.writeBytes(changedBytes)
+                    val changedProof = checkNotNull(RecordingRepository.snapshotDeletionConsentTarget(app, selected))
+                    val siblingProof = checkNotNull(RecordingRepository.snapshotDeletionConsentTarget(app, sibling))
+                    assertEquals(originalProof.recording, changedProof.recording)
+                    assertNotEquals(originalProof.fingerprint, changedProof.fingerprint)
+                    RecordingDeletionConsent.enqueueImmediate(listOf(changedProof)) to
+                        RecordingDeletionConsent.enqueueImmediate(listOf(changedProof, siblingProof))
+                } finally {
+                    RecordingDeletionConsent.finish(app, originalLaunch.token, granted = false)
+                    withTimeout(5_000L) { original.await() }
+                }
+                var previousToken = originalLaunch.token
+                val expectedPrompts = listOf(
+                    changed to listOf(selected.id),
+                    overlapping to listOf(selected.id, sibling.id),
+                )
+                for ((receipt, ids) in expectedPrompts) {
+                    assertFalse(receipt.isCompleted)
+                    val launch = claimDeletionPrompt(app)
+                    try {
+                        assertNotEquals(previousToken, launch.token)
+                        assertEquals(ids, launch.targets.map { it.recording.id })
+                        assertEquals(ids, provider.writeRequestUris)
+                        previousToken = launch.token
+                    } finally {
+                        RecordingDeletionConsent.finish(app, launch.token, granted = false)
+                        withTimeout(5_000L) { receipt.await() }
+                    }
+                }
+                assertFalse(RecordingDeletionConsent.holdsPlayback(selected))
+                assertFalse(RecordingDeletionConsent.holdsPlayback(sibling))
+                assertNull(RecordingDeletionConsent.claim(app))
+                assertEquals(selected, dao.findById(selected.id))
+                assertEquals(sibling, dao.findById(sibling.id))
+                assertArrayEquals(changedBytes, provider.payload.readBytes())
+            } finally {
+                dao.deleteById(sibling.id)
+            }
+        }
+    }
+
+    private suspend fun claimDeletionPrompt(context: Context): RecordingDeletionConsentLaunch = withTimeout(5_000L) {
+        RecordingDeletionConsent.changes.mapNotNull { RecordingDeletionConsent.claim(context) }.first()
     }
 
     @Test

@@ -12,6 +12,8 @@ internal class RecordingDeletionConsentState<T>(private val token: (T) -> String
 
     @Synchronized fun anyRequest(matches: (T) -> Boolean): Boolean = queued.values.any(matches)
 
+    @Synchronized fun findRequest(matches: (T) -> Boolean): T? = queued.values.firstOrNull(matches)
+
     /** A queued request owns no factory, prompt or retry yet. */
     @Synchronized fun removeQueued(expectedToken: String): T? =
         if (active == expectedToken) null else queued.remove(expectedToken)

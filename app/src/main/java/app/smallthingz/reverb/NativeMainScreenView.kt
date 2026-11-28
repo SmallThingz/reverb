@@ -483,9 +483,13 @@ internal class NativeMainScreenView private constructor(
                 onExpandedRecordingActiveChange = { if (navigation.libraryExpandedRecordingActive != it) {
                     navigation.libraryExpandedRecordingActive = it; requestRender()
                 } },
-                onVisibleRecordingsChanged = { visible -> if (librarySnapshot != visible) {
-                    ++libraryRefreshGeneration; librarySnapshot = visible
-                } },
+                onVisibleRecordingsChanged = { visible ->
+                    val metadata = librarySnapshotWithoutWaveformTrust(visible)
+                    if (librarySnapshot != metadata) {
+                        ++libraryRefreshGeneration
+                        librarySnapshot = metadata
+                    }
+                },
                 onParentRefreshRequested = ::refreshLibrarySnapshot,
                 onUndoVisibleChange = { if (navigation.libraryUndoVisible != it) {
                     navigation.libraryUndoVisible = it; requestRender()
@@ -501,14 +505,14 @@ internal class NativeMainScreenView private constructor(
             try {
                 val known = RecordingRepository.listKnown(context.applicationContext)
                 if (generation != libraryRefreshGeneration) return@launch
-                librarySnapshot = known
+                librarySnapshot = librarySnapshotWithoutWaveformTrust(known)
                 requestRender()
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { Unit }
             try {
                 val refreshed = RecordingRepository.refresh(context.applicationContext)
                 if (generation != libraryRefreshGeneration) return@launch
-                librarySnapshot = refreshed
+                librarySnapshot = librarySnapshotWithoutWaveformTrust(refreshed)
                 requestRender()
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { Unit }

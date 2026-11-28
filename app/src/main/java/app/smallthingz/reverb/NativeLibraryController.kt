@@ -504,6 +504,7 @@ internal class NativeLibraryController(
     fun dismissMenu() { contextMenuRecordingId = null }
     fun rename(recording: RecordingEntity) {
         if (expandedTrimSaveInFlight() || pendingSaveOwns(recording)) return
+        retireShareRequest(reportUndeliveredFailure = false)
         contextMenuRecordingId = null
         infoRecording = null
         renameRecording = recording
@@ -589,13 +590,13 @@ internal class NativeLibraryController(
         lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) &&
         hostView.isAttachedToWindow && hostView.isShown && hostView.hasWindowFocus()
 
-    fun retireShareRequest() {
+    fun retireShareRequest(reportUndeliveredFailure: Boolean = true) {
         shareGeneration[0]++
         shareJob[0]?.cancel()
         shareJob[0] = null
         val retired = shareDelivery[0]
         shareDelivery[0] = null
-        retired?.retire()
+        retired?.retire(reportUndeliveredFailure)
     }
 
     fun clearUndoNotice(window: Long? = null) {
@@ -918,7 +919,24 @@ internal class NativeLibraryController(
                 librarySnapshotWithoutWaveformTrust(RecordingRepository.listKnown(context))
             }
             if (refreshGeneration.isCurrent(generation)) {
-                recordings = refreshed
+                recordings = if (!deletePhaseFailed && input.active) {
+                    // The cheap read supplies metadata. Only this active session's current rows
+                    // can supply an already-trusted waveform at the same content revision.
+                    val currentById = recordings.associateBy { it.id }
+                    refreshed.map { row ->
+                        val current = currentById[row.id]
+                        if (current != null && current.waveformRevision.isNotEmpty() && row.missingSinceMillis == null &&
+                            current.waveformRevision == recordingWaveformRevision(row) &&
+                            isValidRecordingWaveformCache(current, current.waveformData, current.waveformRevision)
+                        ) {
+                            row.copy(waveformData = current.waveformData, waveformRevision = current.waveformRevision)
+                        } else {
+                            row
+                        }
+                    }
+                } else {
+                    refreshed
+                }
                 if (deletePhaseFailed) {
                     hasLoaded = true
                     loadFailed = false
@@ -1223,7 +1241,7 @@ internal class NativeLibraryController(
             val currentObserver = if (focusObserver.isAlive) focusObserver else hostView.viewTreeObserver
             if (currentObserver.isAlive) currentObserver.removeOnWindowFocusChangeListener(focusListener)
         }
-        failure = closePreservingPrimaryFailure(failure, ::retireShareRequest)
+        failure = closePreservingPrimaryFailure(failure) { retireShareRequest() }
         failure = closePreservingPrimaryFailure(failure) { input.callbacks.onSelectionActiveChange(false) }
         failure = closePreservingPrimaryFailure(failure) { input.callbacks.onExpandedRecordingActiveChange(false) }
         failure = closePreservingPrimaryFailure(failure) { scope.cancel() }

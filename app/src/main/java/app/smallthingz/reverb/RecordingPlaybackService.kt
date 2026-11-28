@@ -120,14 +120,10 @@ class RecordingPlaybackService : Service() {
                 if (ownership.current(generation)) recording?.let { RecordingPlayback.play(this@RecordingPlaybackService, it) }
             }
             override fun onPause() {
-                if (!ownership.current(generation)) return
-                RecordingPlayback.cancelPendingStartFor(this@RecordingPlaybackService)
-                pauseCurrent()
+                if (ownership.current(generation)) pauseFromControls()
             }
             override fun onStop() {
-                if (!ownership.current(generation)) return
-                RecordingPlayback.cancelPendingStartFor(this@RecordingPlaybackService)
-                finishPlayback()
+                if (ownership.current(generation)) stopFromControls()
             }
             override fun onSeekTo(pos: Long) {
                 if (ownership.current(generation)) {
@@ -163,13 +159,23 @@ class RecordingPlaybackService : Service() {
             } else if (intent?.getStringExtra(EXTRA_INSTANCE) == instanceToken &&
                 ownership.current(intent.getLongExtra(EXTRA_GENERATION, -1L))) {
                 when (intent.action) {
-                    ACTION_PAUSE -> pauseCurrent()
-                    ACTION_STOP -> finishPlayback()
+                    ACTION_PAUSE -> pauseFromControls()
+                    ACTION_STOP -> stopFromControls()
                     ACTION_PLAY -> { ensureForeground(); ownership.resume(); queueExternalTransport(::resume) }
                 }
             } else if (!ownership.active && !RecordingPlayback.hasPendingStart()) stopSelfResult(startId)
         }
         return START_NOT_STICKY
+    }
+
+    private fun pauseFromControls() {
+        RecordingPlayback.cancelPendingStartFor(this)
+        pauseCurrent()
+    }
+
+    private fun stopFromControls() {
+        RecordingPlayback.cancelPendingStartFor(this)
+        finishPlayback()
     }
 
     private fun start(next: RecordingEntity, requestedPosition: Int?, promote: Boolean = false) {

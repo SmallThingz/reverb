@@ -2,11 +2,19 @@ package app.smallthingz.reverb.nativeui
 
 import android.app.Activity
 import android.app.Application
+import android.content.ContentProvider
+import android.content.ContentUris
+import android.content.ContentValues
 import android.content.Context
+import android.content.pm.ProviderInfo
+import android.database.Cursor
+import android.database.MatrixCursor
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.net.Uri
 import android.os.Looper
 import android.os.SystemClock
+import android.provider.MediaStore
 import android.view.Choreographer
 import android.view.InputDevice
 import android.view.MotionEvent
@@ -17,25 +25,47 @@ import androidx.activity.OnBackPressedDispatcher
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
+import app.smallthingz.reverb.DurableSaveCoordinator
+import app.smallthingz.reverb.DurableSaveJobs
+import app.smallthingz.reverb.DurableSaveNotifications
 import app.smallthingz.reverb.IncidentHistoryAccess
 import app.smallthingz.reverb.IncidentHistoryController
 import app.smallthingz.reverb.IncidentPresentation
+import app.smallthingz.reverb.JournalHostIoShadow
 import app.smallthingz.reverb.NativeIncidentsScreenOwner
+import app.smallthingz.reverb.NativeLibraryInput
+import app.smallthingz.reverb.NativeMainNavigationState
 import app.smallthingz.reverb.NativeMainSavedNavigation
 import app.smallthingz.reverb.NativeMainScreenInput
 import app.smallthingz.reverb.NativeMainScreenSavedState
 import app.smallthingz.reverb.NativeMainScreenView
+import app.smallthingz.reverb.RANGE_WAVEFORM_DETAIL_BUCKETS
+import app.smallthingz.reverb.RecordingDatabase
 import app.smallthingz.reverb.RecordingEntity
 import app.smallthingz.reverb.RecordingIncident
 import app.smallthingz.reverb.RecordingStorageType
+import app.smallthingz.reverb.ServiceStateOsShadow
+import app.smallthingz.reverb.durableSaveJournalRoot
+import app.smallthingz.reverb.encodeRecordingWaveform
+import app.smallthingz.reverb.getOutputDirectoryId
+import app.smallthingz.reverb.listedProviderRecordingIdentity
 import app.smallthingz.reverb.prepareIncidentHistory
 import app.smallthingz.reverb.recordingIncidentPresentationKey
+import app.smallthingz.reverb.recordingWaveformRevision
 import app.smallthingz.reverb.toggleRecordingIncidentAcknowledgement
+import java.time.Duration
 import java.time.ZoneId
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -43,9 +73,11 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import org.robolectric.shadows.ShadowContentResolver
 import smallthingz.ui.MotionDurationScale
 import smallthingz.ui.geometry.Offset
 import smallthingz.ui.input.phase.NativeViewPhasePointerNode
@@ -169,7 +201,186 @@ class NativeMainLibraryScrollbarGestureTest {
         f.touch(MotionEvent.ACTION_UP, freshMovedCenter)
     }
 
-    private class Fixture(incidents: Boolean = false) : AutoCloseable {
+    @Test
+    @Config(shadows = [JournalHostIoShadow::class])
+    fun hiddenMainKeepsMetadataWhileReopenedLibraryRestoresProvenWaveform() = withCompletedSaveStartup { app ->
+        val provider = LibraryScanProvider()
+        provider.attachInfo(app, ProviderInfo().apply { authority = "media" })
+        ShadowContentResolver.registerProviderInternal("media", provider)
+        val id = provider.recordingUri.toString()
+        val metadata = RecordingEntity(id, provider.name, "audio/wav", 100_000L, 1_000L,
+            provider.size, "PCM", RecordingStorageType.MEDIASTORE, getOutputDirectoryId(app, null),
+            fileIdentity = listedProviderRecordingIdentity(RecordingStorageType.MEDIASTORE, id,
+                sizeKnown = true, sizeBytes = provider.size, revisionToken = provider.revision))
+        val cached = metadata.copy(
+            waveformData = encodeRecordingWaveform(FloatArray(RANGE_WAVEFORM_DETAIL_BUCKETS) { 0.5f }),
+            waveformRevision = recordingWaveformRevision(metadata),
+        )
+        val dao = RecordingDatabase.getInstance(app).recordingDao()
+        try {
+            runBlocking { dao.upsert(cached) }
+            Fixture(seedSyntheticLibrary = false).use { f ->
+                val library = field<ReverbLibraryScreenContent>(f.root, "library")
+                val mainJob = field<Job>(f.root, "job")
+                fun controllerInput() = field<NativeLibraryInput>(library.owner, "input")
+                fun parentSnapshot() = field<List<RecordingEntity>>(f.root, "librarySnapshot")
+                fun assertMetadataSnapshots() {
+                    assertEquals(metadata, parentSnapshot().single())
+                    assertEquals(metadata, controllerInput().initialRecordings.single())
+                }
+                try {
+                    assertTrue(f.root.isAttachedToWindow)
+                    f.await("first active scan") { provider.entered[0].count == 0L }
+                    assertEquals(metadata, library.currentState()?.recordings?.single())
+                    field<NativeLibraryScreenInput>(library, "input").dismiss()
+                    assertFalse(f.libraryOpen)
+                    assertFalse(controllerInput().active)
+
+                    // Closing the active controller starts Main's refresh behind the held scan.
+                    provider.release[0].countDown()
+                    f.await("parent scan after listKnown") { provider.entered[1].count == 0L }
+                    assertMetadataSnapshots()
+
+                    val knownSnapshot = parentSnapshot()
+                    provider.release[1].countDown()
+                    f.await("parent refresh assignment and controller bind") {
+                        // Each read returns the cached DAO row, so normalization creates a new list.
+                        val refreshedSnapshot = parentSnapshot()
+                        refreshedSnapshot !== knownSnapshot &&
+                            controllerInput().initialRecordings === refreshedSnapshot
+                    }
+                    assertMetadataSnapshots()
+                    assertEquals(metadata, library.currentState()?.recordings?.single())
+                    assertEquals(cached, runBlocking { dao.findById(id) })
+                    assertEquals(1L, provider.entered[2].count)
+
+                    val generation = field<Int>(f.root, "libraryRefreshGeneration")
+                    f.reopenLibrary()
+                    f.await("reopened Library scan") { provider.entered[2].count == 0L }
+                    assertTrue(controllerInput().active)
+                    assertEquals(metadata, library.currentState()?.recordings?.single())
+                    provider.release[2].countDown()
+                    fun reopenEvidence(): String {
+                        val state = library.currentState()
+                        fun describe(rows: List<RecordingEntity>?): String = rows.orEmpty().joinToString {
+                            "${it.id} identity=${it.fileIdentity} duration=${it.durationMillis} " +
+                                "size=${it.sizeBytes} revision=${it.waveformRevision} waveformChars=${it.waveformData.length}"
+                        }
+                        return "active=${controllerInput().active} loaded=${state?.hasLoaded} " +
+                            "failed=${state?.loadFailed} refreshing=${state?.isRefreshing} " +
+                            "saveReadiness=${DurableSaveJobs.readiness.value} " +
+                            "enteredScans=${provider.scanCount} returnedCursors=${provider.returnedCursors.get()} " +
+                            "visible=[${describe(state?.recordings)}] parent=[${describe(parentSnapshot())}] " +
+                            "expected=[${describe(listOf(cached))}]"
+                    }
+                    f.await("reopened Library scan outcome", ::reopenEvidence) {
+                        library.currentState()?.let { it.hasLoaded || it.loadFailed } == true
+                    }
+                    val reopened = checkNotNull(library.currentState())
+                    assertTrue(reopenEvidence(), reopened.hasLoaded && !reopened.loadFailed)
+                    assertEquals(reopenEvidence(), cached, reopened.recordings.singleOrNull())
+                    assertMetadataSnapshots()
+                    assertEquals(generation, field<Int>(f.root, "libraryRefreshGeneration"))
+                    assertEquals(cached, runBlocking { dao.findById(id) })
+                } finally {
+                    provider.release.forEach { it.countDown() }
+                    f.root.close()
+                    f.await("Main coroutine shutdown") { mainJob.isCompleted }
+                }
+            }
+        } finally {
+            provider.release.forEach { it.countDown() }
+            runBlocking { dao.deleteById(id) }
+        }
+    }
+
+    private fun withCompletedSaveStartup(test: (Application) -> Unit) {
+        val app = RuntimeEnvironment.getApplication()
+        val journal = durableSaveJournalRoot(app)
+        check(journal.parentFile?.isDirectory == true && !journal.exists()) { "Expected a fresh app journal" }
+        val coordinator = DurableSaveCoordinator::class.java.getDeclaredField("instance").apply { isAccessible = true }
+        val previousCoordinator = coordinator.get(null)
+        val readiness = field<MutableStateFlow<DurableSaveJobs.Readiness>>(DurableSaveJobs, "mutableReadiness")
+        val previousReadiness = readiness.value
+        val notifications = field<CoroutineScope>(DurableSaveNotifications, "scope")
+        val notificationJob = checkNotNull(notifications.coroutineContext[Job])
+        val priorNotificationJobs = notificationJob.children.toSet()
+        val started = DurableSaveNotifications::class.java.getDeclaredField("started").apply { isAccessible = true }
+        val previousStarted = started.getBoolean(null)
+        val previousRoot = ServiceStateOsShadow.fixtureRoot
+        check(previousRoot == null)
+        JournalHostIoShadow.reset()
+        ServiceStateOsShadow.fixtureRoot = checkNotNull(app.filesDir.parentFile).toPath()
+        try {
+            coordinator.set(null, null)
+            DurableSaveCoordinator.get(app).hydrateStartup()
+            assertEquals(DurableSaveJobs.Readiness(loaded = true), DurableSaveJobs.readiness.value)
+            test(app)
+        } finally {
+            try {
+                runBlocking {
+                    withTimeout(5_000) {
+                        notificationJob.children.toList().filterNot { it in priorNotificationJobs }
+                            .forEach { it.cancelAndJoin() }
+                    }
+                }
+                JournalHostIoShadow.finishFixture()?.let { throw it }
+            } finally {
+                coordinator.set(null, previousCoordinator)
+                started.setBoolean(null, previousStarted)
+                readiness.value = previousReadiness
+                ServiceStateOsShadow.fixtureRoot = previousRoot
+            }
+        }
+    }
+
+    private class LibraryScanProvider : ContentProvider() {
+        private val collection = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+        val recordingUri: Uri = ContentUris.withAppendedId(collection, 731952L)
+        val name = "cached-waveform.wav"
+        val size = 32_044L
+        val revision = 9L
+        val entered = List(3) { CountDownLatch(1) }
+        val release = List(3) { CountDownLatch(1) }
+        private val scans = AtomicInteger()
+        val scanCount get() = scans.get()
+        val returnedCursors = AtomicInteger()
+
+        override fun onCreate() = true
+
+        override fun query(uri: Uri, projection: Array<out String>?, selection: String?,
+            selectionArgs: Array<out String>?, sortOrder: String?): Cursor {
+            check(uri == collection) { "Expected a directory scan of the seeded recording" }
+            val scan = scans.getAndIncrement()
+            if (scan < entered.size) {
+                entered[scan].countDown()
+                check(release[scan].await(15, TimeUnit.SECONDS)) { "Library scan ${scan + 1} was never released" }
+            }
+            val values = mapOf(
+                MediaStore.MediaColumns._ID to 731952L,
+                MediaStore.MediaColumns.DISPLAY_NAME to name,
+                MediaStore.MediaColumns.MIME_TYPE to "audio/wav",
+                MediaStore.MediaColumns.SIZE to size,
+                MediaStore.MediaColumns.DATE_MODIFIED to 100L,
+                MediaStore.MediaColumns.GENERATION_MODIFIED to revision,
+                MediaStore.MediaColumns.IS_PENDING to 0,
+            )
+            val columns = requireNotNull(projection)
+            return MatrixCursor(columns).apply {
+                addRow(columns.map(values::getValue))
+                returnedCursors.incrementAndGet()
+            }
+        }
+
+        override fun getType(uri: Uri) = "audio/wav"
+        override fun insert(uri: Uri, values: ContentValues?): Uri? = error("Read-only Library fixture")
+        override fun update(uri: Uri, values: ContentValues?, selection: String?, selectionArgs: Array<out String>?): Int =
+            error("Read-only Library fixture")
+        override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?): Int =
+            error("Read-only Library fixture")
+    }
+
+    private class Fixture(incidents: Boolean = false, seedSyntheticLibrary: Boolean = true) : AutoCloseable {
         private val activity = Robolectric.buildActivity(Activity::class.java).setup().visible()
         private val context = activity.get()
         private val board = FrameLayout(context)
@@ -183,7 +394,7 @@ class NativeMainLibraryScrollbarGestureTest {
         private val incidentAccess = if (incidents) FixtureIncidentHistory(context) else null
         private val environment = ReverbViewEnvironment(Density(1f), createFontFamilyResolver(context),
             ReverbPalette.fallback(false))
-        private val root = NativeMainScreenView.create(context, environment, NativeMainScreenInput(false, false),
+        val root = NativeMainScreenView.create(context, environment, NativeMainScreenInput(false, false),
             lifecycle, OnBackPressedDispatcher(), scope, null, board,
             NativeWindowTextAccessibilityOwner(board, NativeTextSemanticsClipPolicy { NativeTextSemanticsClip.Unclipped }),
             NativeMainScreenSavedState(navigation = NativeMainSavedNavigation(showLibrary = !incidents,
@@ -201,7 +412,7 @@ class NativeMainLibraryScrollbarGestureTest {
             if (incidentAccess != null) {
                 IncidentHistoryController::class.java.getDeclaredField("access").apply { isAccessible = true }
                     .set(incidentHistory, incidentAccess)
-            } else {
+            } else if (seedSyntheticLibrary) {
                 // Seed the catalog snapshot Main supplies on first open.
                 NativeMainScreenView::class.java.getDeclaredField("librarySnapshot").apply { isAccessible = true }
                     .set(root, List(40) { index ->
@@ -219,9 +430,28 @@ class NativeMainLibraryScrollbarGestureTest {
                 }
                 checkNotNull(field<NativeIncidentsScreenView>(root, "incidents").pointerContent?.pointerList)
             } else {
-                checkNotNull(field<ReverbLibraryScreenContent>(root, "library").listViewport)
+                val library = field<ReverbLibraryScreenContent>(root, "library")
+                // The DAO-backed regression can start with a loading body before its first read.
+                if (seedSyntheticLibrary) checkNotNull(library.listViewport) else library.scrollIndicatorViewport
             }
             place()
+        }
+
+        fun reopenLibrary() {
+            val open: NativeMainNavigationState.() -> Unit = { openLibrary() }
+            NativeMainScreenView::class.java.getDeclaredMethod("navigate", Function1::class.java)
+                .apply { isAccessible = true }.invoke(root, open)
+        }
+
+        fun await(boundary: String, details: () -> String = { "" }, reached: () -> Boolean) {
+            val main = shadowOf(Looper.getMainLooper())
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            do {
+                main.idleFor(Duration.ofMillis(20))
+                if (reached()) return
+                Thread.sleep(5)
+            } while (System.nanoTime() < deadline)
+            error("Timed out waiting for $boundary. ${details()}")
         }
 
         fun place() {

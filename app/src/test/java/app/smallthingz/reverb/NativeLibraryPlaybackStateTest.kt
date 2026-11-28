@@ -709,6 +709,54 @@ class NativeLibraryPlaybackStateTest {
         }
     }
 
+    @Test
+    @Config(shadows = [JournalHostIoShadow::class])
+    fun successfulForegroundDeleteRetainsOnlyCurrentRevisionSurvivorWaveform() {
+        val previousRoot = ServiceStateOsShadow.fixtureRoot
+        val target = recording("delete-target")
+        val directory = File(target.directoryId)
+        val createdDirectory = directory.mkdirs()
+        assertTrue(directory.isDirectory)
+        assertFalse(File(target.id).exists())
+        assertEquals(directory.absolutePath, File(target.id).parent)
+        val waveform = encodeRecordingWaveform(FloatArray(RANGE_WAVEFORM_DETAIL_BUCKETS) { 0.4f })
+        val survivor = a.copy(waveformData = waveform, waveformRevision = recordingWaveformRevision(a))
+        val previous = b.copy(waveformData = waveform, waveformRevision = recordingWaveformRevision(b))
+        val replacement = b.copy(fileIdentity = "replacement-b", displayName = "replacement.wav")
+        val catalogReplacement = replacement.copy(
+            waveformData = waveform,
+            waveformRevision = recordingWaveformRevision(replacement),
+        )
+        ServiceStateOsShadow.fixtureRoot = directory.canonicalFile.toPath()
+        try {
+            Fixture(listOf(target, survivor, previous)).use { f ->
+                f.open()
+                f.publishRefreshResult(listOf(target, survivor, previous))
+                assertTrue(f.latest.hasLoaded)
+                assertEquals(survivor, f.latest.recordings.single { it.id == survivor.id })
+
+                f.controller.deleteRecordings(listOf(target))
+                f.settle()
+                assertNotNull(f.latest.undo)
+                // Model a target already removed before commit. Production foreground settlement
+                // checks durable absence in the repository and takes its successful catalog path.
+                f.replaceCatalog(listOf(survivor, catalogReplacement))
+                runBlocking { f.controller.finalizeDeletions() }
+                f.settle()
+
+                assertTrue(f.latest.hasLoaded)
+                assertFalse(f.latest.loadFailed)
+                val rows = f.latest.recordings.associateBy { it.id }
+                assertEquals(setOf(survivor.id, replacement.id), rows.keys)
+                assertEquals(replacement, rows[replacement.id])
+                assertEquals("An unchanged survivor keeps its trusted waveform", survivor, rows[survivor.id])
+            }
+        } finally {
+            ServiceStateOsShadow.fixtureRoot = previousRoot
+            if (createdDirectory) assertTrue(directory.delete())
+        }
+    }
+
     @Test fun failedAuthoritativeRefreshDoesNotAdmitAutomaticWaveform() = Fixture(listOf(a), playing(a)).use { f ->
         f.open()
         val owner = checkNotNull(f.latest.list.expandedOwner)

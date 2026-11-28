@@ -33,6 +33,7 @@ internal class RecordingOpenResultDelivery<T : Any>(
     private val reportUndeliveredFailureWithCause: ((Throwable?) -> Unit)? = null,
 ) {
     private var retired = false
+    private var reportFailureAfterRetirement = true
     private var completed = false
     private var terminal = false
     private var result: T? = null
@@ -48,7 +49,9 @@ internal class RecordingOpenResultDelivery<T : Any>(
 
     fun foregroundChanged() = drain()
 
-    fun retire() {
+    fun retire(reportUndeliveredFailure: Boolean = true) {
+        if (retired) return
+        reportFailureAfterRetirement = reportUndeliveredFailure
         retired = true
         drain()
     }
@@ -63,7 +66,7 @@ internal class RecordingOpenResultDelivery<T : Any>(
         deliverTerminalResult(
             deliver = {
                 if (retired) {
-                    if (value == null) reportFailure(error)
+                    if (value == null && reportFailureAfterRetirement) reportFailure(error)
                 } else if (value == null) {
                     deliverVisibleTerminalOrFallback(
                         deliverVisible = {

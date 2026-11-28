@@ -127,21 +127,31 @@ object RecordingRepository {
         // change belongs to its next refresh, not a different failure classification mid-scan.
         val configuredTreeUri = getConfiguredExportTreeUri(context)
         val configuredDirectoryId = getOutputDirectoryId(context, configuredTreeUri)
-        val directoryReads = syncRecoverableDirectories(context, configuredTreeUri)
+        val observedWaveformRevisions = mutableMapOf<String, String>()
+        val directoryReads = syncRecoverableDirectories(context, configuredTreeUri, observedWaveformRevisions)
         // A failed whole-directory read cannot grant individual missing probes authority to
         // forget that directory's known rows. Successful scopes already reconciled their rows.
-        updateMissingStatesLocked(context, skipDirectoryIds = directoryReads.keys)
+        updateMissingStatesLocked(context, directoryReads.keys, observedWaveformRevisions)
         if (directoryReads[configuredDirectoryId] != true) {
             // Other successful imports are already durable. Surface the selected-folder failure
             // so Library keeps known rows and offers Retry instead of reporting a fresh empty scan.
             throw ConfiguredRecordingDirectoryUnavailableException(configuredDirectoryId)
         }
         val pending = pendingDeletionIds(context)
+        // Retain the durable cache so a later successful observation can restore it.
         return filterFileCopyCatalogRows(context, visibleCatalogRecordings(
             dao(context).listAll(),
             pending,
             pendingOutputCleanupIds(context),
-        ))
+        )).map { recording ->
+            if ((recording.waveformData.isNotEmpty() || recording.waveformRevision.isNotEmpty()) &&
+                observedWaveformRevisions[recording.id] != recording.waveformRevision
+            ) {
+                recording.copy(waveformData = "", waveformRevision = "")
+            } else {
+                recording
+            }
+        }
     }
 
     /**
@@ -1108,6 +1118,7 @@ object RecordingRepository {
     private suspend fun syncRecoverableDirectories(
         context: Context,
         configuredTreeUri: Uri?,
+        observedWaveformRevisions: MutableMap<String, String>,
     ): Map<String, Boolean> {
         runCatching { recoverPendingFileCopyPublications(context) }
             .onFailure { Log.w("RecordingRepository", "Unable to recover FILE copy publications", it) }
@@ -1135,7 +1146,9 @@ object RecordingRepository {
             }
 
         for ((directoryId, treeUri) in directoryUris) {
-            directoryReads[directoryId] = syncObservedDirectory(context, directoryId) { known ->
+            directoryReads[directoryId] = syncObservedDirectory(
+                context, directoryId, observedWaveformRevisions,
+            ) { known ->
                 listOutputDirectoryRecordings(context, treeUri, known)
             }
         }
@@ -1144,7 +1157,9 @@ object RecordingRepository {
         // scanning it forever so upgrading never strands a recording in the old location.
         val legacyDirectoryId = getSavedRecordingsDirectory(context).absolutePath
         if (legacyDirectoryId !in directoryUris.keys) {
-            directoryReads[legacyDirectoryId] = syncObservedDirectory(context, legacyDirectoryId) { known ->
+            directoryReads[legacyDirectoryId] = syncObservedDirectory(
+                context, legacyDirectoryId, observedWaveformRevisions,
+            ) { known ->
                 listLegacyAppStorageRecordings(context, known)
             }
         }
@@ -1217,6 +1232,7 @@ object RecordingRepository {
     private suspend fun syncObservedDirectory(
         context: Context,
         directoryId: String,
+        observedWaveformRevisions: MutableMap<String, String>,
         scan: (Map<String, RecordingEntity>) -> List<RecordingEntity>,
     ): Boolean = try {
         val dao = dao(context)
@@ -1234,10 +1250,15 @@ object RecordingRepository {
         val nowMillis = System.currentTimeMillis()
         val importedIds = HashSet<String>(imported.size)
         val updates = ArrayList<RecordingEntity>()
+        // Publish proof only after this entire directory reconciliation succeeds.
+        val directoryWaveformRevisions = mutableMapOf<String, String>()
         imported.forEach { observed ->
             val merged = mergeObservedRecording(existingById[observed.id], observed, nowMillis)
             importedIds += merged.id
             if (existingById[merged.id] != merged) updates += merged
+            if (observed.fileIdentity.isNotBlank()) {
+                recordObservedWaveformRevision(merged, directoryWaveformRevisions)
+            }
         }
 
         existing.asSequence()
@@ -1245,7 +1266,7 @@ object RecordingRepository {
             .forEach { recording ->
                 // Never convert a scan gap into catalog deletion. Provider visibility,
                 // removable storage, and persisted permissions can all recover later.
-                val updated = reconcileRecordingAssetState(context, recording, nowMillis)
+                val updated = reconcileRecordingAssetState(context, recording, nowMillis, directoryWaveformRevisions)
                 if (updated != recording) updates += updated
             }
 
@@ -1261,6 +1282,7 @@ object RecordingRepository {
                 }
             }
         } else dao.applyChanges(updates, emptyList())
+        observedWaveformRevisions.putAll(directoryWaveformRevisions)
         true
     } catch (error: Exception) {
         // A changed publication revision is an uncertain scan, never an empty directory.
@@ -1273,25 +1295,38 @@ object RecordingRepository {
         context: Context,
         recording: RecordingEntity,
         nowMillis: Long,
+        observedWaveformRevisions: MutableMap<String, String>,
     ): RecordingEntity = when (selectedRecordingAssetState(context, recording)) {
-        RecordingAssetState.PRESENT -> markRecordingPresent(recording, nowMillis)
+        RecordingAssetState.PRESENT -> markRecordingPresent(recording, nowMillis).also {
+            recordObservedWaveformRevision(it, observedWaveformRevisions)
+        }
         RecordingAssetState.MISSING -> markRecordingMissing(recording, nowMillis)
         RecordingAssetState.UNAVAILABLE -> recording
     }
 
     private suspend fun updateMissingStatesLocked(
         context: Context,
-        skipDirectoryIds: Set<String> = emptySet(),
+        skipDirectoryIds: Set<String>,
+        observedWaveformRevisions: MutableMap<String, String>,
     ) {
         val dao = dao(context)
         val unreconciled = dao.listOutsideDirectories(skipDirectoryIds)
         val nowMillis = System.currentTimeMillis()
         val updates = mutableListOf<RecordingEntity>()
         unreconciled.forEach { recording ->
-            val updated = reconcileRecordingAssetState(context, recording, nowMillis)
+            val updated = reconcileRecordingAssetState(context, recording, nowMillis, observedWaveformRevisions)
             if (updated != recording) updates += updated
         }
         dao.applyChanges(updates, emptyList())
+    }
+
+    private fun recordObservedWaveformRevision(
+        recording: RecordingEntity,
+        observedWaveformRevisions: MutableMap<String, String>,
+    ) {
+        if (recording.waveformData.isEmpty() && recording.waveformRevision.isEmpty()) return
+        val revision = recordingWaveformRevision(recording)
+        if (revision.isNotEmpty()) observedWaveformRevisions[recording.id] = revision
     }
 
     private fun finishCopiedFileSourceLocked(

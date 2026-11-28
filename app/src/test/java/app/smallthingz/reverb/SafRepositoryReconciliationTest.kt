@@ -215,6 +215,46 @@ class SafRepositoryReconciliationTest {
         }
     }
 
+    @Test fun failedSecondaryDirectoryHidesWaveformUntilTheSameRecordingIsObservedAgain() = runBlocking {
+        fixture { f ->
+            val legacyDirectory = getSavedRecordingsDirectory(f.context)
+            check(legacyDirectory.mkdir())
+            val legacyFile = File(legacyDirectory, "legacy.wav").apply { writeBytes(wav(456)) }
+            val displacedDirectory = File(legacyDirectory.parentFile, "displaced-recordings")
+            val legacyId = legacyFile.absolutePath
+            val waveform = encodeRecordingWaveform(FloatArray(RANGE_WAVEFORM_DETAIL_BUCKETS) { 0.5f })
+            try {
+                val initialRows = RecordingRepository.refresh(f.context).associateBy { it.id }
+                val selected = checkNotNull(initialRows[SAF_SELECTED])
+                val legacy = checkNotNull(initialRows[legacyId])
+                val selectedRevision = recordingWaveformRevision(selected)
+                val legacyRevision = recordingWaveformRevision(legacy)
+                assertTrue(RecordingRepository.cacheWaveform(f.context, selected, waveform, selectedRevision))
+                assertTrue(RecordingRepository.cacheWaveform(f.context, legacy, waveform, legacyRevision))
+                val selectedCached = checkNotNull(f.dao.findById(SAF_SELECTED))
+                val legacyCached = checkNotNull(f.dao.findById(legacyId))
+                assertEquals(waveform, legacyCached.waveformData)
+
+                check(legacyDirectory.renameTo(displacedDirectory))
+                legacyDirectory.writeText("temporary non-directory entry")
+                assertEquals(StoragePathState.UNAVAILABLE, storageDirectoryState(legacyDirectory))
+                val partialRows = RecordingRepository.refresh(f.context).associateBy { it.id }
+                assertEquals(selectedCached, partialRows[SAF_SELECTED])
+                assertEquals(legacyCached.copy(waveformData = "", waveformRevision = ""), partialRows[legacyId])
+                assertEquals(legacyCached, f.dao.findById(legacyId))
+
+                check(legacyDirectory.delete())
+                check(displacedDirectory.renameTo(legacyDirectory))
+                val recoveredRows = RecordingRepository.refresh(f.context).associateBy { it.id }
+                assertEquals(selectedCached, recoveredRows[SAF_SELECTED])
+                assertEquals(legacyCached, recoveredRows[legacyId])
+                assertEquals(legacyCached, f.dao.findById(legacyId))
+            } finally {
+                f.dao.deleteById(legacyId)
+            }
+        }
+    }
+
     @Test fun completeEmptyListingDistinguishesUnavailableFromMissingAndRestoresSameRow() = runBlocking {
         fixture { f ->
             f.provider.listing = "empty"

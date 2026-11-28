@@ -37,7 +37,7 @@ internal data class RecordingDeletionConsentRequest(
     val targets: List<RecordingDeletionConsentTarget>,
     val token: String = UUID.randomUUID().toString(),
     val rename: RecordingRenameConsentWork? = null,
-    val promptCompletion: CompletableDeferred<Unit>? = null,
+    val promptReceipts: MutableList<CompletableDeferred<Unit>>? = null,
 )
 
 internal class RecordingRenameConsentWork(
@@ -171,11 +171,27 @@ internal object RecordingDeletionConsent {
             RecordingDeletionPlan(undo, prompt)
         }
 
-    fun enqueueImmediate(targets: List<RecordingDeletionConsentTarget>): Deferred<Unit> {
+    @Synchronized fun enqueueImmediate(targets: List<RecordingDeletionConsentTarget>): Deferred<Unit> {
         require(targets.isNotEmpty())
-        val completion = CompletableDeferred<Unit>()
-        offerDeletion(RecordingDeletionConsentRequest(targets.toList(), promptCompletion = completion))
-        return completion
+        val receipt = CompletableDeferred<Unit>()
+        val batch = targets.toList()
+        // The active request stays in pending through journal settlement.
+        val existing = pending.findRequest { request ->
+            request.promptReceipts != null && request.targets.size == batch.size &&
+                batch.indices.all { index ->
+                    val previous = request.targets[index]
+                    val current = batch[index]
+                    previous.fingerprint == current.fingerprint &&
+                        previous.legacySender == current.legacySender &&
+                        sameRecordingActionTarget(previous.recording, current.recording)
+                }
+        }
+        if (existing == null) {
+            offerDeletion(RecordingDeletionConsentRequest(batch, promptReceipts = mutableListOf(receipt)))
+        } else {
+            checkNotNull(existing.promptReceipts).add(receipt)
+        }
+        return receipt
     }
 
     fun enqueue(targets: List<RecordingDeletionConsentTarget>) {
@@ -326,7 +342,7 @@ internal object RecordingDeletionConsent {
         while (execution.nextIndex < request.targets.size) {
             val chunk = prepareRecordingConsentChunk(request.targets, execution.nextIndex, limit) { index, target ->
                 when (val result = attempt(context) {
-                    if (request.promptCompletion != null) {
+                    if (request.promptReceipts != null) {
                         // A grant acquired while queued must never turn pre-prompt verification into a delete.
                         val verified = RecordingRepository.snapshotDeletionConsentTarget(context, target.recording, target)
                         if (verified != null) RecordingDeletionAttempt.NeedsConsent(verified)
@@ -422,12 +438,21 @@ internal object RecordingDeletionConsent {
                     settled.map { execution.request.targets[it].recording }, result), FeedbackTone.ERROR)
             }
         } finally {
-            synchronized(this) {
+            val receipts = synchronized(this) {
                 if (active === execution && pending.complete(execution.request.token) != null) {
                     active = null
+                    val snapshot = execution.request.promptReceipts.orEmpty().toList()
                     signalCompletion()
                     signal()
-                    execution.request.promptCompletion?.complete(Unit)
+                    snapshot
+                } else emptyList()
+            }
+            for (receipt in receipts) {
+                try {
+                    receipt.complete(Unit)
+                } catch (error: Exception) {
+                    RecordingIncidentStore.recordUnexpectedErrorInBackground(context,
+                        "Recording deletion receipt completion", error)
                 }
             }
         }

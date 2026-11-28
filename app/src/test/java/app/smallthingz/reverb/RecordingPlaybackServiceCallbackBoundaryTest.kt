@@ -154,16 +154,23 @@ class RecordingPlaybackServiceCallbackBoundaryTest {
         assertEquals(listOf(replacement, selected), launched)
     }
 
-    @Test fun currentSessionPauseCancelsHeldPlay() = heldPlayCancelledBySession(stop = false)
+    @Test fun currentSessionPauseCancelsHeldPlay() = heldPlayCancelledByControl(stop = false)
 
-    @Test fun currentSessionStopCancelsHeldPlay() = heldPlayCancelledBySession(stop = true)
+    @Test fun currentSessionStopCancelsHeldPlay() = heldPlayCancelledByControl(stop = true)
 
     @Test fun currentSessionPauseCancelsHeldPlayAcrossVerifiedRename() =
-        heldPlayCancelledBySession(stop = false, rename = true)
+        heldPlayCancelledByControl(stop = false, rename = true)
 
-    private fun heldPlayCancelledBySession(stop: Boolean, rename: Boolean = false) =
+    @Test fun currentNotificationPauseCancelsHeldPlay() =
+        heldPlayCancelledByControl(stop = false, notification = true)
+
+    @Test fun currentNotificationStopCancelsHeldPlay() =
+        heldPlayCancelledByControl(stop = true, notification = true)
+
+    private fun heldPlayCancelledByControl(stop: Boolean, rename: Boolean = false, notification: Boolean = false) =
         withPlaybackService { media, handler, callback, _ ->
             val service = readField(RecordingPlayback, "service") as RecordingPlaybackService
+            val action = if (notification) notificationTerminalIntent(service, stop) else null
             callback.onPause()
             media.invokePreparedListener()
             val prepared = RecordingPlayback.state.value
@@ -186,11 +193,14 @@ class RecordingPlaybackServiceCallbackBoundaryTest {
                     val request = readField(RecordingPlayback, "pending") as RecordingPlayback.Start
                     assertEquals(expected, request.recording)
                 }
-                assertTrue(handler.post { if (stop) callback.onStop() else callback.onPause() })
+                assertTrue(handler.post {
+                    if (action != null) service.onStartCommand(action, 0, 2)
+                    else if (stop) callback.onStop() else callback.onPause()
+                })
                 ShadowLooper.idleMainLooper()
                 val pendingAtDelivery = RecordingPlayback.hasPendingStart()
 
-                service.onStartCommand(heldStart, 0, 2)
+                service.onStartCommand(heldStart, 0, 3)
                 ShadowLooper.idleMainLooper()
 
                 val settled = RecordingPlayback.state.value
@@ -216,11 +226,21 @@ class RecordingPlaybackServiceCallbackBoundaryTest {
             }
         }
 
-    @Test fun currentSessionStopPreservesHeldPlayForAnotherRecording() {
+    @Test fun currentSessionStopPreservesHeldPlayForAnotherRecording() =
+        terminalControlPreservesHeldReplacement(stop = true)
+
+    @Test fun currentNotificationPausePreservesHeldPlayForAnotherRecording() =
+        terminalControlPreservesHeldReplacement(stop = false, notification = true)
+
+    @Test fun currentNotificationStopPreservesHeldPlayForAnotherRecording() =
+        terminalControlPreservesHeldReplacement(stop = true, notification = true)
+
+    private fun terminalControlPreservesHeldReplacement(stop: Boolean, notification: Boolean = false) {
         val app = RuntimeEnvironment.getApplication()
         val secondFile = File.createTempFile("session-pending-replacement-", ".wav", app.cacheDir)
         withPlaybackService(additionalSource = secondFile) { media, handler, callback, _ ->
             val service = readField(RecordingPlayback, "service") as RecordingPlaybackService
+            val action = if (notification) notificationTerminalIntent(service, stop) else null
             callback.onPause()
             media.invokePreparedListener()
             val prepared = RecordingPlayback.state.value
@@ -235,12 +255,17 @@ class RecordingPlaybackServiceCallbackBoundaryTest {
             try {
                 assertTrue(RecordingPlayback.play(app, second))
                 val heldReplacement = checkNotNull(Shadows.shadowOf(app).nextStartedService)
-                assertTrue(handler.post { callback.onStop() })
+                assertTrue(handler.post {
+                    if (action != null) service.onStartCommand(action, 0, 2)
+                    else callback.onStop()
+                })
                 ShadowLooper.idleMainLooper()
-                assertNull(readField(service, "session"))
-                assertTrue("Stopping A must leave B's accepted start armed", RecordingPlayback.hasPendingStart())
+                if (stop) assertNull(readField(service, "session"))
+                else assertSame(firstSession, readField(service, "session"))
+                assertFalse(RecordingPlayback.state.value.wantsPlayback)
+                assertTrue("A's terminal control must leave B's accepted start armed", RecordingPlayback.hasPendingStart())
 
-                service.onStartCommand(heldReplacement, 0, 2)
+                service.onStartCommand(heldReplacement, 0, 3)
                 val adopted = RecordingPlayback.state.value
                 assertEquals(second, adopted.recording)
                 assertTrue(adopted.generation != prepared.generation)
@@ -254,6 +279,14 @@ class RecordingPlaybackServiceCallbackBoundaryTest {
                 RecordingPlayback.stop(second)
             }
         }
+    }
+
+    private fun notificationTerminalIntent(service: RecordingPlaybackService, stop: Boolean): Intent {
+        val manager = checkNotNull(service.getSystemService(NotificationManager::class.java))
+        val notice = manager.activeNotifications.single { it.id == 7391 }.notification
+        val label = service.getString(if (stop) R.string.recording_playback_stop else R.string.player_pause)
+        val action = notice.actions.single { it.title.toString() == label }
+        return Shadows.shadowOf(action.actionIntent).savedIntent
     }
 
     private fun holdSessionPlay(handler: Handler, callback: MediaSession.Callback): Intent {
