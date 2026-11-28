@@ -52,8 +52,8 @@ The original 20 September release APK was unsigned. Its locally signed release s
 - Final corrected APK SHA-256: `92cf5b1ef277d4af0e4c8db58d9b01f6521ecb02006f38403e2afffff33e1ffe`.
   The release package is `app.smallthingz.reverb`, targets API 37, requires API 28+, is not debuggable and
   has no network permission.
-- Store screenshots are unedited 1080 x 2400 captures from the physical Xiaomi M2101K7BG on API 36. A separate debug installation, `app.smallthingz.reverb.screenshots`, used the same source commit with an application ID override. It contained synthetic sample WAV recordings and a silent sample capture buffer. The screenshots show the actual Capture, Library, Trim and Settings screens; they are not evidence that the production-signed APK was installed on the device.
-- The screenshot gallery lives in `fastlane/metadata/android/en-US/images/phoneScreenshots/` and is reused by the README. [F-Droid descriptions do not support embedded images](https://f-droid.org/en/docs/All_About_Descriptions_Graphics_and_Screenshots/); its gallery supplies them alongside the text.
+- The historical September 2026 store screenshots were unedited 1080 x 2400 captures from the physical Xiaomi M2101K7BG on API 36. A separate debug installation, `app.smallthingz.reverb.screenshots`, used the same source commit with an application ID override. It contained synthetic sample WAV recordings and a silent sample capture buffer. That September set showed the actual Capture, Library, Trim and Settings screens; those captures are not evidence that the production-signed APK was installed on the device.
+- The current screenshot gallery lives in `fastlane/metadata/android/en-US/images/phoneScreenshots/` and is reused by the README. [F-Droid descriptions do not support embedded images](https://f-droid.org/en/docs/All_About_Descriptions_Graphics_and_Screenshots/); its gallery supplies them alongside the text.
 
 The corrected APK and checksum are published on the existing GitHub `v0.1.1` release. A fresh download
 verifies with APK Signature Scheme v2, certificate SHA-256
@@ -62,3 +62,12 @@ verifies with APK Signature Scheme v2, certificate SHA-256
 policy failure: AGP had added the `0x504B4453` dependency-metadata APK signing block. The final artifact
 removes only that extra signing-block entry while preserving the v2 signature. Copying its signature onto the
 unsigned APK produced by F-Droid job 16753289709 yields a byte-identical APK with the same SHA-256 above.
+
+## Screenshot refresh: 29 November 2026
+
+The current README and F-Droid gallery replace the September set with full-screen captures
+from the installed normal Reverb 0.1.3-rc5 app (`app.smallthingz.reverb`). The images retain
+their native 1080 × 2400 dimensions and are compressed as JPEGs. They show Capture,
+saved recordings in Library, buffer range selection/export, and Settings, using the
+existing app state rather than the September sample-data installation. This documentation
+and screenshot refresh did not create a release or upload an APK.

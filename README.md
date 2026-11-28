@@ -24,13 +24,13 @@ Forked from `Echo`, now reworked and shipped as `Reverb`.
 ## Screenshots
 
 <p>
-  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/1-capture.png" width="230" alt="Capture screen with One-shot and Looping buffers" />
-  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/2-library.png" width="230" alt="Library with saved recordings and inline waveform playback" />
-  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/3-trim.png" width="230" alt="Non-destructive trimming with waveform selection controls" />
-  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/4-settings.png" width="230" alt="Retention limits and audio settings" />
+  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/1-capture.jpg" width="230" alt="Capture screen with One-shot and Looping buffers" />
+  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/2-library.jpg" width="230" alt="Library with saved recordings" />
+  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/3-trim.jpg" width="230" alt="Buffer range selection and waveform export controls" />
+  <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/4-settings.jpg" width="230" alt="Retention limits and audio settings" />
 </p>
 
-*Screenshots use sample recordings.*
+*Current full-screen screenshots from Reverb 0.1.3-rc5, captured at 1080 × 2400 and compressed as JPEGs.*
 
 ## 📦 App
 
